@@ -10,7 +10,7 @@ const transitions: Record<OrderStatus, readonly OrderStatus[]> = {
   PROVISIONING: [OrderStatus.COMPLETED, OrderStatus.PROVISIONING_FAILED],
   PROVISIONING_FAILED: [OrderStatus.PROVISIONING, OrderStatus.REFUND_PENDING],
   REFUND_PENDING: [OrderStatus.REFUNDED],
-  PAYMENT_FAILED: [], CANCELLED: [], COMPLETED: [], REFUNDED: [],
+  PAYMENT_FAILED: [OrderStatus.PAYMENT_PENDING, OrderStatus.CANCELLED], CANCELLED: [], COMPLETED: [], REFUNDED: [],
 };
 export function canTransition(from: OrderStatus, to: OrderStatus) { return transitions[from].includes(to); }
 export function assertTransition(from: OrderStatus, to: OrderStatus) { if (!canTransition(from, to)) throw new Error(`Invalid order transition: ${from} -> ${to}`); }

@@ -7,6 +7,8 @@ import { AppModule } from './app.module.js';
 import { ApiExceptionFilter } from './common/api-exception.filter.js';
 import { CorrelationInterceptor } from './common/correlation.interceptor.js';
 import { IdempotencyInterceptor } from './common/idempotency.interceptor.js';
+import { LoggingInterceptor } from './common/logging.interceptor.js';
+import { RateLimitGuard } from './common/rate-limit.guard.js';
 import { PrismaService } from './infrastructure/prisma.service.js';
 
 async function bootstrap() {
@@ -16,7 +18,8 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalFilters(new ApiExceptionFilter());
-  app.useGlobalInterceptors(new CorrelationInterceptor(), new IdempotencyInterceptor(app.get(PrismaService)));
+  app.useGlobalGuards(new RateLimitGuard());
+  app.useGlobalInterceptors(new CorrelationInterceptor(), new LoggingInterceptor(), new IdempotencyInterceptor(app.get(PrismaService)));
   const config = new DocumentBuilder().setTitle('Visa Compass eSIM API').setVersion('1.0').addBearerAuth().build();
   SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, config));
   await app.listen(Number(process.env.PORT ?? 4000));

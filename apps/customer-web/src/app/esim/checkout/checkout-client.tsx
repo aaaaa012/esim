@@ -16,11 +16,12 @@ import {
 import {
   DocumentType,
   PaymentProvider,
+  apiErrorMessage,
   type PlanSummary,
 } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-type Envelope<T> = { data: T; error?: { message: string } };
+type Envelope<T> = { data: T; error?: { code?: string; message: string } };
 type Order = {
   id: string;
   orderNumber: string;
@@ -89,7 +90,7 @@ export default function CheckoutClient({
   const api = async <T,>(path: string, init?: RequestInit) => {
     const response = await authFetch(`${API}${path}`, { ...init, headers: { "content-type": "application/json", "x-idempotency-key": crypto.randomUUID(), ...init?.headers } });
     const payload = (await response.json()) as Envelope<T>;
-    if (!response.ok) throw new Error(payload.error?.message ?? "Something went wrong");
+    if (!response.ok) throw new Error(apiErrorMessage(payload.error?.code ?? "", payload.error?.message ?? "Something went wrong"));
     return payload.data;
   };
   const [step, setStep] = useState(1),
@@ -106,7 +107,8 @@ export default function CheckoutClient({
       PaymentProvider.KHALTI,
     ),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [verifying, setVerifying] = useState(false);
   useEffect(() => {
     if (!orderId) return;
     setBusy(true);
@@ -128,6 +130,7 @@ export default function CheckoutClient({
             expiresAt: "",
           });
           setStep(4);
+          if (hasReturnReference()) void verifyPayment(value);
         } else if (!value.traveler) setStep(2);
         else if (!hasRequiredDocs) setStep(3);
         else setStep(4);
@@ -139,6 +142,43 @@ export default function CheckoutClient({
       )
       .finally(() => setBusy(false));
   }, [orderId]);
+  const hasReturnReference = () =>
+    new URLSearchParams(window.location.search).has("reference");
+  const verifyPayment = async (initialOrder: Order) => {
+    setVerifying(true);
+    try {
+      await api(`/customer/orders/${initialOrder.id}/payment/verify`, {
+        method: "POST",
+        body: JSON.stringify({ reference: initialOrder.payment?.reference }),
+      });
+    } catch {
+      // Verification may fail until the provider webhook lands; polling below retries.
+    }
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      const updated = await api<Order>(
+        `/customer/orders/${initialOrder.id}`,
+      ).catch(() => initialOrder);
+      setOrder(updated);
+      setError("");
+      if (
+        ["REVIEW_PENDING", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
+          updated.status,
+        )
+      ) {
+        if (updated.status === "REVIEW_PENDING")
+          setPayment((value) => ({ ...(value ?? { reference: "", redirectUrl: "", expiresAt: "" }), reference: updated.payment?.reference ?? value?.reference ?? "" }));
+        setVerifying(false);
+        break;
+      }
+      if (attempt === 29) {
+        setError(
+          "Your payment is still being confirmed. Check your eSIMs shortly.",
+        );
+        setVerifying(false);
+      }
+    }
+  };
   const update = (key: keyof Traveler, value: string) =>
     setTraveler((v) => ({ ...v, [key]: value }));
   const run = async (task: () => Promise<void>) => {
@@ -252,13 +292,22 @@ export default function CheckoutClient({
     });
   const initiate = () =>
     run(async () => {
-      if (order)
-        setPayment(
-          await api<Payment>(`/customer/orders/${order.id}/payment`, {
-            method: "POST",
-            body: JSON.stringify({ provider }),
-          }),
-        );
+      if (order) {
+        const value = await api<Payment>(`/customer/orders/${order.id}/payment`, {
+          method: "POST",
+          body: JSON.stringify({ provider }),
+        });
+        setPayment(value);
+        const external = (url: string) => {
+          try {
+            return new URL(url).origin !== window.location.origin;
+          } catch {
+            return true;
+          }
+        };
+        if (value.redirectUrl && external(value.redirectUrl))
+          window.location.assign(value.redirectUrl);
+      }
     });
   const complete = () =>
     run(async () => {
@@ -503,6 +552,16 @@ export default function CheckoutClient({
                     <Link className="button" href="/account/esims">
                       View my eSIMs
                     </Link>
+                  </div>
+                ) : verifying ? (
+                  <div className="success-panel">
+                    <LoaderCircle className="spin" size={42} />
+                    <b>Confirming your payment</b>
+                    <span>{order?.orderNumber}</span>
+                    <p>
+                      Your wallet confirmed the payment. We are verifying it
+                      securely — this takes a few seconds.
+                    </p>
                   </div>
                 ) : (
                   <>

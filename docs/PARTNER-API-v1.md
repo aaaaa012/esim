@@ -8,6 +8,8 @@ Base URL: `/api/v1/partners`
 - Send `x-idempotency-key` on every mutation. Reusing a key with a different body returns `409`.
 - Responses use the standard `data`, `meta`, and `error` envelope with a correlation ID.
 - A partner can read or mutate only orders created by that partner key.
+- Errors use stable machine-readable `error.code` values (see `packages/shared/src/errors.ts`) plus a customer-safe `message`. Internal detail is never returned; 5xx responses include the correlation ID for support tracing.
+- Requests are rate-limited per IP + route (`x-ratelimit-limit` / `x-ratelimit-remaining` response headers).
 
 ## Discovery and sales
 
@@ -19,7 +21,7 @@ Base URL: `/api/v1/partners`
 
 ## Traveller and private documents
 
-- `POST /orders/:id/traveler` — validated Auriga-compatible traveller fields.
+- `POST /orders/:id/traveler` — validated Transatel-compatible traveller fields.
 - `POST /orders/:id/documents` — create a short-lived signed private upload authorization.
 - Upload bytes directly to the returned Cloudinary endpoint.
 - `POST /orders/:id/documents/:documentId/confirm` — server-verifies file existence, type and size.
@@ -37,8 +39,8 @@ Passport and ticket are mandatory. Visa remains configuration-driven.
 
 - `GET /orders/:id/connectivity` — selected provider, health and normalized capabilities.
 - `GET /orders/:id/usage` — normalized usage after provisioning.
-- Connectivity callbacks use `/api/v1/webhooks/connectivity/:provider` and are deduplicated.
-- `AURIGA_MOCK` is executable for the MVP. `TRANSATEL` is selectable only after certified endpoint and OAuth credentials are configured.
+- Connectivity callbacks use `/api/v1/webhooks/connectivity/transatel` and are deduplicated.
+- `TRANSATEL` is the production connectivity provider. It is executable only when the certified endpoint and OAuth credentials are configured.
 
 ## Notifications
 

@@ -10,6 +10,7 @@ import {
   Save,
   Settings2,
   ShieldCheck,
+  Upload,
   UsersRound,
 } from "lucide-react";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -86,7 +87,11 @@ export default function AdminWorkspace() {
       "OPERATIONS",
     ),
     [busy, setBusy] = useState(""),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState(""),
+    [planCsvFile, setPlanCsvFile] = useState<File | null>(null),
+    [planCsvBusy, setPlanCsvBusy] = useState(false),
+    [planCsvResult, setPlanCsvResult] = useState("");
+    const [planCsvErrors, setPlanCsvErrors] = useState<string[]>([]);
   const load = () =>
     Promise.all([
       request<Plan[]>("/admin/plans"),
@@ -125,6 +130,36 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
+  const importPlanCsv = async () => {
+    if (!planCsvFile) {
+      setPlanCsvResult("Choose a CSV file first");
+      return;
+    }
+    setPlanCsvBusy(true);
+    setPlanCsvResult("");
+    setPlanCsvErrors([]);
+    try {
+      const csv = await planCsvFile.text();
+      const result = await request<{
+        imported: number;
+        updated: number;
+        skipped: number;
+        errors: string[];
+      }>("/admin/plans/import-csv", {
+        method: "POST",
+        body: JSON.stringify({ csv }),
+      });
+      setPlanCsvResult(
+        `Imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} row(s)`,
+      );
+      setPlanCsvErrors(result.errors ?? []);
+      await load();
+    } catch (e) {
+      setPlanCsvResult(e instanceof Error ? e.message : "CSV import failed");
+    } finally {
+      setPlanCsvBusy(false);
+    }
+  };
   const test = async (item: Integration) => {
     setBusy(item.id);
     const result = await request<{ message: string }>(
@@ -133,6 +168,25 @@ export default function AdminWorkspace() {
     );
     setNotice(result.message);
     setBusy("");
+  };
+  const transatelAction = async (
+    action: "sync-catalog" | "ensure-webhook",
+  ) => {
+    setBusy(`transatel:${action}`);
+    try {
+      const result = await request<Record<string, unknown>>(
+        `/admin/integrations/transatel/${action}`,
+        { method: "POST" },
+      );
+      setNotice(
+        JSON.stringify(result, null, 2).slice(0, 400) ||
+          `${action.replace("-", " ")} complete`,
+      );
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : `${action} failed`);
+    } finally {
+      setBusy("");
+    }
   };
   const inviteStaff = async () => {
     setBusy("invite");
@@ -220,6 +274,36 @@ export default function AdminWorkspace() {
                     {tab === "Plans" ? "Plan catalogue" : "Pricing management"}
                   </h2>
                   <p>Changes affect new immutable order quotes only.</p>
+                </div>
+                <div className="plan-csv-upload">
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(e) => setPlanCsvFile(e.target.files?.[0] ?? null)}
+                  />
+                  <button
+                    onClick={() => void importPlanCsv()}
+                    disabled={planCsvBusy || !planCsvFile}
+                  >
+                    {planCsvBusy ? (
+                      <LoaderCircle className="spin" size={15} />
+                    ) : (
+                      <Upload size={15} />
+                    )}
+                    Upload CSV
+                  </button>
+                  {planCsvResult && (
+                    <span className={planCsvErrors.length ? "csv-error" : "csv-ok"}>
+                      {planCsvResult}
+                    </span>
+                  )}
+                  {planCsvErrors.length > 0 && (
+                    <span className="csv-error-detail">
+                      {planCsvErrors.slice(0, 20).join(" · ")}
+                      {planCsvErrors.length > 20 &&
+                        ` (+${planCsvErrors.length - 20} more)`}
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="table-wrap">
@@ -377,6 +461,32 @@ export default function AdminWorkspace() {
                       )}
                       Test
                     </button>
+                    {item.id === "transatel" && (
+                      <>
+                        <button
+                          onClick={() => transatelAction("sync-catalog")}
+                          disabled={busy === "transatel:sync-catalog"}
+                        >
+                          {busy === "transatel:sync-catalog" ? (
+                            <LoaderCircle className="spin" size={15} />
+                          ) : (
+                            <RefreshCcw size={15} />
+                          )}
+                          Sync catalog
+                        </button>
+                        <button
+                          onClick={() => transatelAction("ensure-webhook")}
+                          disabled={busy === "transatel:ensure-webhook"}
+                        >
+                          {busy === "transatel:ensure-webhook" ? (
+                            <LoaderCircle className="spin" size={15} />
+                          ) : (
+                            <Pencil size={15} />
+                          )}
+                          Register webhook
+                        </button>
+                      </>
+                    )}
                   </div>
                 </article>
               ))}
@@ -558,7 +668,7 @@ function ConfigPanel({ tab }: { tab: string }) {
             ["Default purchase country", "Nepal (NP)"],
             ["Default currency", "NPR"],
             ["Subscriber language", "English"],
-            ["Connectivity provider", "Auriga simulator"],
+            ["Connectivity provider", "Transatel"],
           ];
   return (
     <section className="config-panel">

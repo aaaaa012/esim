@@ -209,6 +209,8 @@ model Order {
   totalAmount Decimal @db.Decimal(12,2)
   pricingSnapshot Json
   compatibilityAcceptedAt DateTime
+  providerSubscriptionId String?
+  providerStatus String?
   traveler Traveler?
   documents TravelerDocument[]
   payments Payment[]
@@ -298,6 +300,10 @@ model EsimInventory {
   assignedOrder Order? @relation(fields: [assignedOrderId], references: [id])
   activationCodeEncrypted String?
   smDpAddress String?
+  providerSubscriptionId String?
+  providerStatus String?
+  activatedAt DateTime?
+  expiresAt DateTime?
   customerEsim CustomerEsim?
   version Int @default(0)
   createdAt DateTime @default(now())
@@ -325,6 +331,9 @@ model Subscription {
   status SubscriptionStatus @default(PENDING)
   activatedAt DateTime?
   expiresAt DateTime?
+  usedMb Int @default(0)
+  totalMb Int @default(0)
+  usageLastCheckedAt DateTime?
 }
 model OrderReview {
   id String @id @default(uuid()) @db.Uuid
@@ -373,6 +382,21 @@ model WebhookEvent {
   errorMessage String?
   createdAt DateTime @default(now())
   @@unique([source, eventId])
+}
+
+model IntegrationLog {
+  id String @id @default(uuid()) @db.Uuid
+  operation String
+  method String
+  endpoint String
+  status Int
+  durationMs Int?
+  errorCode String?
+  errorMessage String?
+  correlationId String?
+  createdAt DateTime @default(now())
+  @@index([operation, createdAt])
+  @@index([status])
 }
 model Notification {
   id String @id @default(uuid()) @db.Uuid

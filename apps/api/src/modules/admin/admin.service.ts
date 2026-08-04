@@ -10,11 +10,13 @@ import {
   UserStatus,
 } from "@prisma/client";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
+import { csvToRecords } from "../../common/csv.util.js";
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly connectivity: ConnectivityService) {}
 
   async plans() {
     if (!this.prisma.enabled) return [];
@@ -66,6 +68,113 @@ export class AdminService {
     return (await this.plans()).find((plan) => plan.id === id);
   }
 
+  async importPlansFromCsv(csv: string) {
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    const { records, errors } = csvToRecords(csv, [
+      "countryiso2",
+      "name",
+      "providerplanid",
+      "dataallowance",
+      "validitydays",
+      "costprice",
+      "sellingprice",
+    ]);
+    if (errors.length) throw new BadRequestException(errors.join("; "));
+    if (records.length > 2000)
+      throw new BadRequestException("A single upload is limited to 2,000 rows");
+    const rowErrors: string[] = [];
+    let imported = 0;
+    let updated = 0;
+    for (const [index, row] of records.entries()) {
+      const line = index + 2;
+      const countryIso2 = (row.countryiso2 ?? "").trim().toUpperCase();
+      const name = (row.name ?? "").trim();
+      const providerPlanId = (row.providerplanid ?? "").trim();
+      const dataAllowance = (row.dataallowance ?? "").trim();
+      const validityDays = Number(row.validitydays);
+      const costPrice = Number(row.costprice);
+      const sellingPrice = Number(row.sellingprice);
+      const currency = (row.currency ?? "NPR").trim().toUpperCase();
+      const popular =
+        (row.popular ?? "").toLowerCase() === "true" ||
+        (row.popular ?? "").trim() === "1";
+      const statusRaw = (row.status ?? "").trim().toUpperCase();
+      const status: PlanStatus =
+        statusRaw === "DRAFT" ||
+        statusRaw === "DISABLED" ||
+        statusRaw === "ARCHIVED"
+          ? statusRaw
+          : PlanStatus.ACTIVE;
+      const coverageCountries = (row.coveragecountries ?? "")
+        .split(/[|;]/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      if (!/^[A-Z]{2}$/.test(countryIso2)) { rowErrors.push(`Line ${line}: invalid countryIso2 '${countryIso2 || '(empty)'}'`); continue; }
+      if (!name) { rowErrors.push(`Line ${line}: name is required`); continue; }
+      if (!providerPlanId) { rowErrors.push(`Line ${line}: providerPlanId is required`); continue; }
+      if (!dataAllowance) { rowErrors.push(`Line ${line}: dataAllowance is required`); continue; }
+      if (!Number.isInteger(validityDays) || validityDays < 1 || validityDays > 3650) { rowErrors.push(`Line ${line}: validityDays must be a whole number between 1 and 3650`); continue; }
+      if (!Number.isFinite(costPrice) || costPrice < 0 || costPrice > 9999999999.99) { rowErrors.push(`Line ${line}: costPrice must be a non-negative number`); continue; }
+      if (!Number.isFinite(sellingPrice) || sellingPrice < 0 || sellingPrice > 9999999999.99) { rowErrors.push(`Line ${line}: sellingPrice must be a non-negative number`); continue; }
+      try {
+        const country = await this.prisma.country.upsert({
+          where: { isoCode: countryIso2 },
+          update: {
+            name: (row.countryname ?? "").trim() || countryIso2,
+            active: true,
+          },
+          create: {
+            isoCode: countryIso2,
+            name: (row.countryname ?? "").trim() || countryIso2,
+            active: true,
+          },
+        });
+        const existing = await this.prisma.plan.findUnique({
+          where: {
+            countryId_providerPlanId: {
+              countryId: country.id,
+              providerPlanId,
+            },
+          },
+        });
+        const coverage = coverageCountries.length
+          ? coverageCountries
+          : [country.name];
+        const data = {
+          name,
+          dataAllowance,
+          validityDays,
+          costPrice,
+          sellingPrice,
+          currency,
+          popular,
+          status,
+          coverage,
+        };
+        if (existing) {
+          await this.prisma.plan.update({ where: { id: existing.id }, data });
+          updated++;
+        } else {
+          await this.prisma.plan.create({
+            data: { countryId: country.id, providerPlanId, ...data },
+          });
+          imported++;
+        }
+      } catch (error) {
+        rowErrors.push(
+          `Line ${line}: ${error instanceof Error ? error.message : "failed to persist"}`,
+        );
+      }
+    }
+    return {
+      imported,
+      updated,
+      skipped: rowErrors.length,
+      errors: rowErrors.slice(0, 100),
+    };
+  }
+
   integrations() {
     const configured = (keys: string[]) =>
       keys.every((key) => Boolean(process.env[key]));
@@ -113,12 +222,24 @@ export class AdminService {
           : "CONFIG_REQUIRED",
       },
       {
-        id: "auriga",
-        name: "Auriga Connectivity",
+        id: "transatel",
+        name: "Transatel Connectivity",
         category: "CONNECTIVITY",
-        provider: "AURIGA MOCK",
-        enabled: true,
-        status: "HEALTHY",
+        provider: "TRANSATEL",
+        enabled: configured([
+          "TRANSATEL_BASE_URL",
+          "TRANSATEL_CLIENT_ID",
+          "TRANSATEL_CLIENT_SECRET",
+          "TRANSATEL_MVNO_REF",
+        ]),
+        status: configured([
+          "TRANSATEL_BASE_URL",
+          "TRANSATEL_CLIENT_ID",
+          "TRANSATEL_CLIENT_SECRET",
+          "TRANSATEL_MVNO_REF",
+        ])
+          ? "HEALTHY"
+          : "CONFIG_REQUIRED",
       },
       {
         id: "cloudinary",
@@ -166,6 +287,36 @@ export class AdminService {
         ? `${item.name} configuration is available`
         : `${item.name} requires environment configuration`,
     };
+  }
+
+  private requireTransatel() {
+    const required = [
+      "TRANSATEL_BASE_URL",
+      "TRANSATEL_CLIENT_ID",
+      "TRANSATEL_CLIENT_SECRET",
+      "TRANSATEL_MVNO_REF",
+    ];
+    if (!required.every((key) => Boolean(process.env[key])))
+      throw new BadRequestException(
+        "Transatel is not configured; set the Transatel environment variables first",
+      );
+  }
+
+  async syncTransatelCatalog() {
+    this.requireTransatel();
+    return this.connectivity.syncCatalog();
+  }
+
+  async ensureTransatelWebhook() {
+    this.requireTransatel();
+    return this.connectivity.ensureWebhook();
+  }
+
+  async transatelEligibility(planId: string, msisdn: string) {
+    this.requireTransatel();
+    if (!/^\d{6,15}$/.test(msisdn))
+      throw new BadRequestException("A valid subscriber MSISDN is required");
+    return this.connectivity.checkEligibility(planId, msisdn);
   }
 
   async users() {

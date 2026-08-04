@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Subscription" ADD COLUMN     "usedMb" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "totalMb" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "usageLastCheckedAt" TIMESTAMP(3);

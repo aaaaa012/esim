@@ -4,4 +4,4 @@
 
 Payment and connectivity providers implement internal contracts. Raw provider DTOs never enter order, inventory, or customer services.
 
-Auriga is the first connectivity target. Until its contract is supplied, a deterministic mock supports the complete workflow. Khalti and eSewa follow the same payment contract.
+Transatel is the connectivity provider. Its OCS preload, inventory, catalog, eSIM-management and webhook APIs are adapted through the internal `ConnectivityProvider` contract. Khalti and eSewa follow the same payment contract.

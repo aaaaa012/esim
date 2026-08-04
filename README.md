@@ -129,11 +129,29 @@ Upstash Redis should use its TCP/TLS connection string. Fixed-price plans are pr
 The default development configuration uses:
 
 - Payment gateway simulators
-- Deterministic Auriga connectivity simulator
+- Transatel connectivity (production provider; requires credentials in `.env`)
 - Simulated notifications unless Gmail OAuth is configured
 - In-process queue simulation unless `REDIS_URL` is configured
 
 Do not claim sandbox or live-provider certification until the corresponding credentials and provider contracts have been smoke-tested.
+
+## API hardening
+
+- **Error contract** — every API error returns a stable machine-readable `error.code` and a customer-safe `message` (`packages/shared/src/errors.ts`). Internal detail (provider responses, stack traces) is logged server-side with the correlation ID and never sent to clients.
+- **Request logging** — every request is logged with method, path, status, duration, correlation ID and a masked actor.
+- **Rate limiting** — per-IP + route limits with `x-ratelimit-limit` / `x-ratelimit-remaining` headers; webhook endpoints are exempt. Tune via `RATE_LIMIT_PER_MINUTE` and `AUTH_RATE_LIMIT_PER_MINUTE`.
+- **Usage reconciliation** — active Transatel subscriptions are polled for fresh usage balances on the `reconciliation` queue (`RECONCILIATION_INTERVAL_MINUTES`, default 15).
+- **Health** — `/health/ready` reports real database and queue state.
+- **Provider audit trail** — every outbound Transatel call (token, provisioning, usage, catalog, eligibility, webhooks) is persisted to `IntegrationLog` with HTTP status, duration, and the provider's raw error text; ops can query `GET /operations/integration-logs`. Inbound webhooks are stored in `WebhookEvent` with signature validity and processing errors.
+- **Provisioning forensics** — `ProvisioningAttempt` stores the exact request snapshot, response snapshot, and a typed `errorCode` (`PROVISIONING_FAILED (HTTP 502): <provider detail>`) for every attempt.
+- **Least-privilege responses** — customer order endpoints strip internal fields (`ownerId`, provider subscription IDs, Cloudinary asset ids, payment correlation ids, operator clerk ids from timeline reasons); ops endpoints receive the full record.
+
+## Bulk data management
+
+- `POST /admin/plans/import-csv` — bulk upsert of plans (`countryIso2, countryName, name, providerPlanId, dataAllowance, validityDays, costPrice, sellingPrice, currency, popular, status, coverageCountries`). Changes publish to the customer catalog immediately. Column headers are case-insensitive.
+- `POST /operations/inventory/import-csv` — bulk profile upload (`iccid, eid`), up to 5,000 rows, with per-line validation, in-file duplicate detection, and existing ICCID/EID skip reporting.
+- `POST /operations/inventory/import` — paste-style ICCID import (existing behavior).
+- Ops UI: CSV uploaders on the **Inventory** and **Admin > Plans** pages with per-row error feedback.
 
 ## Quality checks
 

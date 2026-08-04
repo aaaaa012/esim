@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -26,6 +27,12 @@ export class AdminController {
   @Get("plans") plans() {
     return this.admin.plans();
   }
+  @Post("plans/import-csv")
+  importPlansCsv(@Body() body: { csv: string }) {
+    if (typeof body.csv !== "string" || !body.csv.trim())
+      throw new BadRequestException("csv content is required");
+    return this.admin.importPlansFromCsv(body.csv);
+  }
   @Patch("plans/:id") updatePlan(
     @Param("id") id: string,
     @Body()
@@ -38,6 +45,18 @@ export class AdminController {
   }
   @Post("integrations/:id/test") test(@Param("id") id: string) {
     return this.admin.testIntegration(id);
+  }
+  @Post("integrations/transatel/sync-catalog")
+  syncCatalog() {
+    return this.admin.syncTransatelCatalog();
+  }
+  @Post("integrations/transatel/ensure-webhook")
+  ensureWebhook() {
+    return this.admin.ensureTransatelWebhook();
+  }
+  @Post("integrations/transatel/eligibility")
+  eligibility(@Body() body: { planId: string; msisdn: string }) {
+    return this.admin.transatelEligibility(body.planId, body.msisdn);
   }
   @Get("users") users() {
     return this.admin.users();

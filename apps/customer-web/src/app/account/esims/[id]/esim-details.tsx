@@ -14,6 +14,7 @@ import {
   Upload,
 } from "lucide-react";
 import "./recovery.css";
+import { apiErrorMessage } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -59,7 +60,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
     authFetch(`${API}/customer/orders/${id}`, { headers }).then(
       async (response) => {
         const value = await response.json();
-        if (!response.ok) throw new Error(value.error?.message);
+        if (!response.ok) throw new Error(apiErrorMessage(value.error?.code ?? "", value.error?.message ?? "Something went wrong"));
         setOrder(value.data);
       },
     );
@@ -72,7 +73,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
     });
     const value = await response.json();
     if (!response.ok) {
-      setError(value.error?.message);
+      setError(apiErrorMessage(value.error?.code ?? "", value.error?.message ?? "Something went wrong"));
       return;
     }
     setQr(value.data.qrPayload);
@@ -103,7 +104,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
       );
       const authorizationValue = await authorizationResponse.json();
       if (!authorizationResponse.ok)
-        throw new Error(authorizationValue.error?.message);
+        throw new Error(apiErrorMessage(authorizationValue.error?.code ?? "", authorizationValue.error?.message ?? "Something went wrong"));
       const authorization = authorizationValue.data as DocumentAuthorization;
       if (
         authorization.upload.mode !== "cloudinary-signed" ||
@@ -136,7 +137,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
         },
       );
       const confirmationValue = await confirmation.json();
-      if (!confirmation.ok) throw new Error(confirmationValue.error?.message);
+      if (!confirmation.ok) throw new Error(apiErrorMessage(confirmationValue.error?.code ?? "", confirmationValue.error?.message ?? "Something went wrong"));
       setReplacements({});
       await load();
     } catch (cause) {

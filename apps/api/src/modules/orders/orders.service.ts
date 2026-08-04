@@ -4,7 +4,9 @@ import { DocumentStatus, DocumentType, OrderStatus, PaymentProvider, PaymentStat
 import { CatalogService,type CatalogPlan } from '../catalog/catalog.controller.js';
 import { assertTransition } from './order-machine.js';
 import { ConnectivityService } from '../integration/connectivity.service.js';
+import type { ProviderWebhookEvent } from '../integration/connectivity-provider.js';
 import { CloudinaryStorageService } from '../../infrastructure/cloudinary-storage.service.js';
+import { ApiException } from '../../common/api-error.js';
 import { OrdersPersistenceService } from './orders-persistence.service.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { QueueService } from '../../jobs/queue.service.js';
@@ -16,6 +18,7 @@ export type DemoOrder = {
   id: string; ownerId: string; orderNumber: string; status: OrderStatus; version: number; plan: CatalogPlan; totalAmountNpr: number;
   pricingSnapshot: object; compatibilityAcceptedAt: string; traveler?: TravelerInput; documents: { id: string; type: DocumentType; fileName: string; privateAssetId: string; status: DocumentStatus; uploadVerified?: boolean }[];
   payment?: { provider: PaymentProvider; reference: string; status: PaymentStatus; correlationId?: string; expiresAt?: string; returnUrl?: string }; timeline: Timeline[]; qrPayload?: string; createdAt: string;
+  providerSubscriptionId?: string; providerStatus?: string;
 };
 
 @Injectable()
@@ -24,34 +27,84 @@ export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
   constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService,private readonly catalog:CatalogService) {}
   async onModuleInit() { for (const order of await this.persistence.load()) this.orders.set(order.id, order); this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`); }
-  list(ownerId?: string) { return [...this.orders.values()].filter((o) => !ownerId || o.ownerId === ownerId).map((order) => this.redact(order)); }
+  list(ownerId?: string) { return [...this.orders.values()].filter((o) => !ownerId || o.ownerId === ownerId).map((order) => ownerId ? this.redact(order) : this.expand(order)); }
   audit() { return this.persistence.audit(); }
   get(id: string, ownerId?: string) { const order = this.orders.get(id); if (!order || (ownerId && order.ownerId !== ownerId)) throw new NotFoundException('Order not found'); return order; }
-  view(id: string, ownerId?: string) { return this.redact(this.get(id, ownerId)); }
+  view(id: string, ownerId?: string) { return ownerId ? this.redact(this.get(id, ownerId)) : this.expand(this.get(id)); }
   qr(id: string, ownerId: string) { const order = this.get(id, ownerId); if (order.status !== OrderStatus.COMPLETED || !order.qrPayload) throw new NotFoundException('eSIM activation details are not ready'); return { orderId: order.id, orderNumber: order.orderNumber, qrPayload: order.qrPayload }; }
-  async create(ownerId: string, planId: string, compatibilityAccepted: boolean) {
+  async create(ownerId: string, planId: string, compatibilityAccepted: boolean, meta?: { ipAddress?: string; userAgent?: string }) {
     if (!compatibilityAccepted) throw new BadRequestException('Compatibility declaration is required');
     const plan = await this.catalog.findActive(planId); if (!plan) throw new BadRequestException('Invalid or inactive plan');
     const id = randomUUID(); const now = new Date().toISOString();
     const order: DemoOrder = { id, ownerId, orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`, status: OrderStatus.DRAFT, version: 0, plan, totalAmountNpr: plan.sellingPriceNpr, pricingSnapshot: { planId, name: plan.name, amount: plan.sellingPriceNpr, currency: 'NPR' }, compatibilityAcceptedAt: now, documents: [], timeline: [{ from: null, to: OrderStatus.DRAFT, at: now }], createdAt: now };
-    this.orders.set(id, order); await this.persistence.save(order); return order;
+    this.orders.set(id, order); await this.persistence.save(order);
+    if (meta?.ipAddress || meta?.userAgent) {
+      await this.persistence.recordConsent(id, ownerId, 'E_SIM_COMPATIBILITY', '1.0', meta.ipAddress ?? 'unknown', meta.userAgent ?? 'unknown').catch((error) => this.logger.warn(`Consent recording failed for order ${id}: ${error instanceof Error ? error.message : 'unknown'}`));
+    }
+    return this.redact(order);
   }
-  async setTraveler(id: string, ownerId: string, traveler: TravelerInput) { const order = this.get(id, ownerId); if (order.status !== OrderStatus.DRAFT) throw new BadRequestException('Submitted order is immutable'); order.traveler = traveler; await this.persistence.save(order); return order; }
+  async setTraveler(id: string, ownerId: string, traveler: TravelerInput) { const order = this.get(id, ownerId); if (order.status !== OrderStatus.DRAFT) throw new BadRequestException('Submitted order is immutable'); order.traveler = traveler; await this.persistence.save(order); return this.redact(order); }
   async addDocument(id: string, ownerId: string, input: { type: DocumentType; fileName: string; contentType?: string }) { const order = this.get(id, ownerId); if (![OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER].includes(order.status)) throw new BadRequestException('Documents cannot be changed now'); const signed = this.storage.createDocumentUpload(id, input.type); const document = { id: randomUUID(), type: input.type, fileName: input.fileName, privateAssetId: signed.assetId, status: DocumentStatus.PENDING }; order.documents = order.documents.filter((d) => d.type !== input.type).concat(document); await this.persistence.save(order); return { ...document, upload: signed.upload }; }
   async confirmDocument(id: string, documentId: string, ownerId: string) { const order = this.get(id, ownerId); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); await this.storage.verifyDocument(document.privateAssetId); document.uploadVerified = true; if (order.status === OrderStatus.AWAITING_CUSTOMER && !order.documents.some((item) => item.status === DocumentStatus.REUPLOAD_REQUIRED)) this.transition(order, OrderStatus.REVIEW_PENDING, 'Customer supplied requested document'); await this.persistence.save(order); return { id: document.id, type: document.type, status: document.status, uploadVerified: true }; }
   async documentPreview(id: string, documentId: string) { const order = this.get(id); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); return { url: this.storage.signedReadUrl(document.privateAssetId), fileName: document.fileName, contentType: document.fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image', expiresInSeconds: 300 } }
   async documentContent(id: string, documentId: string) { const order = this.get(id); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); return { ...(await this.storage.downloadDocument(document.privateAssetId)), fileName: document.fileName }; }
-  async beginPayment(id: string, ownerId: string, provider: PaymentProvider, initiation: { reference: string; correlationId?: string; expiresAt?: string; returnUrl: string }) { const order = this.get(id, ownerId); const required = order.documents.filter((d) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type)); if (!order.traveler || required.length !== 2) throw new BadRequestException('Traveler, passport, and ticket are required'); await Promise.all(required.map((document) => this.storage.verifyDocument(document.privateAssetId))); required.forEach((document) => { document.uploadVerified = true; }); this.transition(order, OrderStatus.PAYMENT_PENDING); order.payment = { provider, reference: initiation.reference, status: PaymentStatus.PENDING, ...(initiation.correlationId ? { correlationId: initiation.correlationId } : {}), ...(initiation.expiresAt ? { expiresAt: initiation.expiresAt } : {}), returnUrl: initiation.returnUrl }; await this.persistence.save(order); return order; }
-  async confirmPayment(id: string, reference: string) { const order = this.get(id); if (order.payment?.reference !== reference) throw new BadRequestException('Payment reference mismatch'); if (order.payment.status === PaymentStatus.COMPLETED) return order; order.payment.status = PaymentStatus.COMPLETED; this.transition(order, OrderStatus.PAYMENT_CONFIRMED); this.transition(order, OrderStatus.REVIEW_PENDING); await this.persistence.save(order); return order; }
+  async beginPayment(id: string, ownerId: string, provider: PaymentProvider, initiation: { reference: string; correlationId?: string; expiresAt?: string; returnUrl: string }) { const order = this.get(id, ownerId); const required = order.documents.filter((d) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type)); if (!order.traveler || required.length !== 2) throw new BadRequestException('Traveler, passport, and ticket are required'); await Promise.all(required.map((document) => this.storage.verifyDocument(document.privateAssetId))); required.forEach((document) => { document.uploadVerified = true; }); if (order.status !== OrderStatus.PAYMENT_PENDING) this.transition(order, OrderStatus.PAYMENT_PENDING); order.payment = { provider, reference: initiation.reference, status: PaymentStatus.PENDING, ...(initiation.correlationId ? { correlationId: initiation.correlationId } : {}), ...(initiation.expiresAt ? { expiresAt: initiation.expiresAt } : {}), returnUrl: initiation.returnUrl }; await this.persistence.save(order); return this.redact(order); }
+  async confirmPayment(id: string, reference: string) { const order = this.get(id); if (order.payment?.reference !== reference) throw new BadRequestException('Payment reference mismatch'); if (order.payment.status === PaymentStatus.COMPLETED) return this.redact(order); order.payment.status = PaymentStatus.COMPLETED; this.transition(order, OrderStatus.PAYMENT_CONFIRMED); this.transition(order, OrderStatus.REVIEW_PENDING); await this.persistence.save(order); return this.redact(order); }
   async requestReupload(id: string, reason: string) { const order = this.get(id); this.transition(order, OrderStatus.AWAITING_CUSTOMER, reason); order.documents.forEach((d) => { d.status = DocumentStatus.REUPLOAD_REQUIRED; }); await this.persistence.save(order); return order; }
   async reviewDocument(id: string, documentId: string, actorId: string, decision: 'APPROVE' | 'REUPLOAD', reason?: string) { const order = this.get(id); if (order.status !== OrderStatus.REVIEW_PENDING) throw new BadRequestException('Order is not awaiting review'); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); if (decision === 'APPROVE') { document.status = DocumentStatus.APPROVED; order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `${document.type} approved by ${actorId}` }); } else { if (!reason?.trim()) throw new BadRequestException('Re-upload reason is required'); document.status = DocumentStatus.REUPLOAD_REQUIRED; this.transition(order, OrderStatus.AWAITING_CUSTOMER, `${document.type}: ${reason.trim()} (requested by ${actorId})`); } await this.persistence.save(order); await this.persistence.recordReview(order.id, documentId, actorId, decision, reason); if(decision==='REUPLOAD'&&order.traveler)await this.safeNotify(order,'DOCUMENT_REUPLOAD',reason); return this.redact(order); }
   async approve(id: string, actorId: string) { const order = this.get(id); const required = order.documents.filter((document) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type)); if (required.length !== 2 || required.some((document) => document.status !== DocumentStatus.APPROVED)) throw new BadRequestException('Passport and ticket must be individually approved first'); const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.APPROVED, `Approved by ${actorId}; inventory ${profile.iccid} reserved`); this.transition(order, OrderStatus.PROVISIONING); await this.persistence.save(order); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); if (!this.queues.enabled) await this.processLocally(order.id); return this.redact(order); }
-  async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); const profile = await this.inventory.profileForOrder(order.id); const request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence } }; try { const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.qrPayload) throw new Error('Connectivity provider has not delivered activation details'); order.qrPayload = result.qrPayload; await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload); this.transition(order, OrderStatus.COMPLETED, `Provisioned on attempt ${attempt}`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) { await this.persistence.provisioningAttempt(order.id, attempt, request, { errorCode: error instanceof Error ? error.name : 'UNKNOWN' }); if (finalAttempt) { this.transition(order, OrderStatus.PROVISIONING_FAILED, 'Provisioning retries exhausted'); await this.persistence.save(order); } throw error; } }
-  async completeConnectivityCallback(id:string,qrPayload:string,provider:string){const order=this.get(id);if(order.status===OrderStatus.COMPLETED)return this.redact(order);if(order.status!==OrderStatus.PROVISIONING)throw new BadRequestException('Order is not awaiting connectivity completion');order.qrPayload=qrPayload;await this.inventory.assign(order.id,await this.inventory.customerIdForOrder(order.id),qrPayload);this.transition(order,OrderStatus.COMPLETED,`${provider} callback delivered activation details`);await this.persistence.save(order);await this.safeNotify(order,'QR_READY');return this.redact(order)}
+  async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); const profile = await this.inventory.profileForOrder(order.id); const request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence } }; try { const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.qrPayload) throw new Error('Connectivity provider has not delivered activation details'); order.qrPayload = result.qrPayload; order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'COMPLETED'; await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, { provider: this.connectivity.descriptor().provider, ...(result.providerSubscriptionId ? { providerSubscriptionId: result.providerSubscriptionId } : {}) }); this.transition(order, OrderStatus.COMPLETED, `Provisioned on attempt ${attempt}`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
+    const errorCode = error instanceof ApiException
+      ? `${error.code} (HTTP ${error.getStatus()})${error.internalDetail !== undefined ? `: ${typeof error.internalDetail === 'string' ? error.internalDetail : JSON.stringify(error.internalDetail)}` : ''}`.slice(0, 2000)
+      : (error instanceof Error ? error.name : 'UNKNOWN');
+    await this.persistence.provisioningAttempt(order.id, attempt, request, { errorCode });
+    if (finalAttempt) { this.transition(order, OrderStatus.PROVISIONING_FAILED, 'Provisioning retries exhausted'); await this.persistence.save(order); }
+    throw error;
+  } }
+  async applyProviderEvent(event: ProviderWebhookEvent) {
+    if (!event.orderId) throw new BadRequestException('Provider event did not include an order id');
+    const order = this.get(event.orderId);
+    if (!order) throw new NotFoundException(`No active order found for ${event.orderId}`);
+    const provider = this.connectivity.descriptor().provider;
+    const lifecycle = {
+      provider,
+      ...(event.status ? { status: event.status } : {}),
+      ...(event.subscriptionId ? { subscriptionId: event.subscriptionId } : {}),
+      ...(event.activatedAt ? { activatedAt: event.activatedAt } : {}),
+      ...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
+    };
+
+    if (event.status === 'ACTIVATED' && order.status === OrderStatus.PROVISIONING) {
+      const qrPayload = event.qrPayload ?? order.qrPayload;
+      if (!qrPayload) throw new BadRequestException('Activation event is missing activation details');
+      order.qrPayload = qrPayload;
+      if (event.subscriptionId) order.providerSubscriptionId = event.subscriptionId;
+      order.providerStatus = 'ACTIVATED';
+      await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), qrPayload, { provider, ...(event.subscriptionId ? { providerSubscriptionId: event.subscriptionId } : {}) });
+      await this.inventory.applyLifecycle(order.id, lifecycle);
+      this.transition(order, OrderStatus.COMPLETED, `Provider ${event.eventType} delivered activation`);
+      await this.persistence.save(order);
+      await this.safeNotify(order, 'QR_READY');
+      return { accepted: true, eventType: event.eventType };
+    }
+
+    await this.inventory.applyLifecycle(order.id, lifecycle);
+    if (event.subscriptionId) order.providerSubscriptionId = event.subscriptionId;
+    if (event.status) order.providerStatus = event.status;
+    await this.persistence.save(order);
+    return { accepted: true, eventType: event.eventType };
+  }
   retry(id: string) { const order = this.get(id); if (order.status !== OrderStatus.PROVISIONING_FAILED) throw new BadRequestException('Order is not retryable'); return this.approveProvisioning(order); }
   private async approveProvisioning(order: DemoOrder) { this.transition(order, OrderStatus.PROVISIONING, 'Manual retry'); await this.persistence.save(order); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `retry-${order.id}-${Date.now()}`); if (!this.queues.enabled) return this.processLocally(order.id); return this.redact(order); }
   private async processLocally(orderId:string){let failure:unknown;for(let attempt=1;attempt<=3;attempt++){try{return await this.processProvisioning(orderId,attempt,attempt===3)}catch(error){failure=error}}throw failure}
   private transition(order: DemoOrder, to: OrderStatus, reason?: string) { assertTransition(order.status, to); const from = order.status; order.status = to; order.timeline.push({ from, to, at: new Date().toISOString(), ...(reason ? { reason } : {}) }); }
   private async safeNotify(order:DemoOrder,template:'QR_READY'|'DOCUMENT_REUPLOAD',reason?:string){if(!order.traveler)return;try{await this.notifications.enqueue({orderId:order.id,channel:'EMAIL',template,recipient:order.traveler.email,orderNumber:order.orderNumber,...(reason?{reason}:{})})}catch(error){this.logger.error(`Notification enqueue failed for order ${order.id}: ${error instanceof Error?error.message:'unknown'}`)}}
-  private redact(order: DemoOrder) { const { qrPayload: _qrPayload, ...safe } = order; return safe; }
+  private expand(order: DemoOrder) { const { qrPayload: _qrPayload, ...safe } = order; return safe; }
+  private redact(order: DemoOrder) {
+    const { ownerId: _ownerId, providerSubscriptionId: _providerSubscriptionId, providerStatus: _providerStatus, ...safe } = order;
+    const documents = safe.documents.map(({ privateAssetId: _privateAssetId, ...document }) => document);
+    const payment = safe.payment ? (({ correlationId: _correlationId, ...rest }) => rest)(safe.payment) : undefined;
+    const timeline = safe.timeline.map((event) => ({ ...event, ...(event.reason ? { reason: event.reason.replace(/\s+\(?(requested by|approved by|assigned by)\s+user_[A-Za-z0-9_]+\)?\.?$/i, '').trim() || undefined } : {}) }));
+    return { ...safe, documents, ...(payment ? { payment } : {}), timeline } as DemoOrder;
+  }
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, HttpCode, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { UserRole } from '@visa-compass/shared';
 import { AuthGuard, type AuthenticatedRequest, requireRole } from '../../common/auth.guard.js';
 import { AccountGuard,AccountTypes } from '../../common/auth.guard.js';
@@ -46,15 +46,18 @@ export class WebhooksController {
 
   @Post('connectivity/:provider')
   @HttpCode(202)
-  async connectivity(@Param('provider') provider: string, @Body() body: { eventId?: string }, @Headers('x-visa-signature') signature?:string) {
-    if (!body.eventId) throw new BadRequestException('eventId is required');
-    if(process.env.NODE_ENV==='production'&&!signature)throw new BadRequestException('Connectivity webhook signature is required');
-    if(signature)this.verifyConnectivitySignature(JSON.stringify(body),signature);
-    const key = `${provider}:${body.eventId}`;
-    if (this.accepted.has(key) || await this.webhookExists(provider, body.eventId)) return { accepted: true, duplicate: true };
+  async connectivity(@Param('provider') provider: string, @Body() body: { eventId?: string; header?: { eventId?: string } }, @Headers() headers: Record<string, string>) {
+    if (provider.toLowerCase() !== 'transatel') throw new BadRequestException(`Unsupported connectivity provider: ${provider}`);
+    const eventId = body.eventId ?? body.header?.eventId;
+    if (!eventId) throw new BadRequestException('eventId is required');
+    const signature = headers['x-tsl-signature-256'] ?? headers['x-visa-signature'];
+    if (signature) this.verifyTransatelSignature(JSON.stringify(body), signature);
+    else if (process.env.NODE_ENV === 'production') throw new BadRequestException('Transatel webhook signature is required');
+    const key = `${provider}:${eventId}`;
+    if (this.accepted.has(key) || await this.webhookExists(provider, eventId)) return { accepted: true, duplicate: true };
     this.accepted.add(key);
-    await this.persistWebhook(provider, body.eventId, body, true);
-    await this.queues.add(QUEUES.providerCallbacks, 'connectivity-callback', { provider, eventId: body.eventId, payload: body }, key);
+    await this.persistWebhook(provider, eventId, body, Boolean(signature));
+    await this.queues.add(QUEUES.providerCallbacks, 'connectivity-callback', { provider, eventId, payload: body }, key);
     return { accepted: true, queued: true };
   }
 
@@ -70,7 +73,7 @@ export class WebhooksController {
     const a = Buffer.from(expected); const b = Buffer.from(signature);
     if (a.length !== b.length || !timingSafeEqual(a, b)) throw new BadRequestException('Invalid webhook signature');
   }
-  private verifyConnectivitySignature(payload:string,signature:string){const secret=process.env.CONNECTIVITY_WEBHOOK_SECRET??(process.env.NODE_ENV!=='production'?'local-connectivity-webhook-secret':'');if(!secret)throw new BadRequestException('Connectivity webhook is not configured');const expected=createHmac('sha256',secret).update(payload).digest('hex');const a=Buffer.from(expected);const b=Buffer.from(signature);if(a.length!==b.length||!timingSafeEqual(a,b))throw new BadRequestException('Invalid connectivity webhook signature')}
+  private verifyTransatelSignature(payload:string,signature:string){const secret=process.env.TRANSATEL_WEBHOOK_SECRET;if(!secret)throw new BadRequestException('Transatel webhook is not configured');const expected=`sha256=${createHmac('sha256',secret).update(payload).digest('hex')}`;const a=Buffer.from(expected);const b=Buffer.from(signature);if(a.length!==b.length||!timingSafeEqual(a,b))throw new BadRequestException('Invalid Transatel webhook signature')}
 }
 
 @Controller('operations/integration-events')
@@ -79,4 +82,12 @@ export class WebhooksController {
 export class OperationsIntegrationEventsController {
   constructor(private readonly prisma:PrismaService){}
   @Get() async list(@Req() request:AuthenticatedRequest){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);if(!this.prisma.enabled)return [];return this.prisma.webhookEvent.findMany({where:{NOT:{source:{startsWith:'idempotency:'}}},select:{id:true,source:true,eventId:true,signatureValid:true,processedAt:true,errorMessage:true,createdAt:true},orderBy:{createdAt:'desc'},take:200})}
+}
+
+@Controller('operations/integration-logs')
+@UseGuards(AuthGuard,AccountGuard)
+@AccountTypes(UserRoleName.OPERATIONS,UserRoleName.SUPER_ADMIN)
+export class OperationsIntegrationLogsController {
+  constructor(private readonly prisma:PrismaService){}
+  @Get() async list(@Req() request:AuthenticatedRequest, @Query('operation') operation?:string){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);if(!this.prisma.enabled)return [];return this.prisma.integrationLog.findMany({where:operation?{operation}:{},select:{id:true,operation:true,method:true,endpoint:true,status:true,durationMs:true,errorCode:true,errorMessage:true,createdAt:true},orderBy:{createdAt:'desc'},take:200})}
 }

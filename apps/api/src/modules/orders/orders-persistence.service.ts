@@ -35,6 +35,8 @@ export class OrdersPersistenceService {
         ...(payment ? { payment: { provider: payment.provider as PaymentProvider, reference: payment.paymentReference, status: payment.status as PaymentStatus, ...(payment.providerCorrelationId ? { correlationId: payment.providerCorrelationId } : {}), ...(payment.expiresAt ? { expiresAt: payment.expiresAt.toISOString() } : {}), ...(payment.returnUrl ? { returnUrl: payment.returnUrl } : {}) } } : {}),
         timeline: row.events.map((event) => ({ from: event.fromStatus as OrderStatus | null, to: event.toStatus as OrderStatus, at: event.createdAt.toISOString(), ...(event.reason ? { reason: event.reason } : {}) })),
         ...(row.customerEsim ? { qrPayload: this.crypto.decrypt(row.customerEsim.qrPayloadEncrypted) } : {}),
+        ...(row.providerSubscriptionId ? { providerSubscriptionId: row.providerSubscriptionId } : {}),
+        ...(row.providerStatus ? { providerStatus: row.providerStatus } : {}),
         createdAt: row.createdAt.toISOString(),
       };
     });
@@ -45,13 +47,13 @@ export class OrdersPersistenceService {
     await this.prisma.$transaction(async (tx) => {
       const identity = await this.ensureIdentity(tx, order.ownerId);
       const country = await tx.country.upsert({ where: { isoCode: order.plan.countryCode }, update: { name: order.plan.countryName, active: true }, create: { isoCode: order.plan.countryCode, name: order.plan.countryName } });
-      await tx.plan.upsert({ where: { id: order.plan.id }, update: { name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' }, create: { id: order.plan.id, countryId: country.id, providerPlanId: `AURIGA-MOCK-${order.plan.countryCode}`, name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, costPrice: Math.round(order.plan.sellingPriceNpr * 0.65), sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' } });
+      await tx.plan.upsert({ where: { id: order.plan.id }, update: { name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' }, create: { id: order.plan.id, countryId: country.id, providerPlanId: `TRANSATEL-${order.plan.countryCode}`, name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, costPrice: Math.round(order.plan.sellingPriceNpr * 0.65), sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' } });
       const existing = await tx.order.findUnique({ where: { id: order.id }, select: { id: true } });
       if (existing) {
-        const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, version: { increment: 1 } } });
+        const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, version: { increment: 1 } } });
         if (updated.count !== 1) throw new ConflictException('Order was changed by another request; reload and retry');
       } else {
-        await tx.order.create({ data: { id: order.id, orderNumber: order.orderNumber, customerId: identity.customerId, planId: order.plan.id, status: order.status as DbOrderStatus, version: 1, subtotal: order.totalAmountNpr, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, compatibilityAcceptedAt: new Date(order.compatibilityAcceptedAt), createdAt: new Date(order.createdAt) } });
+        await tx.order.create({ data: { id: order.id, orderNumber: order.orderNumber, customerId: identity.customerId, planId: order.plan.id, status: order.status as DbOrderStatus, version: 1, subtotal: order.totalAmountNpr, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, compatibilityAcceptedAt: new Date(order.compatibilityAcceptedAt), providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, createdAt: new Date(order.createdAt) } });
       }
       if (order.traveler) await tx.traveler.upsert({ where: { orderId: order.id }, update: this.travelerData(order.traveler), create: { orderId: order.id, ...this.travelerData(order.traveler) } });
       await tx.travelerDocument.deleteMany({ where: { orderId: order.id, id: { notIn: order.documents.map((document) => document.id) } } });
@@ -63,7 +65,14 @@ export class OrdersPersistenceService {
     order.version += 1;
   }
 
-  async provisioningAttempt(orderId: string, attempt: number, request: object, result?: { response?: object; errorCode?: string }) { if (!this.prisma.enabled) return; await this.prisma.provisioningAttempt.create({ data: { orderId, provider: 'AURIGA_MOCK', status: result?.errorCode ? (attempt >= 3 ? 'FAILED' : 'RETRYING') : 'SUCCEEDED', correlationId: randomUUID(), attempt, requestSnapshot: request as Prisma.InputJsonValue, ...(result?.response ? { responseSnapshot: result.response as Prisma.InputJsonValue } : {}), ...(result?.errorCode ? { errorCode: result.errorCode } : {}), completedAt: new Date() } }); }
+  async recordConsent(orderId: string, ownerId: string, type: string, version: string, ipAddress: string, userAgent: string) {
+    if (!this.prisma.enabled) return;
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, select: { customerId: true } });
+    if (!order) return;
+    await this.prisma.customerConsent.create({ data: { customerId: order.customerId, type, version, ipAddress: ipAddress.slice(0, 64), userAgent: userAgent.slice(0, 255) } });
+  }
+
+  async provisioningAttempt(orderId: string, attempt: number, request: object, result?: { response?: object; errorCode?: string }) { if (!this.prisma.enabled) return; const provider = 'TRANSATEL'; await this.prisma.provisioningAttempt.create({ data: { orderId, provider, status: result?.errorCode ? (attempt >= 3 ? 'FAILED' : 'RETRYING') : 'SUCCEEDED', correlationId: randomUUID(), attempt, requestSnapshot: request as Prisma.InputJsonValue, ...(result?.response ? { responseSnapshot: result.response as Prisma.InputJsonValue } : {}), ...(result?.errorCode ? { errorCode: result.errorCode } : {}), completedAt: new Date() } }); }
 
   async audit() {
     if (!this.prisma.enabled) return [];

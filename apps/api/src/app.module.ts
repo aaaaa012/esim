@@ -15,10 +15,10 @@ import { PaymentsService } from "./modules/payments/payments.service.js";
 import { KhaltiGateway } from "./modules/payments/gateways/khalti.gateway.js";
 import { EsewaGateway } from "./modules/payments/gateways/esewa.gateway.js";
 import { PaymentSimulatorGateway } from "./modules/payments/gateways/simulator.gateway.js";
-import { AurigaMockProvider } from "./modules/integration/auriga-mock.provider.js";
 import { CryptoService } from "./infrastructure/crypto.service.js";
 import {
   OperationsIntegrationEventsController,
+  OperationsIntegrationLogsController,
   WebhooksController,
 } from "./modules/webhooks/webhooks.controller.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
@@ -40,6 +40,7 @@ import { NotificationService } from "./modules/notification/notification.service
 import { GmailChannel } from "./modules/notification/gmail.channel.js";
 import { WhatsappChannel } from "./modules/notification/whatsapp.channel.js";
 import { IntegrationProcessor } from "./jobs/integration.processor.js";
+import { ReconciliationService } from "./jobs/reconciliation.service.js";
 import { AuthController } from "./modules/identity/auth.controller.js";
 import { AccountGuard } from "./common/auth.guard.js";
 
@@ -61,6 +62,7 @@ import { AccountGuard } from "./common/auth.guard.js";
     PaymentsController,
     WebhooksController,
     OperationsIntegrationEventsController,
+    OperationsIntegrationLogsController,
     PartnersController,
     NotificationController,
   ],
@@ -75,7 +77,6 @@ import { AccountGuard } from "./common/auth.guard.js";
     KhaltiGateway,
     EsewaGateway,
     PaymentSimulatorGateway,
-    AurigaMockProvider,
     TransatelProvider,
     ConnectivityService,
     CryptoService,
@@ -84,6 +85,7 @@ import { AccountGuard } from "./common/auth.guard.js";
     QueueService,
     ProvisioningProcessor,
     IntegrationProcessor,
+    ReconciliationService,
     ClerkSyncService,
     PartnerAuthGuard,
     NotificationService,
