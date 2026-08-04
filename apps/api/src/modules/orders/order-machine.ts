@@ -3,7 +3,7 @@ import { OrderStatus } from '@visa-compass/shared';
 const transitions: Record<OrderStatus, readonly OrderStatus[]> = {
   DRAFT: [OrderStatus.PAYMENT_PENDING, OrderStatus.CANCELLED],
   PAYMENT_PENDING: [OrderStatus.PAYMENT_CONFIRMED, OrderStatus.PAYMENT_FAILED, OrderStatus.CANCELLED],
-  PAYMENT_CONFIRMED: [OrderStatus.REVIEW_PENDING],
+  PAYMENT_CONFIRMED: [OrderStatus.APPROVED, OrderStatus.REVIEW_PENDING],
   REVIEW_PENDING: [OrderStatus.AWAITING_CUSTOMER, OrderStatus.APPROVED, OrderStatus.REFUND_PENDING],
   AWAITING_CUSTOMER: [OrderStatus.REVIEW_PENDING, OrderStatus.REFUND_PENDING],
   APPROVED: [OrderStatus.PROVISIONING, OrderStatus.REFUND_PENDING],

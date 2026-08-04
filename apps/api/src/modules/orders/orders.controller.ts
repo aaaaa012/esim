@@ -12,7 +12,6 @@ export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
   @Get() list(@Req() req: AuthenticatedRequest) { return this.orders.list(req.user!.id); }
   @Get(':id') get(@Param('id') id: string, @Req() req: AuthenticatedRequest) { return this.orders.view(id, req.user!.id); }
-  @Get(':id/qr') qr(@Param('id') id: string, @Req() req: AuthenticatedRequest) { return this.orders.qr(id, req.user!.id); }
   @Post() create(@Body() body: unknown, @Req() req: AuthenticatedRequest) { const input = createOrderSchema.parse(body); const ipAddress = (req as { ip?: string }).ip; const userAgent = req.headers['user-agent']; return this.orders.create(req.user!.id, input.planId, input.compatibilityAccepted, { ...(ipAddress ? { ipAddress } : {}), ...(userAgent ? { userAgent } : {}) }); }
   @Patch(':id/traveler') traveler(@Param('id') id: string, @Body() body: unknown, @Req() req: AuthenticatedRequest) { return this.orders.setTraveler(id, req.user!.id, travelerSchema.parse(body)); }
   @Post(':id/documents') document(@Param('id') id: string, @Body() body: unknown, @Req() req: AuthenticatedRequest) { const input = documentRequestSchema.parse(body); return this.orders.addDocument(id, req.user!.id, input); }

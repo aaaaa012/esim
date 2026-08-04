@@ -39,6 +39,7 @@ import { NotificationController } from "./modules/notification/notification.cont
 import { NotificationService } from "./modules/notification/notification.service.js";
 import { GmailChannel } from "./modules/notification/gmail.channel.js";
 import { WhatsappChannel } from "./modules/notification/whatsapp.channel.js";
+import { QrPdfService } from "./modules/notification/qr-pdf.service.js";
 import { IntegrationProcessor } from "./jobs/integration.processor.js";
 import { ReconciliationService } from "./jobs/reconciliation.service.js";
 import { AuthController } from "./modules/identity/auth.controller.js";
@@ -91,6 +92,7 @@ import { AccountGuard } from "./common/auth.guard.js";
     NotificationService,
     GmailChannel,
     WhatsappChannel,
+    QrPdfService,
   ],
 })
 export class AppModule {}

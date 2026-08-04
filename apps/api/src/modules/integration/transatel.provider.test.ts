@@ -21,6 +21,7 @@ function prismaStub(overrides: Record<string, unknown> = {}) {
     subscription: { findUnique: vi.fn() },
     customerEsim: { findUnique: vi.fn() },
     order: { findUnique: vi.fn() },
+    integrationLog: { create: vi.fn() },
     $transaction: vi.fn(),
     ...overrides,
   } as unknown as PrismaService;
@@ -201,6 +202,28 @@ describe('TransatelProvider', () => {
     expect(result.event).toMatchObject({ status: 'EXPIRED', expiresAt: '2026-08-19T00:00:00Z' });
   });
 
+  it('resolves the ICCID and dates from a real OCS webhook envelope', async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({ assignedOrderId: 'order-1' });
+    prisma.order.findUnique = vi.fn().mockResolvedValue({ status: 'COMPLETED' });
+    const provider = new TransatelProvider(prisma);
+    route({ '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }) });
+    const result = await provider.handleWebhook({
+      header: { eventId: 'evt-4', eventType: 'OCS/PRODUCT/ACTIVATED', eventDate: '2026-08-04T13:30:00Z' },
+      body: { mvnoRef: 'visacompass-test', cos: 'WW_COS_TEST', msisdn: '33612345678', iccid: '8988247076000000319', externalReference: 'order-1', subscriptionId: 'sub-123', activationDate: '2026-08-04T13:30:00Z', expirationDate: '2026-09-03T13:30:00Z' },
+    });
+    expect(result.handled).toBe(true);
+    expect(result.event).toMatchObject({
+      eventType: 'OCS/PRODUCT/ACTIVATED',
+      orderId: 'order-1',
+      iccid: '8988247076000000319',
+      subscriptionId: 'sub-123',
+      status: 'ACTIVATED',
+      activatedAt: '2026-08-04T13:30:00Z',
+      expiresAt: '2026-09-03T13:30:00Z',
+    });
+  });
+
   it('synchronizes catalog products into per-country plans', async () => {
     const tx = {
       country: { upsert: vi.fn().mockResolvedValue({ id: 'country-1' }) },
@@ -218,7 +241,7 @@ describe('TransatelProvider', () => {
           display: { priority: 1 },
           hasSubProducts: false,
           inventoryActive: false,
-          prices: { subscriptionFee: [['4.99', 'EUR']] },
+          prices: { subscriptionFee: [[{ currency: 'EUR', unit: 'CENTS', amount: 499 }]] },
           productDefinition: {
             productId: 'TRVL-5GB-15D',
             productCategory: 'One-off',
@@ -238,6 +261,41 @@ describe('TransatelProvider', () => {
     expect(planArgs[0].create).toMatchObject({ name: 'Travel 5GB', dataAllowance: '5120 MB', validityDays: 15, costPrice: 848, sellingPrice: 848, providerPlanId: 'TRVL-5GB-15D', status: 'ACTIVE' });
   });
 
+  it('parses subscription fees expressed in major units without dividing', async () => {
+    const tx = {
+      country: { upsert: vi.fn().mockResolvedValue({ id: 'country-1' }) },
+      plan: { upsert: vi.fn().mockResolvedValue({ id: 'plan-1' }) },
+    };
+    const prisma = prismaStub({ $transaction: vi.fn(async (fn: (transaction: unknown) => unknown) => fn(tx)) });
+    const provider = new TransatelProvider(prisma);
+    route({
+      '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
+      '/ocs/catalog/api/cos/WW_COS_TEST/products': () => jsonResponse({
+        cos: 'WW_COS_TEST',
+        products: [{
+          availability: { available: true },
+          canSubscribe: { allowed: true },
+          display: { priority: 1 },
+          hasSubProducts: false,
+          inventoryActive: false,
+          prices: { subscriptionFee: [[{ currency: 'EUR', unit: 'EURO', amount: 4.99 }]] },
+          productDefinition: {
+            productId: 'TRVL-EURO',
+            productCategory: 'One-off',
+            allowances: { data: [{ resourceName: 'DATA', startValue: 1024, unit: 'MB' }] },
+            countryList: ['GBR'],
+            validityPeriod: { validityDuration: 15, validityDurationUnit: 'days' },
+            description: { productLabel: 'Euro price plan' },
+          },
+        }],
+      }),
+    });
+    const result = await provider.syncCatalog();
+    expect(result).toEqual({ synced: 1, skipped: 0 });
+    const create = tx.plan.upsert.mock.calls[0]![0].create;
+    expect(create.costPrice).toBe(848);
+  });
+
   it('registers a webhook when none exists for the target URL', async () => {
     process.env.TRANSATEL_WEBHOOK_TARGET_URL = 'https://api.visacompass.example/webhooks/connectivity/transatel';
     process.env.TRANSATEL_WEBHOOK_CONTACT_EMAIL = 'ops@visacompass.example';
@@ -247,7 +305,7 @@ describe('TransatelProvider', () => {
       '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
       '/webhooks/api/webhooks': (init) => {
         if (init?.method === 'POST') return jsonResponse({ id: 'webhook-1', ...JSON.parse(String(init.body)) });
-        return jsonResponse([]);
+        return jsonResponse({ webhooks: [] });
       },
     });
     const result = await provider.ensureWebhook();
@@ -271,7 +329,7 @@ describe('TransatelProvider', () => {
     route({
       '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
       '/webhooks/api/webhooks': (init) => {
-        if (init?.method === 'GET') return jsonResponse([{ id: 'webhook-1', mvnoRef: 'visacompass-test', targetUrl: 'https://api.visacompass.example/webhooks/connectivity/transatel' }]);
+        if (init?.method === 'GET') return jsonResponse({ webhooks: [{ id: 'webhook-1', mvnoRef: 'visacompass-test', targetUrl: 'https://api.visacompass.example/webhooks/connectivity/transatel' }] });
         if (init?.method === 'PUT') return jsonResponse({ id: 'webhook-1', ...JSON.parse(String(init.body)) });
         throw new Error('Expected PUT, got POST');
       },

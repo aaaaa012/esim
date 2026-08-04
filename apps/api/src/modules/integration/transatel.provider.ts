@@ -64,13 +64,19 @@ interface ProductSubscription {
 
 interface ProductSubscriptionsResponse { currentLocale: string; productSubscriptions: ProductSubscription[]; }
 
+interface Price {
+  amount: number;
+  currency: string;
+  unit: string;
+}
+
 interface ProductDetails {
   availability: { available: boolean; startDate?: string; endDate?: string };
   canSubscribe: { allowed: boolean; errorKey?: string; errorMessage?: string };
   display?: { priority: number; shotMessage?: string };
   hasSubProducts: boolean;
   inventoryActive: boolean;
-  prices?: { subscriptionFee?: Array<[number | string, string]>; renewalFee?: Array<[number | string, string]> };
+  prices?: { subscriptionFee?: Price[][]; renewalFee?: Price[][] };
   productDefinition: {
     productId: string;
     productCategory?: 'Add-on' | 'One-off' | 'Recurring';
@@ -93,7 +99,7 @@ interface ProductDetails {
 
 interface ProductCatalogResponse { cos: string; products: ProductDetails[]; }
 
-interface WebhookDefinition {
+interface WebhookResponse {
   id: string;
   mvnoRef: string;
   status: 'active' | 'inactive' | 'suspended';
@@ -101,6 +107,8 @@ interface WebhookDefinition {
   email: string;
   events: Array<string | { eventType: string }>;
 }
+
+interface WebhooksResponse { webhooks: WebhookResponse[]; }
 
 interface ApiError { error?: string; error_description?: string; message?: string; }
 
@@ -478,7 +486,8 @@ export class TransatelProvider implements ConnectivityProvider {
     const base = this.baseUrl('webhooks');
     const listResponse = await this.authorizedFetch(`${base}/api/webhooks`, { method: 'GET', operation: 'webhook' });
     if (!listResponse.ok) throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Webhook registration is unavailable right now.', status: 502, details: `Failed to list Transatel webhooks: ${await this.errorText(listResponse)}` });
-    const existing = ((await listResponse.json()) as WebhookDefinition[]).find((item) => item.targetUrl === targetUrl && item.mvnoRef === mvnoRef);
+    const listed = (await listResponse.json()) as WebhooksResponse;
+    const existing = (Array.isArray(listed.webhooks) ? listed.webhooks : []).find((item) => item.targetUrl === targetUrl && item.mvnoRef === mvnoRef);
 
     const definition = { mvnoRef, status: 'active', targetUrl, email, ...(secret ? { secret } : {}), events };
     let id: string | undefined;
@@ -490,7 +499,7 @@ export class TransatelProvider implements ConnectivityProvider {
     } else {
       const createResponse = await this.authorizedFetch(`${base}/api/webhooks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(definition), operation: 'webhook' });
       if (!createResponse.ok) throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Webhook registration is unavailable right now.', status: 502, details: `Failed to register Transatel webhook: ${await this.errorText(createResponse)}` });
-      id = ((await createResponse.json()) as WebhookDefinition).id;
+      id = ((await createResponse.json()) as WebhookResponse).id;
       this.logger.log(`Registered Transatel webhook ${id} for ${targetUrl}`);
     }
     return { registered: true, id, targetUrl, events };
@@ -551,6 +560,8 @@ export class TransatelProvider implements ConnectivityProvider {
     const subscriptionSerialNumbers = Array.isArray(subscription.serialNumbers) ? (subscription.serialNumbers as unknown[]) : [];
 
     const iccid =
+      (typeof data.iccid === 'string' ? data.iccid : undefined) ??
+      (this.subscriberIdentifier() === 'iccid' && typeof data.msisdn === 'string' && /^\d{19,20}$/.test(data.msisdn) ? data.msisdn : undefined) ??
       (this.subscriberIdentifier() === 'iccid' ? bind.msisdn : undefined) ??
       (typeof bind.msisdn === 'string' && /^\d{19,20}$/.test(String(bind.msisdn)) ? bind.msisdn : undefined) ??
       (typeof subscription.iccid === 'string' ? subscription.iccid : undefined) ??
@@ -558,12 +569,15 @@ export class TransatelProvider implements ConnectivityProvider {
       (typeof serialNumbers[0] === 'string' ? serialNumbers[0] : undefined) ??
       (typeof subscriptionSerialNumbers[0] === 'string' ? subscriptionSerialNumbers[0] : undefined);
 
+    const activatedAt = typeof data.activatedAt === 'string' ? data.activatedAt : typeof data.activationDate === 'string' ? data.activationDate : undefined;
+    const expiresAt = typeof data.expiresAt === 'string' ? data.expiresAt : typeof data.expirationDate === 'string' ? data.expirationDate : undefined;
+
     return {
       eventType,
       ...(iccid ? { iccid: String(iccid) } : {}),
       ...(typeof data.subscriptionId === 'string' ? { subscriptionId: data.subscriptionId } : {}),
-      ...(typeof data.activatedAt === 'string' ? { activatedAt: data.activatedAt } : {}),
-      ...(typeof data.expiresAt === 'string' ? { expiresAt: data.expiresAt } : {}),
+      ...(activatedAt ? { activatedAt } : {}),
+      ...(expiresAt ? { expiresAt } : {}),
     };
   }
 
@@ -607,16 +621,17 @@ export class TransatelProvider implements ConnectivityProvider {
     }));
   }
 
-  private priceNpr(fee?: Array<[number | string, string]>): number | null {
+  private priceNpr(fee?: Price[][]): number | null {
     if (!Array.isArray(fee) || !fee.length) return null;
-    const first = fee[0];
+    const first = Array.isArray(fee[0]) ? fee[0][0] : undefined;
     if (!first) return null;
-    const amount = Number(first[0]);
-    const currency = String(first[1] ?? 'EUR');
+    const amount = Number(first.amount);
     if (!Number.isFinite(amount) || amount <= 0) return null;
     const fx = Number(process.env.TRANSATEL_FX_TO_NPR);
     if (!Number.isFinite(fx) || fx <= 0) return null;
-    return Math.max(1, Math.round(amount * fx));
+    const minor = /^(CENT|CENTS)$/i.test(String(first.unit ?? ''));
+    const value = minor ? amount / 100 : amount;
+    return Math.max(1, Math.round(value * fx));
   }
 
   private iso3ToIso2(iso3: string): string | undefined {

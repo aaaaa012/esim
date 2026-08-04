@@ -7,9 +7,8 @@ import {
   CheckCircle2,
   ChevronLeft,
   Clock3,
-  Copy,
   LoaderCircle,
-  LockKeyhole,
+  Mail,
   QrCode,
   Upload,
 } from "lucide-react";
@@ -50,7 +49,6 @@ type Order = {
 
 export default function EsimDetails({ id }: { id: string }) {const authFetch=useAuthenticatedFetch();
   const [order, setOrder] = useState<Order | null>(null),
-    [qr, setQr] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState("");
   const [replacements, setReplacements] = useState<
@@ -67,17 +65,6 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
   useEffect(() => {
     void load().catch((cause) => setError(cause.message));
   }, [id]);
-  const loadQr = async () => {
-    const response = await authFetch(`${API}/customer/orders/${id}/qr`, {
-      headers,
-    });
-    const value = await response.json();
-    if (!response.ok) {
-      setError(apiErrorMessage(value.error?.code ?? "", value.error?.message ?? "Something went wrong"));
-      return;
-    }
-    setQr(value.data.qrPayload);
-  };
   const uploadReplacement = async (document: { id: string; type: string }) => {
     const file = replacements[document.id];
     if (!file) return setError("Choose a replacement file first");
@@ -303,38 +290,23 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                 </Link>
               </>
             ) : order.status === "COMPLETED" ? (
-              qr ? (
-                <>
-                  <div className="qr-display">
-                    <QrCode size={120} />
-                  </div>
-                  <code>{qr}</code>
-                  <button
-                    className="button secondary"
-                    onClick={() => navigator.clipboard.writeText(qr)}
-                  >
-                    <Copy size={16} />
-                    Copy activation code
-                  </button>
-                </>
-              ) : (
-                <>
-                  <p>
-                    Your eSIM is ready. Reveal credentials only on the device
-                    you want to install.
-                  </p>
-                  <button className="button" onClick={loadQr}>
-                    <LockKeyhole size={16} />
-                    Reveal secure QR
-                  </button>
-                </>
-              )
+              <>
+                <p>
+                  Your activation QR was emailed to you as a password-protected
+                  PDF. Open the PDF on your phone and enter the mobile number
+                  you provided to reveal the QR.
+                </p>
+                <div className="processing">
+                  <Mail size={18} />
+                  Check your email for the attachment
+                </div>
+              </>
             ) : (
               <>
                 <p>
                   {needsReupload
                     ? "Upload the requested replacement. The order returns to review automatically."
-                    : "Activation details become available after payment review and provisioning."}
+                    : "Your eSIM is being activated automatically after payment. You will receive your QR by email."}
                 </p>
                 <div className="processing">
                   <LoaderCircle size={18} />

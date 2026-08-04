@@ -1,7 +1,7 @@
 "use client";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Check,
@@ -162,12 +162,10 @@ export default function CheckoutClient({
       setOrder(updated);
       setError("");
       if (
-        ["REVIEW_PENDING", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
+        ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
           updated.status,
         )
       ) {
-        if (updated.status === "REVIEW_PENDING")
-          setPayment((value) => ({ ...(value ?? { reference: "", redirectUrl: "", expiresAt: "" }), reference: updated.payment?.reference ?? value?.reference ?? "" }));
         setVerifying(false);
         break;
       }
@@ -521,16 +519,19 @@ export default function CheckoutClient({
                     label="Passport"
                     file={files.passport}
                     onChange={(v) => setFiles((f) => ({ ...f, passport: v }))}
+                    capture
                   />
                   <FileField
                     label="Travel ticket"
                     file={files.ticket}
                     onChange={(v) => setFiles((f) => ({ ...f, ticket: v }))}
+                    capture
                   />
                   <FileField
                     label="Visa (optional)"
                     file={files.visa}
                     onChange={(v) => setFiles((f) => ({ ...f, visa: v }))}
+                    capture
                   />
                 </div>
                 <Nav back={() => setStep(2)} busy={busy} next={saveDocuments} />
@@ -539,16 +540,44 @@ export default function CheckoutClient({
             {step === 4 && (
               <div className="form-section">
                 <h2>
-                  {order?.status === "REVIEW_PENDING"
+                  {order &&
+                  ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "COMPLETED"].includes(
+                    order.status,
+                  )
                     ? "Payment verified"
-                    : "Choose payment method"}
+                    : order &&
+                        ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
+                          order.status,
+                        )
+                      ? "Payment issue"
+                      : "Choose payment method"}
                 </h2>
-                {order?.status === "REVIEW_PENDING" ? (
+                {order?.status === "COMPLETED" ? (
                   <div className="success-panel">
                     <CheckCircle2 size={42} />
-                    <b>Order submitted for review</b>
+                    <b>Your eSIM is ready</b>
                     <span>{order.orderNumber}</span>
-                    <p>Your verified payment and documents are safe.</p>
+                    <p>
+                      Your activation QR was emailed to you as a password-protected
+                      PDF. Open it on your phone and enter your mobile number to
+                      reveal the QR.
+                    </p>
+                    <Link className="button" href="/account/esims">
+                      View my eSIMs
+                    </Link>
+                  </div>
+                ) : order &&
+                  ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(
+                    order.status,
+                  ) ? (
+                  <div className="success-panel">
+                    <LoaderCircle className="spin" size={42} />
+                    <b>Payment verified — activating your eSIM</b>
+                    <span>{order.orderNumber}</span>
+                    <p>
+                      Your eSIM is being activated automatically. Your QR will be
+                      emailed to you as a password-protected PDF shortly.
+                    </p>
                     <Link className="button" href="/account/esims">
                       View my eSIMs
                     </Link>
@@ -565,6 +594,15 @@ export default function CheckoutClient({
                   </div>
                 ) : (
                   <>
+                    {order &&
+                      ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
+                        order.status,
+                      ) && (
+                        <p>
+                          Your earlier payment could not be confirmed. You can try
+                          again below.
+                        </p>
+                      )}
                     <p>
                       The server checks the exact order, reference and immutable
                       NPR amount.
@@ -695,25 +733,49 @@ function FileField({
   label,
   file,
   onChange,
+  capture,
 }: {
   label: string;
   file: File | undefined;
   onChange: (file: File | undefined) => void;
+  capture?: boolean;
 }) {
+  const captureRef = useRef<HTMLInputElement>(null);
   return (
-    <label className="file-input">
-      <input
-        type="file"
-        accept="application/pdf,image/jpeg,image/png"
-        onChange={(e) => onChange(e.target.files?.[0])}
-      />
-      <span>
-        <b>{file?.name ?? label}</b>
-        <small>
-          {file ? `${Math.ceil(file.size / 1024)} KB` : "PDF, JPG or PNG"}
-        </small>
-      </span>
-      <em>{file ? "Replace" : "Choose file"}</em>
-    </label>
+    <div className="file-field">
+      <label className="file-input">
+        <input
+          type="file"
+          accept="application/pdf,image/jpeg,image/png"
+          onChange={(e) => onChange(e.target.files?.[0])}
+        />
+        <span>
+          <b>{file?.name ?? label}</b>
+          <small>
+            {file ? `${Math.ceil(file.size / 1024)} KB` : "PDF, JPG or PNG"}
+          </small>
+        </span>
+        <em>{file ? "Replace" : "Choose file"}</em>
+      </label>
+      {capture && (
+        <>
+          <input
+            ref={captureRef}
+            type="file"
+            accept="image/jpeg,image/png"
+            capture="environment"
+            style={{ display: "none" }}
+            onChange={(e) => onChange(e.target.files?.[0])}
+          />
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => captureRef.current?.click()}
+          >
+            Take photo
+          </button>
+        </>
+      )}
+    </div>
   );
 }

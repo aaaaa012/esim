@@ -20,8 +20,10 @@ in the customer UI; internal diagnostics never reach clients.
 
 Visa Compass is a TypeScript monorepo that lets travellers buy a travel eSIM,
 upload identity documents, pay in NPR via Khalti/eSewa, and receive an
-activation QR once an operations team has reviewed the order and a
-connectivity provider (Transatel) has provisioned the profile.
+activation QR by email (as a password-protected PDF) once payment is verified
+and a connectivity provider (Transatel) has provisioned the profile. Orders
+are approved automatically after a verified payment; the operations review
+queue is reserved for exceptions (document replacements, failed activations).
 
 ### 1.1 Applications
 
@@ -235,7 +237,14 @@ other fields plaintext.
 Upload constraint (enforced at `confirmDocument` via Cloudinary
 `verifyDocument`, `cloudinary-storage.service.ts:30`): resource format must be
 `pdf`, `jpg`, `jpeg` or `png`, and bytes must be ≤ 10 MB
-(10 × 1024 × 1024).
+(10 × 1024 × 1024). Only file type and size are validated — there is no
+content review of the document.
+
+The customer checkout also offers a **native camera capture** button
+(`apps/customer-web/src/app/esim/checkout/checkout-client.tsx`): a hidden
+`<input type="file" accept="image/jpeg,image/png" capture="environment">`
+opens the device camera, and the captured photo follows the same signed-upload
++ confirm path.
 
 ### 4.4 Payment — `initiatePaymentSchema`
 
@@ -349,7 +358,6 @@ separation (customer portal 404s for staff and vice-versa) and MFA redirects.
 | --- | --- | --- |
 | `GET /customer/orders` | — | Redacted `Order[]` for the caller (customer view). |
 | `GET /customer/orders/:id` | — | Redacted order; 404 `NOT_FOUND` if not owned. |
-| `GET /customer/orders/:id/qr` | — | `{ orderId, orderNumber, qrPayload }`; only when `COMPLETED` and QR stored, else 404. |
 | `POST /customer/orders` | `createOrderSchema` | Creates DRAFT order + records `E_SIM_COMPATIBILITY` consent (v1.0) with IP + User-Agent; returns redacted order. |
 | `PATCH /customer/orders/:id/traveler` | `travelerSchema` | Only in `DRAFT`; stores traveler; redacted order. |
 | `POST /customer/orders/:id/documents` | `documentRequestSchema` | Only in `DRAFT`/`AWAITING_CUSTOMER`; creates/overwrites the document (one per type) and returns `{ id, type, fileName, status, upload }` where `upload` is a signed Cloudinary upload authorization (10-minute expiry) or a `local-simulator` fallback. |
@@ -374,7 +382,7 @@ separation (customer portal 404s for staff and vice-versa) and MFA redirects.
 | `POST /operations/orders/:id/approve` | Requires passport AND ticket both `APPROVED`; reserves inventory; `APPROVED → PROVISIONING`; enqueues `provision-order` (or runs in-process). |
 | `POST /operations/orders/:id/request-reupload` | `{ reason }`; order → `AWAITING_CUSTOMER`, all documents → `REUPLOAD_REQUIRED`. |
 | `POST /operations/orders/:id/documents/:documentId/approve` | Approves one document + audit + `OrderReview`. |
-| `POST /operations/orders/:id/documents/:documentId/request-reupload` | `{ reason? }` (reason required); document → `REUPLOAD_REQUIRED`, order → `AWAITING_CUSTOMER` (reason recorded `(requested by <clerkId>)`), notifies customer `DOCUMENT_REUPLOAD`. |
+| `POST /operations/orders/:id/documents/:documentId/request-reupload` | `{ reason? }` (reason required); document → `REUPLOAD_REQUIRED`, order → `AWAITING_CUSTOMER` (reason recorded `(requested by <clerkId>)`). No email is sent (template dormant); the customer sees an in-app banner. |
 | `POST /operations/orders/:id/retry` | Only from `PROVISIONING_FAILED`; re-runs provisioning (`PROVISIONING`, "Manual retry"). |
 | `GET /operations/integration-events` | Last 200 `WebhookEvent`s (source, eventId, signatureValid, processedAt, errorMessage) excluding idempotency entries. |
 | `GET /operations/integration-logs?operation=` | Last 200 `IntegrationLog`s; optional `operation` filter. |
@@ -479,7 +487,7 @@ Result mapping to the customer journey:
 
 | Case | Behavior | Customer message (error.message) / effect |
 | --- | --- | --- |
-| Response ok + subscription id + QR available | order → `COMPLETED`, inventory assigned, `QR_READY` email | — |
+| Response ok + subscription id + QR available | order → `COMPLETED`, inventory assigned, `QR_READY` email with PDF attachment | — |
 | Response ok + subscription id, **no QR** | attempt treated as delayed → throws so the job retries | on final retry: `PROVISIONING_FAILED`; customer sees generic 502 above |
 | Plan missing | 404 `PLAN_NOT_AVAILABLE` | *"This plan is no longer available. Please choose another plan."* |
 | Plan has no `providerPlanId` | 502 `PROVISIONING_FAILED` | *"We could not activate your eSIM right now. Our team is reviewing it and will contact you."* |
@@ -521,7 +529,7 @@ is fetched and used to complete a still-`PROVISIONING` order.
 
 | Case | Effect |
 | --- | --- |
-| QR present | order `COMPLETED`; `qrPayload` encrypted at rest; `QR_READY` email |
+| QR present | order `COMPLETED`; `qrPayload` encrypted at rest; `QR_READY` email with PDF attachment |
 | QR absent | provisioning returns `DELAYED`; job retries |
 
 ### 6.5 Eligibility
@@ -567,7 +575,7 @@ the order via `EsimInventory.assignedOrderId`, and maps events:
 
 | Provider event (suffix match) | Mapped status | Order/inventory/subscription effect |
 | --- | --- | --- |
-| `...ACTIVATED` | `ACTIVATED` | If order `PROVISIONING`: fetch QR, assign inventory, order → `COMPLETED`, `QR_READY` email. Always: inventory → `ACTIVATED`, subscription → `ACTIVE` (with activatedAt/expiresAt). |
+| `...ACTIVATED` | `ACTIVATED` | If order `PROVISIONING`: fetch QR, assign inventory, order → `COMPLETED`, `QR_READY` email with PDF attachment. Always: inventory → `ACTIVATED`, subscription → `ACTIVE` (with activatedAt/expiresAt). |
 | `...PRELOADED` | `PRELOADED` | subscription → `PENDING` |
 | `...EXPIRED` | `EXPIRED` | inventory → `EXPIRED`, subscription → `EXPIRED` |
 | `...TERMINATED` | `TERMINATED` | inventory → `TERMINATED`, subscription → `TERMINATED` |
@@ -637,11 +645,16 @@ with `providerTransactionId: sim-<reference>`.
 4. Otherwise 400 `Payment lookup did not confirm the order: <status>`.
 
 On success: `confirmPayment` sets payment `COMPLETED`, then
-`PAYMENT_PENDING → PAYMENT_CONFIRMED → REVIEW_PENDING`. If the payment is
-already COMPLETED, confirmation is idempotent (returns the order).
-Re-initiating on `PAYMENT_PENDING` is safe (`beginPayment` only transitions
-when not already pending), and `PAYMENT_FAILED → PAYMENT_PENDING` is allowed
-for retry.
+`PAYMENT_PENDING → PAYMENT_CONFIRMED`, and **automatically approves and
+provisions** the order (`PAYMENT_CONFIRMED → APPROVED → PROVISIONING`,
+enqueueing `provision-order`). No operations review is required for a verified
+payment. If the payment is already COMPLETED, confirmation is idempotent
+(returns the order). Re-initiating on `PAYMENT_PENDING` is safe
+(`beginPayment` only transitions when not already pending), and
+`PAYMENT_FAILED → PAYMENT_PENDING` is allowed for retry. The `REVIEW_PENDING`
+state is reserved for the replacement-document path: when a customer uploads a
+requested replacement, `AWAITING_CUSTOMER → REVIEW_PENDING` and an operator
+approves it.
 
 ---
 
@@ -703,7 +716,7 @@ Allowed transitions (illegal ones throw and surface as errors):
 ```
 DRAFT                 → PAYMENT_PENDING, CANCELLED
 PAYMENT_PENDING       → PAYMENT_CONFIRMED, PAYMENT_FAILED, CANCELLED
-PAYMENT_CONFIRMED     → REVIEW_PENDING
+PAYMENT_CONFIRMED     → APPROVED, REVIEW_PENDING
 REVIEW_PENDING        → AWAITING_CUSTOMER, APPROVED, REFUND_PENDING
 AWAITING_CUSTOMER     → REVIEW_PENDING, REFUND_PENDING
 APPROVED              → PROVISIONING, REFUND_PENDING
@@ -714,6 +727,11 @@ PAYMENT_FAILED        → PAYMENT_PENDING, CANCELLED
 CANCELLED / COMPLETED / REFUNDED  → (terminal)
 ```
 
+> Note: `PAYMENT_CONFIRMED → APPROVED` is the automatic path taken by
+> `confirmPayment` — a verified payment is approved without manual review.
+> `PAYMENT_CONFIRMED → REVIEW_PENDING` is kept in the machine for completeness
+> but is not produced by the current flow.
+
 ### What triggers each event and what it does
 
 | Trigger | Flow |
@@ -722,11 +740,11 @@ CANCELLED / COMPLETED / REFUNDED  → (terminal)
 | Traveller saved | `PATCH .../traveler` → stays `DRAFT`. |
 | Document uploaded + confirmed | signed Cloudinary upload → `confirmDocument` verifies bytes/format → if resuming from `AWAITING_CUSTOMER` with no other pending re-uploads → `AWAITING_CUSTOMER → REVIEW_PENDING`. |
 | Payment initiated | `beginPayment` validates traveler + passport + ticket, re-verifies documents → `PAYMENT_PENDING`, stores payment row. |
-| Payment webhook / verify | `verifyCallback`/`verify` gate (§7.4) → `confirmPayment` → `PAYMENT_PENDING → PAYMENT_CONFIRMED → REVIEW_PENDING`. Customer UI polls the order and the webhook also lands via the `payments` queue. |
-| Ops approves a document | document → `APPROVED`, `OrderReview` + audit recorded. |
-| Ops requests re-upload | document → `REUPLOAD_REQUIRED`, order → `AWAITING_CUSTOMER` (reason with operator), `DOCUMENT_REUPLOAD` notification sent. |
-| Ops approves order | requires both passport + ticket `APPROVED` → reserve inventory (`AVAILABLE→RESERVED` atomic) → `APPROVED → PROVISIONING` → enqueue `provision-order` (or local 3-attempt loop when no Redis). |
-| Provisioning attempt | OCS preload → QR fetch (§6.2). Success + QR → `COMPLETED` (inventory `ASSIGNED`, subscription `PENDING`, `QR_READY` email). Success no QR → retry. Failure → attempt recorded; 3rd failure → `PROVISIONING_FAILED`. |
+| Payment webhook / verify | `verifyCallback`/`verify` gate (§7.4) → `confirmPayment` → `PAYMENT_PENDING → PAYMENT_CONFIRMED`, then **auto-approve** (`PAYMENT_CONFIRMED → APPROVED → PROVISIONING` + enqueue `provision-order`). Customer UI polls the order and the webhook also lands via the `payments` queue. |
+| Ops approves a document | document → `APPROVED`, `OrderReview` + audit recorded. Used for the replacement-document path. |
+| Ops requests re-upload | document → `REUPLOAD_REQUIRED`, order → `AWAITING_CUSTOMER` (reason with operator). No email is sent (the `DOCUMENT_REUPLOAD` template/notification path is dormant); the customer is prompted in-app. |
+| Ops approves order | requires both passport + ticket `APPROVED` → reserve inventory (`AVAILABLE→RESERVED` atomic) → `APPROVED → PROVISIONING` → enqueue `provision-order` (or local 3-attempt loop when no Redis). Applies to replacement-document orders; verified payments are auto-approved. |
+| Provisioning attempt | OCS preload → QR fetch (§6.2). Success + QR → `COMPLETED` (inventory `ASSIGNED`, subscription `PENDING`, `QR_READY` email with PDF attachment). Success no QR → retry. Failure → attempt recorded; 3rd failure → `PROVISIONING_FAILED`. |
 | Transatel `ACTIVATED` webhook | completes a `PROVISIONING` order with the QR, or updates lifecycle for completed orders. |
 | Transatel `EXPIRED`/`TERMINATED`/`PRELOADED` | inventory + subscription lifecycle updates only; order unchanged. |
 | Ops retries | `PROVISIONING_FAILED → PROVISIONING` ("Manual retry"). |
@@ -760,15 +778,16 @@ Recipient resolves to `traveler.email` (EMAIL) or `traveler.mobile`
 | Template | Subject | Body text |
 | --- | --- | --- |
 | `ORDER_STATUS` | `Visa Compass order update — {orderNumber}` | `There is an update for order {orderNumber}. Sign in to view its secure timeline.` |
-| `QR_READY` | `Your Visa Compass eSIM is ready — {orderNumber}` | `Your eSIM is ready. Sign in to Visa Compass to securely reveal and install the activation QR for {orderNumber}.` |
-| `DOCUMENT_REUPLOAD` | `Action required for {orderNumber}` | `A replacement travel document is required for {orderNumber}.` + optional ` Reason: {reason}` + ` Sign in to upload it securely.` |
+| `QR_READY` | `Your Visa Compass eSIM is ready — {orderNumber}` | `Your eSIM is ready for order {orderNumber}. Open the attached PDF and enter the mobile number you provided when prompted to reveal the activation QR.` |
+| `DOCUMENT_REUPLOAD` | `Action required for {orderNumber}` | `A replacement travel document is required for {orderNumber}.` + optional ` Reason: {reason}` + ` Sign in to upload it securely.` — **dormant**: the trigger in `reviewDocument` is removed so no re-upload email is sent. |
 
 ### 10.2 Channels
 
 - **Gmail** (`gmail.channel.ts`): when `NOTIFICATION_MODE === 'live'` sends
   via Gmail API with OAuth refresh-token flow (`GMAIL_CLIENT_ID/SECRET`,
-  `GMAIL_REFRESH_TOKEN`, `GMAIL_FROM_ADDRESS`); RFC-2822 MIME built inline,
-  base64url `raw`. Otherwise (or missing credentials in non-prod) returns
+  `GMAIL_REFRESH_TOKEN`, `GMAIL_FROM_ADDRESS`); RFC-2822 MIME built inline
+  (multipart/mixed with base64 PDF attachment support), base64url `raw`.
+  Otherwise (or missing credentials in non-prod) returns
   `{ providerMessageId: 'gmail-sim-<ts>', simulated: true }`; in production
   missing credentials → 503.
 - **WhatsApp** (`whatsapp.channel.ts`): same mode gate; `POST
@@ -780,9 +799,16 @@ Recipient resolves to `traveler.email` (EMAIL) or `traveler.mobile`
 
 | Event | Template | Channel |
 | --- | --- | --- |
-| Provisioning completes with QR (or ACTIVATED webhook completes order) | `QR_READY` | EMAIL (to traveler) |
-| Ops requests document re-upload | `DOCUMENT_REUPLOAD` | EMAIL (to traveler) |
+| Provisioning completes with QR (or ACTIVATED webhook completes order) | `QR_READY` | EMAIL (to traveler) with **password-protected PDF attachment** |
+| Ops requests document re-upload | `DOCUMENT_REUPLOAD` | — (dormant; not triggered) |
 | Ops test endpoint / partner notify | `ORDER_STATUS` | EMAIL or WHATSAPP |
+
+The `QR_READY` email carries the activation QR as an attached PDF generated by
+`QrPdfService` (`apps/api/src/modules/notification/qr-pdf.service.ts`). The PDF
+is password-protected with the customer's **mobile number** as the password,
+and disables copying/extraction. There is no in-app QR reveal: the customer
+endpoint `GET /customer/orders/:id/qr` was removed, so the QR is only ever
+delivered through the email attachment.
 
 The customer notification-history page shows channel/template/status/sentAt.
 
@@ -847,9 +873,9 @@ in-process (`processLocally`, `reconcile()`).
 | --- | --- | --- |
 | `/` | Landing + plan browse + compatibility check | public; fetches `/public/plans`, `/public/coverage/:country` |
 | `/sign-in/[[...sign-in]]` | Clerk sign-in | |
-| `/esim/checkout` | 4-step checkout (Compatibility → Traveller → Documents → Payment) | fields per §4; x-idempotency-key on every mutation; payment verification poll (30 × 3 s); simulator box in dev |
+| `/esim/checkout` | 4-step checkout (Compatibility → Traveller → Documents → Payment) | fields per §4; x-idempotency-key on every mutation; payment verification poll (30 × 3 s) that follows the order into auto-approval/activation; document uploads offer a native camera capture button; simulator box in dev |
 | `/account/esims` | eSIM list with stats/filters (Ready / Processing / Needs action) | maps errors via `apiErrorMessage` |
-| `/account/esims/[id]` | Order detail: status chip, timeline, documents (incl. replacement upload), QR reveal | `GET /customer/orders/:id/qr` reveals the QR only when `COMPLETED`; resumable banner for DRAFT/PAYMENT_PENDING; re-upload banner for AWAITING_CUSTOMER |
+| `/account/esims/[id]` | Order detail: status chip, timeline, documents (incl. replacement upload), emailed-QR notice | no in-app QR reveal (customer `/qr` endpoint removed); QR is delivered by email as a password-protected PDF; resumable banner for DRAFT/PAYMENT_PENDING; re-upload banner for AWAITING_CUSTOMER |
 | `/account/notifications` | Notification history | |
 
 Middleware (`customer-web/src/middleware.ts`): protects `/account(.*)` and
@@ -861,7 +887,7 @@ non-CUSTOMER accounts.
 | Route | Page |
 | --- | --- |
 | `/` | Dashboard (counts, integration status, recent orders) |
-| `/orders` / `/orders/[id]` | Order list + review (document approve/re-upload, order approve/retry, request re-upload) |
+| `/orders` / `/orders/[id]` | Order list + review for exceptions (document approve/re-upload, order approve/retry, request re-upload). Verified payments auto-approve, so the queue mostly holds replacement-document and provisioning-failure cases. |
 | `/inventory` | Inventory overview, JSON paste import, **CSV upload with per-row errors** |
 | `/integration-events` | Inbound webhook events + processing status |
 | `/integration-logs` | Outbound Transatel call logs |

@@ -1,8 +1,10 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 
+export type GmailAttachment = { filename: string; contentType: string; base64: string };
+
 @Injectable()
 export class GmailChannel {
-  async send(input:{to:string;subject:string;text:string}) {
+  async send(input: { to: string; subject: string; text: string; attachment?: GmailAttachment }) {
     if(process.env.NOTIFICATION_MODE!=='live')return {providerMessageId:`gmail-sim-${Date.now()}`,simulated:true};
     const { GMAIL_CLIENT_ID:clientId, GMAIL_CLIENT_SECRET:clientSecret, GMAIL_REFRESH_TOKEN:refreshToken } = process.env;
     if (!clientId || !clientSecret || !refreshToken) {
@@ -13,10 +15,35 @@ export class GmailChannel {
     if(!tokenResponse.ok)throw new ServiceUnavailableException('Gmail OAuth refresh failed');
     const token=await tokenResponse.json() as {access_token:string};
     const from=process.env.GMAIL_FROM_ADDRESS??'me';
-    const mime=[`From: ${from}`,`To: ${input.to}`,`Subject: ${input.subject}`,'MIME-Version: 1.0','Content-Type: text/plain; charset=UTF-8','',input.text].join('\r\n');
+    const mime=this.buildMime({ from, to: input.to, subject: input.subject, text: input.text, ...(input.attachment?{attachment:input.attachment}:{}) });
     const raw=Buffer.from(mime).toString('base64url');
     const sendResponse=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{method:'POST',headers:{authorization:`Bearer ${token.access_token}`,'content-type':'application/json'},body:JSON.stringify({raw})});
     if(!sendResponse.ok)throw new ServiceUnavailableException('Gmail message delivery failed');
     const result=await sendResponse.json() as {id:string};return {providerMessageId:result.id,simulated:false};
+  }
+
+  private buildMime(input: { from: string; to: string; subject: string; text: string; attachment?: GmailAttachment }): string {
+    const headers = [`From: ${input.from}`, `To: ${input.to}`, `Subject: ${input.subject}`, 'MIME-Version: 1.0'];
+    if (!input.attachment) {
+      return [...headers, 'Content-Type: text/plain; charset=UTF-8', '', input.text].join('\r\n');
+    }
+    const boundary = `----=_boundary_${Date.now().toString(36)}`;
+    return [
+      ...headers,
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/plain; charset=UTF-8',
+      '',
+      input.text,
+      `--${boundary}`,
+      `Content-Type: ${input.attachment.contentType}`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${input.attachment.filename.replace(/["\r\n]/g, '_')}"`,
+      '',
+      input.attachment.base64,
+      `--${boundary}--`,
+      '',
+    ].join('\r\n');
   }
 }
