@@ -10,9 +10,9 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:generate": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js generate",
+    "prisma:migrate": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js migrate dev",
+    "prisma:seed": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/seed.ts"
   },
   "dependencies": {
     "@clerk/backend": "^2.14.0",

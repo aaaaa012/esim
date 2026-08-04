@@ -1,15 +1,166 @@
-# Visa Compass eSIM
+# Visa Compass eSIM Platform
 
-TypeScript monorepo for the Visa Compass customer portal, operations portal, and modular NestJS API.
+Visa Compass is a TypeScript monorepo for purchasing, reviewing, provisioning, and managing travel eSIMs.
 
-## Start locally
+## Applications
 
-1. Copy `.env.example` to `.env` and provide local services/keys.
-2. Run `pnpm install`.
-3. Run `pnpm db:generate` and `pnpm db:migrate`.
-4. Run `pnpm db:seed`.
-5. Run `pnpm dev`.
+| Workspace | Technology | Local URL |
+| --- | --- | --- |
+| `apps/api` | NestJS, Prisma, BullMQ | `http://localhost:4000` |
+| `apps/customer-web` | Next.js App Router | `http://localhost:3000` |
+| `apps/ops-web` | Next.js App Router | `http://localhost:3001` |
+| `packages/shared` | Shared contracts and validation | Internal package |
 
-Customer web runs on `3000`, operations web on `3001`, and the API on `4000`. Swagger is available at `/api/docs`.
+API documentation is available at `http://localhost:4000/api/docs` after the API starts.
 
-Payment and Auriga simulators are enabled only outside production. Live payment confirmation always requires provider-side verification.
+## Prerequisites
+
+- Node.js 22 or newer
+- pnpm 11.9.0 (`corepack enable` is recommended)
+- A CockroachDB or CockroachDB-compatible PostgreSQL connection
+- A Clerk development application
+- Redis with a TCP/TLS endpoint when BullMQ processing is required
+
+Cloudinary, Gmail, Khalti, eSewa, WhatsApp, and live connectivity-provider credentials are optional for simulator-based development.
+
+## First-time installation
+
+Clone the repository and install the locked dependencies:
+
+```bash
+git clone https://github.com/Samirmajhi/Visa-compass.git
+cd Visa-compass
+corepack enable
+pnpm install --frozen-lockfile
+```
+
+Create the single root environment file:
+
+```bash
+cp .env.example .env
+```
+
+Generate safe local encryption values:
+
+```bash
+openssl rand -base64 32
+openssl rand -hex 32
+```
+
+Put the first result in `APP_ENCRYPTION_KEY_BASE64` and the second in `PII_HASH_KEY`. Then configure at least:
+
+```dotenv
+DATABASE_URL=postgresql://user:password@host:26257/visa_compass?sslmode=require
+PERSISTENCE_MODE=prisma
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+BOOTSTRAP_SUPER_ADMIN_EMAIL=separate-staff-email@example.com
+```
+
+Never commit `.env`, application `.env.local` files, API keys, OAuth tokens, database credentials, passport data, QR payloads, or activation codes.
+
+## Database setup
+
+Generate Prisma Client, apply migrations, and add the development catalogue:
+
+```bash
+pnpm db:generate
+pnpm db:migrate
+pnpm db:seed
+```
+
+`db:migrate` is intended for developer databases. Production deployments should apply committed migrations through the deployment workflow rather than running interactive development migrations.
+
+## Start development
+
+Start the API and both portals together:
+
+```bash
+pnpm dev
+```
+
+Or start a single workspace:
+
+```bash
+pnpm --filter @visa-compass/api dev
+pnpm --filter @visa-compass/customer-web dev
+pnpm --filter @visa-compass/ops-web dev
+```
+
+Health checks:
+
+```bash
+curl http://localhost:4000/api/v1/health/live
+curl http://localhost:4000/api/v1/health/ready
+```
+
+## Clerk configuration
+
+Configure these development origins in Clerk:
+
+- Customer portal: `http://localhost:3000`
+- Operations portal: `http://localhost:3001`
+
+Customer registration is public. Staff accounts are separate identities and are created through Super Admin invitations. `BOOTSTRAP_SUPER_ADMIN_EMAIL` is used only when no active Super Admin exists.
+
+The database is authoritative for `CUSTOMER`, `OPERATIONS`, and `SUPER_ADMIN`; Clerk metadata never grants API permissions. Super Admin MFA is enabled by default. Set `ENFORCE_SUPER_ADMIN_MFA=false` only for temporary local development.
+
+For webhook synchronization, point Clerk's user webhook to:
+
+```text
+POST <public-api-url>/api/v1/webhooks/clerk
+```
+
+Set its signing secret in `CLERK_WEBHOOK_SECRET`. Local development also performs just-in-time identity synchronization when a valid Clerk session first calls the API.
+
+## Redis and background jobs
+
+Without `REDIS_URL`, queue submissions use the local simulator. For BullMQ, provide a Redis TCP URL, not an Upstash REST URL:
+
+```dotenv
+REDIS_URL=rediss://default:password@host:6379
+QUEUE_CONCURRENCY=3
+```
+
+Upstash Redis should use its TCP/TLS connection string. Fixed-price plans are preferable for continuously running BullMQ workers because workers poll Redis.
+
+## Integration modes
+
+The default development configuration uses:
+
+- Payment gateway simulators
+- Deterministic Auriga connectivity simulator
+- Simulated notifications unless Gmail OAuth is configured
+- In-process queue simulation unless `REDIS_URL` is configured
+
+Do not claim sandbox or live-provider certification until the corresponding credentials and provider contracts have been smoke-tested.
+
+## Quality checks
+
+Run the same checks used by CI:
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+Format changed files with:
+
+```bash
+pnpm format
+```
+
+## Repository workflow
+
+- Branch from the latest shared branch.
+- Keep real secrets in ignored environment files or an approved secret manager.
+- Add or update tests with behavioral changes.
+- Run typecheck, tests, and a proportional build before committing.
+- Use focused commits that describe one completed implementation tranche.
+
+Architecture decisions are recorded in [`docs/`](docs/), and the partner API contract is described in [`docs/PARTNER-API-v1.md`](docs/PARTNER-API-v1.md).
+
+## Current development status
+
+The platform includes the customer purchase flow, Operations review flow, database-backed Clerk RBAC, staff administration, private document handling, payment/connectivity adapters, notifications, queues, and partner API foundations. Some provider functions remain simulated or require live credentials; consult the active implementation plan before treating an integration as production-ready.

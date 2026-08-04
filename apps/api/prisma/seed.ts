@@ -1,7 +1,4 @@
 import { PrismaClient, PlanStatus, UserRoleName } from '@prisma/client';
-import { readFile } from 'node:fs/promises';
-const env = await readFile(new URL('../.env', import.meta.url), 'utf8');
-for (const line of env.split(/\r?\n/)) { const index = line.indexOf('='); if (index > 0) process.env[line.slice(0, index)] = line.slice(index + 1); }
 const prisma = new PrismaClient();
 async function main() {
   for (const name of Object.values(UserRoleName)) await prisma.role.upsert({ where: { name }, update: {}, create: { name } });
