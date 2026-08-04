@@ -1,0 +1,233 @@
+.orders-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+}
+.orders-toolbar + .panel {
+  margin-top: 12px;
+}
+.empty-table {
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+}
+td small {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.queue-count {
+  padding: 4px 8px;
+  border-radius: 99px;
+  background: #eff6ff;
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 800;
+}
+.ops-back {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 18px;
+}
+.review-top h1 {
+  margin-top: 10px;
+}
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  gap: 20px;
+  align-items: start;
+}
+.review-card {
+  margin-top: 0;
+  margin-bottom: 18px;
+}
+.review-card .panel-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin: 0;
+  padding: 10px 20px 20px;
+}
+.info-grid > div {
+  padding: 14px 5px;
+  border-bottom: 1px solid var(--line);
+}
+.info-grid dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 750;
+}
+.info-grid dd {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+.review-doc {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+}
+.review-doc span:first-child {
+  display: grid;
+  gap: 4px;
+}
+.review-doc small {
+  color: var(--muted);
+}
+.ops-timeline {
+  padding: 18px 22px;
+}
+.ops-timeline > div {
+  display: flex;
+  gap: 12px;
+  min-height: 54px;
+  position: relative;
+}
+.ops-timeline i {
+  width: 11px;
+  height: 11px;
+  border: 3px solid #93c5fd;
+  border-radius: 50%;
+  margin-top: 3px;
+  z-index: 1;
+  background: white;
+}
+.ops-timeline > div:not(:last-child):after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 14px;
+  bottom: 0;
+  width: 1px;
+  background: var(--line);
+}
+.ops-timeline span {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+.ops-timeline b {
+  font-size: 12px;
+}
+.ops-timeline small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.decision-card {
+  position: sticky;
+  top: 25px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px;
+}
+.decision-card h2 {
+  font-size: 17px;
+  margin: 0 0 15px;
+}
+.decision-card p {
+  font-size: 12px;
+  color: var(--muted);
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.decision-card label {
+  display: grid;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 750;
+  color: var(--muted);
+  margin: 18px 0 12px;
+}
+.decision-card textarea {
+  min-height: 80px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  font: inherit;
+}
+.decision {
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  padding: 11px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 7px;
+  font-weight: 750;
+  cursor: pointer;
+  margin-top: 9px;
+}
+.decision.approve {
+  background: var(--green);
+  color: white;
+}
+.secondary-decision {
+  background: #fff7ed;
+  color: #b54708;
+}
+.decision-card > small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  margin-top: 15px;
+}
+.decision-complete {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: var(--muted);
+  font-size: 11px;
+}
+.ops-error {
+  padding: 12px;
+  margin-bottom: 15px;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: var(--red);
+  font-size: 12px;
+}
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 850px) {
+  .review-grid {
+    grid-template-columns: 1fr;
+  }
+  .decision-card {
+    position: static;
+    grid-row: 1;
+  }
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "declaration": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "strictPropertyInitialization": false
+  },
+  "include": ["src/**/*.ts", "prisma/**/*.ts"]
+}

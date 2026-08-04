@@ -1,0 +1,14 @@
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { PaymentStatus } from '@visa-compass/shared';
+import type { PaymentGateway } from '../payment-gateway.js';
+
+@Injectable()
+export class KhaltiGateway implements PaymentGateway {
+  readonly provider = 'KHALTI';
+  async initiate(input: { orderId: string; orderNumber: string; amountNpr: number; returnUrl: string }) {
+    if (!process.env.KHALTI_SECRET_KEY) throw new ServiceUnavailableException('Khalti merchant credentials are not configured');
+    const response = await fetch(`${process.env.KHALTI_BASE_URL}/epayment/initiate/`, { method: 'POST', headers: { Authorization: `Key ${process.env.KHALTI_SECRET_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ return_url: input.returnUrl, website_url: new URL(input.returnUrl).origin, amount: Math.round(input.amountNpr * 100), purchase_order_id: input.orderId, purchase_order_name: input.orderNumber }) });
+    if (!response.ok) throw new ServiceUnavailableException('Khalti initiation failed'); const data = await response.json() as { pidx: string; payment_url: string; expires_at: string }; return { reference: data.pidx, redirectUrl: data.payment_url, expiresAt: data.expires_at };
+  }
+  async verify(reference: string,context:{orderId:string;amountNpr:number}) { if (!process.env.KHALTI_SECRET_KEY) throw new ServiceUnavailableException('Khalti merchant credentials are not configured'); const response = await fetch(`${process.env.KHALTI_BASE_URL}/epayment/lookup/`, { method: 'POST', headers: { Authorization: `Key ${process.env.KHALTI_SECRET_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ pidx: reference }) }); const data = await response.json() as { status: string; total_amount: number; transaction_id?: string }; const statuses:Record<string,PaymentStatus>={Completed:PaymentStatus.COMPLETED,Pending:PaymentStatus.PENDING,Initiated:PaymentStatus.PENDING,Refunded:PaymentStatus.REFUNDED,'Partially Refunded':PaymentStatus.REFUNDED,Expired:PaymentStatus.FAILED,'User canceled':PaymentStatus.CANCELLED}; return { reference, status:statuses[data.status]??PaymentStatus.FAILED, amountNpr:data.total_amount/100, orderId:context.orderId, ...(data.transaction_id ? { providerTransactionId: data.transaction_id } : {}) }; }
+}

@@ -1,0 +1,48 @@
+{
+  "name": "@visa-compass/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/src/main.js",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@clerk/backend": "^2.14.0",
+    "@nestjs/bullmq": "^11.0.3",
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-express": "^11.1.6",
+    "@nestjs/swagger": "^11.2.0",
+    "@prisma/client": "^6.15.0",
+    "@visa-compass/shared": "workspace:*",
+    "bullmq": "^5.58.5",
+    "cloudinary": "^2.7.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.7.0",
+    "pino": "^9.9.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "svix": "^1.73.0",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.10",
+    "@nestjs/testing": "^11.1.6",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.18.1",
+    "prisma": "^6.15.0",
+    "tsx": "^4.20.5",
+    "vitest": "^3.2.4"
+  }
+}

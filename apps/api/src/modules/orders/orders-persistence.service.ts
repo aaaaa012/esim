@@ -1,0 +1,95 @@
+import { ConflictException, Injectable } from '@nestjs/common';
+import { Prisma, type OrderStatus as DbOrderStatus, type PaymentStatus as DbPaymentStatus } from '@prisma/client';
+import { DocumentStatus, DocumentType, OrderStatus, PaymentProvider, PaymentStatus, type TravelerInput } from '@visa-compass/shared';
+import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { CryptoService } from '../../infrastructure/crypto.service.js';
+import { PrismaService } from '../../infrastructure/prisma.service.js';
+import type { DemoOrder } from './orders.service.js';
+
+@Injectable()
+export class OrdersPersistenceService {
+  constructor(private readonly prisma: PrismaService, private readonly crypto: CryptoService) {}
+
+  async load(): Promise<DemoOrder[]> {
+    if (!this.prisma.enabled) return [];
+    const rows = await this.prisma.order.findMany({ include: { customer: { include: { user: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: true, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
+    return rows.map((row) => {
+      const traveler: TravelerInput | undefined = row.traveler ? {
+        title: row.traveler.title as TravelerInput['title'], firstName: row.traveler.firstName, surname: row.traveler.surname,
+        ...(row.traveler.middleName ? { middleName: row.traveler.middleName } : {}),
+        dateOfBirth: this.crypto.decrypt(row.traveler.dateOfBirthEncrypted), nationality: row.traveler.nationality,
+        city: row.traveler.city, countryOfResidence: row.traveler.countryOfResidence,
+        ...(row.traveler.employerOrBusinessName ? { employerOrBusinessName: row.traveler.employerOrBusinessName } : {}),
+        email: row.traveler.email, mobile: row.traveler.mobile, passportNumber: this.crypto.decrypt(row.traveler.passportNumberEncrypted),
+        passportExpiryDate: this.crypto.decrypt(row.traveler.passportExpiryEncrypted),
+        ...(row.traveler.pointOfSaleCode ? { pointOfSaleCode: row.traveler.pointOfSaleCode } : {}),
+      } : undefined;
+      const payment = row.payments[0];
+      return {
+        id: row.id, ownerId: row.customer.user?.clerkId ?? row.customerId, orderNumber: row.orderNumber, status: row.status as OrderStatus, version: row.version,
+        plan: { id: row.plan.id, countryCode: row.plan.country.isoCode, countryName: row.plan.country.name, name: row.plan.name, dataAllowance: row.plan.dataAllowance, validityDays: row.plan.validityDays, sellingPriceNpr: Number(row.plan.sellingPrice), coverage: row.plan.coverage as string[], popular: row.plan.popular },
+        totalAmountNpr: Number(row.totalAmount), pricingSnapshot: row.pricingSnapshot as object, compatibilityAcceptedAt: row.compatibilityAcceptedAt.toISOString(),
+        ...(traveler ? { traveler } : {}),
+        documents: row.documents.map((doc) => ({ id: doc.id, type: doc.type as DocumentType, fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as DocumentStatus })),
+        ...(payment ? { payment: { provider: payment.provider as PaymentProvider, reference: payment.paymentReference, status: payment.status as PaymentStatus, ...(payment.providerCorrelationId ? { correlationId: payment.providerCorrelationId } : {}), ...(payment.expiresAt ? { expiresAt: payment.expiresAt.toISOString() } : {}), ...(payment.returnUrl ? { returnUrl: payment.returnUrl } : {}) } } : {}),
+        timeline: row.events.map((event) => ({ from: event.fromStatus as OrderStatus | null, to: event.toStatus as OrderStatus, at: event.createdAt.toISOString(), ...(event.reason ? { reason: event.reason } : {}) })),
+        ...(row.customerEsim ? { qrPayload: this.crypto.decrypt(row.customerEsim.qrPayloadEncrypted) } : {}),
+        createdAt: row.createdAt.toISOString(),
+      };
+    });
+  }
+
+  async save(order: DemoOrder) {
+    if (!this.prisma.enabled) return;
+    await this.prisma.$transaction(async (tx) => {
+      const identity = await this.ensureIdentity(tx, order.ownerId);
+      const country = await tx.country.upsert({ where: { isoCode: order.plan.countryCode }, update: { name: order.plan.countryName, active: true }, create: { isoCode: order.plan.countryCode, name: order.plan.countryName } });
+      await tx.plan.upsert({ where: { id: order.plan.id }, update: { name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' }, create: { id: order.plan.id, countryId: country.id, providerPlanId: `AURIGA-MOCK-${order.plan.countryCode}`, name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, costPrice: Math.round(order.plan.sellingPriceNpr * 0.65), sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' } });
+      const existing = await tx.order.findUnique({ where: { id: order.id }, select: { id: true } });
+      if (existing) {
+        const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, version: { increment: 1 } } });
+        if (updated.count !== 1) throw new ConflictException('Order was changed by another request; reload and retry');
+      } else {
+        await tx.order.create({ data: { id: order.id, orderNumber: order.orderNumber, customerId: identity.customerId, planId: order.plan.id, status: order.status as DbOrderStatus, version: 1, subtotal: order.totalAmountNpr, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, compatibilityAcceptedAt: new Date(order.compatibilityAcceptedAt), createdAt: new Date(order.createdAt) } });
+      }
+      if (order.traveler) await tx.traveler.upsert({ where: { orderId: order.id }, update: this.travelerData(order.traveler), create: { orderId: order.id, ...this.travelerData(order.traveler) } });
+      await tx.travelerDocument.deleteMany({ where: { orderId: order.id, id: { notIn: order.documents.map((document) => document.id) } } });
+      for (const doc of order.documents) await tx.travelerDocument.upsert({ where: { id: doc.id }, update: { fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as never }, create: { id: doc.id, orderId: order.id, type: doc.type as never, fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as never } });
+      if (order.payment) await tx.payment.upsert({ where: { paymentReference: order.payment.reference }, update: { status: order.payment.status as DbPaymentStatus, providerCorrelationId: order.payment.correlationId ?? null, expiresAt: order.payment.expiresAt ? new Date(order.payment.expiresAt) : null, returnUrl: order.payment.returnUrl ?? null, paidAt: order.payment.status === PaymentStatus.COMPLETED ? new Date() : null }, create: { orderId: order.id, provider: order.payment.provider as never, paymentReference: order.payment.reference, providerCorrelationId: order.payment.correlationId ?? null, expiresAt: order.payment.expiresAt ? new Date(order.payment.expiresAt) : null, returnUrl: order.payment.returnUrl ?? null, amount: order.totalAmountNpr, status: order.payment.status as DbPaymentStatus } });
+      await tx.orderEvent.deleteMany({ where: { orderId: order.id } });
+      if (order.timeline.length) await tx.orderEvent.createMany({ data: order.timeline.map((event) => ({ orderId: order.id, fromStatus: event.from as DbOrderStatus | null, toStatus: event.to as DbOrderStatus, createdAt: new Date(event.at), reason: event.reason ?? null })) });
+    });
+    order.version += 1;
+  }
+
+  async provisioningAttempt(orderId: string, attempt: number, request: object, result?: { response?: object; errorCode?: string }) { if (!this.prisma.enabled) return; await this.prisma.provisioningAttempt.create({ data: { orderId, provider: 'AURIGA_MOCK', status: result?.errorCode ? (attempt >= 3 ? 'FAILED' : 'RETRYING') : 'SUCCEEDED', correlationId: randomUUID(), attempt, requestSnapshot: request as Prisma.InputJsonValue, ...(result?.response ? { responseSnapshot: result.response as Prisma.InputJsonValue } : {}), ...(result?.errorCode ? { errorCode: result.errorCode } : {}), completedAt: new Date() } }); }
+
+  async audit() {
+    if (!this.prisma.enabled) return [];
+    const rows = await this.prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200 });
+    return rows.map((row) => ({ id: row.id, module: row.module, entity: row.entity, entityId: row.entityId, action: row.action, previousValue: row.previousValue, newValue: row.newValue, createdAt: row.createdAt.toISOString() }));
+  }
+
+  async recordReview(orderId: string, documentId: string, actorClerkId: string, decision: 'APPROVE'|'REUPLOAD', reason?: string) {
+    if (!this.prisma.enabled) return;
+    const actor = await this.prisma.user.upsert({ where: { clerkId: actorClerkId }, update: {}, create: { clerkId: actorClerkId, email: `${createHash('sha256').update(actorClerkId).digest('hex').slice(0,12)}@local.visacompass.invalid` } });
+    await this.prisma.$transaction([
+      this.prisma.orderReview.create({ data: { orderId, reviewerId: actor.id, decision: decision === 'APPROVE' ? 'APPROVED' : 'REUPLOAD_REQUIRED', reasons: reason ? [reason] : [], comments: reason ?? null } }),
+      this.prisma.travelerDocument.update({ where: { id: documentId }, data: { reviewedById: actor.id, reviewedAt: new Date() } }),
+      this.prisma.auditLog.create({ data: { module: 'VERIFICATION', entity: 'TravelerDocument', entityId: documentId, action: decision, performedById: actor.id, newValue: { orderId, reason: reason ?? null } } }),
+    ]);
+  }
+
+  private travelerData(traveler: TravelerInput) {
+    return { title: traveler.title, firstName: traveler.firstName, middleName: traveler.middleName ?? null, surname: traveler.surname, dateOfBirthEncrypted: this.crypto.encrypt(traveler.dateOfBirth), nationality: traveler.nationality, city: traveler.city, countryOfResidence: traveler.countryOfResidence, employerOrBusinessName: traveler.employerOrBusinessName ?? null, email: traveler.email, mobile: traveler.mobile, passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber), passportNumberHash: this.crypto.blindIndex(traveler.passportNumber), passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate), pointOfSaleCode: traveler.pointOfSaleCode ?? null };
+  }
+
+  private async ensureIdentity(tx: Prisma.TransactionClient, ownerId: string) {
+    const suffix = createHash('sha256').update(ownerId).digest('hex').slice(0, 12);
+    const email = `${suffix}@local.visacompass.invalid`;
+    const user = await tx.user.upsert({ where: { clerkId: ownerId }, update: {}, create: { clerkId: ownerId, email } });
+    const customer = await tx.customer.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id, email, customerCode: `VC-${suffix.toUpperCase()}` } });
+    return { userId: user.id, customerId: customer.id };
+  }
+}
