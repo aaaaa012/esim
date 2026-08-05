@@ -1,5 +1,5 @@
 import { ConflictException, Injectable } from '@nestjs/common';
-import { Prisma, type OrderStatus as DbOrderStatus, type PaymentStatus as DbPaymentStatus } from '@prisma/client';
+import { Prisma, type OrderStatus as DbOrderStatus, type OrderType as DbOrderType, type PaymentStatus as DbPaymentStatus } from '@prisma/client';
 import { DocumentStatus, DocumentType, OrderStatus, PaymentProvider, PaymentStatus, type TravelerInput } from '@visa-compass/shared';
 import { createHash } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +13,7 @@ export class OrdersPersistenceService {
 
   async load(): Promise<DemoOrder[]> {
     if (!this.prisma.enabled) return [];
-    const rows = await this.prisma.order.findMany({ include: { customer: { include: { user: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: true, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
+    const rows = await this.prisma.order.findMany({ include: { customer: { include: { user: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: { include: { subscriptions: true } }, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
     return rows.map((row) => {
       const traveler: TravelerInput | undefined = row.traveler ? {
         title: row.traveler.title as TravelerInput['title'], firstName: row.traveler.firstName, surname: row.traveler.surname,
@@ -37,6 +37,9 @@ export class OrdersPersistenceService {
         ...(row.customerEsim ? { qrPayload: this.crypto.decrypt(row.customerEsim.qrPayloadEncrypted) } : {}),
         ...(row.providerSubscriptionId ? { providerSubscriptionId: row.providerSubscriptionId } : {}),
         ...(row.providerStatus ? { providerStatus: row.providerStatus } : {}),
+        purchaseType: row.orderType as 'INITIAL_PURCHASE' | 'TOPUP',
+        ...(() => { const snapshot = row.pricingSnapshot as { topUpMobile?: string }; return snapshot?.topUpMobile ? { topUpMobile: snapshot.topUpMobile } : {}; })(),
+        ...(() => { if (!row.customerEsim?.subscriptions?.length) return {}; const latest = [...row.customerEsim.subscriptions].sort((a, b) => (b.usageLastCheckedAt?.getTime() ?? 0) - (a.usageLastCheckedAt?.getTime() ?? 0))[0]; if (!latest?.usageLastCheckedAt) return {}; return { usage: { usedMb: latest.usedMb, totalMb: latest.totalMb, lastCheckedAt: latest.usageLastCheckedAt.toISOString() } }; })(),
         createdAt: row.createdAt.toISOString(),
       };
     });
@@ -45,15 +48,15 @@ export class OrdersPersistenceService {
   async save(order: DemoOrder) {
     if (!this.prisma.enabled) return;
     await this.prisma.$transaction(async (tx) => {
-      const identity = await this.ensureIdentity(tx, order.ownerId);
+      const identity = await this.ensureIdentity(tx, order);
       const country = await tx.country.upsert({ where: { isoCode: order.plan.countryCode }, update: { name: order.plan.countryName, active: true }, create: { isoCode: order.plan.countryCode, name: order.plan.countryName } });
       await tx.plan.upsert({ where: { id: order.plan.id }, update: { name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' }, create: { id: order.plan.id, countryId: country.id, providerPlanId: `TRANSATEL-${order.plan.countryCode}`, name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, costPrice: Math.round(order.plan.sellingPriceNpr * 0.65), sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' } });
       const existing = await tx.order.findUnique({ where: { id: order.id }, select: { id: true } });
       if (existing) {
-        const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, version: { increment: 1 } } });
+        const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, orderType: (order.purchaseType ?? 'INITIAL_PURCHASE') as DbOrderType, providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, version: { increment: 1 } } });
         if (updated.count !== 1) throw new ConflictException('Order was changed by another request; reload and retry');
       } else {
-        await tx.order.create({ data: { id: order.id, orderNumber: order.orderNumber, customerId: identity.customerId, planId: order.plan.id, status: order.status as DbOrderStatus, version: 1, subtotal: order.totalAmountNpr, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, compatibilityAcceptedAt: new Date(order.compatibilityAcceptedAt), providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, createdAt: new Date(order.createdAt) } });
+        await tx.order.create({ data: { id: order.id, orderNumber: order.orderNumber, customerId: identity.customerId, planId: order.plan.id, orderType: (order.purchaseType ?? 'INITIAL_PURCHASE') as DbOrderType, status: order.status as DbOrderStatus, version: 1, subtotal: order.totalAmountNpr, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, compatibilityAcceptedAt: new Date(order.compatibilityAcceptedAt), providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, createdAt: new Date(order.createdAt) } });
       }
       if (order.traveler) await tx.traveler.upsert({ where: { orderId: order.id }, update: this.travelerData(order.traveler), create: { orderId: order.id, ...this.travelerData(order.traveler) } });
       await tx.travelerDocument.deleteMany({ where: { orderId: order.id, id: { notIn: order.documents.map((document) => document.id) } } });
@@ -94,10 +97,18 @@ export class OrdersPersistenceService {
     return { title: traveler.title, firstName: traveler.firstName, middleName: traveler.middleName ?? null, surname: traveler.surname, dateOfBirthEncrypted: this.crypto.encrypt(traveler.dateOfBirth), nationality: traveler.nationality, city: traveler.city, countryOfResidence: traveler.countryOfResidence, employerOrBusinessName: traveler.employerOrBusinessName ?? null, email: traveler.email, mobile: traveler.mobile, passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber), passportNumberHash: this.crypto.blindIndex(traveler.passportNumber), passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate), pointOfSaleCode: traveler.pointOfSaleCode ?? null };
   }
 
-  private async ensureIdentity(tx: Prisma.TransactionClient, ownerId: string) {
-    const suffix = createHash('sha256').update(ownerId).digest('hex').slice(0, 12);
+  private async ensureIdentity(tx: Prisma.TransactionClient, order: DemoOrder) {
+    if (!order.ownerId) {
+      const suffix = createHash('sha256').update(order.id).digest('hex').slice(0, 12);
+      const clerkId = `guest-${suffix}`;
+      const email = order.traveler?.email ?? `${suffix}@guest.visacompass.invalid`;
+      const user = await tx.user.upsert({ where: { clerkId }, update: { email }, create: { clerkId, email } });
+      const customer = await tx.customer.upsert({ where: { userId: user.id }, update: { email }, create: { userId: user.id, email, customerCode: `G-${suffix.toUpperCase()}` } });
+      return { userId: user.id, customerId: customer.id };
+    }
+    const suffix = createHash('sha256').update(order.ownerId).digest('hex').slice(0, 12);
     const email = `${suffix}@local.visacompass.invalid`;
-    const user = await tx.user.upsert({ where: { clerkId: ownerId }, update: {}, create: { clerkId: ownerId, email } });
+    const user = await tx.user.upsert({ where: { clerkId: order.ownerId }, update: {}, create: { clerkId: order.ownerId, email } });
     const customer = await tx.customer.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id, email, customerCode: `VC-${suffix.toUpperCase()}` } });
     return { userId: user.id, customerId: customer.id };
   }

@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../infrastructure/prisma.service.js';
 import { ConnectivityService } from '../modules/integration/connectivity.service.js';
+import { NotificationService } from '../modules/notification/notification.service.js';
 import { QueueService } from './queue.service.js';
 import { QUEUES } from './queues.js';
 
@@ -21,6 +22,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
     private readonly queues: QueueService,
+    private readonly notifications: NotificationService,
   ) {}
 
   onModuleInit() {
@@ -39,6 +41,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
 
   private async run() {
     if (!this.prisma.enabled) return;
+    await this.sweepLifecycle();
     const subscriptions = await this.prisma.subscription.findMany({
       where: { status: 'ACTIVE' },
       select: {
@@ -69,14 +72,45 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     if (queued) this.logger.log(`Queued ${queued} subscription usage reconciliation job(s)`);
   }
 
+  private async sweepLifecycle() {
+    const now = new Date();
+    const subscriptions = await this.prisma.subscription.findMany({
+      where: { status: 'ACTIVE' },
+      include: { customerEsim: { include: { inventory: true, order: { include: { traveler: true } } } } },
+      take: 500,
+    });
+    for (const subscription of subscriptions) {
+      const inventory = subscription.customerEsim?.inventory;
+      const order = subscription.customerEsim?.order;
+      if (!inventory || !order) continue;
+      const expiredByDate = inventory.expiresAt !== null && inventory.expiresAt <= now;
+      const exhausted = subscription.totalMb > 0 && subscription.usedMb >= subscription.totalMb;
+      if (expiredByDate || exhausted) {
+        await this.prisma.subscription.update({ where: { id: subscription.id }, data: { status: 'EXPIRED' } });
+        await this.prisma.esimInventory.update({ where: { id: inventory.id }, data: { status: 'EXPIRED', expiresAt: inventory.expiresAt } });
+        this.logger.log(`Marked subscription ${subscription.id} as EXPIRED (${expiredByDate ? 'date elapsed' : 'data exhausted'})`);
+        await this.notifyLifecycle(order, expiredByDate ? 'PLAN_EXPIRED' : 'PLAN_EXHAUSTED');
+      }
+    }
+  }
+
+  private async notifyLifecycle(order: { id: string; orderNumber: string; traveler: { email: string } | null }, template: 'PLAN_EXPIRED' | 'PLAN_EXHAUSTED') {
+    if (!order.traveler?.email) return;
+    try {
+      await this.notifications.enqueue({ orderId: order.id, channel: 'EMAIL', template, recipient: order.traveler.email, orderNumber: order.orderNumber });
+    } catch (error) {
+      this.logger.warn(`Lifecycle notification failed for ${order.id}: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  }
+
   private async reconcile(subscriptionId: string) {
     try {
       const subscription = await this.prisma.subscription.findUnique({
         where: { id: subscriptionId },
         include: { customerEsim: { include: { inventory: true } } },
       });
-      if (!subscription?.customerEsim?.inventory) return;
-      const usage = await this.connectivity.getUsage(subscription.providerSubscriptionId);
+      if (!subscription?.customerEsim?.inventory?.iccid) return;
+      const usage = await this.connectivity.getUsage(subscription.customerEsim.inventory.iccid);
       await this.prisma.subscription.update({
         where: { id: subscriptionId },
         data: { usedMb: usage.usedMb, totalMb: usage.totalMb, usageLastCheckedAt: new Date() },

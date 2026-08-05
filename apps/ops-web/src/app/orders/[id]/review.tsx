@@ -33,6 +33,8 @@ type Detail = OpsOrder & {
   documents: { id: string; type: string; fileName: string; status: string }[];
   payment?: { provider: string; status: string };
   timeline: { to: string; at: string; reason?: string }[];
+  purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
+  topUpMobile?: string;
 };
 
 export default function OrderReview({ id }: { id: string }) {const authFetch=useAuthenticatedFetch();
@@ -118,9 +120,13 @@ export default function OrderReview({ id }: { id: string }) {const authFetch=use
           <span className={`pill ${canReview ? "green" : ""}`}>
             {order.status.replaceAll("_", " ")}
           </span>
+          <span className={`pill ${order.purchaseType === "TOPUP" ? "topup" : "first"}`}>
+            {order.purchaseType === "TOPUP" ? "TOP-UP" : "FIRST PURCHASE"}
+          </span>
           <h1>{order.orderNumber}</h1>
           <p>
             {order.plan.name} · NPR {order.totalAmountNpr.toLocaleString()}
+            {order.topUpMobile ? ` · top-up for ${order.topUpMobile}` : ""}
           </p>
         </div>
       </div>
@@ -271,6 +277,35 @@ export default function OrderReview({ id }: { id: string }) {const authFetch=use
               <AlertTriangle size={18} />
               No review action available in this state.
             </div>
+          )}
+          {order.payment?.status === "COMPLETED" &&
+            !["REFUND_PENDING", "REFUNDED"].includes(order.status) && (
+              <button
+                className="decision refund"
+                disabled={Boolean(busy)}
+                onClick={() =>
+                  action("payment/refund", {
+                    reason: prompt("Reason for refund", "Customer requested cancellation") ?? "Customer requested refund",
+                  })
+                }
+              >
+                <RefreshCcw size={16} />
+                Refund order
+              </button>
+            )}
+          {["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(order.status) && (
+            <button
+              className="decision cancel"
+              disabled={Boolean(busy)}
+              onClick={() =>
+                action("cancel", {
+                  reason: prompt("Reason for cancellation", "Customer request") ?? "Customer request",
+                })
+              }
+            >
+              <AlertTriangle size={16} />
+              Cancel order
+            </button>
           )}
           <small>
             Every document decision and order transition is appended to the

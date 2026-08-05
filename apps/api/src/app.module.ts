@@ -10,6 +10,7 @@ import {
   OperationsController,
 } from "./modules/orders/orders.controller.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
+import { GuestOrdersController } from "./modules/orders/guest-orders.controller.js";
 import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
 import { KhaltiGateway } from "./modules/payments/gateways/khalti.gateway.js";
@@ -57,7 +58,8 @@ import { AccountGuard } from "./common/auth.guard.js";
     AuthController,
     CatalogController,
     OrdersController,
-    OperationsController,
+OperationsController,
+    GuestOrdersController,
     InventoryController,
     AdminController,
     PaymentsController,

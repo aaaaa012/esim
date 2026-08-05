@@ -13,4 +13,5 @@ export class PaymentSimulatorGateway implements PaymentGateway {
   sign(payload: string) { return createHmac('sha256', process.env.PAYMENT_SIMULATOR_SECRET ?? 'local-development-only-change-me').update(payload).digest('hex'); }
   verifySignature(payload: string, signature: string) { const expected = Buffer.from(this.sign(payload)); const actual = Buffer.from(signature); return expected.length === actual.length && timingSafeEqual(expected, actual); }
   async verify(reference: string, context: PaymentContext) { const record = this.records.get(reference) ?? { orderId: context.orderId, amountNpr: context.amountNpr, status: PaymentStatus.PENDING }; return { reference, ...record, providerTransactionId: `sim-${reference}` }; }
+  async refund(reference: string) { const record = this.records.get(reference); if (record) record.status = PaymentStatus.REFUNDED; return { reference: `refund-${reference}` }; }
 }

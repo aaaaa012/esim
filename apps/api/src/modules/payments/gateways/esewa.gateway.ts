@@ -29,4 +29,5 @@ export class EsewaGateway implements PaymentGateway {
     const statuses: Record<string,PaymentStatus> = { SUCCESS:PaymentStatus.COMPLETED, BOOKED:PaymentStatus.PENDING, PENDING:PaymentStatus.PENDING, FAILED:PaymentStatus.FAILED, CANCELED:PaymentStatus.CANCELLED, REVERTED:PaymentStatus.REFUNDED };
     return { reference, orderId:context.orderId, amountNpr:context.amountNpr, status:statuses[payload.data.status] ?? PaymentStatus.PENDING, ...(payload.data.transaction_id?{providerTransactionId:payload.data.transaction_id}:{}) };
   }
+  async refund(_reference: string, _context: PaymentContext, _amountNpr: number): Promise<{ reference: string }> { throw new ServiceUnavailableException('eSewa refunds are not automated; complete them in the merchant console'); }
 }

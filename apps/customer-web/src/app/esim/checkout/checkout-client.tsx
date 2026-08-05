@@ -1,5 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
+import { useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -21,6 +22,7 @@ import {
 } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+const SIMULATOR = process.env.NEXT_PUBLIC_PAYMENT_MODE === "simulator";
 type Envelope<T> = { data: T; error?: { code?: string; message: string } };
 type Order = {
   id: string;
@@ -82,13 +84,44 @@ const initial: Traveler = {
 export default function CheckoutClient({
   planId,
   orderId,
+  mobile,
 }: {
   planId: string;
   orderId: string;
+  mobile?: string;
 }) {
   const authFetch = useAuthenticatedFetch();
+  const { isLoaded, isSignedIn } = useAuth();
+  const guest = isLoaded ? !isSignedIn : false;
+  const [guestToken, setGuestToken] = useState(() => {
+    try {
+      return sessionStorage.getItem("vc_guest_token") ?? "";
+    } catch {
+      return "";
+    }
+  });
   const api = async <T,>(path: string, init?: RequestInit) => {
-    const response = await authFetch(`${API}${path}`, { ...init, headers: { "content-type": "application/json", "x-idempotency-key": crypto.randomUUID(), ...init?.headers } });
+    let url = `${API}${path}`;
+    let body = init?.body as BodyInit | null | undefined;
+    const isGet = !init?.method || init.method.toUpperCase() === "GET";
+    if (guest) {
+      url = url.replace(`${API}/customer/orders`, `${API}/guest/orders`);
+      if (isGet) {
+        url += `${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(guestToken)}`;
+      } else if (typeof body === "string") {
+        const parsed = JSON.parse(body);
+        parsed.token = guestToken;
+        body = JSON.stringify(parsed);
+      } else if (!body) {
+        body = JSON.stringify({ token: guestToken });
+      }
+    }
+    const requestInit: RequestInit = {
+      ...init,
+      headers: { "content-type": "application/json", "x-idempotency-key": crypto.randomUUID(), ...init?.headers },
+    };
+    if (body !== undefined) requestInit.body = body;
+    const response = await authFetch(url, requestInit);
     const payload = (await response.json()) as Envelope<T>;
     if (!response.ok) throw new Error(apiErrorMessage(payload.error?.code ?? "", payload.error?.message ?? "Something went wrong"));
     return payload.data;
@@ -198,6 +231,25 @@ export default function CheckoutClient({
       }
       if (!planId) throw new Error("Choose a plan before checkout");
       if (!compatible) throw new Error("Confirm device compatibility");
+      if (guest) {
+        const created = await api<{ order: Order; token: string }>("/customer/orders", {
+          method: "POST",
+          body: JSON.stringify({
+            planId,
+            compatibilityAccepted: true,
+            mobile: (mobile || traveler.mobile) || undefined,
+          }),
+        });
+        setOrder(created.order);
+        setGuestToken(created.token);
+        try {
+          sessionStorage.setItem("vc_guest_token", created.token);
+        } catch {
+          /* storage unavailable */
+        }
+        setStep(2);
+        return;
+      }
       const value = await api<Order>("/customer/orders", {
         method: "POST",
         body: JSON.stringify({ planId, compatibilityAccepted: true }),
@@ -263,6 +315,13 @@ export default function CheckoutClient({
             }),
           },
         );
+        if (authorization.upload.mode === "local-simulator") {
+          await api(
+            `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
+            { method: "POST", body: "{}" },
+          );
+          continue;
+        }
         if (
           authorization.upload.mode !== "cloudinary-signed" ||
           !authorization.upload.endpoint
@@ -309,16 +368,21 @@ export default function CheckoutClient({
     });
   const complete = () =>
     run(async () => {
-      if (order && payment)
-        setOrder(
-          await api<Order>(
-            `/customer/orders/${order.id}/payment/simulate-complete`,
-            {
-              method: "POST",
-              body: JSON.stringify({ reference: payment.reference }),
-            },
-          ),
-        );
+      if (!order || !payment) return;
+      const endpoint = SIMULATOR
+        ? guest
+          ? `/customer/orders/${order.id}/payment/simulate`
+          : `/customer/orders/${order.id}/payment/simulate-complete`
+        : `/customer/orders/${order.id}/payment/verify`;
+      setOrder(
+        await api<Order>(
+          endpoint,
+          {
+            method: "POST",
+            body: JSON.stringify({ reference: payment.reference }),
+          },
+        ),
+      );
     });
 
   return (
@@ -622,15 +686,21 @@ export default function CheckoutClient({
                       )}
                     </div>
                     {payment ? (
-                      <div className="simulator-box">
-                        <span>Local signed simulator</span>
-                        <small>
-                          Reference: {payment.reference.slice(0, 14)}…
-                        </small>
+                      SIMULATOR ? (
+                        <div className="simulator-box">
+                          <span>Local signed simulator</span>
+                          <small>
+                            Reference: {payment.reference.slice(0, 14)}…
+                          </small>
+                          <Action busy={busy} onClick={complete}>
+                            Simulate verified payment
+                          </Action>
+                        </div>
+                      ) : (
                         <Action busy={busy} onClick={complete}>
-                          Simulate verified payment
+                          Confirm my payment
                         </Action>
-                      </div>
+                      )
                     ) : (
                       <Action busy={busy} onClick={initiate}>
                         Continue to {provider === "KHALTI" ? "Khalti" : "eSewa"}

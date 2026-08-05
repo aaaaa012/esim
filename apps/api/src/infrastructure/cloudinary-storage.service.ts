@@ -28,6 +28,9 @@ export class CloudinaryStorageService {
   }
 
   async verifyDocument(assetId: string) {
+    if (!this.isConfigured()) {
+      return { bytes: 0, format: 'pdf', simulated: true };
+    }
     this.configure();
     try {
       const resource = await cloudinary.api.resource(assetId, { type: 'authenticated', resource_type: 'image' }) as { bytes?: number; format?: string };
@@ -41,15 +44,19 @@ export class CloudinaryStorageService {
   }
 
   signedReadUrl(assetId: string) {
+    if (!this.isConfigured()) throw new ServiceUnavailableException('Private document storage is not configured');
     this.configure();
     return cloudinary.url(assetId, { type: 'authenticated', resource_type: 'image', sign_url: true, secure: true, expires_at: Math.floor(Date.now() / 1000) + 300 });
   }
 
   async downloadDocument(assetId: string) {
+    if (!this.isConfigured()) throw new ServiceUnavailableException('Private document storage is not configured');
     const response = await fetch(this.signedReadUrl(assetId));
     if (!response.ok) throw new BadRequestException('Document content is unavailable');
     return { bytes: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get('content-type') ?? 'application/octet-stream' };
   }
+
+  private isConfigured() { return Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET); }
 
   private configure() {
     const { CLOUDINARY_CLOUD_NAME: cloudName, CLOUDINARY_API_KEY: apiKey, CLOUDINARY_API_SECRET: apiSecret } = process.env;

@@ -45,6 +45,7 @@ type Order = {
   documents: { id: string; type: string; status: string; fileName: string }[];
   payment?: { provider: string; status: string };
   timeline: { from: string | null; to: string; at: string; reason?: string }[];
+  usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
 };
 
 export default function EsimDetails({ id }: { id: string }) {const authFetch=useAuthenticatedFetch();
@@ -300,6 +301,46 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                   <Mail size={18} />
                   Check your email for the attachment
                 </div>
+                {order.usage ? (
+                  <div className="usage-panel">
+                    <span className="form-icon">
+                      <Clock3 />
+                    </span>
+                    <h3>Data usage</h3>
+                    <div className="usage-bar">
+                      <i
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            (order.usage.usedMb / order.usage.totalMb) * 100,
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    <p>
+                      <b>
+                        {order.usage.usedMb.toLocaleString()} MB
+                      </b>{" "}
+                      of {order.usage.totalMb.toLocaleString()} MB used
+                    </p>
+                    <small>
+                      Remaining:{" "}
+                      {Math.max(
+                        0,
+                        order.usage.totalMb - order.usage.usedMb,
+                      ).toLocaleString()}{" "}
+                      MB · last checked{" "}
+                      {order.usage.lastCheckedAt
+                        ? new Date(order.usage.lastCheckedAt).toLocaleString()
+                        : "—"}
+                    </small>
+                  </div>
+                ) : (
+                  <p className="usage-pending">
+                    Usage will appear here after your plan is activated and
+                    reconciled.
+                  </p>
+                )}
               </>
             ) : (
               <>

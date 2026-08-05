@@ -1,6 +1,8 @@
-export type NotificationTemplate = 'ORDER_STATUS' | 'QR_READY' | 'DOCUMENT_REUPLOAD';
+export type NotificationTemplate = 'ORDER_STATUS' | 'QR_READY' | 'DOCUMENT_REUPLOAD' | 'PLAN_EXHAUSTED' | 'PLAN_EXPIRED';
 export function renderNotification(template: NotificationTemplate, data: { orderNumber:string; reason?:string }) {
-  if (template === 'QR_READY') return { subject:`Your Visa Compass eSIM is ready — ${data.orderNumber}`, text:`Your eSIM is ready for order ${data.orderNumber}. Open the attached PDF and enter the mobile number you provided when prompted to reveal the activation QR.` };
+  if (template === 'QR_READY') return { subject:`Your Visa Compass eSIM is ready - ${data.orderNumber}`, text:`Your eSIM is ready for order ${data.orderNumber}. Open the attached PDF and enter the mobile number you provided when prompted to reveal the activation QR.` };
   if (template === 'DOCUMENT_REUPLOAD') return { subject:`Action required for ${data.orderNumber}`, text:`A replacement travel document is required for ${data.orderNumber}.${data.reason ? ` Reason: ${data.reason}` : ''} Sign in to upload it securely.` };
-  return { subject:`Visa Compass order update — ${data.orderNumber}`, text:`There is an update for order ${data.orderNumber}. Sign in to view its secure timeline.` };
+  if (template === 'PLAN_EXHAUSTED') return { subject:`Your data plan is used up - ${data.orderNumber}`, text:`The data allowance for order ${data.orderNumber} has been fully consumed. Top up on Visa Compass to stay connected.` };
+  if (template === 'PLAN_EXPIRED') return { subject:`Your data plan has expired - ${data.orderNumber}`, text:`The plan for order ${data.orderNumber} has expired.${data.reason ? ` Reason: ${data.reason}` : ''} Recharge with a new plan on Visa Compass to continue using mobile data.` };
+  return { subject:`Visa Compass order update - ${data.orderNumber}`, text:`There is an update for order ${data.orderNumber}. Sign in to view its secure timeline.` };
 }

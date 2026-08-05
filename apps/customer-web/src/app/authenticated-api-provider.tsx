@@ -14,7 +14,7 @@ export default function AuthenticatedApiProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const { getToken, isLoaded, isSignedIn } = useAuth();
+  const { getToken, isLoaded } = useAuth();
   const authFetch = useCallback<AuthFetch>(
     async (input, init) => {
       const url =
@@ -36,7 +36,5 @@ export default function AuthenticatedApiProvider({
   );
   if (!isLoaded)
     return <main className="account-loading">Securing your session…</main>;
-  if (!isSignedIn)
-    return <Context.Provider value={authFetch}>{children}</Context.Provider>;
   return <Context.Provider value={authFetch}>{children}</Context.Provider>;
 }

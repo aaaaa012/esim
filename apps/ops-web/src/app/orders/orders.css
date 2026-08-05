@@ -231,3 +231,4 @@ td small {
     grid-template-columns: 1fr;
   }
 }
+.pill.topup{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}.pill.first{background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe}.decision.refund{background:#fdf2f8;color:#be185d;border:1px solid #fbcfe8}.decision.cancel{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}

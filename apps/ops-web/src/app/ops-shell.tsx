@@ -1,12 +1,14 @@
 "use client";
 
-import { UserButton, useAuth } from "@clerk/nextjs";
+import { useClerk, UserButton, useAuth } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
+import { LogOut } from "lucide-react";
 import OpsSidebar from "./ops-sidebar";
 import ThemeToggle from "./theme-toggle";
 
 export default function OpsShell({ children }: { children: React.ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
+  const { signOut } = useClerk();
   const pathname = usePathname();
   if (
     pathname.startsWith("/sign-in") ||
@@ -25,6 +27,15 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
           <div>
             <ThemeToggle />
             <a href="http://localhost:3000">← Customer Portal</a>
+            <button
+              type="button"
+              className="sign-out"
+              onClick={() => void signOut()}
+              title="Sign out of the operations console"
+            >
+              <LogOut size={15} />
+              Sign out
+            </button>
             <UserButton />
           </div>
         </header>

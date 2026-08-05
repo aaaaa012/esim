@@ -12,42 +12,101 @@ import { InventoryService } from '../inventory/inventory.service.js';
 import { QueueService } from '../../jobs/queue.service.js';
 import { QUEUES } from '../../jobs/queues.js';
 import { NotificationService } from '../notification/notification.service.js';
+import { PrismaService } from '../../infrastructure/prisma.service.js';
 
 type Timeline = { from: OrderStatus | null; to: OrderStatus; at: string; reason?: string };
 export type DemoOrder = {
-  id: string; ownerId: string; orderNumber: string; status: OrderStatus; version: number; plan: CatalogPlan; totalAmountNpr: number;
+  id: string; ownerId: string | null; orderNumber: string; status: OrderStatus; version: number; plan: CatalogPlan; totalAmountNpr: number;
   pricingSnapshot: object; compatibilityAcceptedAt: string; traveler?: TravelerInput; documents: { id: string; type: DocumentType; fileName: string; privateAssetId: string; status: DocumentStatus; uploadVerified?: boolean }[];
   payment?: { provider: PaymentProvider; reference: string; status: PaymentStatus; correlationId?: string; expiresAt?: string; returnUrl?: string }; timeline: Timeline[]; qrPayload?: string; createdAt: string;
-  providerSubscriptionId?: string; providerStatus?: string;
+  providerSubscriptionId?: string; providerStatus?: string; usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
+  purchaseType?: 'INITIAL_PURCHASE' | 'TOPUP';
+  topUpMobile?: string;
 };
 
 @Injectable()
 export class OrdersService implements OnModuleInit {
   private readonly orders = new Map<string, DemoOrder>();
   private readonly logger = new Logger(OrdersService.name);
-  constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService,private readonly catalog:CatalogService) {}
+  constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService) {}
   async onModuleInit() { for (const order of await this.persistence.load()) this.orders.set(order.id, order); this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`); }
   list(ownerId?: string) { return [...this.orders.values()].filter((o) => !ownerId || o.ownerId === ownerId).map((order) => ownerId ? this.redact(order) : this.expand(order)); }
   audit() { return this.persistence.audit(); }
   get(id: string, ownerId?: string) { const order = this.orders.get(id); if (!order || (ownerId && order.ownerId !== ownerId)) throw new NotFoundException('Order not found'); return order; }
   view(id: string, ownerId?: string) { return ownerId ? this.redact(this.get(id, ownerId)) : this.expand(this.get(id)); }
-  async create(ownerId: string, planId: string, compatibilityAccepted: boolean, meta?: { ipAddress?: string; userAgent?: string }) {
+  async customerProfile(ownerId: string) {
+    if (!this.prisma.enabled) {
+      const orders = this.list(ownerId);
+      return { ownerId, orders: orders.map((order) => ({ id: order.id, orderNumber: order.orderNumber, status: order.status, plan: order.plan, createdAt: order.createdAt, totalAmountNpr: order.totalAmountNpr, usage: order.usage })) };
+    }
+    const customer = await this.prisma.customer.findFirst({ where: { OR: [{ id: ownerId }, { user: { clerkId: ownerId } }] }, include: { user: true } });
+    if (!customer) throw new NotFoundException('Customer not found');
+    const orders = await this.prisma.order.findMany({ where: { customerId: customer.id }, include: { plan: { include: { country: true } }, traveler: true, customerEsim: { include: { inventory: true, subscriptions: true } } }, orderBy: { createdAt: 'desc' } });
+    return {
+      ownerId: customer.user?.clerkId ?? customer.id,
+      customerCode: customer.customerCode,
+      email: customer.email,
+      name: orders.find((order) => order.traveler)?.traveler?.firstName,
+      orders: orders.map((order) => ({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        plan: { id: order.plan.id, name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, countryCode: order.plan.country.isoCode, countryName: order.plan.country.name },
+        createdAt: order.createdAt.toISOString(),
+        totalAmountNpr: Number(order.totalAmount),
+        traveler: order.traveler ? { firstName: order.traveler.firstName, surname: order.traveler.surname, mobile: order.traveler.mobile, email: order.traveler.email } : undefined,
+        ...(order.customerEsim ? { esim: { iccid: order.customerEsim.inventory.iccid, status: order.customerEsim.inventory.status, ...(order.customerEsim.inventory.activatedAt ? { activatedAt: order.customerEsim.inventory.activatedAt.toISOString() } : {}), ...(order.customerEsim.inventory.expiresAt ? { expiresAt: order.customerEsim.inventory.expiresAt.toISOString() } : {}), usage: (() => { const latest = [...order.customerEsim.subscriptions].sort((a, b) => (b.usageLastCheckedAt?.getTime() ?? 0) - (a.usageLastCheckedAt?.getTime() ?? 0))[0]; if (!latest || latest.usageLastCheckedAt === null) return undefined; return { usedMb: latest.usedMb, totalMb: latest.totalMb, lastCheckedAt: latest.usageLastCheckedAt.toISOString() }; })() } } : {}),
+      })),
+    };
+  }
+  async create(ownerId: string | null, planId: string, compatibilityAccepted: boolean, meta?: { ipAddress?: string; userAgent?: string; mobile?: string; email?: string }) {
     if (!compatibilityAccepted) throw new BadRequestException('Compatibility declaration is required');
     const plan = await this.catalog.findActive(planId); if (!plan) throw new BadRequestException('Invalid or inactive plan');
     const id = randomUUID(); const now = new Date().toISOString();
-    const order: DemoOrder = { id, ownerId, orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`, status: OrderStatus.DRAFT, version: 0, plan, totalAmountNpr: plan.sellingPriceNpr, pricingSnapshot: { planId, name: plan.name, amount: plan.sellingPriceNpr, currency: 'NPR' }, compatibilityAcceptedAt: now, documents: [], timeline: [{ from: null, to: OrderStatus.DRAFT, at: now }], createdAt: now };
+    const purchaseType = await this.resolvePurchaseType(ownerId, meta?.mobile);
+    const order: DemoOrder = { id, ownerId, orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`, status: OrderStatus.DRAFT, version: 0, plan, totalAmountNpr: plan.sellingPriceNpr, pricingSnapshot: { planId, name: plan.name, amount: plan.sellingPriceNpr, currency: 'NPR', ...(meta?.mobile ? { topUpMobile: meta.mobile } : {}) }, compatibilityAcceptedAt: now, documents: [], timeline: [{ from: null, to: OrderStatus.DRAFT, at: now }], createdAt: now, purchaseType, ...(meta?.mobile ? { topUpMobile: meta.mobile } : {}) };
     this.orders.set(id, order); await this.persistence.save(order);
     if (meta?.ipAddress || meta?.userAgent) {
-      await this.persistence.recordConsent(id, ownerId, 'E_SIM_COMPATIBILITY', '1.0', meta.ipAddress ?? 'unknown', meta.userAgent ?? 'unknown').catch((error) => this.logger.warn(`Consent recording failed for order ${id}: ${error instanceof Error ? error.message : 'unknown'}`));
+      await this.persistence.recordConsent(id, ownerId ?? 'guest', 'E_SIM_COMPATIBILITY', '1.0', meta.ipAddress ?? 'unknown', meta.userAgent ?? 'unknown').catch((error) => this.logger.warn(`Consent recording failed for order ${id}: ${error instanceof Error ? error.message : 'unknown'}`));
     }
     return this.redact(order);
   }
-  async setTraveler(id: string, ownerId: string, traveler: TravelerInput) { const order = this.get(id, ownerId); if (order.status !== OrderStatus.DRAFT) throw new BadRequestException('Submitted order is immutable'); order.traveler = traveler; await this.persistence.save(order); return this.redact(order); }
-  async addDocument(id: string, ownerId: string, input: { type: DocumentType; fileName: string; contentType?: string }) { const order = this.get(id, ownerId); if (![OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER].includes(order.status)) throw new BadRequestException('Documents cannot be changed now'); const signed = this.storage.createDocumentUpload(id, input.type); const document = { id: randomUUID(), type: input.type, fileName: input.fileName, privateAssetId: signed.assetId, status: DocumentStatus.PENDING }; order.documents = order.documents.filter((d) => d.type !== input.type).concat(document); await this.persistence.save(order); return { ...document, upload: signed.upload }; }
-  async confirmDocument(id: string, documentId: string, ownerId: string) { const order = this.get(id, ownerId); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); await this.storage.verifyDocument(document.privateAssetId); document.uploadVerified = true; if (order.status === OrderStatus.AWAITING_CUSTOMER && !order.documents.some((item) => item.status === DocumentStatus.REUPLOAD_REQUIRED)) this.transition(order, OrderStatus.REVIEW_PENDING, 'Customer supplied requested document'); await this.persistence.save(order); return { id: document.id, type: document.type, status: document.status, uploadVerified: true }; }
+  private async resolvePurchaseType(ownerId: string | null, mobile?: string) {
+    if (ownerId && (await this.hasCompletedOrderForOwner(ownerId))) return 'TOPUP' as const;
+    if (mobile) {
+      const prior = [...this.orders.values()].find((order) => order.status === OrderStatus.COMPLETED && order.traveler?.mobile === mobile);
+      if (prior) return 'TOPUP' as const;
+      if (this.prisma.enabled) {
+        const found = await this.prisma.order.findFirst({ where: { status: 'COMPLETED', traveler: { mobile } }, select: { id: true } });
+        if (found) return 'TOPUP' as const;
+      }
+    }
+    return 'INITIAL_PURCHASE' as const;
+  }
+  private async hasCompletedOrderForOwner(ownerId: string) {
+    const anyCompleted = [...this.orders.values()].some((order) => order.ownerId === ownerId && order.status === OrderStatus.COMPLETED);
+    if (anyCompleted) return true;
+    if (!this.prisma.enabled) return false;
+    const customer = await this.prisma.customer.findFirst({ where: { OR: [{ id: ownerId }, { user: { clerkId: ownerId } }] }, select: { id: true } });
+    if (!customer) return false;
+    return Boolean(await this.prisma.order.findFirst({ where: { customerId: customer.id, status: 'COMPLETED' }, select: { id: true } }));
+  }
+  async usageFor(orderId: string) {
+    const order = this.get(orderId);
+    if (this.prisma.enabled) {
+      const inventory = await this.prisma.esimInventory.findUnique({ where: { assignedOrderId: orderId }, select: { iccid: true } });
+      if (!inventory?.iccid) throw new NotFoundException('eSIM is not yet provisioned');
+      return this.connectivity.getUsage(inventory.iccid);
+    }
+    if (order.usage) return order.usage;
+    throw new NotFoundException('Usage is available after provisioning');
+  }
+  async setTraveler(id: string, ownerId: string | null, traveler: TravelerInput) { const order = this.get(id, ownerId ?? undefined); if (order.status !== OrderStatus.DRAFT) throw new BadRequestException('Submitted order is immutable'); order.traveler = traveler; await this.persistence.save(order); return this.redact(order); }
+  async addDocument(id: string, ownerId: string | null, input: { type: DocumentType; fileName: string; contentType?: string }) { const order = this.get(id, ownerId ?? undefined); if (![OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER].includes(order.status)) throw new BadRequestException('Documents cannot be changed now'); const signed = this.storage.createDocumentUpload(id, input.type); const document = { id: randomUUID(), type: input.type, fileName: input.fileName, privateAssetId: signed.assetId, status: DocumentStatus.PENDING }; order.documents = order.documents.filter((d) => d.type !== input.type).concat(document); await this.persistence.save(order); return { ...document, upload: signed.upload }; }
+  async confirmDocument(id: string, documentId: string, ownerId: string | null) { const order = this.get(id, ownerId ?? undefined); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); await this.storage.verifyDocument(document.privateAssetId); document.uploadVerified = true; if (order.status === OrderStatus.AWAITING_CUSTOMER && !order.documents.some((item) => item.status === DocumentStatus.REUPLOAD_REQUIRED)) this.transition(order, OrderStatus.REVIEW_PENDING, 'Customer supplied requested document'); await this.persistence.save(order); return { id: document.id, type: document.type, status: document.status, uploadVerified: true }; }
   async documentPreview(id: string, documentId: string) { const order = this.get(id); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); return { url: this.storage.signedReadUrl(document.privateAssetId), fileName: document.fileName, contentType: document.fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image', expiresInSeconds: 300 } }
   async documentContent(id: string, documentId: string) { const order = this.get(id); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); return { ...(await this.storage.downloadDocument(document.privateAssetId)), fileName: document.fileName }; }
-  async beginPayment(id: string, ownerId: string, provider: PaymentProvider, initiation: { reference: string; correlationId?: string; expiresAt?: string; returnUrl: string }) { const order = this.get(id, ownerId); const required = order.documents.filter((d) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type)); if (!order.traveler || required.length !== 2) throw new BadRequestException('Traveler, passport, and ticket are required'); await Promise.all(required.map((document) => this.storage.verifyDocument(document.privateAssetId))); required.forEach((document) => { document.uploadVerified = true; }); if (order.status !== OrderStatus.PAYMENT_PENDING) this.transition(order, OrderStatus.PAYMENT_PENDING); order.payment = { provider, reference: initiation.reference, status: PaymentStatus.PENDING, ...(initiation.correlationId ? { correlationId: initiation.correlationId } : {}), ...(initiation.expiresAt ? { expiresAt: initiation.expiresAt } : {}), returnUrl: initiation.returnUrl }; await this.persistence.save(order); return this.redact(order); }
+  async beginPayment(id: string, ownerId: string | null, provider: PaymentProvider, initiation: { reference: string; correlationId?: string; expiresAt?: string; returnUrl: string }) { const order = this.get(id, ownerId ?? undefined); const required = order.documents.filter((d) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type)); if (!order.traveler || required.length !== 2) throw new BadRequestException('Traveler, passport, and ticket are required'); await Promise.all(required.map((document) => this.storage.verifyDocument(document.privateAssetId))); required.forEach((document) => { document.uploadVerified = true; }); if (order.status !== OrderStatus.PAYMENT_PENDING) this.transition(order, OrderStatus.PAYMENT_PENDING); order.payment = { provider, reference: initiation.reference, status: PaymentStatus.PENDING, ...(initiation.correlationId ? { correlationId: initiation.correlationId } : {}), ...(initiation.expiresAt ? { expiresAt: initiation.expiresAt } : {}), returnUrl: initiation.returnUrl }; await this.persistence.save(order); return this.redact(order); }
   async confirmPayment(id: string, reference: string) {
     const order = this.get(id);
     if (order.payment?.reference !== reference) throw new BadRequestException('Payment reference mismatch');
@@ -57,6 +116,98 @@ export class OrdersService implements OnModuleInit {
     await this.autoApprove(order);
     await this.persistence.save(order);
     return this.redact(order);
+  }
+  async resolvePaymentFailure(id: string, ownerId: string | null, reason: string) {
+    const order = this.get(id, ownerId ?? undefined);
+    if (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.REFUNDED) return this.redact(order);
+    if (![OrderStatus.PAYMENT_PENDING, OrderStatus.PAYMENT_FAILED].includes(order.status)) return this.redact(order);
+    if (order.payment && order.payment.status !== PaymentStatus.COMPLETED) order.payment.status = PaymentStatus.FAILED;
+    if (order.status !== OrderStatus.PAYMENT_FAILED) this.transition(order, OrderStatus.PAYMENT_FAILED, reason);
+    await this.persistence.save(order);
+    return this.redact(order);
+  }
+  async cancel(id: string, ownerId: string | null, reason: string) {
+    const order = this.get(id, ownerId ?? undefined);
+    if (![OrderStatus.DRAFT, OrderStatus.PAYMENT_PENDING, OrderStatus.PAYMENT_FAILED].includes(order.status)) throw new BadRequestException(`Order in ${order.status} cannot be cancelled`);
+    if (order.payment && order.payment.status === PaymentStatus.PENDING) order.payment.status = PaymentStatus.CANCELLED;
+    this.transition(order, OrderStatus.CANCELLED, reason);
+    await this.persistence.save(order);
+    return this.redact(order);
+  }
+  async requestRefund(id: string, actorId: string, reason: string) {
+    const order = this.get(id);
+    if (!order.payment) throw new BadRequestException('No payment recorded for this order');
+    if (order.payment.status === PaymentStatus.REFUNDED) throw new BadRequestException('Order is already refunded');
+    if (order.payment.status !== PaymentStatus.COMPLETED) throw new BadRequestException('Only paid orders can be refunded');
+    if (order.status === OrderStatus.REFUND_PENDING || order.status === OrderStatus.REFUNDED) throw new BadRequestException('Refund is already in progress');
+    if (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.DRAFT || order.status === OrderStatus.PAYMENT_PENDING || order.status === OrderStatus.PAYMENT_FAILED) throw new BadRequestException(`Order in ${order.status} cannot be refunded`);
+    this.transition(order, OrderStatus.REFUND_PENDING, `${reason} (requested by ${actorId})`);
+    await this.persistence.save(order);
+    return this.redact(order);
+  }
+  async markRefunded(id: string, reference: string) {
+    const order = this.get(id);
+    if (order.payment) order.payment.status = PaymentStatus.REFUNDED;
+    if (order.status !== OrderStatus.REFUNDED) this.transition(order, OrderStatus.REFUNDED, `Refund completed (${reference})`);
+    await this.persistence.save(order);
+    return this.redact(order);
+  }
+  async expireStalePayments() {
+    const now = Date.now();
+    let expired = 0;
+    for (const order of this.orders.values()) {
+      if (order.status !== OrderStatus.PAYMENT_PENDING || !order.payment?.expiresAt) continue;
+      if (new Date(order.payment.expiresAt).getTime() > now) continue;
+      if (order.payment.status === PaymentStatus.PENDING) order.payment.status = PaymentStatus.FAILED;
+      this.transition(order, OrderStatus.PAYMENT_FAILED, 'Payment window expired');
+      await this.persistence.save(order);
+      expired += 1;
+    }
+    return { expired };
+  }
+  async topUpLookup(mobile: string) {
+    const normalize = (value: string) => value.replace(/[\s-]/g, '').replace(/^(\+?977)?0?/, '');
+    const target = normalize(mobile);
+    const fromOrders = [...this.orders.values()].filter((order) => order.status === OrderStatus.COMPLETED && order.traveler).find((order) => normalize(order.traveler!.mobile) === target);
+    if (fromOrders) return { found: true, mobile, ...this.topUpSubscriber(fromOrders) };
+    if (this.prisma.enabled) {
+      const dbOrder = await this.prisma.order.findFirst({ where: { status: 'COMPLETED', traveler: { is: { mobile } } }, include: { plan: { include: { country: true } }, customer: { include: { user: true } }, customerEsim: { include: { inventory: true, subscriptions: true } }, traveler: true }, orderBy: { createdAt: 'desc' } });
+      if (dbOrder?.traveler) {
+        const latest = [...(dbOrder.customerEsim?.subscriptions ?? [])].sort((a, b) => (b.usageLastCheckedAt?.getTime() ?? 0) - (a.usageLastCheckedAt?.getTime() ?? 0))[0];
+        return {
+          found: true,
+          mobile,
+          subscriber: {
+            firstName: dbOrder.traveler.firstName,
+            surname: dbOrder.traveler.surname,
+            email: dbOrder.traveler.email,
+            countryOfResidence: dbOrder.traveler.countryOfResidence,
+            currentPlan: { name: dbOrder.plan.name, dataAllowance: dbOrder.plan.dataAllowance, validityDays: dbOrder.plan.validityDays, countryName: dbOrder.plan.country.name },
+            ...(dbOrder.customerEsim?.inventory?.activatedAt ? { activatedAt: dbOrder.customerEsim.inventory.activatedAt.toISOString() } : {}),
+            ...(dbOrder.customerEsim?.inventory?.expiresAt ? { expiresAt: dbOrder.customerEsim.inventory.expiresAt.toISOString() } : {}),
+            ...(dbOrder.customerEsim?.inventory ? { iccid: dbOrder.customerEsim.inventory.iccid } : {}),
+            ...(latest?.usageLastCheckedAt ? { usage: { usedMb: latest.usedMb, totalMb: latest.totalMb, lastCheckedAt: latest.usageLastCheckedAt.toISOString() } } : {}),
+          },
+          topUpAvailable: dbOrder.status === 'COMPLETED',
+        };
+      }
+    }
+    return { found: false, mobile };
+  }
+  private topUpSubscriber(order: DemoOrder) {
+    const traveler = order.traveler!;
+    return {
+      subscriber: {
+        firstName: traveler.firstName,
+        surname: traveler.surname,
+        email: traveler.email,
+        countryOfResidence: traveler.countryOfResidence,
+        currentPlan: { name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, countryName: order.plan.countryName },
+        ...(order.usage ? { usage: order.usage } : {}),
+        ...(order.qrPayload ? { hasActiveEsim: true } : {}),
+      },
+      topUpAvailable: Boolean(order.qrPayload),
+    };
   }
   async requestReupload(id: string, reason: string) { const order = this.get(id); this.transition(order, OrderStatus.AWAITING_CUSTOMER, reason); order.documents.forEach((d) => { d.status = DocumentStatus.REUPLOAD_REQUIRED; }); await this.persistence.save(order); return order; }
   async reviewDocument(id: string, documentId: string, actorId: string, decision: 'APPROVE' | 'REUPLOAD', reason?: string) { const order = this.get(id); if (order.status !== OrderStatus.REVIEW_PENDING) throw new BadRequestException('Order is not awaiting review'); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); if (decision === 'APPROVE') { document.status = DocumentStatus.APPROVED; order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `${document.type} approved by ${actorId}` }); } else { if (!reason?.trim()) throw new BadRequestException('Re-upload reason is required'); document.status = DocumentStatus.REUPLOAD_REQUIRED; this.transition(order, OrderStatus.AWAITING_CUSTOMER, `${document.type}: ${reason.trim()} (requested by ${actorId})`); } await this.persistence.save(order); await this.persistence.recordReview(order.id, documentId, actorId, decision, reason); return this.redact(order); }

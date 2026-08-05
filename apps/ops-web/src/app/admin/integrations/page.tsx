@@ -1,2 +1,5 @@
-const integrations=[['Transatel','Credentials required'],['Khalti','Credentials required'],['eSewa','Credentials required'],['Cloudinary','Credentials required'],['Redis / BullMQ','Simulator active'],['Clerk','Credentials required']];
-export default function Integrations() { return <><div className="top"><div><h1>Integration health</h1><p>Configuration status is shown without exposing stored secrets.</p></div></div><section className="panel"><div className="panel-head"><h2>Providers</h2></div><div className="health">{integrations.map(([name,status])=><div className="health-item" key={name}><span className={`dot ${status==='Simulator active'?'':'amber'}`}/><b>{name}</b><div style={{color:'var(--muted)',marginTop:5}}>{status}</div></div>)}</div></section></>; }
+import IntegrationsClient from "./integrations-client";
+
+export default function Integrations() {
+  return <IntegrationsClient />;
+}

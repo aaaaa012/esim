@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { UserRole, createOrderSchema, documentRequestSchema, travelerSchema } from '@visa-compass/shared';
 import { UserRoleName } from '@prisma/client';
 import { AccountGuard, AccountTypes, AuthGuard, type AuthenticatedRequest, requireRole } from '../../common/auth.guard.js';
 import { OrdersService } from './orders.service.js';
+import { InventoryService } from '../inventory/inventory.service.js';
+import { PaymentsService } from '../payments/payments.service.js';
 
 @Controller('customer/orders')
 @UseGuards(AuthGuard,AccountGuard)
@@ -16,15 +18,19 @@ export class OrdersController {
   @Patch(':id/traveler') traveler(@Param('id') id: string, @Body() body: unknown, @Req() req: AuthenticatedRequest) { return this.orders.setTraveler(id, req.user!.id, travelerSchema.parse(body)); }
   @Post(':id/documents') document(@Param('id') id: string, @Body() body: unknown, @Req() req: AuthenticatedRequest) { const input = documentRequestSchema.parse(body); return this.orders.addDocument(id, req.user!.id, input); }
   @Post(':id/documents/:documentId/confirm') confirmDocument(@Param('id') id: string, @Param('documentId') documentId: string, @Req() req: AuthenticatedRequest) { return this.orders.confirmDocument(id, documentId, req.user!.id); }
+  @Patch(':id/cancel') cancel(@Param('id') id: string, @Body() body: { reason?: string }, @Req() req: AuthenticatedRequest) { return this.orders.cancel(id, req.user!.id, body.reason ?? 'Cancelled by customer'); }
+  @Post(':id/payment/abandon') abandon(@Param('id') id: string, @Body() body: { reason?: string }, @Req() req: AuthenticatedRequest) { return this.orders.resolvePaymentFailure(id, req.user!.id, body.reason ?? 'Payment abandoned by customer'); }
 }
 
 @Controller('operations')
 @UseGuards(AuthGuard,AccountGuard)
 @AccountTypes(UserRoleName.OPERATIONS,UserRoleName.SUPER_ADMIN)
 export class OperationsController {
-  constructor(private readonly orders: OrdersService) {}
+  constructor(private readonly orders: OrdersService, private readonly inventory: InventoryService, private readonly payments: PaymentsService) {}
   @Get('dashboard') dashboard(@Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); const all = this.orders.list(); const today = new Date().toISOString().slice(0, 10); const transatelConfigured = ['TRANSATEL_BASE_URL','TRANSATEL_CLIENT_ID','TRANSATEL_CLIENT_SECRET','TRANSATEL_MVNO_REF'].every((key) => Boolean(process.env[key])); return { counts: { reviewPending: all.filter((o) => o.status === 'REVIEW_PENDING').length, awaitingCustomer: all.filter((o) => o.status === 'AWAITING_CUSTOMER').length, provisioningFailed: all.filter((o) => o.status === 'PROVISIONING_FAILED').length, completedToday: all.filter((o) => o.status === 'COMPLETED' && o.timeline.some((event) => event.to === 'COMPLETED' && event.at.startsWith(today))).length }, integrations: [{ name: 'Transatel', status: transatelConfigured ? 'UP' : 'CONFIG_REQUIRED' }, { name: 'Khalti', status: process.env.KHALTI_SECRET_KEY ? 'UP' : 'CONFIG_REQUIRED' }, { name: 'eSewa', status: process.env.ESEWA_SECRET_KEY ? 'UP' : 'CONFIG_REQUIRED' }], recentOrders: all.slice().sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0, 8) }; }
-  @Get('customers') customers(@Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); const grouped = new Map<string, ReturnType<OrdersService['list']>>(); for (const order of this.orders.list()) grouped.set(order.ownerId, [...(grouped.get(order.ownerId) ?? []), order]); return [...grouped.entries()].map(([ownerId, orders]) => ({ ownerId, name: orders.find((o) => o.traveler)?.traveler ? `${orders.find((o) => o.traveler)!.traveler!.firstName} ${orders.find((o) => o.traveler)!.traveler!.surname}` : 'Customer profile pending', email: orders.find((o) => o.traveler)?.traveler?.email ?? '—', orders: orders.length, completedEsims: orders.filter((o) => o.status === 'COMPLETED').length, lastOrderAt: orders.map((o) => o.createdAt).sort().at(-1) })); }
+  @Get('customers') customers(@Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); const grouped = new Map<string | null, ReturnType<OrdersService['list']>>(); for (const order of this.orders.list()) grouped.set(order.ownerId, [...(grouped.get(order.ownerId) ?? []), order]); return [...grouped.entries()].map(([ownerId, orders]) => ({ ownerId, name: orders.find((o) => o.traveler)?.traveler ? `${orders.find((o) => o.traveler)!.traveler!.firstName} ${orders.find((o) => o.traveler)!.traveler!.surname}` : 'Customer profile pending', email: orders.find((o) => o.traveler)?.traveler?.email ?? '—', orders: orders.length, completedEsims: orders.filter((o) => o.status === 'COMPLETED').length, lastOrderAt: orders.map((o) => o.createdAt).sort().at(-1) })); }
+  @Get('customers/:ownerId') customer(@Param('ownerId') ownerId: string, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.customerProfile(ownerId); }
+  @Post('orders/:id/usage/refresh') refreshUsage(@Param('id') id: string, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.inventory.refreshUsage(id); }
   @Get('audit') audit(@Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.audit(); }
   @Get('orders') list(@Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.list(); }
   @Get('orders/:id') get(@Param('id') id: string, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.view(id); }
@@ -35,4 +41,9 @@ export class OperationsController {
   @Post('orders/:id/documents/:documentId/approve') approveDocument(@Param('id') id: string, @Param('documentId') documentId: string, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.reviewDocument(id, documentId, req.user!.id, 'APPROVE'); }
   @Post('orders/:id/documents/:documentId/request-reupload') reuploadDocument(@Param('id') id: string, @Param('documentId') documentId: string, @Body() body: { reason?: string }, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.reviewDocument(id, documentId, req.user!.id, 'REUPLOAD', body.reason); }
   @Post('orders/:id/retry') retry(@Param('id') id: string, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.retry(id); }
+  @Post('orders/:id/cancel') cancel(@Param('id') id: string, @Body() body: { reason?: string }, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.cancel(id, null, body.reason ?? 'Cancelled by operations'); }
+  @Post('orders/:id/payment/fail') failPayment(@Param('id') id: string, @Body() body: { reason: string }, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.resolvePaymentFailure(id, null, body.reason); }
+  @Post('orders/:id/payment/refund') refund(@Param('id') id: string, @Body() body: { reason: string }, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.payments.refund(id, req.user!.id, body.reason); }
+  @Get('topup/lookup') topUpLookup(@Query('mobile') mobile: string, @Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.topUpLookup(mobile ?? ''); }
+  @Post('payments/expire-stale') expireStale(@Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.orders.expireStalePayments(); }
 }

@@ -4,10 +4,11 @@ import { createHash } from 'node:crypto';
 import { CryptoService } from '../../infrastructure/crypto.service.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 import { csvToRecords } from '../../common/csv.util.js';
+import { ConnectivityService } from '../integration/connectivity.service.js';
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
-  constructor(private readonly prisma: PrismaService, private readonly crypto: CryptoService) {}
+  constructor(private readonly prisma: PrismaService, private readonly crypto: CryptoService, private readonly connectivity: ConnectivityService) {}
 
   async onModuleInit() {
     if (!this.prisma.enabled || process.env.NODE_ENV === 'production') return;
@@ -183,6 +184,17 @@ export class InventoryService implements OnModuleInit {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, select: { customerId: true } });
     if (!order) throw new NotFoundException('Order not found');
     return order.customerId;
+  }
+
+  async refreshUsage(orderId: string) {
+    if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
+    const inventory = await this.prisma.esimInventory.findUnique({ where: { assignedOrderId: orderId }, select: { iccid: true } });
+    if (!inventory) throw new NotFoundException('No eSIM inventory is assigned to this order');
+    const customerEsim = await this.prisma.customerEsim.findUnique({ where: { orderId }, select: { id: true } });
+    if (!customerEsim) throw new NotFoundException('No customer eSIM record exists for this order');
+    const usage = await this.connectivity.getUsage(inventory.iccid);
+    await this.prisma.subscription.updateMany({ where: { customerEsimId: customerEsim.id }, data: { usedMb: usage.usedMb, totalMb: usage.totalMb, usageLastCheckedAt: new Date() } });
+    return { orderId, ...usage, lastCheckedAt: new Date().toISOString() };
   }
 
   async overview() {

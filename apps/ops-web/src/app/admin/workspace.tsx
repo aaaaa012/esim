@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   FlaskConical,
+  History,
   LoaderCircle,
   Pencil,
   RefreshCcw,
@@ -57,6 +58,17 @@ type Invitation = {
   status: string;
   expiresAt: string;
 };
+type IntegrationLog = {
+  id: string;
+  operation: string;
+  method: string;
+  endpoint: string;
+  status: string;
+  durationMs?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+};
 const tabs = [
   "Plans",
   "Pricing",
@@ -92,6 +104,10 @@ export default function AdminWorkspace() {
     [planCsvBusy, setPlanCsvBusy] = useState(false),
     [planCsvResult, setPlanCsvResult] = useState("");
     const [planCsvErrors, setPlanCsvErrors] = useState<string[]>([]);
+  const [eligibilityPlanId, setEligibilityPlanId] = useState("");
+  const [eligibilityMsisdn, setEligibilityMsisdn] = useState("");
+  const [logs, setLogs] = useState<IntegrationLog[]>([]);
+  const [logsBusy, setLogsBusy] = useState(false);
   const load = () =>
     Promise.all([
       request<Plan[]>("/admin/plans"),
@@ -227,6 +243,49 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
+  const checkEligibility = async () => {
+    if (!eligibilityPlanId || !eligibilityMsisdn) {
+      setNotice("Choose a plan and enter an MSISDN first");
+      return;
+    }
+    setBusy("transatel:eligibility");
+    try {
+      const result = await request<Record<string, unknown>>(
+        "/admin/integrations/transatel/eligibility",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            planId: eligibilityPlanId,
+            msisdn: eligibilityMsisdn,
+          }),
+        },
+      );
+      setNotice(
+        JSON.stringify(result, null, 2).slice(0, 400) ||
+          "Eligibility check complete",
+      );
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Eligibility check failed");
+    } finally {
+      setBusy("");
+    }
+  };
+  const loadLogs = async () => {
+    setLogsBusy(true);
+    try {
+      setLogs(await request<IntegrationLog[]>("/operations/integration-logs"));
+    } catch (e) {
+      setNotice(
+        e instanceof Error ? e.message : "Could not load integration logs",
+      );
+    } finally {
+      setLogsBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (tab === "Integrations") void loadLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
   return (
     <>
       <div className="admin-title">
@@ -433,9 +492,8 @@ export default function AdminWorkspace() {
                     <span>
                       {item.enabled ? "Enabled" : "Environment setup required"}
                     </span>
-                    <Toggle value={item.enabled} disabled />
+                    <code>{item.secretValue}</code>
                   </div>
-                  <code>{item.secretValue}</code>
                   <small>
                     Last checked: {new Date(item.checkedAt).toLocaleString()}
                   </small>
@@ -443,12 +501,12 @@ export default function AdminWorkspace() {
                     <button
                       onClick={() =>
                         setNotice(
-                          `${item.name}: secrets are managed in the environment/secret manager and never returned to this UI.`,
+                          `Set ${item.provider} credentials as environment/secret values, then restart the API. They are never returned to this UI.`,
                         )
                       }
                     >
                       <Pencil size={15} />
-                      Configure
+                      Credential guidance
                     </button>
                     <button
                       onClick={() => test(item)}
@@ -485,12 +543,126 @@ export default function AdminWorkspace() {
                           )}
                           Register webhook
                         </button>
+                        <div className="eligibility-box">
+                          <b>Eligibility check</b>
+                          <small>
+                            Confirm a plan works for a subscriber MSISDN before
+                            approval.
+                          </small>
+                          <div className="config-row">
+                            <select
+                              value={eligibilityPlanId}
+                              onChange={(event) =>
+                                setEligibilityPlanId(event.target.value)
+                              }
+                            >
+                              <option value="">Select plan…</option>
+                              {plans.map((plan) => (
+                                <option key={plan.id} value={plan.id}>
+                                  {plan.countryCode} · {plan.name}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              placeholder="MSISDN, e.g. 97798…"
+                              value={eligibilityMsisdn}
+                              onChange={(event) =>
+                                setEligibilityMsisdn(event.target.value)
+                              }
+                            />
+                            <button
+                              className="admin-action"
+                              disabled={busy === "transatel:eligibility"}
+                              onClick={() => void checkEligibility()}
+                            >
+                              Check
+                            </button>
+                          </div>
+                        </div>
                       </>
                     )}
                   </div>
                 </article>
               ))}
             </div>
+          )}
+          {tab === "Integrations" && (
+            <section className="config-panel">
+              <div className="admin-section-head">
+                <div>
+                  <h2>Integration call log</h2>
+                  <p>
+                    Outbound integration requests and outcomes (most recent 200).
+                  </p>
+                </div>
+                <button
+                  className="admin-action"
+                  onClick={() => void loadLogs()}
+                  disabled={logsBusy}
+                >
+                  {logsBusy ? (
+                    <LoaderCircle className="spin" size={15} />
+                  ) : (
+                    <History size={15} />
+                  )}
+                  Refresh
+                </button>
+              </div>
+              {!logs.length ? (
+                <p className="catalog-empty">
+                  No integration calls recorded yet.
+                </p>
+              ) : (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Operation</th>
+                        <th>Endpoint</th>
+                        <th>Status</th>
+                        <th>Duration</th>
+                        <th>Error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {logs.map((log) => (
+                        <tr key={log.id}>
+                          <td>
+                            <small>
+                              {new Date(log.createdAt).toLocaleString()}
+                            </small>
+                          </td>
+                          <td>{log.operation}</td>
+                          <td>
+                            <code>
+                              {log.method} {log.endpoint}
+                            </code>
+                          </td>
+                          <td>
+                            <span
+                              className={`health-badge ${log.status === "SUCCESS" ? "healthy" : "warning"}`}
+                            >
+                              {log.status}
+                            </span>
+                          </td>
+                          <td>
+                            {log.durationMs != null
+                              ? `${log.durationMs}ms`
+                              : "—"}
+                          </td>
+                          <td>
+                            <small>
+                              {log.errorMessage ?? log.errorCode ?? "—"}
+                            </small>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
           )}
           {tab === "Users" && (
             <div className="plans-table">
@@ -624,7 +796,7 @@ export default function AdminWorkspace() {
           )}
           {["Document Rules", "Inventory Settings", "System Config"].includes(
             tab,
-          ) && <ConfigPanel tab={tab} />}
+          ) && <ConfigPanel tab={tab} request={request} />}
         </>
       )}
     </>
@@ -650,43 +822,179 @@ function Toggle({
     </button>
   );
 }
-function ConfigPanel({ tab }: { tab: string }) {
-  const content =
+function ConfigPanel({
+  tab,
+  request,
+}: {
+  tab: string;
+  request: <T,>(path: string, init?: RequestInit) => Promise<T>;
+}) {
+  type InventoryOverview = {
+    counts: {
+      available: number;
+      reserved: number;
+      assigned: number;
+      activated: number;
+    };
+    lowStockThreshold: number;
+    lowStock: boolean;
+  };
+  const [inventory, setInventory] = useState<InventoryOverview | null>(null);
+  const [systemConfig, setSystemConfig] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  const [topupMobile, setTopupMobile] = useState("");
+  const [topupResult, setTopupResult] = useState<null | { found: boolean; subscriber?: { firstName: string; surname: string; currentPlan?: { name: string }; expiresAt?: string }; topUpAvailable?: boolean }>(null);
+  const [busy, setBusy] = useState("");
+  const [sweepResult, setSweepResult] = useState("");
+  useEffect(() => {
+    if (tab === "Inventory Settings") {
+      setError("");
+      request<InventoryOverview>("/operations/inventory")
+        .then(setInventory)
+        .catch((e) =>
+          setError(e instanceof Error ? e.message : "Inventory unavailable"),
+        );
+    } else if (tab === "System Config") {
+      setError("");
+      request<Integration[]>("/admin/integrations")
+        .then((items) => {
+          const map: Record<string, string> = {};
+          for (const item of items) map[item.name] = item.status;
+          setSystemConfig(map);
+        })
+        .catch((e) =>
+          setError(e instanceof Error ? e.message : "System config unavailable"),
+        );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+  const rows: { label: string; value: string | number; ok?: boolean }[] =
     tab === "Document Rules"
       ? [
-          ["Passport required", "Required for every purchase"],
-          ["Travel ticket required", "Required before payment"],
-          ["Visa requirement", "Configuration driven by destination"],
+          { label: "Passport", value: "Required and verified for every purchase" },
+          { label: "Travel ticket", value: "Required and verified before payment" },
+          { label: "Supported formats", value: "JPEG, PNG, or PDF" },
+          { label: "Maximum file size", value: "10 MB" },
+          { label: "Review", value: "Operationally verified before approval" },
         ]
       : tab === "Inventory Settings"
-        ? [
-            ["Low-stock threshold", "10 profiles"],
-            ["Reservation timing", "After approval, before provisioning"],
-            ["Assigned inventory", "Never returned to available"],
-          ]
+        ? inventory
+          ? [
+              { label: "Available profiles", value: inventory.counts.available },
+              { label: "Reserved", value: inventory.counts.reserved },
+              { label: "Assigned", value: inventory.counts.assigned },
+              { label: "Activated", value: inventory.counts.activated },
+              {
+                label: "Low-stock threshold",
+                value: inventory.lowStockThreshold,
+              },
+              {
+                label: "Inventory status",
+                value: inventory.lowStock ? "LOW STOCK" : "Healthy",
+                ok: !inventory.lowStock,
+              },
+            ]
+          : []
         : [
-            ["Default purchase country", "Nepal (NP)"],
-            ["Default currency", "NPR"],
-            ["Subscriber language", "English"],
-            ["Connectivity provider", "Transatel"],
+            { label: "Default purchase country", value: "Nepal (NP)" },
+            { label: "Default currency", value: "NPR" },
+            { label: "Subscriber language", value: "English" },
+            {
+              label: "Connectivity provider",
+              value: systemConfig["Transatel Connectivity"] ?? "—",
+            },
+            {
+              label: "Payment gateway (Khalti)",
+              value: systemConfig["Khalti Payment Gateway"] ?? "—",
+            },
+            {
+              label: "Payment gateway (eSewa)",
+              value: systemConfig["eSewa Payment Gateway"] ?? "—",
+            },
           ];
   return (
     <section className="config-panel">
       <div className="admin-section-head">
         <div>
           <h2>{tab}</h2>
-          <p>Safe platform defaults defined by the approved business rules.</p>
+          <p>Live platform defaults and enforced business rules.</p>
         </div>
       </div>
-      {content.map(([label, value]) => (
-        <div className="config-row" key={label}>
-          <span>
-            <b>{label}</b>
-            <small>{value}</small>
-          </span>
-          <CheckCircle2 size={18} />
+      {error ? <div className="catalog-error">{error}</div> : null}
+      {rows.length ? (
+        rows.map(({ label, value, ok }) => (
+          <div className="config-row" key={label}>
+            <span>
+              <b>{label}</b>
+              <small>{value}</small>
+            </span>
+            {ok !== undefined ? (
+              ok ? (
+                <CheckCircle2 size={18} />
+              ) : (
+                <span className="health-badge warning">ATTENTION</span>
+              )
+            ) : (
+              <CheckCircle2 size={18} />
+            )}
+          </div>
+        ))
+      ) : (
+        <p className="catalog-empty">Loading live data…</p>
+      )}
+      {tab === "System Config" && (
+        <div className="config-ops">
+          <div className="config-ops-block">
+            <b>Look up a subscriber by MSISDN</b>
+            <small>Detect an existing eSIM so future purchases are routed as top-ups.</small>
+            <div className="config-ops-row">
+              <input
+                value={topupMobile}
+                onChange={(e) => setTopupMobile(e.target.value)}
+                placeholder="e.g. 9841234567"
+              />
+              <button className="button" disabled={Boolean(busy)} onClick={() => {
+                setBusy("lookup");
+                setError("");
+                setTopupResult(null);
+                request<{ found: boolean; subscriber?: { firstName: string; surname: string; currentPlan?: { name: string }; expiresAt?: string }; topUpAvailable?: boolean }>(`/operations/topup/lookup?mobile=${encodeURIComponent(topupMobile)}`)
+                  .then(setTopupResult)
+                  .catch((e) => setError(e instanceof Error ? e.message : "Lookup failed"))
+                  .finally(() => setBusy(""));
+              }}>
+                {busy === "lookup" ? <LoaderCircle className="spin" size={15} /> : null}
+                Look up
+              </button>
+            </div>
+            {topupResult &&
+              (topupResult.found && topupResult.subscriber ? (
+                <p className="config-ops-note ok">
+                  Found {topupResult.subscriber.firstName} {topupResult.subscriber.surname} —{" "}
+                  {topupResult.subscriber.currentPlan?.name ?? "active subscriber"}
+                  {topupResult.subscriber.expiresAt ? ` · valid until ${new Date(topupResult.subscriber.expiresAt).toLocaleDateString()}` : ""}. Future orders will be flagged TOP-UP.
+                </p>
+              ) : (
+                <p className="config-ops-note warn">No active eSIM found for that MSISDN.</p>
+              ))}
+          </div>
+          <div className="config-ops-block">
+            <b>Payment lifecycle</b>
+            <small>Expire abandoned payments that outlived their gateway window.</small>
+            <button className="button" disabled={Boolean(busy)} onClick={() => {
+              setBusy("sweep");
+              setError("");
+              request<{ expired: number }>("/operations/payments/expire-stale", { method: "POST", headers: { "x-idempotency-key": crypto.randomUUID() } })
+                .then((r) => setSweepResult(`${r.expired} stale payment(s) expired`))
+                .catch((e) => setError(e instanceof Error ? e.message : "Sweep failed"))
+                .finally(() => setBusy(""));
+            }}>
+              {busy === "sweep" ? <LoaderCircle className="spin" size={15} /> : null}
+              Expire stale payments
+            </button>
+            {sweepResult ? <p className="config-ops-note ok">{sweepResult}</p> : null}
+          </div>
         </div>
-      ))}
+      )}
     </section>
   );
 }
