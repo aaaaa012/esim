@@ -63,6 +63,8 @@ export const apiErrorMessage = (
   fallback = 'Something went wrong. Please try again.',
 ): string => {
   switch (code) {
+    case ApiErrorCode.VALIDATION_ERROR:
+      return 'Please check your details and try again.';
     case ApiErrorCode.RATE_LIMITED:
       return 'Too many attempts. Please wait a moment and try again.';
     case ApiErrorCode.AUTHENTICATION_REQUIRED:

@@ -39,7 +39,7 @@ export class GuestOrdersController {
 
   @Get(':id') get(@Param('id') id: string, @Query('token') token: string) { this.assert(id, token); return this.orders.view(id); }
 
-  @Patch(':id/traveler') traveler(@Param('id') id: string, @Body() body: { token: string; traveler: unknown }) { this.assert(id, body.token); return this.orders.setTraveler(id, null, travelerSchema.parse(body.traveler)); }
+  @Patch(':id/traveler') traveler(@Param('id') id: string, @Body() body: Record<string, unknown>) { this.assert(id, typeof body.token === 'string' ? body.token : ''); const { token: _token, ...traveler } = body; return this.orders.setTraveler(id, null, travelerSchema.parse(traveler)); }
 
   @Post(':id/documents') document(@Param('id') id: string, @Body() body: { token: string; type: unknown; fileName: string; contentType?: string }) { this.assert(id, body.token); return this.orders.addDocument(id, null, documentRequestSchema.parse({ type: body.type, fileName: body.fileName, ...(body.contentType ? { contentType: body.contentType } : {}) })); }
 

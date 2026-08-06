@@ -19,6 +19,8 @@ type Plan = {
 
 type Country = { code: string; name: string };
 
+type Envelope<T> = { data: T; meta: { correlationId: string; timestamp: string } };
+
 function flagEmoji(countryCode: string) {
   return countryCode.toUpperCase().replace(/./g, (char) => String.fromCodePoint(127397 + char.charCodeAt(0)));
 }
@@ -55,10 +57,10 @@ export default function CatalogPlans() {
           countriesResponse.ok ? countriesResponse.json() : Promise.reject(new Error("catalog unavailable")),
         ]),
       )
-      .then(([plansData, countriesData]: [Plan[], Country[]]) => {
+      .then(([plansData, countriesData]: [Envelope<Plan[]>, Envelope<Country[]>]) => {
         if (cancelled) return;
-        setPlans(plansData);
-        setCountries(countriesData);
+        setPlans(plansData.data);
+        setCountries(countriesData.data);
         setError(null);
       })
       .catch(() => {
@@ -84,8 +86,8 @@ export default function CatalogPlans() {
     let cancelled = false;
     fetch(`${API}/public/coverage/${selected}`)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error("coverage unavailable"))))
-      .then((data: { available: boolean; message: string }) => {
-        if (!cancelled) setCoverage((previous) => ({ ...previous, [selected]: data.message }));
+      .then((data: Envelope<{ available: boolean; message: string }>) => {
+        if (!cancelled) setCoverage((previous) => ({ ...previous, [selected]: data.data.message }));
       })
       .catch(() => {});
     return () => {

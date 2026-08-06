@@ -1,6 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
-const isProtected = createRouteMatcher(["/account(.*)", "/esim/checkout(.*)"]);
+const isProtected = createRouteMatcher(["/account(.*)"]);
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 export default clerkMiddleware(async (auth, request) => {
   if (!isProtected(request)) return;

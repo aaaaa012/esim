@@ -93,7 +93,6 @@ export default function CheckoutClient({
 }) {
   const authFetch = useAuthenticatedFetch();
   const { isLoaded, isSignedIn } = useAuth();
-  const guest = isLoaded ? !isSignedIn : false;
   const [guestToken, setGuestToken] = useState(() => {
     try {
       return sessionStorage.getItem("vc_guest_token") ?? "";
@@ -101,6 +100,7 @@ export default function CheckoutClient({
       return "";
     }
   });
+  const guest = isLoaded ? !isSignedIn : Boolean(guestToken);
   const api = async <T,>(path: string, init?: RequestInit) => {
     let url = `${API}${path}`;
     let body = init?.body as BodyInit | null | undefined;
@@ -152,6 +152,7 @@ export default function CheckoutClient({
   }, [isTopUpIntent]);
   useEffect(() => {
     if (!orderId) return;
+    if (!isLoaded && !guestToken) return;
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
       .then((value) => {
@@ -190,7 +191,7 @@ export default function CheckoutClient({
         ),
       )
       .finally(() => setBusy(false));
-  }, [orderId]);
+  }, [orderId, isLoaded, guestToken]);
   const hasReturnReference = () => {
     const params = new URLSearchParams(window.location.search);
     return params.has("reference") || params.has("pidx");

@@ -11,8 +11,10 @@ export function useAuthenticatedFetch() {
 }
 export default function AuthenticatedApiProvider({
   children,
+  waitForSession = false,
 }: {
   children: React.ReactNode;
+  waitForSession?: boolean;
 }) {
   const { getToken, isLoaded } = useAuth();
   const authFetch = useCallback<AuthFetch>(
@@ -34,7 +36,7 @@ export default function AuthenticatedApiProvider({
     },
     [getToken],
   );
-  if (!isLoaded)
+  if (waitForSession && !isLoaded)
     return <main className="account-loading">Securing your session…</main>;
   return <Context.Provider value={authFetch}>{children}</Context.Provider>;
 }

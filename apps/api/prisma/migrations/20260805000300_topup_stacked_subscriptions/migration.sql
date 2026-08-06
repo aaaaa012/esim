@@ -2,6 +2,6 @@
 -- referencing the same physical eSIM (ICCID). A single eSIM can now host
 -- several stacked subscriptions, one per order, each with its own expiry.
 -- AlterTable
-DROP CONSTRAINT IF EXISTS "CustomerEsim_inventoryId_key";
+DROP INDEX "CustomerEsim_inventoryId_key" CASCADE;
 
 CREATE INDEX "CustomerEsim_inventoryId_idx" ON "CustomerEsim"("inventoryId");

@@ -86,7 +86,28 @@ export class ClerkSyncService {
       },
       orderBy: { createdAt: "desc" },
     });
-    const accountType = invitation?.accountType ?? UserRoleName.CUSTOMER;
+    let accountType = invitation?.accountType ?? UserRoleName.CUSTOMER;
+    let bootstrap = false;
+    if (accountType === UserRoleName.CUSTOMER) {
+      const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+      const tokenConfigured = Boolean(process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim());
+      if (
+        bootstrapEmail &&
+        email === bootstrapEmail &&
+        (process.env.NODE_ENV !== "production" || tokenConfigured)
+      ) {
+        const activeSuperAdmins = await this.prisma.user.count({
+          where: {
+            accountType: UserRoleName.SUPER_ADMIN,
+            status: UserStatus.ACTIVE,
+          },
+        });
+        if (activeSuperAdmins === 0) {
+          accountType = UserRoleName.SUPER_ADMIN;
+          bootstrap = true;
+        }
+      }
+    }
     await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -108,6 +129,17 @@ export class ClerkSyncService {
             userId: user.id,
             email,
             customerCode: `VC-${user.id.slice(0, 8).toUpperCase()}`,
+          },
+        });
+      if (bootstrap)
+        await tx.auditLog.create({
+          data: {
+            module: "IDENTITY",
+            entity: "User",
+            entityId: user.id,
+            action: "BOOTSTRAP_SUPER_ADMIN",
+            performedById: user.id,
+            newValue: { source: "SIGNUP_AUTO_BOOTSTRAP", email },
           },
         });
       if (invitation) {
