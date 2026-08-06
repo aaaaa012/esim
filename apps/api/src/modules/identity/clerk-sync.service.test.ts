@@ -19,6 +19,7 @@ function prismaStub(overrides: Record<string, unknown> = {}) {
     },
     userRole: {
       create: vi.fn().mockResolvedValue({}),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
     customer: {
       create: vi.fn().mockResolvedValue({}),
@@ -100,5 +101,124 @@ describe("ClerkSyncService re-registration recovery", () => {
     expect(result.persisted).toBe(true);
     expect(result.accountType).toBe(UserRoleName.CUSTOMER);
     expect(prisma.user.create).toHaveBeenCalled();
+  });
+});
+
+describe("ClerkSyncService bootstrap (token-verified)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const customerUser = {
+    id: "user-1",
+    clerkId: "clerk-1",
+    email: "founder@visacompassnepal.com",
+    accountType: UserRoleName.CUSTOMER,
+    status: UserStatus.ACTIVE,
+    mustChangePassword: false,
+    customer: null,
+  };
+
+  it("promotes the bootstrap email when the token matches", async () => {
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_EMAIL", "founder@visacompassnepal.com");
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_TOKEN", "topsecret");
+    vi.stubEnv("NODE_ENV", "production");
+    const prisma = prismaStub();
+    (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(
+      customerUser,
+    );
+    const service = new ClerkSyncService(prisma);
+
+    const result = await service.bootstrapSuperAdmin("clerk-1", "topsecret");
+
+    expect(result.promoted).toBe(true);
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "user-1" },
+      data: {
+        accountType: UserRoleName.SUPER_ADMIN,
+        mustChangePassword: false,
+      },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: "BOOTSTRAP_SUPER_ADMIN" }),
+      }),
+    );
+  });
+
+  it("rejects a wrong token and audits the attempt", async () => {
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_EMAIL", "founder@visacompassnepal.com");
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_TOKEN", "topsecret");
+    vi.stubEnv("NODE_ENV", "production");
+    const prisma = prismaStub();
+    (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(
+      customerUser,
+    );
+    const service = new ClerkSyncService(prisma);
+
+    await expect(
+      service.bootstrapSuperAdmin("clerk-1", "wrong"),
+    ).rejects.toThrow();
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: "BOOTSTRAP_TOKEN_REJECTED" }),
+      }),
+    );
+  });
+
+  it("refuses bootstrap once a Super Admin already exists", async () => {
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_EMAIL", "founder@visacompassnepal.com");
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_TOKEN", "topsecret");
+    vi.stubEnv("NODE_ENV", "production");
+    const prisma = prismaStub();
+    (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(
+      customerUser,
+    );
+    (prisma.user.count as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+    const service = new ClerkSyncService(prisma);
+
+    await expect(
+      service.bootstrapSuperAdmin("clerk-1", "topsecret"),
+    ).rejects.toThrow("already exists");
+  });
+});
+
+describe("ClerkSyncService last-super-admin recovery", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("audits an identity emergency when the last active Super Admin is deleted in Clerk", async () => {
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_EMAIL", "");
+    vi.stubEnv("OPS_ALERT_EMAIL", "");
+    const deleted = {
+      id: "user-1",
+      clerkId: "clerk-1",
+      email: "admin@visacompassnepal.com",
+      accountType: UserRoleName.SUPER_ADMIN,
+      status: UserStatus.ACTIVE,
+    };
+    const prisma = prismaStub();
+    (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(
+      deleted,
+    );
+    (prisma.user.count as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+    const service = new ClerkSyncService(prisma);
+
+    const result = await service.sync({
+      type: "user.deleted",
+      data: { id: "clerk-1" },
+    });
+
+    expect(result.persisted).toBe(true);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "LAST_SUPER_ADMIN_IDENTITY_DELETED",
+        }),
+      }),
+    );
+    expect(prisma.user.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { clerkId: "clerk-1" },
+        data: { status: UserStatus.DISABLED },
+      }),
+    );
   });
 });

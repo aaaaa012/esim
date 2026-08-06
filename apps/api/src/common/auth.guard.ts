@@ -42,6 +42,7 @@ export type AuthenticatedUser = {
   capabilities: string[];
   status: UserStatus;
   mfaVerified: boolean;
+  mustChangePassword: boolean;
 };
 export type AuthenticatedRequest = {
   headers: Record<string, string | undefined>;
@@ -111,6 +112,7 @@ export class AuthGuard implements CanActivate {
         capabilities: capabilitiesFor(user.accountType),
         status: user.status,
         mfaVerified,
+        mustChangePassword: user.mustChangePassword,
       };
       return true;
     } catch (error) {
@@ -160,6 +162,12 @@ export class AccountGuard implements CanActivate {
         "MFA_REQUIRED",
         "Multi-factor authentication is required",
       );
+    if (user.mustChangePassword)
+      throw authError(
+        403,
+        "PASSWORD_CHANGE_REQUIRED",
+        "You must set a new password before continuing",
+      );
     return true;
   }
 }
@@ -180,5 +188,11 @@ export function requireRole(request: AuthenticatedRequest, roles: UserRole[]) {
       403,
       "MFA_REQUIRED",
       "Multi-factor authentication is required",
+    );
+  if (request.user.mustChangePassword)
+    throw authError(
+      403,
+      "PASSWORD_CHANGE_REQUIRED",
+      "You must set a new password before continuing",
     );
 }

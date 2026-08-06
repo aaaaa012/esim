@@ -6,6 +6,7 @@ const isPublic = createRouteMatcher([
   "/staff-onboarding(.*)",
 ]);
 const isSecurity = createRouteMatcher(["/security(.*)"]);
+const isChangePassword = createRouteMatcher(["/change-password(.*)"]);
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 export default clerkMiddleware(async (auth, request) => {
   if (isPublic(request)) return;
@@ -23,10 +24,20 @@ export default clerkMiddleware(async (auth, request) => {
     });
     if (!response.ok) return new NextResponse(null, { status: 404 });
     const envelope = (await response.json()) as {
-      data: { accountType: string; mfaRequired: boolean; mfaVerified: boolean };
+      data: {
+        accountType: string;
+        mfaRequired: boolean;
+        mfaVerified: boolean;
+        mustChangePassword: boolean;
+      };
     };
     if (!["OPERATIONS", "SUPER_ADMIN"].includes(envelope.data.accountType))
       return new NextResponse(null, { status: 404 });
+    if (
+      envelope.data.mustChangePassword &&
+      !isChangePassword(request)
+    )
+      return NextResponse.redirect(new URL("/change-password", request.url));
     if (
       envelope.data.mfaRequired &&
       !envelope.data.mfaVerified &&

@@ -573,6 +573,10 @@ export class AdminService {
       password: temporaryPassword,
       skipPasswordChecks: true,
     });
+    await this.prisma.user.updateMany({
+      where: { clerkId: old.clerkInvitationId },
+      data: { mustChangePassword: true },
+    });
     return { ...old, temporaryPassword };
   }
   async changeAccountType(

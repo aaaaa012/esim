@@ -119,6 +119,7 @@ model User {
   email String @unique
   status UserStatus @default(ACTIVE)
   accountType UserRoleName @default(CUSTOMER)
+  mustChangePassword Boolean @default(false)
   roles UserRole[]
   customer Customer?
   reviews OrderReview[]
