@@ -17,5 +17,10 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+          NEXT_PUBLIC_PAYMENT_MODE: ${{ vars.NEXT_PUBLIC_PAYMENT_MODE }}
+          NEXT_PUBLIC_CUSTOMER_WEB_URL: ${{ vars.NEXT_PUBLIC_CUSTOMER_WEB_URL }}
       - name: Reject committed secrets
         run: '! git grep -nE "(CLERK_SECRET_KEY|KHALTI_SECRET_KEY|DATABASE_URL)=.+" -- ":(exclude).env.example"'
