@@ -26,7 +26,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
           <b>Visa Compass Operations</b>
           <div>
             <ThemeToggle />
-            <a href="http://localhost:3000">← Customer Portal</a>
+            <a href={process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL ?? "http://localhost:3000"}>← Customer Portal</a>
             <button
               type="button"
               className="sign-out"

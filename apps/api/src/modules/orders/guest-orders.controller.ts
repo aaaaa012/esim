@@ -1,10 +1,16 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query, Req, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query, Req, NotFoundException, UseGuards } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createOrderSchema, documentRequestSchema, initiatePaymentSchema, travelerSchema } from '@visa-compass/shared';
+import { GuestLookupRateLimitGuard } from '../../common/guest-lookup.rate-limit.guard.js';
+import { clientIp } from '../../common/client-ip.js';
 import { PaymentsService } from '../payments/payments.service.js';
 import { OrdersService } from './orders.service.js';
 
-const tokenFor = (orderId: string) => createHmac('sha256', process.env.GUEST_ORDER_SECRET ?? 'local-guest-checkout-secret').update(orderId).digest('hex');
+const tokenFor = (orderId: string) => {
+  const secret = process.env.GUEST_ORDER_SECRET;
+  if (!secret && process.env.NODE_ENV === 'production') throw new Error('GUEST_ORDER_SECRET is required in production');
+  return createHmac('sha256', secret ?? 'local-guest-checkout-secret').update(orderId).digest('hex');
+};
 
 // Login-free ("guest") checkout. Orders are created with no owner and every
 // mutation is gated by an HMAC token bound to the order id, so the browser can
@@ -13,14 +19,14 @@ const tokenFor = (orderId: string) => createHmac('sha256', process.env.GUEST_ORD
 export class GuestOrdersController {
   constructor(private readonly orders: OrdersService, private readonly payments: PaymentsService) {}
 
-  @Post() async create(@Body() body: unknown, @Req() req: { ip?: string; headers?: { 'user-agent'?: string } }) {
+  @Post() async create(@Body() body: unknown, @Req() req: { ip?: string; socket?: { remoteAddress?: string }; headers?: { 'user-agent'?: string } }) {
     const parsed = createOrderSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.message);
     const input = parsed.data as { planId: string; compatibilityAccepted: boolean } & Partial<{ mobile: string }>;
     const candidate = body as { mobile?: unknown; email?: unknown };
     if (candidate.mobile !== undefined && typeof candidate.mobile !== 'string') throw new BadRequestException('mobile must be a string');
     if (candidate.email !== undefined && typeof candidate.email !== 'string') throw new BadRequestException('email must be a string');
-    const ipAddress = (req as { ip?: string }).ip;
+    const ipAddress = clientIp(req);
     const userAgent = req.headers?.['user-agent'];
     const order = await this.orders.create(null, input.planId, input.compatibilityAccepted, {
       ...(candidate.mobile !== undefined ? { mobile: candidate.mobile as string } : {}),
@@ -49,7 +55,9 @@ export class GuestOrdersController {
 
   @Post(':id/cancel') cancel(@Param('id') id: string, @Body() body: { token: string; reason?: string }) { this.assert(id, body.token); return this.orders.cancel(id, null, body.reason ?? 'Cancelled by guest'); }
 
-  @Post('topup-lookup') topUpLookup(@Body() body: { mobile: string }) { if (!body.mobile?.trim()) throw new BadRequestException('mobile is required'); return this.orders.topUpLookup(body.mobile); }
+  @Post('topup-lookup')
+  @UseGuards(GuestLookupRateLimitGuard)
+  topUpLookup(@Body() body: { mobile: string }) { if (!body.mobile?.trim()) throw new BadRequestException('mobile is required'); return this.orders.topUpLookup(body.mobile); }
 
   private assert(id: string, token: string) {
     if (!this.orders.get(id)) throw new NotFoundException('Order not found');

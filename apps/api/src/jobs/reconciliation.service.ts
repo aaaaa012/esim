@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { PrismaService } from '../infrastructure/prisma.service.js';
 import { ConnectivityService } from '../modules/integration/connectivity.service.js';
 import { NotificationService } from '../modules/notification/notification.service.js';
+import { MetricsService } from '../observability/metrics.service.js';
 import { QueueService } from './queue.service.js';
 import { QUEUES } from './queues.js';
 
@@ -23,6 +24,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly connectivity: ConnectivityService,
     private readonly queues: QueueService,
     private readonly notifications: NotificationService,
+    private readonly metrics?: MetricsService,
   ) {}
 
   onModuleInit() {
@@ -83,21 +85,25 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       const inventory = subscription.customerEsim?.inventory;
       const order = subscription.customerEsim?.order;
       if (!inventory || !order) continue;
-      const expiredByDate = inventory.expiresAt !== null && inventory.expiresAt <= now;
+      const expiry = subscription.expiresAt ?? inventory.expiresAt;
+      const expiredByDate = expiry !== null && expiry <= now;
       const exhausted = subscription.totalMb > 0 && subscription.usedMb >= subscription.totalMb;
-      if (expiredByDate || exhausted) {
-        await this.prisma.subscription.update({ where: { id: subscription.id }, data: { status: 'EXPIRED' } });
-        await this.prisma.esimInventory.update({ where: { id: inventory.id }, data: { status: 'EXPIRED', expiresAt: inventory.expiresAt } });
-        this.logger.log(`Marked subscription ${subscription.id} as EXPIRED (${expiredByDate ? 'date elapsed' : 'data exhausted'})`);
-        await this.notifyLifecycle(order, expiredByDate ? 'PLAN_EXPIRED' : 'PLAN_EXHAUSTED');
+      if (!expiredByDate && !exhausted) continue;
+      await this.prisma.subscription.update({ where: { id: subscription.id }, data: { status: 'EXPIRED' } });
+      const remainingActive = await this.prisma.subscription.count({ where: { customerEsim: { inventoryId: inventory.id }, status: 'ACTIVE' } });
+      if (remainingActive === 0) {
+        await this.prisma.esimInventory.update({ where: { id: inventory.id }, data: { status: 'EXPIRED', expiresAt: expiry } });
       }
+      this.logger.log(`Marked subscription ${subscription.id} as EXPIRED (${expiredByDate ? 'date elapsed' : 'data exhausted'})`);
+      await this.notifyLifecycle(order, expiredByDate ? 'PLAN_EXPIRED' : 'PLAN_EXHAUSTED');
     }
   }
 
-  private async notifyLifecycle(order: { id: string; orderNumber: string; traveler: { email: string } | null }, template: 'PLAN_EXPIRED' | 'PLAN_EXHAUSTED') {
-    if (!order.traveler?.email) return;
+  private async notifyLifecycle(order: { id: string; orderNumber: string; traveler: { email: string } | null; pricingSnapshot: unknown }, template: 'PLAN_EXPIRED' | 'PLAN_EXHAUSTED') {
+    const recipient = order.traveler?.email ?? (order.pricingSnapshot as { topUpEmail?: string } | null)?.topUpEmail;
+    if (!recipient) return;
     try {
-      await this.notifications.enqueue({ orderId: order.id, channel: 'EMAIL', template, recipient: order.traveler.email, orderNumber: order.orderNumber });
+      await this.notifications.enqueue({ orderId: order.id, channel: 'EMAIL', template, recipient, orderNumber: order.orderNumber });
     } catch (error) {
       this.logger.warn(`Lifecycle notification failed for ${order.id}: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
@@ -117,7 +123,13 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       });
       this.logger.debug(`Reconciled usage for subscription ${subscriptionId}: ${usage.usedMb}/${usage.totalMb} MB`);
     } catch (error) {
-      this.logger.warn(`Usage reconciliation failed for ${subscriptionId}: ${error instanceof Error ? error.message : 'unknown error'}`);
+      this.metrics?.recordFailure('reconciliation', 'usage');
+      const json = process.env.LOG_FORMAT === 'json';
+      if (json) {
+        this.logger.warn(JSON.stringify({ event: 'reconciliation_failed', subscriptionId, error: error instanceof Error ? error.message : 'unknown' }));
+      } else {
+        this.logger.warn(`Usage reconciliation failed for ${subscriptionId}: ${error instanceof Error ? error.message : 'unknown error'}`);
+      }
     }
   }
 }

@@ -30,7 +30,7 @@ Passport and ticket are mandatory. Visa remains configuration-driven.
 
 ## Payments
 
-- `POST /orders/:id/payments` — body `{ "provider": "KHALTI" }` or `{ "provider": "ESEWA" }`.
+- `POST /orders/:id/payments` — body `{ "provider": "KHALTI" }`.
 - Gateway-specific payloads remain private to their adapters.
 - Only verified provider lookup results with matching order, amount and status confirm payment.
 - Provider callbacks use `/api/v1/webhooks/payments/:provider` and are deduplicated by provider event ID.

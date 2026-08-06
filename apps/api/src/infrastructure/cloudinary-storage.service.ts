@@ -16,6 +16,8 @@ export class CloudinaryStorageService {
     const timestamp = Math.floor(Date.now() / 1000);
     const configured = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
     if (!configured) {
+      if (process.env.NODE_ENV === "production")
+        throw new ServiceUnavailableException('Private document storage is not configured');
       return { assetId, upload: { mode: 'local-simulator', timestamp, signature: createHash('sha256').update(`${assetId}:${timestamp}`).digest('hex'), folder, expiresInSeconds: 600 } };
     }
     const cloudName = process.env.CLOUDINARY_CLOUD_NAME!;

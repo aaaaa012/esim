@@ -14,6 +14,7 @@ export type ProviderWebhookEvent = {
   orderId?: string;
   iccid?: string;
   subscriptionId?: string;
+  externalReference?: string;
   status?: 'PRELOADED' | 'ACTIVATED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER';
   activatedAt?: string;
   expiresAt?: string;

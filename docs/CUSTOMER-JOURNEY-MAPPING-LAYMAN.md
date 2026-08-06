@@ -104,7 +104,7 @@ else's folder.
 
 ### Step 6 – Pay
 
-**You do:** choose **Khalti** or **eSewa** (Nepal's wallets). You're taken to the
+**You do:** choose **Khalti** (Nepal's wallet). You're taken to the
 wallet, pay, and come back. The website keeps checking until it's confirmed (usually
 seconds).
 
@@ -203,7 +203,7 @@ step is tracked.
 | **Find a subscriber** | Type a mobile number to see its current plan and route future sales as TOP-UP. |
 | **Inventory** | See how many eSIMs are available / reserved / assigned / activated; get a low-stock warning; upload stock from a spreadsheet (up to 5,000 at a time). |
 | **Plan & price control** | Edit prices, mark popular, enable/disable plans, and import/update the whole catalogue from a spreadsheet — changes go live to customers immediately. |
-| **Integrations** | One screen showing whether every partner is connected (Khalti, eSewa, the telecom, email, WhatsApp, storage), test each one, pull the telecom catalogue, and check if a number is eligible for a plan. |
+| **Integrations** | One screen showing whether every partner is connected (Khalti, the telecom, email, WhatsApp, storage), test each one, pull the telecom catalogue, and check if a number is eligible for a plan. |
 | **Team & access** | Invite staff (by email), give them Operations or Admin roles, disable people, and read the full audit log. |
 | **Observability** | A log of every call to the telecom company (and every message the telecom sends back) with success/failure, so problems are diagnosed in minutes, not hours. |
 
@@ -241,7 +241,7 @@ secret key and a ready API:
 | **Sign-in (Clerk)** | Handles logins/passwords/MFA. Customer and staff are **separate** — staff can never act as a customer and vice versa. |
 | **Database** | The single source of truth for everything: customers, orders, documents, payments, stock, subscriptions, audit log. |
 | **Telecom company (Transatel)** | The company that actually turns on the eSIM in the destination country. |
-| **Wallets (Khalti/eSewa)** | Collect the money in NPR, and return it on refunds. |
+| **Wallets (Khalti)** | Collect the money in NPR, and return it on refunds. |
 | **Document storage** | Holds passports/tickets privately with short-lived links. |
 | **Email + WhatsApp** | Send order updates; the activation QR arrives by email as a password-protected PDF. |
 | **Background jobs** | A to-do list the machine works through on its own (activate now, verify now, email now, refresh usage now). Fails retry automatically. |

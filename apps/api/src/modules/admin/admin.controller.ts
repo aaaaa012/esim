@@ -28,10 +28,22 @@ export class AdminController {
     return this.admin.plans();
   }
   @Post("plans/import-csv")
-  importPlansCsv(@Body() body: { csv: string }) {
-    if (typeof body.csv !== "string" || !body.csv.trim())
-      throw new BadRequestException("csv content is required");
-    return this.admin.importPlansFromCsv(body.csv);
+  importPlansCsv(@Body() body: { csv?: string; content?: string; fileName?: string }, @Req() req: AuthenticatedRequest) {
+    const content = typeof body.content === "string" && body.content.trim()
+      ? body.content
+      : typeof body.csv === "string" && body.csv.trim()
+        ? body.csv
+        : "";
+    if (!content) throw new BadRequestException("csv/xlsx content is required");
+    return this.admin.importPlansFromTabular(content, body.fileName, req.user!.id);
+  }
+  @Post("plans/:id/approve")
+  approvePlan(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
+    return this.admin.approvePlan(id, req.user!.id);
+  }
+  @Post("plans/:id/reject")
+  rejectPlan(@Param("id") id: string, @Body() body: { reason?: string }, @Req() req: AuthenticatedRequest) {
+    return this.admin.rejectPlan(id, req.user!.id, body.reason);
   }
   @Patch("plans/:id") updatePlan(
     @Param("id") id: string,

@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { HealthController } from "./observability/health.controller.js";
+import { MetricsController } from "./observability/metrics.controller.js";
+import { MetricsService } from "./observability/metrics.service.js";
 import {
   CatalogController,
   CatalogService,
@@ -14,7 +16,6 @@ import { GuestOrdersController } from "./modules/orders/guest-orders.controller.
 import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
 import { KhaltiGateway } from "./modules/payments/gateways/khalti.gateway.js";
-import { EsewaGateway } from "./modules/payments/gateways/esewa.gateway.js";
 import { PaymentSimulatorGateway } from "./modules/payments/gateways/simulator.gateway.js";
 import { CryptoService } from "./infrastructure/crypto.service.js";
 import {
@@ -55,6 +56,7 @@ import { AccountGuard } from "./common/auth.guard.js";
   ],
   controllers: [
     HealthController,
+    MetricsController,
     AuthController,
     CatalogController,
     OrdersController,
@@ -78,7 +80,6 @@ OperationsController,
     AdminService,
     PaymentsService,
     KhaltiGateway,
-    EsewaGateway,
     PaymentSimulatorGateway,
     TransatelProvider,
     ConnectivityService,
@@ -89,6 +90,7 @@ OperationsController,
     ProvisioningProcessor,
     IntegrationProcessor,
     ReconciliationService,
+    MetricsService,
     ClerkSyncService,
     PartnerAuthGuard,
     NotificationService,

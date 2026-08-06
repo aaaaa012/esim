@@ -19,7 +19,7 @@ in the customer UI; internal diagnostics never reach clients.
 ## 1. Platform overview
 
 Visa Compass is a TypeScript monorepo that lets travellers buy a travel eSIM,
-upload identity documents, pay in NPR via Khalti/eSewa, and receive an
+upload identity documents, pay in NPR via Khalti, and receive an
 activation QR by email (as a password-protected PDF) once payment is verified
 and a connectivity provider (Transatel) has provisioned the profile. Orders
 are approved automatically after a verified payment; the operations review
@@ -181,7 +181,7 @@ applied to a real database): `20260804000300_transatel_provider_columns`,
 - `CustomerStatus` ACTIVE / BLOCKED
 - `PlanStatus` DRAFT / ACTIVE / DISABLED / ARCHIVED
 - `OrderStatus` DRAFT / PAYMENT_PENDING / PAYMENT_CONFIRMED / REVIEW_PENDING / AWAITING_CUSTOMER / APPROVED / PROVISIONING / COMPLETED / PAYMENT_FAILED / CANCELLED / PROVISIONING_FAILED / REFUND_PENDING / REFUNDED
-- `PaymentProvider` KHALTI / ESEWA
+- `PaymentProvider` KHALTI
 - `PaymentStatus` INITIATED / PENDING / COMPLETED / FAILED / CANCELLED / REFUNDED
 - `DocumentType` PASSPORT / TICKET / VISA
 - `DocumentStatus` PENDING / APPROVED / REJECTED / REUPLOAD_REQUIRED
@@ -250,7 +250,7 @@ opens the device camera, and the captured photo follows the same signed-upload
 
 | Field | Type | Required | Rule |
 | --- | --- | --- | --- |
-| `provider` | enum | yes | `KHALTI` \| `ESEWA` |
+| `provider` | enum | yes | `KHALTI` |
 
 ### 4.5 Other bodies
 
@@ -372,7 +372,7 @@ separation (customer portal 404s for staff and vice-versa) and MFA redirects.
 
 | Method/Path | Description |
 | --- | --- |
-| `GET /operations/dashboard` | Counts (REVIEW_PENDING, AWAITING_CUSTOMER, PROVISIONING_FAILED, COMPLETED today), integration config status (Transatel/Khalti/eSewa UP or CONFIG_REQUIRED), 8 recent orders. |
+| `GET /operations/dashboard` | Counts (REVIEW_PENDING, AWAITING_CUSTOMER, PROVISIONING_FAILED, COMPLETED today), integration config status (Transatel/Khalti UP or CONFIG_REQUIRED), 8 recent orders. |
 | `GET /operations/customers` | Grouped customers with order counts, completed eSIMs, last order date. |
 | `GET /operations/audit` | Last 200 `AuditLog` rows. |
 | `GET /operations/orders` | **Full** (expanded) order list — includes qrPayload, ownerId, provider ids. |
@@ -400,7 +400,7 @@ separation (customer portal 404s for staff and vice-versa) and MFA redirects.
 | `GET /admin/plans` | All plans with cost/selling price, country, status. |
 | `POST /admin/plans/import-csv` | Bulk plan upsert (see §4.6). |
 | `PATCH /admin/plans/:id` | Update selling price/popular/status (price must be ≥ 0). |
-| `GET /admin/integrations` | Config status of Email/Khalti/eSewa/Transatel/Cloudinary/WhatsApp with masked secret values. |
+| `GET /admin/integrations` | Config status of Email/Khalti/Transatel/Cloudinary/WhatsApp with masked secret values. |
 | `POST /admin/integrations/:id/test` | Health check per integration. |
 | `POST /admin/integrations/transatel/sync-catalog` | Pulls Transatel catalog → plans (see §6.6). |
 | `POST /admin/integrations/transatel/ensure-webhook` | Registers/updates the Transatel webhook (see §6.7). |
@@ -607,25 +607,37 @@ Gateway selection: `PAYMENT_MODE === 'sandbox'` or `NODE_ENV === 'production'`
   purchase_order_name: orderNumber }` → `{ pidx, payment_url, expires_at }`.
 - **Verify** `POST {KHALTI_BASE_URL}/epayment/lookup/` body `{ pidx }` →
   `{ status, total_amount, transaction_id }`.
-- Status map: `Completed→COMPLETED`, `Pending|Initiated→PENDING`,
+- **Verify** `POST {KHALTI_BASE_URL}/epayment/lookup/` body `{ pidx }` →
+  `{ status, total_amount, transaction_id }`; `total_amount` is in paisa
+  (`/100` → NPR). `transaction_id` is persisted as `providerTransactionId` on
+  payment confirmation.
+- Status map (compared case-insensitively — docs use both "Partially Refunded"
+  and "Partially refunded"): `Completed→COMPLETED`, `Pending|Initiated→PENDING`,
   `Refunded|Partially Refunded→REFUNDED`, `Expired→FAILED`,
   `User canceled→CANCELLED`, anything else `FAILED`.
-- Missing `KHALTI_SECRET_KEY` → 503.
+- **Refund** → Khalti Refund API
+  `POST {origin}/api/merchant-transaction/{transaction_id}/refund/` where
+  `{origin}/api` = `KHALTI_BASE_URL` minus `/v2` and `{transaction_id}` is the
+  lookup `transaction_id` (not the pidx). Wallet full refund sends an empty
+  body; a partial refund sends `{ amount }` (paisa). Success
+  `{ "detail": "Transaction refund successful." }` → internal
+  `refund-{transaction_id}`.
+- Missing `KHALTI_SECRET_KEY` → `ApiException` `PAYMENT_PROVIDER_ERROR` (503).
+- **Error handling**: every request uses a 15 s timeout
+  (`KHALTI_REQUEST_TIMEOUT_MS`). Provider failures throw `ApiException`
+  `PAYMENT_PROVIDER_ERROR` (502) with the provider `detail`/`error_key`/field
+  messages plus HTTP status kept in `details` (logged server-side, never
+  serialized). Verify maps the body `status` before any HTTP-status check, so
+  Khalti's 400 outcomes (`Expired`, `User canceled`) resolve to FAILED /
+  CANCELLED; a non-2xx without a body `status` (401 invalid token, 404 unknown
+  `pidx`) and a 2xx without `status` both throw `PAYMENT_PROVIDER_ERROR`.
+  Initiate also rejects a 2xx body missing `pidx`/`payment_url`.
 
-### 7.2 eSewa (`esewa.gateway.ts`)
+### 7.2 eSewa (removed)
 
-- Signature: HMAC-SHA256 of `"product_code=<..>,amount=<..>,transaction_uuid=<..>"` with `ESEWA_ACCESS_KEY`, base64.
-- **Initiate** `POST {ESEWA_INTENT_BASE_URL}/book` body `{ product_code,
-  amount, transaction_uuid, signed_field_names, signature, callback_url:
-  <API_PUBLIC_URL>/api/v1/webhooks/payments/esewa, redirect_url, properties:
-  { order_number } }` → `{ data: { booking_id, deeplink, correlation_id } }`.
-  `reference = booking_id`, `correlationId = correlation_id` (persisted and
-  required for verification).
-- **Verify** `POST {ESEWA_INTENT_BASE_URL}/status` body `{ booking_id,
-  product_code, correlation_id, signed_field_names, signature }` →
-  `{ data: { status, transaction_id } }`.
-- Status map: `SUCCESS→COMPLETED`, `BOOKED|PENDING→PENDING`,
-  `FAILED→FAILED`, `CANCELED→CANCELLED`, `REVERTED→REFUNDED`.
+eSewa support was removed. The platform now integrates Khalti as the sole
+payment gateway (see §7.1). There are no eSewa gateway adapters, env vars, or
+`PaymentProvider.ESEWA` in the codebase.
 
 ### 7.3 Simulator (`simulator.gateway.ts`)
 
@@ -914,7 +926,7 @@ redirects unverified-MFA Super Admins to `/security`.
 | Clerk | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `BOOTSTRAP_SUPER_ADMIN_EMAIL`, `ENFORCE_SUPER_ADMIN_MFA` (default true) |
 | Queues | `REDIS_URL` (empty → simulation), `QUEUE_CONCURRENCY` (3), `RECONCILIATION_INTERVAL_MINUTES` (15) |
 | Hardening | `RATE_LIMIT_PER_MINUTE` (300), `AUTH_RATE_LIMIT_PER_MINUTE` (60) |
-| Payments | `PAYMENT_MODE` (simulator), `PAYMENT_SIMULATOR_SECRET`, `KHALTI_BASE_URL`, `KHALTI_SECRET_KEY`, `ESEWA_INTENT_BASE_URL`, `ESEWA_PRODUCT_CODE`, `ESEWA_ACCESS_KEY`, `ESEWA_SECRET_KEY` |
+| Payments | `PAYMENT_MODE` (simulator), `PAYMENT_SIMULATOR_SECRET`, `KHALTI_BASE_URL`, `KHALTI_SECRET_KEY` |
 | Transatel | `TRANSATEL_BASE_URL`, `TRANSATEL_CLIENT_ID`, `TRANSATEL_CLIENT_SECRET`, `TRANSATEL_MVNO_REF`, `TRANSATEL_COS`, `TRANSATEL_PAYMENT_PROVIDER` (none), `TRANSATEL_SUBSCRIBER_IDENTIFIER` (iccid), `TRANSATEL_FX_TO_NPR` (170), `TRANSATEL_CATALOG_SYNC_ON_STARTUP` (false), `TRANSATEL_WEBHOOK_TARGET_URL`, `TRANSATEL_WEBHOOK_CONTACT_EMAIL`, `TRANSATEL_WEBHOOK_SECRET`, `TRANSATEL_WEBHOOK_EVENTS`, `TRANSATEL_REQUEST_TIMEOUT_MS` (15000) |
 | Storage | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` |
 | Notifications | `NOTIFICATION_MODE` (simulator), `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_FROM_ADDRESS`, `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` |

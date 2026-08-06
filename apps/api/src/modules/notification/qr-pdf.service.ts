@@ -31,7 +31,7 @@ export class QrPdfService {
       doc.moveDown();
       doc.fontSize(12).text(`Order: ${input.orderNumber}`, { align: 'center' });
       doc.moveDown(0.5);
-      doc.text('Open this PDF on your phone and enter the mobile number you provided when prompted.', { align: 'center' });
+      doc.text('Open this PDF on your phone and enter the eSIM number (MSISDN) you received in your secure email when prompted.', { align: 'center' });
       doc.moveDown(1.5);
       doc.image(png, { fit: [360, 360], align: 'center', valign: 'center' });
       doc.moveDown(1);

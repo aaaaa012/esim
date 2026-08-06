@@ -25,7 +25,6 @@ enum StaffInvitationStatus {
 enum CustomerSource {
   WEBSITE
   PARTNER
-  ESEWA
   KHALTI
 }
 enum CustomerStatus {
@@ -59,7 +58,6 @@ enum OrderStatus {
 }
 enum PaymentProvider {
   KHALTI
-  ESEWA
 }
 enum PaymentStatus {
   INITIATED
@@ -88,6 +86,11 @@ enum InventoryStatus {
   ACTIVATED
   EXPIRED
   TERMINATED
+}
+enum BatchStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 enum ReviewDecision {
   APPROVED
@@ -286,6 +289,13 @@ model InventoryBatch {
   totalProfiles Int
   importedCount Int @default(0)
   failedCount Int @default(0)
+  status BatchStatus @default(PENDING)
+  submittedById String? @db.Uuid
+  approvedById String? @db.Uuid
+  rejectedById String? @db.Uuid
+  approvedAt DateTime?
+  rejectedAt DateTime?
+  rejectionReason String?
   inventory EsimInventory[]
   createdAt DateTime @default(now())
 }
@@ -295,6 +305,7 @@ model EsimInventory {
   batch InventoryBatch @relation(fields: [batchId], references: [id])
   iccid String @unique
   eid String @unique
+  msisdn String? @unique
   status InventoryStatus @default(IMPORTED)
   assignedOrderId String? @unique @db.Uuid
   assignedOrder Order? @relation(fields: [assignedOrderId], references: [id])
@@ -304,7 +315,7 @@ model EsimInventory {
   providerStatus String?
   activatedAt DateTime?
   expiresAt DateTime?
-  customerEsim CustomerEsim?
+  customerEsims CustomerEsim[]
   version Int @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -314,7 +325,7 @@ model CustomerEsim {
   id String @id @default(uuid()) @db.Uuid
   customerId String @db.Uuid
   customer Customer @relation(fields: [customerId], references: [id])
-  inventoryId String @unique @db.Uuid
+  inventoryId String @db.Uuid
   inventory EsimInventory @relation(fields: [inventoryId], references: [id])
   orderId String @unique @db.Uuid
   order Order @relation(fields: [orderId], references: [id])

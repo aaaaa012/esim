@@ -9,6 +9,7 @@ import { PrismaService } from '../../infrastructure/prisma.service.js';
 import { QueueService } from '../../jobs/queue.service.js';
 import { QUEUES } from '../../jobs/queues.js';
 import { ClerkSyncService } from '../identity/clerk-sync.service.js';
+import { paymentSimulatorSecret } from '../../common/payment-simulator-secret.js';
 
 @Controller('webhooks')
 export class WebhooksController {
@@ -36,9 +37,11 @@ export class WebhooksController {
   async payment(@Param('provider') provider: string, @Body() body: { eventId?: string }, @Headers('x-visa-signature') signature?: string) {
     const eventId = body.eventId;
     if (!eventId) throw new BadRequestException('eventId is required');
+    if (typeof eventId !== 'string' || eventId.length < 8 || eventId.length > 256) throw new BadRequestException('eventId is invalid');
     if (this.accepted.has(`${provider}:${eventId}`) || await this.webhookExists(provider, eventId)) return { accepted: true, duplicate: true };
-    if (process.env.NODE_ENV !== 'production' && signature) this.verifyLocalSignature(JSON.stringify(body), signature);
-    this.accepted.add(`${provider}:${eventId}`);
+    if (signature) this.verifyLocalSignature(JSON.stringify(body), signature);
+    else if (process.env.NODE_ENV === 'production') throw new BadRequestException('Payment webhook signature is required');
+    this.remember(`${provider}:${eventId}`);
     await this.persistWebhook(provider, eventId, body, Boolean(signature));
     await this.queues.add(QUEUES.payments, 'payment-callback', { provider, eventId, payload: body }, `${provider}-${eventId}`);
     return { accepted: true, queued: true };
@@ -50,15 +53,22 @@ export class WebhooksController {
     if (provider.toLowerCase() !== 'transatel') throw new BadRequestException(`Unsupported connectivity provider: ${provider}`);
     const eventId = body.eventId ?? body.header?.eventId;
     if (!eventId) throw new BadRequestException('eventId is required');
+    if (typeof eventId !== 'string' || eventId.length < 8 || eventId.length > 256) throw new BadRequestException('eventId is invalid');
     const signature = headers['x-tsl-signature-256'] ?? headers['x-visa-signature'];
     if (signature) this.verifyTransatelSignature(JSON.stringify(body), signature);
     else if (process.env.NODE_ENV === 'production') throw new BadRequestException('Transatel webhook signature is required');
     const key = `${provider}:${eventId}`;
     if (this.accepted.has(key) || await this.webhookExists(provider, eventId)) return { accepted: true, duplicate: true };
-    this.accepted.add(key);
+    this.remember(key);
     await this.persistWebhook(provider, eventId, body, Boolean(signature));
     await this.queues.add(QUEUES.providerCallbacks, 'connectivity-callback', { provider, eventId, payload: body }, key);
     return { accepted: true, queued: true };
+  }
+
+  /** Bounded in-memory dedup set used when persistence is disabled. */
+  private remember(key: string) {
+    this.accepted.add(key);
+    if (this.accepted.size > 20_000) this.accepted.clear();
   }
 
   private async persistWebhook(source: string, eventId: string, payload: object, signatureValid: boolean) {
@@ -69,7 +79,7 @@ export class WebhooksController {
   private async webhookExists(source: string, eventId: string) { if (!this.prisma.enabled) return false; return Boolean(await this.prisma.webhookEvent.findUnique({ where: { source_eventId: { source, eventId } }, select: { id: true } })); }
 
   private verifyLocalSignature(payload: string, signature: string) {
-    const expected = createHmac('sha256', process.env.PAYMENT_SIMULATOR_SECRET ?? 'local-development-only-change-me').update(payload).digest('hex');
+    const expected = createHmac('sha256', paymentSimulatorSecret()).update(payload).digest('hex');
     const a = Buffer.from(expected); const b = Buffer.from(signature);
     if (a.length !== b.length || !timingSafeEqual(a, b)) throw new BadRequestException('Invalid webhook signature');
   }

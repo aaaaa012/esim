@@ -9,10 +9,11 @@ import {
   UserRoleName,
   UserStatus,
 } from "@prisma/client";
+import { randomBytes } from "node:crypto";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
-import { csvToRecords } from "../../common/csv.util.js";
+import { tabularToRecords } from "../../common/tabular.util.js";
 
 @Injectable()
 export class AdminService {
@@ -68,18 +69,73 @@ export class AdminService {
     return (await this.plans()).find((plan) => plan.id === id);
   }
 
-  async importPlansFromCsv(csv: string) {
+  /**
+   * Approves a plan so it becomes visible in the customer catalogue. Only
+   * DRAFT (imported-but-unreviewed) plans may be approved; the decision is
+   * audited.
+   */
+  async approvePlan(id: string, actorClerkId: string) {
+    if (!this.prisma.enabled) throw new BadRequestException("Database persistence is required");
+    const plan = await this.prisma.plan.findUnique({ where: { id }, include: { country: true } });
+    if (!plan) throw new NotFoundException("Plan not found");
+    if (plan.status !== PlanStatus.DRAFT) throw new BadRequestException(`Plan is ${plan.status.toLowerCase()}; only draft plans can be approved`);
+    const actor = await this.actor(actorClerkId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.plan.update({ where: { id }, data: { status: PlanStatus.ACTIVE } });
+      await tx.auditLog.create({
+        data: {
+          module: "PLAN_ADMIN",
+          entity: "Plan",
+          entityId: id,
+          action: "PLAN_APPROVED",
+          ...(actor ? { performedById: actor.id } : {}),
+          previousValue: { status: plan.status },
+          newValue: { status: PlanStatus.ACTIVE },
+        },
+      });
+    });
+    return (await this.plans()).find((item) => item.id === id);
+  }
+
+  async rejectPlan(id: string, actorClerkId: string, reason?: string) {
+    if (!this.prisma.enabled) throw new BadRequestException("Database persistence is required");
+    const plan = await this.prisma.plan.findUnique({ where: { id } });
+    if (!plan) throw new NotFoundException("Plan not found");
+    if (plan.status === PlanStatus.ACTIVE) throw new BadRequestException("An active plan cannot be rejected; disable it instead");
+    const actor = await this.actor(actorClerkId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.plan.update({ where: { id }, data: { status: PlanStatus.ARCHIVED } });
+      await tx.auditLog.create({
+        data: {
+          module: "PLAN_ADMIN",
+          entity: "Plan",
+          entityId: id,
+          action: "PLAN_REJECTED",
+          ...(actor ? { performedById: actor.id } : {}),
+          previousValue: { status: plan.status },
+          newValue: { status: PlanStatus.ARCHIVED, ...(reason?.trim() ? { reason: reason.trim() } : {}) },
+        },
+      });
+    });
+    return (await this.plans()).find((item) => item.id === id);
+  }
+
+  private async actor(actorClerkId: string) {
+    try {
+      return await this.prisma.user.findUnique({ where: { clerkId: actorClerkId } });
+    } catch {
+      return null;
+    }
+  }
+
+  async importPlansFromTabular(content: string, fileName?: string, actorClerkId?: string) {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
-    const { records, errors } = csvToRecords(csv, [
-      "countryiso2",
-      "name",
-      "providerplanid",
-      "dataallowance",
-      "validitydays",
-      "costprice",
-      "sellingprice",
-    ]);
+    const { records, errors } = await tabularToRecords(
+      content,
+      ["countryiso2", "name", "providerplanid", "dataallowance", "validitydays", "costprice", "sellingprice"],
+      fileName ? { fileName, maxRows: 2000 } : { maxRows: 2000 },
+    );
     if (errors.length) throw new BadRequestException(errors.join("; "));
     if (records.length > 2000)
       throw new BadRequestException("A single upload is limited to 2,000 rows");
@@ -92,7 +148,7 @@ export class AdminService {
       const name = (row.name ?? "").trim();
       const providerPlanId = (row.providerplanid ?? "").trim();
       const dataAllowance = (row.dataallowance ?? "").trim();
-      const validityDays = Number(row.validitydays);
+      const validityDays = this.parseValidityToDays(row.validitydays);
       const costPrice = Number(row.costprice);
       const sellingPrice = Number(row.sellingprice);
       const currency = (row.currency ?? "NPR").trim().toUpperCase();
@@ -105,7 +161,7 @@ export class AdminService {
         statusRaw === "DISABLED" ||
         statusRaw === "ARCHIVED"
           ? statusRaw
-          : PlanStatus.ACTIVE;
+          : PlanStatus.DRAFT;
       const coverageCountries = (row.coveragecountries ?? "")
         .split(/[|;]/)
         .map((value) => value.trim())
@@ -114,7 +170,7 @@ export class AdminService {
       if (!name) { rowErrors.push(`Line ${line}: name is required`); continue; }
       if (!providerPlanId) { rowErrors.push(`Line ${line}: providerPlanId is required`); continue; }
       if (!dataAllowance) { rowErrors.push(`Line ${line}: dataAllowance is required`); continue; }
-      if (!Number.isInteger(validityDays) || validityDays < 1 || validityDays > 3650) { rowErrors.push(`Line ${line}: validityDays must be a whole number between 1 and 3650`); continue; }
+      if (validityDays === null || !Number.isInteger(validityDays) || validityDays < 1 || validityDays > 3650) { rowErrors.push(`Line ${line}: validityDays must be a whole number between 1 and 3650`); continue; }
       if (!Number.isFinite(costPrice) || costPrice < 0 || costPrice > 9999999999.99) { rowErrors.push(`Line ${line}: costPrice must be a non-negative number`); continue; }
       if (!Number.isFinite(sellingPrice) || sellingPrice < 0 || sellingPrice > 9999999999.99) { rowErrors.push(`Line ${line}: sellingPrice must be a non-negative number`); continue; }
       try {
@@ -167,12 +223,47 @@ export class AdminService {
         );
       }
     }
-    return {
+    const summary = {
       imported,
       updated,
       skipped: rowErrors.length,
       errors: rowErrors.slice(0, 100),
     };
+    if (this.prisma.enabled && actorClerkId) {
+      const actor = await this.actor(actorClerkId);
+      await this.prisma.auditLog.create({
+        data: {
+          module: "PLAN_ADMIN",
+          entity: "PlanImport",
+          entityId: `import-${Date.now()}`,
+          action: "PLANS_IMPORTED",
+          ...(actor ? { performedById: actor.id } : {}),
+          newValue: { imported, updated, skipped: rowErrors.length, fileName: fileName ?? null },
+        },
+      });
+    }
+    return summary;
+  }
+
+  /**
+   * Parses a plan validity value to a whole number of days.
+   *
+   * Accepts plain integers ("7") or human-readable forms ("7 days", "7days",
+   * "7D", "1 months", "2 month"). Validity is counted from the day the plan is
+   * activated: a value of "7 days" means 7 days after the activation date.
+   * Returns null when the value cannot be interpreted.
+   */
+  private parseValidityToDays(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const match = raw.match(/^(\d+)\s*(day|days|d|month|months|mo)?$/i);
+    if (!match) return null;
+    const amount = Number(match[1]);
+    if (!Number.isInteger(amount) || amount < 1) return null;
+    const unit = (match[2] ?? "day").toLowerCase();
+    if (unit === "month" || unit === "months" || unit === "mo") return amount * 30;
+    return amount;
   }
 
   integrations() {
@@ -208,16 +299,6 @@ export class AdminService {
         provider: "KHALTI",
         enabled: configured(["KHALTI_SECRET_KEY"]),
         status: configured(["KHALTI_SECRET_KEY"])
-          ? "HEALTHY"
-          : "CONFIG_REQUIRED",
-      },
-      {
-        id: "esewa",
-        name: "eSewa Payment Gateway",
-        category: "PAYMENT",
-        provider: "ESEWA",
-        enabled: configured(["ESEWA_SECRET_KEY"]),
-        status: configured(["ESEWA_SECRET_KEY"])
           ? "HEALTHY"
           : "CONFIG_REQUIRED",
       },
@@ -264,8 +345,22 @@ export class AdminService {
         name: "WhatsApp Business",
         category: "NOTIFICATION",
         provider: "WHATSAPP",
-        enabled: configured(["WHATSAPP_TOKEN"]),
-        status: configured(["WHATSAPP_TOKEN"]) ? "HEALTHY" : "CONFIG_REQUIRED",
+        enabled:
+          process.env.NOTIFICATION_MODE === "live" &&
+          configured([
+            "WHATSAPP_API_URL",
+            "WHATSAPP_ACCESS_TOKEN",
+            "WHATSAPP_PHONE_NUMBER_ID",
+          ]),
+        status:
+          process.env.NOTIFICATION_MODE === "live" &&
+          configured([
+            "WHATSAPP_API_URL",
+            "WHATSAPP_ACCESS_TOKEN",
+            "WHATSAPP_PHONE_NUMBER_ID",
+          ])
+            ? "HEALTHY"
+            : "SIMULATED",
       },
     ].map((item) => ({
       ...item,
@@ -356,6 +451,9 @@ export class AdminService {
       orderBy: { createdAt: "desc" },
     });
   }
+  private staffDomain(): string {
+    return process.env.STAFF_EMAIL_DOMAIN ?? "visacompassnepal.com";
+  }
   async invite(
     emailInput: string,
     accountType: UserRoleName,
@@ -371,6 +469,11 @@ export class AdminService {
     const email = emailInput.trim().toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(email))
       throw new BadRequestException("Valid email is required");
+    const domain = this.staffDomain();
+    if (!email.endsWith(`@${domain}`))
+      throw new BadRequestException(
+        `Staff accounts must use a company email at @${domain}`,
+      );
     if (await this.prisma.user.findUnique({ where: { email } }))
       throw new BadRequestException(
         "This email already belongs to an account; staff and customer identities must be separate",
@@ -391,29 +494,45 @@ export class AdminService {
     if (!inviter) throw new NotFoundException("Inviter account not found");
     if (!process.env.CLERK_SECRET_KEY)
       throw new BadRequestException("Clerk is not configured");
-    const clerk = createClerkClient({
-      secretKey: process.env.CLERK_SECRET_KEY,
-    });
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
-    const created = await clerk.invitations.createInvitation({
-      emailAddress: email,
-      redirectUrl: `${process.env.OPS_WEB_URL ?? "http://localhost:3001"}/`,
-      publicMetadata: { accountType },
-    });
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60_000);
+    const temporaryPassword = randomBytes(9).toString("base64url");
     const invitation = await this.prisma.staffInvitation.create({
       data: {
         email,
         accountType,
         invitedById: inviter.id,
-        clerkInvitationId: created.id,
         expiresAt,
       },
     });
+    try {
+      const clerk = createClerkClient({
+        secretKey: process.env.CLERK_SECRET_KEY,
+      });
+      const created = await clerk.users.createUser({
+        emailAddress: [email],
+        password: temporaryPassword,
+        skipPasswordChecks: true,
+        publicMetadata: { accountType },
+      });
+      await this.prisma.staffInvitation.update({
+        where: { id: invitation.id },
+        data: { clerkInvitationId: created.id },
+      });
+    } catch (error) {
+      await this.prisma.staffInvitation.update({
+        where: { id: invitation.id },
+        data: {
+          status: StaffInvitationStatus.REVOKED,
+          revokedAt: new Date(),
+        },
+      });
+      throw error;
+    }
     await this.audit(inviter.id, "StaffInvitation", invitation.id, "CREATED", {
       email,
       accountType,
     });
-    return invitation;
+    return { ...invitation, temporaryPassword };
   }
   async revokeInvitation(id: string, actorClerkId: string) {
     const invitation = await this.prisma.staffInvitation.findUnique({
@@ -422,13 +541,16 @@ export class AdminService {
     if (!invitation) throw new NotFoundException("Invitation not found");
     if (invitation.status !== StaffInvitationStatus.PENDING)
       throw new BadRequestException("Invitation is not pending");
-    if (invitation.clerkInvitationId && process.env.CLERK_SECRET_KEY)
-      await createClerkClient({
-        secretKey: process.env.CLERK_SECRET_KEY,
-      }).invitations.revokeInvitation(invitation.clerkInvitationId);
     const actor = await this.prisma.user.findUnique({
       where: { clerkId: actorClerkId },
     });
+    if (invitation.clerkInvitationId && process.env.CLERK_SECRET_KEY) {
+      try {
+        await createClerkClient({
+          secretKey: process.env.CLERK_SECRET_KEY,
+        }).users.deleteUser(invitation.clerkInvitationId);
+      } catch {}
+    }
     const updated = await this.prisma.staffInvitation.update({
       where: { id },
       data: { status: StaffInvitationStatus.REVOKED, revokedAt: new Date() },
@@ -441,18 +563,17 @@ export class AdminService {
     if (!old) throw new NotFoundException("Invitation not found");
     if (old.status === StaffInvitationStatus.ACCEPTED)
       throw new BadRequestException("Invitation was already accepted");
-    if (old.clerkInvitationId && process.env.CLERK_SECRET_KEY) {
-      try {
-        await createClerkClient({
-          secretKey: process.env.CLERK_SECRET_KEY,
-        }).invitations.revokeInvitation(old.clerkInvitationId);
-      } catch {}
-    }
-    await this.prisma.staffInvitation.update({
-      where: { id },
-      data: { status: StaffInvitationStatus.REVOKED, revokedAt: new Date() },
+    if (!process.env.CLERK_SECRET_KEY || !old.clerkInvitationId)
+      throw new BadRequestException("Clerk is not configured");
+    const temporaryPassword = randomBytes(9).toString("base64url");
+    const clerk = createClerkClient({
+      secretKey: process.env.CLERK_SECRET_KEY,
     });
-    return this.invite(old.email, old.accountType, actorClerkId);
+    await clerk.users.updateUser(old.clerkInvitationId, {
+      password: temporaryPassword,
+      skipPasswordChecks: true,
+    });
+    return { ...old, temporaryPassword };
   }
   async changeAccountType(
     userId: string,

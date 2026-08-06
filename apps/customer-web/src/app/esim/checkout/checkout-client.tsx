@@ -30,6 +30,7 @@ type Order = {
   status: string;
   totalAmountNpr: number;
   plan: PlanSummary;
+  purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   traveler?: Partial<Traveler>;
   documents?: { type: string; status: string }[];
   payment?: { reference: string; status: string };
@@ -129,6 +130,7 @@ export default function CheckoutClient({
   const [step, setStep] = useState(1),
     [compatible, setCompatible] = useState(false),
     [traveler, setTraveler] = useState(initial);
+  const isTopUpIntent = Boolean(mobile) && !orderId;
   const [files, setFiles] = useState<{
     passport: File | undefined;
     ticket: File | undefined;
@@ -136,12 +138,18 @@ export default function CheckoutClient({
   }>({ passport: undefined, ticket: undefined, visa: undefined });
   const [order, setOrder] = useState<Order | null>(null),
     [payment, setPayment] = useState<Payment | null>(null);
+  const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
   const [provider, setProvider] = useState<PaymentProvider>(
       PaymentProvider.KHALTI,
     ),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
+  useEffect(() => {
+    if (!isTopUpIntent) return;
+    setCompatible(true);
+    setStep(4);
+  }, [isTopUpIntent]);
   useEffect(() => {
     if (!orderId) return;
     setBusy(true);
@@ -152,6 +160,14 @@ export default function CheckoutClient({
         setOrder(value);
         setCompatible(true);
         if (value.traveler) setTraveler({ ...initial, ...value.traveler });
+        if (value.purchaseType === "TOPUP") {
+          setStep(4);
+          if (value.status === "PAYMENT_PENDING" && value.payment) {
+            setPayment({ reference: value.payment.reference, redirectUrl: "", expiresAt: "" });
+            if (hasReturnReference()) void verifyPayment(value);
+          }
+          return;
+        }
         const hasRequiredDocs = Boolean(
           value.documents?.some((document) => document.type === "PASSPORT") &&
           value.documents?.some((document) => document.type === "TICKET"),
@@ -175,8 +191,10 @@ export default function CheckoutClient({
       )
       .finally(() => setBusy(false));
   }, [orderId]);
-  const hasReturnReference = () =>
-    new URLSearchParams(window.location.search).has("reference");
+  const hasReturnReference = () => {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("reference") || params.has("pidx");
+  };
   const verifyPayment = async (initialOrder: Order) => {
     setVerifying(true);
     try {
@@ -226,11 +244,15 @@ export default function CheckoutClient({
   const begin = () =>
     run(async () => {
       if (order) {
+        if (isTopUp) {
+          setStep(4);
+          return;
+        }
         setStep(order.traveler ? 3 : 2);
         return;
       }
       if (!planId) throw new Error("Choose a plan before checkout");
-      if (!compatible) throw new Error("Confirm device compatibility");
+      if (!compatible && !isTopUpIntent) throw new Error("Confirm device compatibility");
       if (guest) {
         const created = await api<{ order: Order; token: string }>("/customer/orders", {
           method: "POST",
@@ -247,7 +269,12 @@ export default function CheckoutClient({
         } catch {
           /* storage unavailable */
         }
-        setStep(2);
+        if (created.order.purchaseType === "TOPUP") {
+          setStep(4);
+          await initiate(created.order);
+        } else {
+          setStep(2);
+        }
         return;
       }
       const value = await api<Order>("/customer/orders", {
@@ -255,7 +282,12 @@ export default function CheckoutClient({
         body: JSON.stringify({ planId, compatibilityAccepted: true }),
       });
       setOrder(value);
-      setStep(2);
+      if (value.purchaseType === "TOPUP") {
+        setStep(4);
+        await initiate(value);
+      } else {
+        setStep(2);
+      }
     });
   const saveTraveler = () =>
     run(async () => {
@@ -347,10 +379,11 @@ export default function CheckoutClient({
       }
       setStep(4);
     });
-  const initiate = () =>
+  const initiate = (orderArg?: Order) =>
     run(async () => {
-      if (order) {
-        const value = await api<Payment>(`/customer/orders/${order.id}/payment`, {
+      const target = orderArg ?? order;
+      if (target) {
+        const value = await api<Payment>(`/customer/orders/${target.id}/payment`, {
           method: "POST",
           body: JSON.stringify({ provider }),
         });
@@ -396,19 +429,20 @@ export default function CheckoutClient({
             <LockKeyhole size={13} />
             Secure checkout
           </span>
-          <h1>Your travel eSIM</h1>
+          <h1>{isTopUp ? "Top up your eSIM" : "Your travel eSIM"}</h1>
           <p>
-            Complete verification once. We’ll keep your order safe while our
-            team reviews it.
+            {isTopUp
+              ? "Recharge your existing eSIM. No verification needed — pay and activate in seconds."
+              : "Complete verification once. We’ll keep your order safe while our team reviews it."}
           </p>
         </div>
         <div className="checkout-progress">
-          <span style={{ width: `${step * 25}%` }} />
+          <span style={{ width: `${(isTopUp ? 1 : step * 0.25) * 100}%` }} />
         </div>
         <div className="checkout-layout">
           <section className="checkout-card">
             <div className="step-tabs">
-              {["Compatibility", "Traveller", "Documents", "Payment"].map(
+              {(isTopUp ? ["Payment"] : ["Compatibility", "Traveller", "Documents", "Payment"]).map(
                 (label, index) => (
                   <div
                     key={label}
@@ -623,8 +657,8 @@ export default function CheckoutClient({
                     <span>{order.orderNumber}</span>
                     <p>
                       Your activation QR was emailed to you as a password-protected
-                      PDF. Open it on your phone and enter your mobile number to
-                      reveal the QR.
+                      PDF. Open it on your phone and enter the eSIM number
+                      (MSISDN) shown in your email to reveal the QR.
                     </p>
                     <Link className="button" href="/account/esims">
                       View my eSIMs
@@ -672,18 +706,10 @@ export default function CheckoutClient({
                       NPR amount.
                     </p>
                     <div className="gateway-grid">
-                      {[PaymentProvider.KHALTI, PaymentProvider.ESEWA].map(
-                        (item) => (
-                          <button
-                            key={item}
-                            className={provider === item ? "selected" : ""}
-                            onClick={() => setProvider(item)}
-                          >
-                            <b>{item === "KHALTI" ? "Khalti" : "eSewa"}</b>
-                            <small>Digital wallet</small>
-                          </button>
-                        ),
-                      )}
+                      <button className="selected">
+                        <b>Khalti</b>
+                        <small>Digital wallet</small>
+                      </button>
                     </div>
                     {payment ? (
                       SIMULATOR ? (
@@ -701,9 +727,13 @@ export default function CheckoutClient({
                           Confirm my payment
                         </Action>
                       )
+                    ) : isTopUp && !order ? (
+                      <Action busy={busy} onClick={begin}>
+                        Continue to payment
+                      </Action>
                     ) : (
-                      <Action busy={busy} onClick={initiate}>
-                        Continue to {provider === "KHALTI" ? "Khalti" : "eSewa"}
+                      <Action busy={busy} onClick={() => void initiate()}>
+                        Continue to Khalti
                       </Action>
                     )}
                   </>

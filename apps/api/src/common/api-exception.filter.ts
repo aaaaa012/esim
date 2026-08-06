@@ -9,6 +9,7 @@ import {
 import { ZodError } from "zod";
 import { apiErrorMessage } from "@visa-compass/shared";
 import { ApiException } from "./api-error.js";
+import { redactUrl } from "./redact.js";
 
 /**
  * Global exception filter.
@@ -80,7 +81,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
     }
 
     // Log every failure server-side; never send internal detail to clients.
-    const log = `${req.method ?? "?"} ${req.url ?? "?"} -> ${status} [${code}] correlationId=${correlationId}`;
+    const log = `${req.method ?? "?"} ${redactUrl(req.url ?? "?")} -> ${status} [${code}] correlationId=${correlationId}`;
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
         log,

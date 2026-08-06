@@ -1,4 +1,5 @@
 import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { clientIp } from './client-ip.js';
 
 type Bucket = { tokens: number; lastRefill: number };
 
@@ -20,11 +21,8 @@ export class RateLimitGuard implements CanActivate {
   private readonly windowMs = 60_000;
 
   canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest<{ ip?: string; path: string; method: string; headers: Record<string, string | undefined> }>();
-    const forwarded = request.headers['x-forwarded-for'] ?? '';
-    const firstForwarded = String(forwarded).split(',')[0];
-    const rawIp = (request.ip ?? firstForwarded ?? '').trim();
-    const ip = rawIp || 'unknown';
+    const request = context.switchToHttp().getRequest<{ ip?: string; socket?: { remoteAddress?: string }; path: string; method: string }>();
+    const ip = clientIp(request);
     const path = request.path ?? '';
 
     if (path.startsWith('/api/v1/webhooks/')) return true;

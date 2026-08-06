@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { Redis } from 'ioredis';
 import { PrismaService } from '../infrastructure/prisma.service.js';
 
 @Controller('health')
@@ -19,14 +20,31 @@ export class HealthController {
         database = 'down';
       }
     }
-    const ready = database !== 'down';
+    let redis: 'up' | 'not-configured' | 'down' = 'not-configured';
+    let redisLatencyMs: number | undefined;
+    if (process.env.REDIS_URL) {
+      const client = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 1, enableReadyCheck: true, lazyConnect: true, connectTimeout: 2000 });
+      try {
+        const started = Date.now();
+        await client.connect();
+        await client.ping();
+        redis = 'up';
+        redisLatencyMs = Date.now() - started;
+      } catch {
+        redis = 'down';
+      } finally {
+        client.disconnect();
+      }
+    }
+    const ready = database !== 'down' && redis !== 'down';
     return {
       status: ready ? 'ready' : 'degraded',
       checks: {
         api: 'up',
         database,
         ...(databaseLatencyMs !== undefined ? { databaseLatencyMs } : {}),
-        redis: process.env.REDIS_URL ? 'configured' : 'not-configured',
+        redis,
+        ...(redisLatencyMs !== undefined ? { redisLatencyMs } : {}),
       },
     };
   }

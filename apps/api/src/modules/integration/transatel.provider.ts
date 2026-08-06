@@ -252,11 +252,12 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   /**
-   * Resolves an internal reference (ICCID, order id or OCS subscription id) to the
-   * subscriber identifier that Transatel uses in bind.msisdn (ICCID by default).
+   * Resolves an internal reference (ICCID, order id or OCS subscription id) to
+   * the inventory row backing the subscriber. Transatel binds orders via the
+   * SIM's MSISDN (bind.msisdn) while the sim-serial endpoint keys on the ICCID.
    */
-  private async resolveSubscriber(reference: string): Promise<string> {
-    if (/^\d{19,20}$/.test(reference)) return reference;
+  private async resolveSubscriber(reference: string): Promise<{ iccid?: string; msisdn?: string }> {
+    if (/^\d{19,20}$/.test(reference)) return { iccid: reference };
 
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidPattern.test(reference)) throw new ApiException({ code: ApiErrorCode.USAGE_UNAVAILABLE, message: 'Usage details are not available yet. Please check back shortly.', status: 404, details: `Could not resolve Transatel subscriber for reference: ${reference}` });
@@ -265,21 +266,21 @@ export class TransatelProvider implements ConnectivityProvider {
 
     const inventory = await this.prisma.esimInventory.findFirst({
       where: { OR: [{ assignedOrderId: reference }, { id: reference }] },
-      select: { iccid: true },
+      select: { iccid: true, msisdn: true },
     });
-    if (inventory?.iccid) return inventory.iccid;
+    if (inventory?.iccid) return { iccid: inventory.iccid, ...(inventory.msisdn ? { msisdn: inventory.msisdn } : {}) };
 
     const subscription = await this.prisma.subscription.findUnique({
       where: { providerSubscriptionId: reference },
-      select: { customerEsim: { select: { inventory: { select: { iccid: true } } } } },
+      select: { customerEsim: { select: { inventory: { select: { iccid: true, msisdn: true } } } } },
     });
-    if (subscription?.customerEsim?.inventory?.iccid) return subscription.customerEsim.inventory.iccid;
+    if (subscription?.customerEsim?.inventory?.iccid) return { iccid: subscription.customerEsim.inventory.iccid, ...(subscription.customerEsim.inventory.msisdn ? { msisdn: subscription.customerEsim.inventory.msisdn } : {}) };
 
     const customerEsim = await this.prisma.customerEsim.findUnique({
       where: { orderId: reference },
-      select: { inventory: { select: { iccid: true } } },
+      select: { inventory: { select: { iccid: true, msisdn: true } } },
     });
-    if (customerEsim?.inventory?.iccid) return customerEsim.inventory.iccid;
+    if (customerEsim?.inventory?.iccid) return { iccid: customerEsim.inventory.iccid, ...(customerEsim.inventory.msisdn ? { msisdn: customerEsim.inventory.msisdn } : {}) };
 
     throw new ApiException({ code: ApiErrorCode.USAGE_UNAVAILABLE, message: 'Usage details are not available yet. Please check back shortly.', status: 404, details: `Could not resolve Transatel subscriber for reference: ${reference}` });
   }
@@ -295,17 +296,16 @@ export class TransatelProvider implements ConnectivityProvider {
     const profile = await this.prisma.esimInventory.findFirst({ where: { OR: [{ assignedOrderId: request.orderId }, { eid: request.eid }] } });
     if (!profile) throw new ApiException({ code: ApiErrorCode.INVENTORY_UNAVAILABLE, message: 'No eSIM is available right now. Please try again shortly.', status: 409, details: `No allocated eSIM profile found for EID: ${request.eid}` });
 
-    const identifier = this.subscriberIdentifier();
-    const bindMsisdn = identifier === 'iccid' ? profile.iccid : profile.eid;
+    const bindMsisdn = profile.msisdn ?? profile.iccid;
 
     const orderUrl = `${this.baseUrl('ocs/subscriptions')}/api/orders/products`;
     const payload = {
       bind: { msisdn: bindMsisdn },
-      source: 'VisaCompass',
+      source: 'api',
       orderType: 'preload',
       mvnoRef,
       product: { productId: plan.providerPlanId },
-      ...(process.env.TRANSATEL_PAYMENT_PROVIDER ? { payment: { provider: process.env.TRANSATEL_PAYMENT_PROVIDER } } : {}),
+      payment: { provider: 'customer' },
       transactionReference: request.orderId,
     };
 
@@ -330,8 +330,10 @@ export class TransatelProvider implements ConnectivityProvider {
 
   async getUsage(subscriptionId: string): Promise<{ usedMb: number; totalMb: number }> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
-    const url = `${this.baseUrl('ocs/inventory')}/api/subscriptions/products?msisdn=${encodeURIComponent(subscriber)}&withBalances=true`;
-    this.logger.log(`Fetching inventory usage for ${this.subscriberIdentifier()}: ${subscriber}`);
+    const msisdn = subscriber.msisdn ?? subscriber.iccid ?? '';
+    if (!msisdn) throw new ApiException({ code: ApiErrorCode.USAGE_UNAVAILABLE, message: 'Usage details are not available yet. Please check back shortly.', status: 404, details: 'No subscriber identifier found for usage lookup' });
+    const url = `${this.baseUrl('ocs/inventory')}/api/subscriptions/products?msisdn=${encodeURIComponent(msisdn)}&withBalances=true`;
+    this.logger.log(`Fetching inventory usage for ${this.subscriberIdentifier()}: ${msisdn}`);
 
     const response = await this.authorizedFetch(url, { method: 'GET', headers: { Accept: 'application/json' }, operation: 'usage' });
     if (!response.ok) throw new ApiException({ code: ApiErrorCode.USAGE_UNAVAILABLE, message: 'Usage details are not available yet. Please check back shortly.', status: 502, details: `Failed to fetch usage balance from Transatel: ${await this.errorText(response)}` });
@@ -359,15 +361,17 @@ export class TransatelProvider implements ConnectivityProvider {
 
   async getEsimDetails(subscriptionId: string): Promise<EsimDetailsResult> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
-    const url = `${this.baseUrl('sim-management/sims')}/api/esims/sim-serial/${encodeURIComponent(subscriber)}`;
-    this.logger.log(`Fetching eSIM details for ICCID: ${subscriber}`);
+    const iccid = subscriber.iccid ?? '';
+    if (!iccid) throw new ApiException({ code: ApiErrorCode.USAGE_UNAVAILABLE, message: 'Usage details are not available yet. Please check back shortly.', status: 404, details: 'No ICCID found for the requested subscriber' });
+    const url = `${this.baseUrl('sim-management/sims')}/api/esims/sim-serial/${encodeURIComponent(iccid)}`;
+    this.logger.log(`Fetching eSIM details for ICCID: ${iccid}`);
 
     const response = await this.authorizedFetch(url, { method: 'GET', headers: { Accept: 'application/json' }, operation: 'esim-details' });
     if (!response.ok) throw new ApiException({ code: ApiErrorCode.USAGE_UNAVAILABLE, message: 'Usage details are not available yet. Please check back shortly.', status: 502, details: `Failed to query eSIM details from Transatel: ${await this.errorText(response)}` });
 
     const data = (await response.json()) as ESimDetailsResponse;
     return {
-      subscriptionId: subscriber,
+      subscriptionId: iccid,
       status: data.status,
       ...(data.smdpAddress ? { smDpAddress: data.smdpAddress } : {}),
       ...(data.qrCode?.value || data.activationCode ? { qrPayload: data.qrCode?.value ?? data.activationCode } : {}),
@@ -470,8 +474,9 @@ export class TransatelProvider implements ConnectivityProvider {
       }
       throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Our connectivity service is temporarily unavailable. Please try again shortly.', status: 502, details: `Transatel eligibility check failed: ${detail}` });
     }
-    const data = (await response.json()) as ProductDetails;
-    return { allowed: Boolean(data.canSubscribe?.allowed), ...(data.canSubscribe?.errorKey ? { errorKey: data.canSubscribe.errorKey } : {}), ...(data.canSubscribe?.errorMessage ? { errorMessage: data.canSubscribe.errorMessage } : {}) };
+    const data = (await response.json()) as ProductCatalogResponse;
+    const details = Array.isArray(data.products) ? data.products[0] : undefined;
+    return { allowed: Boolean(details?.canSubscribe?.allowed), ...(details?.canSubscribe?.errorKey ? { errorKey: details.canSubscribe.errorKey } : {}), ...(details?.canSubscribe?.errorMessage ? { errorMessage: details.canSubscribe.errorMessage } : {}) };
   }
 
   async ensureWebhook(): Promise<{ registered: boolean; id?: string; targetUrl: string; events: string[] }> {
@@ -515,16 +520,26 @@ export class TransatelProvider implements ConnectivityProvider {
 
     let orderId: string | undefined;
     if (this.prisma.enabled) {
-      const inventory = await this.prisma.esimInventory.findUnique({ where: { iccid }, select: { assignedOrderId: true } });
-      orderId = inventory?.assignedOrderId ?? undefined;
+      // Bind the event to an order by our own transaction/order reference first
+      // (Transatel echoes it back as body.externalReference), falling back to the
+      // SIM serial (body.iccid) -> reserved inventory mapping.
+      if (envelope.externalReference) {
+        const order = await this.prisma.order.findUnique({ where: { id: envelope.externalReference }, select: { id: true } });
+        if (order) orderId = order.id;
+      }
+      if (!orderId) {
+        const inventory = await this.prisma.esimInventory.findUnique({ where: { iccid }, select: { assignedOrderId: true } });
+        orderId = inventory?.assignedOrderId ?? undefined;
+      }
     }
-    if (!orderId) return { handled: false, reason: `No allocated inventory profile found for ICCID ${iccid} (event ${eventType})` };
+    if (!orderId) return { handled: false, reason: `No order found for event ${eventType} (externalReference ${envelope.externalReference ?? 'n/a'}, ICCID ${iccid})` };
 
     const eventStatus = this.mapEventType(eventType);
     const event: ProviderWebhookEvent = {
       eventType,
       orderId,
       iccid,
+      ...(envelope.externalReference ? { externalReference: envelope.externalReference } : {}),
       ...(envelope.subscriptionId ? { subscriptionId: envelope.subscriptionId } : {}),
       ...(eventStatus ? { status: eventStatus } : {}),
       ...(envelope.activatedAt ? { activatedAt: envelope.activatedAt } : {}),
@@ -546,36 +561,39 @@ export class TransatelProvider implements ConnectivityProvider {
     return { handled: true, event };
   }
 
-  private normalizeEnvelope(payload: unknown): { eventType?: string; iccid?: string; subscriptionId?: string; activatedAt?: string; expiresAt?: string } {
-    const body = (payload as { header?: Record<string, unknown>; body?: Record<string, unknown> }) ?? {};
-    const header = body.header ?? {};
-    const data = body.body ?? (typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {});
+  /**
+   * Normalizes an inbound Transatel OCS event to its canonical fields using the
+   * exact field locations defined by the OCS events OpenAPI spec (v1.10):
+   *   header.eventType
+   *   body.iccid (required, [0-9]{19,20})
+   *   body.msisdn (required, [0-9]{6,15})
+   *   body.externalReference (our transaction/order reference, echoed back)
+   *   body.productSubscription.subscriptionId
+   *   body.productSubscription.activationDate / expirationDate
+   * No tolerant fallbacks: the spec marks body.iccid as required, so anything
+   * that does not match exactly is rejected.
+   */
+  private normalizeEnvelope(payload: unknown): { eventType?: string; iccid?: string; msisdn?: string; subscriptionId?: string; externalReference?: string; activatedAt?: string; expiresAt?: string } {
+    const envelope = (payload as { header?: Record<string, unknown>; body?: Record<string, unknown> }) ?? {};
+    const header = envelope.header ?? {};
+    const body = envelope.body ?? {};
 
-    const eventType = String(header.eventType ?? data.eventType ?? '');
+    const eventType = typeof header.eventType === 'string' ? header.eventType : undefined;
+    const iccid = typeof body.iccid === 'string' ? body.iccid : undefined;
+    const msisdn = typeof body.msisdn === 'string' ? body.msisdn : undefined;
+    const externalReference = typeof body.externalReference === 'string' ? body.externalReference : undefined;
 
-    const bind = (data.bind ?? {}) as Record<string, unknown>;
-    const product = (data.product ?? {}) as Record<string, unknown>;
-    const subscription = (data.subscription ?? {}) as Record<string, unknown>;
-    const serialNumbers = Array.isArray(product.serialNumbers) ? (product.serialNumbers as unknown[]) : [];
-    const subscriptionSerialNumbers = Array.isArray(subscription.serialNumbers) ? (subscription.serialNumbers as unknown[]) : [];
-
-    const iccid =
-      (typeof data.iccid === 'string' ? data.iccid : undefined) ??
-      (this.subscriberIdentifier() === 'iccid' && typeof data.msisdn === 'string' && /^\d{19,20}$/.test(data.msisdn) ? data.msisdn : undefined) ??
-      (this.subscriberIdentifier() === 'iccid' ? bind.msisdn : undefined) ??
-      (typeof bind.msisdn === 'string' && /^\d{19,20}$/.test(String(bind.msisdn)) ? bind.msisdn : undefined) ??
-      (typeof subscription.iccid === 'string' ? subscription.iccid : undefined) ??
-      (typeof product.iccid === 'string' ? product.iccid : undefined) ??
-      (typeof serialNumbers[0] === 'string' ? serialNumbers[0] : undefined) ??
-      (typeof subscriptionSerialNumbers[0] === 'string' ? subscriptionSerialNumbers[0] : undefined);
-
-    const activatedAt = typeof data.activatedAt === 'string' ? data.activatedAt : typeof data.activationDate === 'string' ? data.activationDate : undefined;
-    const expiresAt = typeof data.expiresAt === 'string' ? data.expiresAt : typeof data.expirationDate === 'string' ? data.expirationDate : undefined;
+    const productSubscription = (body.productSubscription ?? {}) as Record<string, unknown>;
+    const subscriptionId = typeof productSubscription.subscriptionId === 'string' ? productSubscription.subscriptionId : undefined;
+    const activatedAt = typeof productSubscription.activationDate === 'string' ? productSubscription.activationDate : undefined;
+    const expiresAt = typeof productSubscription.expirationDate === 'string' ? productSubscription.expirationDate : undefined;
 
     return {
-      eventType,
-      ...(iccid ? { iccid: String(iccid) } : {}),
-      ...(typeof data.subscriptionId === 'string' ? { subscriptionId: data.subscriptionId } : {}),
+      ...(eventType ? { eventType } : {}),
+      ...(iccid ? { iccid } : {}),
+      ...(msisdn ? { msisdn } : {}),
+      ...(subscriptionId ? { subscriptionId } : {}),
+      ...(externalReference ? { externalReference } : {}),
       ...(activatedAt ? { activatedAt } : {}),
       ...(expiresAt ? { expiresAt } : {}),
     };

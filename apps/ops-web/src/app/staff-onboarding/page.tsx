@@ -10,7 +10,7 @@ export default function StaffOnboardingPage() {
 
   const continueOnboarding = async () => {
     setWorking(true);
-    const destination = `/sign-up${window.location.search}`;
+    const destination = `/sign-in`;
     if (isSignedIn) await clerk.signOut({ redirectUrl: destination });
     else window.location.replace(destination);
   };
@@ -21,15 +21,15 @@ export default function StaffOnboardingPage() {
         <h1>Continue with your staff account</h1>
         <p>
           Staff and Customer identities must remain separate. Continuing will
-          sign out the current Customer session, then open the invited staff
-          registration.
+          sign out the current account, then open the staff sign-in. Your super
+          admin has created your account and provided your credentials.
         </p>
         <button
           className="primary-action"
           disabled={!isLoaded || working}
           onClick={() => void continueOnboarding()}
         >
-          {working ? "Switching account…" : "Continue with staff invitation"}
+          {working ? "Switching account…" : "Continue to staff sign-in"}
         </button>
       </section>
     </main>

@@ -6,7 +6,6 @@ export default function OperationsSignInPage() {
       <SignIn
         routing="path"
         path="/sign-in"
-        signUpUrl="/sign-up"
         forceRedirectUrl="/"
       />
     </main>

@@ -58,6 +58,27 @@ export class ClerkSyncService {
         accountType: accountType ?? existing.accountType,
       };
     }
+    const disabledWithSameEmail = await this.prisma.user.findUnique({
+      where: { email },
+    });
+    if (disabledWithSameEmail && disabledWithSameEmail.status === UserStatus.DISABLED) {
+      await this.prisma.user.update({
+        where: { id: disabledWithSameEmail.id },
+        data: {
+          clerkId: event.data.id,
+          email,
+          status: UserStatus.ACTIVE,
+        },
+      });
+      const accountType = await this.bootstrapExistingAccount(
+        disabledWithSameEmail.id,
+        email,
+      );
+      return {
+        persisted: true,
+        accountType: accountType ?? disabledWithSameEmail.accountType,
+      };
+    }
     const invitation = await this.prisma.staffInvitation.findFirst({
       where: {
         email,
@@ -72,6 +93,7 @@ export class ClerkSyncService {
       process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
     if (
       !invitation &&
+      this.bootstrapEnabled(bootstrapEmail) &&
       bootstrapEmail === email &&
       (await this.prisma.user.count({
         where: {
@@ -170,10 +192,19 @@ export class ClerkSyncService {
     });
   }
 
+  private bootstrapEnabled(email?: string): boolean {
+    if (!email) return false;
+    if (process.env.NODE_ENV !== "production") return true;
+    // In production the operator must additionally configure a bootstrap token
+    // so that merely registering the configured email cannot self-appoint a
+    // Super Admin.
+    return Boolean(process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN);
+  }
+
   private async bootstrapExistingAccount(userId: string, email: string) {
     const bootstrapEmail =
       process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
-    if (!bootstrapEmail || bootstrapEmail !== email.toLowerCase()) return null;
+    if (!this.bootstrapEnabled(bootstrapEmail) || !bootstrapEmail || bootstrapEmail !== email.toLowerCase()) return null;
     if (
       (await this.prisma.user.count({
         where: {

@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, MapPin } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Globe2, MapPin } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -17,11 +17,7 @@ type Plan = {
   popular: boolean;
 };
 
-const fallbackPlans: Plan[] = [
-  { id: "10000000-0000-4000-8000-000000000001", countryCode: "AE", countryName: "United Arab Emirates", name: "UAE Essential", dataAllowance: "5 GB", validityDays: 15, sellingPriceNpr: 2499, coverage: ["UAE"], popular: true },
-  { id: "10000000-0000-4000-8000-000000000002", countryCode: "GB", countryName: "United Kingdom", name: "UK Explorer", dataAllowance: "10 GB", validityDays: 30, sellingPriceNpr: 3999, coverage: ["United Kingdom"], popular: true },
-  { id: "10000000-0000-4000-8000-000000000003", countryCode: "JP", countryName: "Japan", name: "Japan Connect", dataAllowance: "3 GB", validityDays: 7, sellingPriceNpr: 1899, coverage: ["Japan"], popular: false },
-];
+type Country = { code: string; name: string };
 
 function flagEmoji(countryCode: string) {
   return countryCode.toUpperCase().replace(/./g, (char) => String.fromCodePoint(127397 + char.charCodeAt(0)));
@@ -33,71 +29,103 @@ function npr(amount: number) {
 
 export default function CatalogPlans() {
   const [plans, setPlans] = useState<Plan[] | null>(null);
-  const [country, setCountry] = useState("ALL");
+  const [countries, setCountries] = useState<Country[]>([]);
+  const [selected, setSelected] = useState<string>("");
   const [coverage, setCoverage] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [topUpMobile, setTopUpMobile] = useState("");
+  const [topUpCountry, setTopUpCountry] = useState("");
+
   useEffect(() => {
     try {
       setTopUpMobile(sessionStorage.getItem("vc_topup_mobile") ?? "");
+      setTopUpCountry(sessionStorage.getItem("vc_topup_country") ?? "");
     } catch {
       setTopUpMobile("");
+      setTopUpCountry("");
     }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API}/public/plans`)
-      .then((response) => {
-        if (!response.ok) throw new Error("catalog unavailable");
-        return response.json() as Promise<Plan[]>;
-      })
-      .then((data) => {
+    Promise.all([fetch(`${API}/public/plans`), fetch(`${API}/public/countries`)])
+      .then(([plansResponse, countriesResponse]) =>
+        Promise.all([
+          plansResponse.ok ? plansResponse.json() : Promise.reject(new Error("catalog unavailable")),
+          countriesResponse.ok ? countriesResponse.json() : Promise.reject(new Error("catalog unavailable")),
+        ]),
+      )
+      .then(([plansData, countriesData]: [Plan[], Country[]]) => {
         if (cancelled) return;
-        setPlans(data.length ? data : fallbackPlans);
+        setPlans(plansData);
+        setCountries(countriesData);
         setError(null);
       })
       .catch(() => {
         if (cancelled) return;
-        setPlans(fallbackPlans);
-        setError("Live catalog is unavailable right now — showing sample plans.");
+        setPlans(null);
+        setError("Live catalog is unavailable right now. Please try again shortly.");
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  // When a top-up lookup has pinned a destination, default to it so only that
+  // country's plans are offered (the ones that can recharge the existing eSIM).
   useEffect(() => {
-    if (!country || country === "ALL") return;
+    if (topUpCountry && countries.some((country) => country.code === topUpCountry)) {
+      setSelected(topUpCountry);
+    }
+  }, [topUpCountry, countries]);
+
+  useEffect(() => {
+    if (!selected) return;
     let cancelled = false;
-    fetch(`${API}/public/coverage/${country}`)
+    fetch(`${API}/public/coverage/${selected}`)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error("coverage unavailable"))))
       .then((data: { available: boolean; message: string }) => {
-        if (!cancelled) setCoverage((previous) => ({ ...previous, [country]: data.message }));
+        if (!cancelled) setCoverage((previous) => ({ ...previous, [selected]: data.message }));
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [country]);
+  }, [selected]);
 
   const grouped = new Map<string, Plan[]>();
   for (const plan of plans ?? []) grouped.set(plan.countryCode, [...(grouped.get(plan.countryCode) ?? []), plan]);
-  const countryList = [...grouped.entries()].map(([code, items]) => ({ code, name: items[0]?.countryName ?? code }));
-  const visible = country === "ALL" ? plans ?? [] : (grouped.get(country) ?? []);
-  const coverageMessage = country !== "ALL" ? coverage[country] : undefined;
+  const countryList = countries.length
+    ? countries
+    : [...grouped.entries()].map(([code, items]) => ({ code, name: items[0]?.countryName ?? code }));
+  const visible = selected ? (grouped.get(selected) ?? []) : [];
+  const coverageMessage = selected ? coverage[selected] : undefined;
 
   return (
     <>
-      <div className="catalog-tabs">
-        <button type="button" className={`catalog-tab ${country === "ALL" ? "active" : ""}`} onClick={() => setCountry("ALL")} disabled={!plans}>
-          All destinations
-        </button>
-        {countryList.map(({ code, name }) => (
-          <button type="button" key={code} className={`catalog-tab ${country === code ? "active" : ""}`} onClick={() => setCountry(code)} disabled={!plans}>
-            {flagEmoji(code)} {name}
-          </button>
-        ))}
+      <div className="destination-picker">
+        <label htmlFor="destination-select">
+          <Globe2 size={16} /> Choose your destination
+        </label>
+        <select
+          id="destination-select"
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+          disabled={!plans}
+        >
+          <option value="">Select a destination…</option>
+          {countryList.map(({ code, name }) => (
+            <option key={code} value={code}>
+              {flagEmoji(code)} {name}
+            </option>
+          ))}
+        </select>
+        {topUpMobile && selected && (
+          <small className="topup-context">
+            Recharging {selected ? countryList.find((country) => country.code === selected)?.name ?? selected : ""} for
+            {` ${topUpMobile}`}.
+          </small>
+        )}
       </div>
       {error ? <div className="catalog-error">{error}</div> : null}
       {coverageMessage ? (
@@ -106,7 +134,9 @@ export default function CatalogPlans() {
           <span>{coverageMessage}</span>
         </div>
       ) : null}
-      {visible.length ? (
+      {!selected ? (
+        <p className="catalog-empty">Select a destination above to see its available plans.</p>
+      ) : visible.length ? (
         <div className="cards">
           {visible.map((plan) => (
             <article className="card" key={plan.id}>

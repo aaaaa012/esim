@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Upload,
   UsersRound,
+  XCircle,
 } from "lucide-react";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {
@@ -78,6 +79,17 @@ const tabs = [
   "Users",
   "System Config",
 ];
+
+const fileToTabularContent = async (file: File): Promise<string> => {
+  if (/\.xlsx?$/i.test(file.name)) {
+    const buffer = await file.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    return btoa(binary);
+  }
+  return file.text();
+};
 export default function AdminWorkspace() {
   const authFetch = useAuthenticatedFetch();
   const request = async <T,>(path: string, init?: RequestInit) => {
@@ -146,16 +158,37 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
+  const reviewPlan = async (plan: Plan, approve: boolean) => {
+    setBusy(`${plan.id}:${approve ? "approve" : "reject"}`);
+    try {
+      const updated = await request<Plan>(
+        `/admin/plans/${plan.id}/${approve ? "approve" : "reject"}`,
+        { method: "POST", body: JSON.stringify({ reason: approve ? undefined : "Rejected by Super Admin" }) },
+      );
+      setPlans((v) =>
+        v.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setNotice(
+        approve
+          ? `${updated.name} approved and now visible to customers`
+          : `${updated.name} rejected and archived`,
+      );
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Review failed");
+    } finally {
+      setBusy("");
+    }
+  };
   const importPlanCsv = async () => {
     if (!planCsvFile) {
-      setPlanCsvResult("Choose a CSV file first");
+      setPlanCsvResult("Choose a CSV or Excel file first");
       return;
     }
     setPlanCsvBusy(true);
     setPlanCsvResult("");
     setPlanCsvErrors([]);
     try {
-      const csv = await planCsvFile.text();
+      const content = await fileToTabularContent(planCsvFile);
       const result = await request<{
         imported: number;
         updated: number;
@@ -163,7 +196,7 @@ export default function AdminWorkspace() {
         errors: string[];
       }>("/admin/plans/import-csv", {
         method: "POST",
-        body: JSON.stringify({ csv }),
+        body: JSON.stringify({ content, fileName: planCsvFile.name }),
       });
       setPlanCsvResult(
         `Imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} row(s)`,
@@ -207,13 +240,18 @@ export default function AdminWorkspace() {
   const inviteStaff = async () => {
     setBusy("invite");
     try {
-      await request("/admin/staff-invitations", {
-        method: "POST",
-        body: JSON.stringify({ email: inviteEmail, accountType: inviteType }),
-      });
+      const result = await request<{ email: string; accountType: string; temporaryPassword: string }>(
+        "/admin/staff-invitations",
+        {
+          method: "POST",
+          body: JSON.stringify({ email: inviteEmail, accountType: inviteType }),
+        },
+      );
       setInviteEmail("");
       await load();
-      setNotice("Staff invitation sent");
+      setNotice(
+        `Account created for ${result.email}. One-time password: ${result.temporaryPassword} — share it securely; the staff member should change it after signing in.`,
+      );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Invitation failed");
     } finally {
@@ -337,7 +375,7 @@ export default function AdminWorkspace() {
                 <div className="plan-csv-upload">
                   <input
                     type="file"
-                    accept=".csv,text/csv"
+                    accept=".csv,.xlsx,.xls,text/csv"
                     onChange={(e) => setPlanCsvFile(e.target.files?.[0] ?? null)}
                   />
                   <button
@@ -448,18 +486,44 @@ export default function AdminWorkspace() {
                           />
                         </td>
                         <td>
-                          <button
-                            className="admin-action"
-                            disabled={busy === plan.id}
-                            onClick={() => savePlan(plan)}
-                          >
-                            {busy === plan.id ? (
-                              <LoaderCircle className="spin" size={15} />
-                            ) : (
-                              <Save size={15} />
+                          <div className="integration-actions" style={{ justifyContent: "flex-end" }}>
+                            {plan.status === "DRAFT" && (
+                              <>
+                                <button
+                                  className="approve"
+                                  disabled={busy === `${plan.id}:approve`}
+                                  onClick={() => void reviewPlan(plan, true)}
+                                >
+                                  {busy === `${plan.id}:approve` ? (
+                                    <LoaderCircle className="spin" size={15} />
+                                  ) : (
+                                    <CheckCircle2 size={15} />
+                                  )}
+                                  Approve
+                                </button>
+                                <button
+                                  className="reject"
+                                  disabled={busy === `${plan.id}:reject`}
+                                  onClick={() => void reviewPlan(plan, false)}
+                                >
+                                  <XCircle size={15} />
+                                  Reject
+                                </button>
+                              </>
                             )}
-                            Save
-                          </button>
+                            <button
+                              className="admin-action"
+                              disabled={busy === plan.id}
+                              onClick={() => savePlan(plan)}
+                            >
+                              {busy === plan.id ? (
+                                <LoaderCircle className="spin" size={15} />
+                              ) : (
+                                <Save size={15} />
+                              )}
+                              Save
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -906,10 +970,6 @@ function ConfigPanel({
             {
               label: "Payment gateway (Khalti)",
               value: systemConfig["Khalti Payment Gateway"] ?? "—",
-            },
-            {
-              label: "Payment gateway (eSewa)",
-              value: systemConfig["eSewa Payment Gateway"] ?? "—",
             },
           ];
   return (

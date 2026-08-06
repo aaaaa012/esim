@@ -18,7 +18,7 @@ const paymentSchema = z.object({ provider: z.enum(PaymentProvider) });
 export class PartnersController {
   constructor(private readonly orders: OrdersService, private readonly payments: PaymentsService, private readonly connectivity: ConnectivityService, private readonly notifications:NotificationService,private readonly catalog:CatalogService) {}
 
-  @Get('capabilities') async capabilities() { return { apiVersion: 'v1', payments: [PaymentProvider.KHALTI, PaymentProvider.ESEWA], notifications: ['EMAIL','WHATSAPP'], connectivity: { ...this.connectivity.descriptor(), health: await this.connectivity.health() }, idempotencyRequiredForMutations: true }; }
+  @Get('capabilities') async capabilities() { return { apiVersion: 'v1', payments: [PaymentProvider.KHALTI], notifications: ['EMAIL','WHATSAPP'], connectivity: { ...this.connectivity.descriptor(), health: await this.connectivity.health() }, idempotencyRequiredForMutations: true }; }
 
   @Get('plans') plans() { return this.catalog.plans(); }
 

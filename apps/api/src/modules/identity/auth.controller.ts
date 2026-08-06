@@ -11,6 +11,8 @@ import {
 export class AuthController {
   @Get("me") me(@Req() request: AuthenticatedRequest) {
     const user = request.user!;
+    const customerBase = (process.env.CUSTOMER_WEB_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+    const opsBase = (process.env.OPS_WEB_URL ?? 'http://localhost:3001').replace(/\/+$/, '');
     return {
       id: user.localUserId,
       clerkId: user.id,
@@ -24,8 +26,8 @@ export class AuthController {
       mfaVerified: user.mfaVerified,
       landingPortal:
         user.accountType === UserRoleName.CUSTOMER
-          ? "http://localhost:3000/account/esims"
-          : "http://localhost:3001/",
+          ? `${customerBase}/account/esims`
+          : `${opsBase}/`,
     };
   }
 }

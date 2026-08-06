@@ -1,9 +1,9 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { InventoryStatus } from '@prisma/client';
+import { BatchStatus, InventoryStatus } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { CryptoService } from '../../infrastructure/crypto.service.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
-import { csvToRecords } from '../../common/csv.util.js';
+import { tabularToRecords } from '../../common/tabular.util.js';
 import { ConnectivityService } from '../integration/connectivity.service.js';
 
 @Injectable()
@@ -14,7 +14,7 @@ export class InventoryService implements OnModuleInit {
     if (!this.prisma.enabled || process.env.NODE_ENV === 'production') return;
     if (await this.prisma.esimInventory.count()) return;
     const batch = await this.prisma.inventoryBatch.create({ data: { batchReference: `DEV-MOCK-${new Date().getUTCFullYear()}`, totalProfiles: 20, importedCount: 20 } });
-    await this.prisma.esimInventory.createMany({ data: Array.from({ length: 20 }, (_, index) => ({ batchId: batch.id, iccid: `899770100000000${String(index).padStart(3, '0')}`, eid: `890490320000000000000000000${String(index).padStart(3, '0')}`, status: InventoryStatus.AVAILABLE, activationCodeEncrypted: this.crypto.encrypt(`LPA:1$mock.smdp.visacompass.local$${batch.id}-${index}`), smDpAddress: 'mock.smdp.visacompass.local' })) });
+    await this.prisma.esimInventory.createMany({ data: Array.from({ length: 20 }, (_, index) => ({ batchId: batch.id, iccid: `899770100000000${String(index).padStart(3, '0')}`, eid: `890490320000000000000000000${String(index).padStart(3, '0')}`, msisdn: `8824700018${String(50000 + index)}`, status: InventoryStatus.AVAILABLE, activationCodeEncrypted: this.crypto.encrypt(`LPA:1$mock.smdp.visacompass.local$${batch.id}-${index}`), smDpAddress: 'mock.smdp.visacompass.local' })) });
   }
 
   async reserve(orderId: string) {
@@ -32,10 +32,10 @@ export class InventoryService implements OnModuleInit {
 
   async profileForOrder(orderId: string) { return this.reserve(orderId); }
 
-  async importBatch(iccdsInput: string[], eidsInput?: (string | null)[], source?: string) {
+  async importBatch(iccdsInput: string[], eidsInput?: (string | null)[], source?: string, msisdnsInput?: (string | null)[], submittedById?: string) {
     if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
     if (iccdsInput.length > 5000) throw new BadRequestException('A single upload is limited to 5,000 rows');
-    const rows = iccdsInput.map((iccid, index) => ({ iccid: iccid.trim(), eid: eidsInput?.[index]?.trim() ?? null }));
+    const rows = iccdsInput.map((iccid, index) => ({ iccid: iccid.trim(), eid: eidsInput?.[index]?.trim() ?? null, msisdn: msisdnsInput?.[index]?.trim() ?? null }));
     const invalid = rows.filter((row) => !/^\d{15,25}$/.test(row.iccid));
     if (invalid.length) throw new BadRequestException(`Invalid ICCID values: ${invalid.map((row) => row.iccid).join(', ')}`);
     const existing = await this.prisma.esimInventory.findMany({ where: { iccid: { in: rows.map((row) => row.iccid) } }, select: { iccid: true } });
@@ -44,13 +44,14 @@ export class InventoryService implements OnModuleInit {
     if (!toImport.length) return { imported: 0, skipped: rows.length, batch: null };
     const batchReference = `MANUAL-${source ?? 'ops'}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     const batch = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.inventoryBatch.create({ data: { batchReference, totalProfiles: rows.length, importedCount: toImport.length } });
+      const created = await tx.inventoryBatch.create({ data: { batchReference, totalProfiles: rows.length, importedCount: toImport.length, status: BatchStatus.PENDING, ...(submittedById ? { submittedById } : {}) } });
       await tx.esimInventory.createMany({
         data: toImport.map((row) => ({
           batchId: created.id,
           iccid: row.iccid,
           eid: row.eid ?? `SYNTH-${createHash('sha256').update(row.iccid).digest('hex').slice(0, 28).toUpperCase()}`,
-          status: InventoryStatus.AVAILABLE,
+          ...(row.msisdn ? { msisdn: row.msisdn } : {}),
+          status: InventoryStatus.IMPORTED,
         })),
       });
       return created;
@@ -58,20 +59,21 @@ export class InventoryService implements OnModuleInit {
     return { imported: toImport.length, skipped: rows.length - toImport.length, batch: batch.id };
   }
 
-  async importBatchCsv(csv: string, source?: string) {
+  async importBatchCsv(content: string, source?: string, fileName?: string, submittedById?: string) {
     if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
-    const { records, errors } = csvToRecords(csv, ['iccid']);
+    const { records, errors } = await tabularToRecords(content, ['iccid'], fileName ? { fileName, maxRows: 5000 } : { maxRows: 5000 });
     if (errors.length) throw new BadRequestException(errors.join('; '));
     if (records.length > 5000) throw new BadRequestException('A single upload is limited to 5,000 rows');
     const rowErrors: string[] = [];
-    const candidates: { line: number; iccid: string; eid: string | null }[] = [];
+    const candidates: { line: number; iccid: string; eid: string | null; msisdn: string | null }[] = [];
     for (const [index, row] of records.entries()) {
       const line = index + 2;
       const iccid = (row.iccid ?? '').trim();
       const eid = (row.eid ?? '').trim() || null;
+      const msisdn = (row.msisdn ?? '').trim() || null;
       if (!/^\d{15,25}$/.test(iccid)) { rowErrors.push(`Line ${line}: invalid ICCID '${iccid || '(empty)'}'`); continue; }
       if (eid && !/^[A-Z0-9-]{16,80}$/.test(eid)) { rowErrors.push(`Line ${line}: invalid EID '${eid}'`); continue; }
-      candidates.push({ line, iccid, eid });
+      candidates.push({ line, iccid, eid, msisdn });
     }
     const seen = new Set<string>();
     const uniqueCandidates: typeof candidates = [];
@@ -93,13 +95,14 @@ export class InventoryService implements OnModuleInit {
     if (!toImport.length) return { imported: 0, skipped: rowErrors.length, errors: rowErrors.slice(0, 100), batch: null };
     const batchReference = `MANUAL-CSV-${source?.trim() || 'ops'}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     const batch = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.inventoryBatch.create({ data: { batchReference, totalProfiles: toImport.length, importedCount: toImport.length } });
+      const created = await tx.inventoryBatch.create({ data: { batchReference, totalProfiles: toImport.length, importedCount: toImport.length, status: BatchStatus.PENDING, ...(submittedById ? { submittedById } : {}) } });
       await tx.esimInventory.createMany({
         data: toImport.map((row) => ({
           batchId: created.id,
           iccid: row.iccid,
           eid: row.eid ?? `SYNTH-${createHash('sha256').update(row.iccid).digest('hex').slice(0, 28).toUpperCase()}`,
-          status: InventoryStatus.AVAILABLE,
+          ...(row.msisdn ? { msisdn: row.msisdn } : {}),
+          status: InventoryStatus.IMPORTED,
         })),
       });
       return created;
@@ -107,7 +110,83 @@ export class InventoryService implements OnModuleInit {
     return { imported: toImport.length, skipped: rowErrors.length, errors: rowErrors.slice(0, 100), batch: batch.id };
   }
 
-  async assign(orderId: string, customerId: string, qrPayload: string, providerInfo?: { provider: string; providerSubscriptionId?: string }) {
+  async importBatchTabular(content: string, fileName?: string, source?: string, submittedById?: string) {
+    return this.importBatchCsv(content, source, fileName, submittedById);
+  }
+
+  /**
+   * Approves a pending upload batch: rows flip from IMPORTED to AVAILABLE and
+   * only then enter the sellable FIFO pool. Every decision is audited.
+   */
+  async approveBatch(batchId: string, actorClerkId: string) {
+    if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
+    const batch = await this.prisma.inventoryBatch.findUnique({ where: { id: batchId } });
+    if (!batch) throw new NotFoundException('Upload batch not found');
+    if (batch.status !== BatchStatus.PENDING) throw new BadRequestException(`Batch is ${batch.status.toLowerCase()}; only pending batches can be approved`);
+    const actor = await this.localUser(actorClerkId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inventoryBatch.update({
+        where: { id: batchId },
+        data: { status: BatchStatus.APPROVED, approvedById: actor?.id ?? null, approvedAt: new Date() },
+      });
+      await tx.esimInventory.updateMany({
+        where: { batchId, status: InventoryStatus.IMPORTED },
+        data: { status: InventoryStatus.AVAILABLE, version: { increment: 1 } },
+      });
+      await tx.auditLog.create({
+        data: {
+          module: 'INVENTORY',
+          entity: 'InventoryBatch',
+          entityId: batchId,
+          action: 'BATCH_APPROVED',
+          ...(actor ? { performedById: actor.id } : {}),
+          previousValue: { status: batch.status, reference: batch.batchReference },
+          newValue: { status: BatchStatus.APPROVED },
+        },
+      });
+    });
+    return { id: batchId, status: BatchStatus.APPROVED, reference: batch.batchReference };
+  }
+
+  /**
+   * Rejects a pending upload batch. Rows stay IMPORTED so they can never be
+   * reserved; the reason is retained on the batch and in the audit trail.
+   */
+  async rejectBatch(batchId: string, actorClerkId: string, reason?: string) {
+    if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
+    const batch = await this.prisma.inventoryBatch.findUnique({ where: { id: batchId } });
+    if (!batch) throw new NotFoundException('Upload batch not found');
+    if (batch.status !== BatchStatus.PENDING) throw new BadRequestException(`Batch is ${batch.status.toLowerCase()}; only pending batches can be rejected`);
+    const actor = await this.localUser(actorClerkId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inventoryBatch.update({
+        where: { id: batchId },
+        data: { status: BatchStatus.REJECTED, rejectedById: actor?.id ?? null, rejectedAt: new Date(), ...(reason?.trim() ? { rejectionReason: reason.trim() } : {}) },
+      });
+      await tx.auditLog.create({
+        data: {
+          module: 'INVENTORY',
+          entity: 'InventoryBatch',
+          entityId: batchId,
+          action: 'BATCH_REJECTED',
+          ...(actor ? { performedById: actor.id } : {}),
+          previousValue: { status: batch.status, reference: batch.batchReference },
+          newValue: { status: BatchStatus.REJECTED, ...(reason?.trim() ? { reason: reason.trim() } : {}) },
+        },
+      });
+    });
+    return { id: batchId, status: BatchStatus.REJECTED, reference: batch.batchReference };
+  }
+
+  private async localUser(clerkId: string) {
+    try {
+      return await this.prisma.user.findUnique({ where: { clerkId } });
+    } catch {
+      return null;
+    }
+  }
+
+  async assign(orderId: string, customerId: string, qrPayload: string, providerInfo?: { provider: string; providerSubscriptionId?: string; expiresAt?: string }) {
     if (!this.prisma.enabled) return;
     const inventory = await this.prisma.esimInventory.findUnique({ where: { assignedOrderId: orderId } });
     if (!inventory) throw new NotFoundException('Reserved inventory was not found');
@@ -124,16 +203,53 @@ export class InventoryService implements OnModuleInit {
       if (providerInfo?.providerSubscriptionId) {
         await tx.subscription.upsert({
           where: { providerSubscriptionId: providerInfo.providerSubscriptionId },
-          update: { provider: providerInfo.provider },
-          create: { customerEsimId: customerEsim.id, provider: providerInfo.provider, providerSubscriptionId: providerInfo.providerSubscriptionId, status: 'PENDING' },
+          update: { provider: providerInfo.provider, ...(providerInfo.expiresAt ? { expiresAt: new Date(providerInfo.expiresAt) } : {}) },
+          create: { customerEsimId: customerEsim.id, provider: providerInfo.provider, providerSubscriptionId: providerInfo.providerSubscriptionId, status: 'PENDING', ...(providerInfo.expiresAt ? { expiresAt: new Date(providerInfo.expiresAt) } : {}) },
         });
       }
     });
   }
 
+  /**
+   * Attaches a top-up order to an already-provisioned eSIM (same country). The
+   * physical eSIM is not reserved again; a new CustomerEsim row (unique per
+   * order) links the order to the existing inventory so data plans can stack,
+   * each with its own subscription and expiry.
+   */
+  async assignTopup(orderId: string, customerId: string, iccid: string, qrPayload: string, providerInfo?: { provider: string; providerSubscriptionId?: string; expiresAt?: string }) {
+    if (!this.prisma.enabled) return;
+    const inventory = await this.prisma.esimInventory.findUnique({ where: { iccid } });
+    if (!inventory) throw new NotFoundException('Existing eSIM was not found');
+    await this.prisma.$transaction(async (tx) => {
+      const customerEsim = await tx.customerEsim.upsert({ where: { orderId }, update: { qrPayloadEncrypted: this.crypto.encrypt(qrPayload) }, create: { orderId, inventoryId: inventory.id, customerId, qrPayloadEncrypted: this.crypto.encrypt(qrPayload) } });
+      if (providerInfo?.providerSubscriptionId) {
+        await tx.subscription.upsert({
+          where: { providerSubscriptionId: providerInfo.providerSubscriptionId },
+          update: { provider: providerInfo.provider, ...(providerInfo.expiresAt ? { expiresAt: new Date(providerInfo.expiresAt) } : {}) },
+          create: { customerEsimId: customerEsim.id, provider: providerInfo.provider, providerSubscriptionId: providerInfo.providerSubscriptionId, status: 'PENDING', ...(providerInfo.expiresAt ? { expiresAt: new Date(providerInfo.expiresAt) } : {}) },
+        });
+      }
+    });
+  }
+
+  /**
+   * Resolves the eSIM inventory backing an order. Initial purchases are found
+   * through the reserved `assignedOrderId`; top-up orders reuse an existing
+   * eSIM and are resolved through their CustomerEsim row instead.
+   */
+  async inventoryForOrder(orderId: string) {
+    if (!this.prisma.enabled) return null;
+    const byAssigned = await this.prisma.esimInventory.findUnique({ where: { assignedOrderId: orderId }, select: { id: true, iccid: true, msisdn: true } });
+    if (byAssigned) return byAssigned;
+    const viaEsim = await this.prisma.customerEsim.findUnique({ where: { orderId }, select: { inventory: { select: { id: true, iccid: true, msisdn: true } } } });
+    return viaEsim?.inventory ?? null;
+  }
+
   async applyLifecycle(orderId: string, event: { provider: string; status?: 'PRELOADED' | 'ACTIVATED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER'; subscriptionId?: string; activatedAt?: string; expiresAt?: string }) {
     if (!this.prisma.enabled) return;
-    const inventory = await this.prisma.esimInventory.findUnique({ where: { assignedOrderId: orderId } });
+    const resolved = await this.inventoryForOrder(orderId);
+    if (!resolved) throw new NotFoundException('No inventory is associated with this order');
+    const inventory = await this.prisma.esimInventory.findUnique({ where: { id: resolved.id } });
     if (!inventory) throw new NotFoundException('Reserved inventory was not found');
 
     const inventoryStatus = this.mapInventoryStatus(event.status);
@@ -188,8 +304,8 @@ export class InventoryService implements OnModuleInit {
 
   async refreshUsage(orderId: string) {
     if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
-    const inventory = await this.prisma.esimInventory.findUnique({ where: { assignedOrderId: orderId }, select: { iccid: true } });
-    if (!inventory) throw new NotFoundException('No eSIM inventory is assigned to this order');
+    const inventory = await this.inventoryForOrder(orderId);
+    if (!inventory?.iccid) throw new NotFoundException('No eSIM inventory is assigned to this order');
     const customerEsim = await this.prisma.customerEsim.findUnique({ where: { orderId }, select: { id: true } });
     if (!customerEsim) throw new NotFoundException('No customer eSIM record exists for this order');
     const usage = await this.connectivity.getUsage(inventory.iccid);
@@ -202,6 +318,6 @@ export class InventoryService implements OnModuleInit {
     const [groups, batches] = await Promise.all([this.prisma.esimInventory.groupBy({ by: ['status'], _count: { _all: true } }), this.prisma.inventoryBatch.findMany({ orderBy: { createdAt: 'desc' }, take: 20 })]);
     const count = (status: InventoryStatus) => groups.find((item) => item.status === status)?._count._all ?? 0;
     const available = count(InventoryStatus.AVAILABLE);
-    return { counts: { available, reserved: count(InventoryStatus.RESERVED), assigned: count(InventoryStatus.ASSIGNED), activated: count(InventoryStatus.ACTIVATED) }, lowStockThreshold: 10, lowStock: available <= 10, batches };
+    return { counts: { available, reserved: count(InventoryStatus.RESERVED), assigned: count(InventoryStatus.ASSIGNED), activated: count(InventoryStatus.ACTIVATED), pending: count(InventoryStatus.IMPORTED) }, lowStockThreshold: 10, lowStock: available <= 10, batches: batches.map((batch) => ({ id: batch.id, batchReference: batch.batchReference, totalProfiles: batch.totalProfiles, importedCount: batch.importedCount, failedCount: batch.failedCount, status: batch.status, rejectionReason: batch.rejectionReason, createdAt: batch.createdAt.toISOString() })) };
   }
 }

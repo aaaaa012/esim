@@ -90,7 +90,7 @@ Two documents are **required** — a **passport** and a **travel ticket**
 
 ### Step 5 — Payment
 
-The customer chooses **Khalti** or **eSewa** (Nepal's digital wallets).
+The customer chooses **Khalti** (Nepal's digital wallet).
 
 **What happens:**
 - The customer is redirected to the wallet's page, pays, and returns.
@@ -171,7 +171,7 @@ surfaced to customers later.
 | **Review** | Orders are approved automatically after verified payment. Review is used for exceptions only: approve replacement documents and retry failed activations. Every action is audited. |
 | **Inventory** | See how many eSIM profiles are available/reserved/assigned/activated, low-stock warning (≤10), and **bulk upload stock from a CSV** (up to 5,000 profiles per file). |
 | **Plans** | Edit prices, mark popular, enable/disable plans, and **bulk import/update the whole catalogue from a CSV** — changes go live to customers immediately. |
-| **Integrations** | One screen showing whether each partner is connected (Khalti, eSewa, Transatel, email, WhatsApp, document storage), test each one, sync the Transatel catalogue, and check whether a number is eligible for a plan. |
+| **Integrations** | One screen showing whether each partner is connected (Khalti, Transatel, email, WhatsApp, document storage), test each one, sync the Transatel catalogue, and check whether a number is eligible for a plan. |
 | **Team & access** | Invite staff (invitation emails), assign Operations or Admin roles, disable users, and see the full audit log. |
 | **Observability** | Log of every call to the telecom provider (and any inbound provider messages) with success/failure, so problems are diagnosed in minutes. |
 
@@ -184,7 +184,7 @@ surfaced to customers later.
 | **Sign-in (Clerk)** | Handles logins/passwords/MFA so we don't store passwords ourselves. Customer and staff are **separate accounts** — staff can never see the customer website as a customer and vice versa. |
 | **Database (CockroachDB)** | The single source of truth: customers, orders, documents, payments, inventory, subscriptions, audit logs. |
 | **Telecom provider (Transatel)** | The company that actually turns on the eSIM in the destination network. |
-| **Wallets (Khalti/eSewa)** | Collect the money in NPR. |
+| **Wallets (Khalti)** | Collect the money in NPR. |
 | **Document storage (Cloudinary)** | Holds passport/ticket files privately, with short-lived access links. |
 | **Email (Gmail) + WhatsApp** | Send order updates. The activation QR is delivered by email as a **password-protected PDF** (password = the customer's mobile number). |
 | **Background jobs (Redis)** | A "to-do list" of tasks (activate this eSIM, verify this payment, send this email, refresh this usage). If a task fails it retries automatically. |
@@ -241,7 +241,7 @@ agencies, etc.) sell Visa Compass eSIMs inside their own systems:
 | Database | CockroachDB via Prisma (enums, Decimal money, Json columns) |
 | Background jobs | BullMQ on Redis (3 attempts, exponential backoff) |
 | Auth | Clerk (JWT, authorized parties, MFA flag from session `fva`) |
-| Payments | Khalti / eSewa adapters + local simulator |
+| Payments | Khalti adapter + local simulator |
 | Connectivity | Transatel adapter (OCS preload, inventory, catalog, SIM management, webhooks) |
 | Document storage | Cloudinary signed authenticated uploads |
 | Notifications | Gmail API (OAuth refresh) + WhatsApp Business Cloud API |

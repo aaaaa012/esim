@@ -101,8 +101,9 @@ resolvable:
   `OrdersService.requestRefund` transitions the order to `REFUND_PENDING`, then
   `PaymentsService.refund` calls the gateway's `refund()` and
   `OrdersService.markRefunded` transitions to `REFUNDED`.
-- Gateways: the simulator fully implements refunds; Khalti uses
-  `POST /epayment/refund/`; eSewa refunds are flagged as manual (merchant console).
+- Gateways: the simulator fully implements refunds; Khalti uses the Refund API
+  `POST {origin}/api/merchant-transaction/{transaction_id}/refund/`
+  (see `docs/08-payments.md`).
 - The order review page shows a "Refund order" button whenever a refund is possible.
 
 ## 7. Plan expiry / exhaustion lifecycle

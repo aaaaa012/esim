@@ -93,7 +93,7 @@ describe('TransatelProvider', () => {
     const provider = new TransatelProvider(prisma);
     route({
       '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
-      '/ocs/subscriptions/api/orders/products': () => jsonResponse({ id: 'ord-1', orderReference: 'VC-REF', status: 'done', submissionDate: '2026-08-04T00:00:00Z', bind: { msisdn: '8988247076000000319' }, source: 'VisaCompass', mvnoRef: 'visacompass-test', subscriptionId: 'sub-123' }),
+      '/ocs/subscriptions/api/orders/products': () => jsonResponse({ id: 'ord-1', orderReference: 'VC-REF', status: 'done', submissionDate: '2026-08-04T00:00:00Z', bind: { msisdn: '8988247076000000319' }, source: 'api', mvnoRef: 'visacompass-test', subscriptionId: 'sub-123' }),
       '/sim-management/sims/api/esims/sim-serial/8988247076000000319': () => jsonResponse({ simSerial: '8988247076000000319', status: 'downloaded', smdpAddress: 'consumer.rsp.world', qrCode: { value: 'LPA:1$consumer.rsp.world$ABC', dataUrl: 'data:image/png;base64,xxx' } }),
     });
     const result = await provider.provision({ orderId: 'order-1', planId: 'plan-1', eid: '890490320000000000000000000001', traveler });
@@ -101,8 +101,24 @@ describe('TransatelProvider', () => {
     const orderCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('/api/orders/products'));
     expect(orderCall).toBeDefined();
     const payload = JSON.parse(String(orderCall![1].body));
-    expect(payload).toMatchObject({ bind: { msisdn: '8988247076000000319' }, source: 'VisaCompass', orderType: 'preload', mvnoRef: 'visacompass-test', product: { productId: 'TRVL-5GB-15D' }, transactionReference: 'order-1' });
+    expect(payload).toMatchObject({ bind: { msisdn: '8988247076000000319' }, source: 'api', orderType: 'preload', mvnoRef: 'visacompass-test', product: { productId: 'TRVL-5GB-15D' }, payment: { provider: 'customer' }, transactionReference: 'order-1' });
     expect(prisma.esimInventory.findFirst).toHaveBeenCalledWith({ where: { OR: [{ assignedOrderId: 'order-1' }, { eid: '890490320000000000000000000001' }] } });
+  });
+
+  it('uses the stored MSISDN in bind.msisdn when present', async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi.fn().mockResolvedValue({ id: 'plan-1', providerPlanId: 'TRVL-5GB-15D' });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({ iccid: '8988247076000000319', eid: '890490320000000000000000000001', msisdn: '882470001850263' });
+    const provider = new TransatelProvider(prisma);
+    route({
+      '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
+      '/ocs/subscriptions/api/orders/products': () => jsonResponse({ id: 'ord-1', orderReference: 'VC-REF', status: 'done', submissionDate: '2026-08-04T00:00:00Z', bind: { msisdn: '882470001850263' }, source: 'api', mvnoRef: 'visacompass-test', subscriptionId: 'sub-123' }),
+      '/sim-management/sims/api/esims/sim-serial/8988247076000000319': () => jsonResponse({ simSerial: '8988247076000000319', status: 'downloaded', smdpAddress: 'consumer.rsp.world', qrCode: { value: 'LPA:1$consumer.rsp.world$ABC', dataUrl: 'data:image/png;base64,xxx' } }),
+    });
+    await provider.provision({ orderId: 'order-1', planId: 'plan-1', eid: '890490320000000000000000000001', traveler });
+    const orderCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('/api/orders/products'));
+    const payload = JSON.parse(String(orderCall![1].body));
+    expect(payload.bind).toEqual({ msisdn: '882470001850263' });
   });
 
   it('returns a DELAYED result when the QR payload is not yet available', async () => {
@@ -112,7 +128,7 @@ describe('TransatelProvider', () => {
     const provider = new TransatelProvider(prisma);
     route({
       '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
-      '/ocs/subscriptions/api/orders/products': () => jsonResponse({ id: 'ord-1', orderReference: 'VC-REF', status: 'done', submissionDate: '2026-08-04T00:00:00Z', bind: { msisdn: '8988247076000000319' }, source: 'VisaCompass', mvnoRef: 'visacompass-test', subscriptionId: 'sub-123' }),
+      '/ocs/subscriptions/api/orders/products': () => jsonResponse({ id: 'ord-1', orderReference: 'VC-REF', status: 'done', submissionDate: '2026-08-04T00:00:00Z', bind: { msisdn: '8988247076000000319' }, source: 'api', mvnoRef: 'visacompass-test', subscriptionId: 'sub-123' }),
       '/sim-management/sims/api/esims/sim-serial/8988247076000000319': () => jsonResponse({ simSerial: '8988247076000000319', status: 'allocated' }),
     });
     const result = await provider.provision({ orderId: 'order-1', planId: 'plan-1', eid: '890490320000000000000000000001', traveler });
@@ -171,46 +187,86 @@ describe('TransatelProvider', () => {
 
   it('normalizes an OCS/PRODUCT/ACTIVATED webhook into a provider event', async () => {
     const prisma = prismaStub();
-    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({ assignedOrderId: 'order-1' });
-    prisma.order.findUnique = vi.fn().mockResolvedValue({ status: 'COMPLETED' });
+    prisma.order.findUnique = vi.fn().mockResolvedValue({ id: 'order-1' });
     const provider = new TransatelProvider(prisma);
     route({ '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }) });
     const result = await provider.handleWebhook({
-      header: { eventId: 'evt-1', eventType: 'OCS/PRODUCT/ACTIVATED', domain: 'OCS', category: 'products' },
-      body: { subscription: { serialNumbers: ['8988247076000000319'] }, subscriptionId: 'sub-123', activatedAt: '2026-08-04T00:00:00Z' },
+      header: { eventId: 'evt-1', eventType: 'OCS/PRODUCT/ACTIVATED', eventDate: '2026-08-04T00:00:00Z' },
+      body: { mvnoRef: 'visacompass-test', cos: 'WW_COS_TEST', msisdn: '33612345678', iccid: '8988247076000000319', externalReference: 'order-1', productSubscription: { subscriptionId: 'sub-123', activationDate: '2026-08-04T13:30:00Z' } },
     });
     expect(result.handled).toBe(true);
-    expect(result.event).toMatchObject({ eventType: 'OCS/PRODUCT/ACTIVATED', orderId: 'order-1', iccid: '8988247076000000319', subscriptionId: 'sub-123', status: 'ACTIVATED' });
+    expect(result.event).toMatchObject({ eventType: 'OCS/PRODUCT/ACTIVATED', orderId: 'order-1', iccid: '8988247076000000319', externalReference: 'order-1', subscriptionId: 'sub-123', status: 'ACTIVATED', activatedAt: '2026-08-04T13:30:00Z' });
+    expect(prisma.order.findUnique).toHaveBeenCalledWith({ where: { id: 'order-1' }, select: { id: true } });
+    expect(prisma.esimInventory.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('routes by externalReference (our order id) and not by ICCID', async () => {
+    const prisma = prismaStub();
+    prisma.order.findUnique = vi.fn().mockResolvedValue({ id: 'order-9' });
+    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue(null);
+    const provider = new TransatelProvider(prisma);
+    route({ '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }) });
+    const result = await provider.handleWebhook({
+      header: { eventId: 'evt-2', eventType: 'OCS/PRODUCT/ACTIVATED' },
+      body: { msisdn: '33612345678', iccid: '8988989996000000319', externalReference: 'order-9', productSubscription: { subscriptionId: 'sub-9' } },
+    });
+    expect(result.handled).toBe(true);
+    expect(result.event?.orderId).toBe('order-9');
+    expect(prisma.esimInventory.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('falls back to ICCID inventory binding when externalReference matches no order', async () => {
+    const prisma = prismaStub();
+    prisma.order.findUnique = vi.fn().mockResolvedValue(null);
+    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({ assignedOrderId: 'order-3' });
+    const provider = new TransatelProvider(prisma);
+    route({ '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }) });
+    const result = await provider.handleWebhook({
+      header: { eventId: 'evt-3', eventType: 'OCS/PRODUCT/ACTIVATED' },
+      body: { msisdn: '33612345678', iccid: '8988247076000000319', externalReference: 'unknown-ref', productSubscription: { subscriptionId: 'sub-3' } },
+    });
+    expect(result.handled).toBe(true);
+    expect(result.event?.orderId).toBe('order-3');
     expect(prisma.esimInventory.findUnique).toHaveBeenCalledWith({ where: { iccid: '8988247076000000319' }, select: { assignedOrderId: true } });
   });
 
   it('acknowledges webhooks that reference an unknown ICCID as unhandled', async () => {
     const prisma = prismaStub();
+    prisma.order.findUnique = vi.fn().mockResolvedValue(null);
     prisma.esimInventory.findUnique = vi.fn().mockResolvedValue(null);
     const provider = new TransatelProvider(prisma);
-    const result = await provider.handleWebhook({ header: { eventId: 'evt-2', eventType: 'OCS/PRODUCT/ACTIVATED' }, body: { bind: { msisdn: '8988247076000000319' } } });
+    const result = await provider.handleWebhook({ header: { eventId: 'evt-4', eventType: 'OCS/PRODUCT/ACTIVATED' }, body: { msisdn: '33612345678', iccid: '8988247076000000319' } });
     expect(result.handled).toBe(false);
     expect(result.reason).toContain('8988247076000000319');
   });
 
-  it('maps an expiration webhook to an EXPIRED status', async () => {
+  it('rejects a webhook whose iccid is not present on body.iccid', async () => {
     const prisma = prismaStub();
-    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({ assignedOrderId: 'order-2' });
     const provider = new TransatelProvider(prisma);
     route({ '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }) });
-    const result = await provider.handleWebhook({ header: { eventId: 'evt-3', eventType: 'OCS/PRODUCT/EXPIRED' }, body: { bind: { msisdn: '8988247076000000319' }, expiresAt: '2026-08-19T00:00:00Z' } });
+    const result = await provider.handleWebhook({ header: { eventId: 'evt-5', eventType: 'OCS/PRODUCT/ACTIVATED' }, body: { subscription: { serialNumbers: ['8988247076000000319'] }, subscriptionId: 'sub-5' } });
+    expect(result.handled).toBe(false);
+    expect(result.reason).toContain('subscriber identifier');
+  });
+
+  it('maps an expiration webhook to an EXPIRED status', async () => {
+    const prisma = prismaStub();
+    prisma.order.findUnique = vi.fn().mockResolvedValue({ id: 'order-2' });
+    const provider = new TransatelProvider(prisma);
+    route({ '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }) });
+    const result = await provider.handleWebhook({ header: { eventId: 'evt-6', eventType: 'OCS/PRODUCT/EXPIRED' }, body: { msisdn: '33612345678', iccid: '8988247076000000319', externalReference: 'order-2', productSubscription: { subscriptionId: 'sub-2', expirationDate: '2026-08-19T00:00:00Z' } } });
     expect(result.event).toMatchObject({ status: 'EXPIRED', expiresAt: '2026-08-19T00:00:00Z' });
   });
 
   it('resolves the ICCID and dates from a real OCS webhook envelope', async () => {
     const prisma = prismaStub();
+    prisma.order.findUnique = vi.fn().mockResolvedValue({ id: 'order-1' });
     prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({ assignedOrderId: 'order-1' });
-    prisma.order.findUnique = vi.fn().mockResolvedValue({ status: 'COMPLETED' });
     const provider = new TransatelProvider(prisma);
     route({ '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }) });
     const result = await provider.handleWebhook({
-      header: { eventId: 'evt-4', eventType: 'OCS/PRODUCT/ACTIVATED', eventDate: '2026-08-04T13:30:00Z' },
-      body: { mvnoRef: 'visacompass-test', cos: 'WW_COS_TEST', msisdn: '33612345678', iccid: '8988247076000000319', externalReference: 'order-1', subscriptionId: 'sub-123', activationDate: '2026-08-04T13:30:00Z', expirationDate: '2026-09-03T13:30:00Z' },
+      header: { eventId: 'evt-7', eventType: 'OCS/PRODUCT/ACTIVATED', eventDate: '2026-08-04T13:30:00Z' },
+      body: { mvnoRef: 'visacompass-test', cos: 'WW_COS_TEST', msisdn: '33612345678', iccid: '8988247076000000319', externalReference: 'order-1', productSubscription: { subscriptionId: 'sub-123', activationDate: '2026-08-04T13:30:00Z', expirationDate: '2026-09-03T13:30:00Z' } },
     });
     expect(result.handled).toBe(true);
     expect(result.event).toMatchObject({

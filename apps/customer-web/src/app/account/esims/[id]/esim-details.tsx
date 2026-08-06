@@ -294,8 +294,8 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
               <>
                 <p>
                   Your activation QR was emailed to you as a password-protected
-                  PDF. Open the PDF on your phone and enter the mobile number
-                  you provided to reveal the QR.
+                  PDF. Open the PDF on your phone and enter the eSIM number
+                  (MSISDN) shown in your email to reveal the QR.
                 </p>
                 <div className="processing">
                   <Mail size={18} />

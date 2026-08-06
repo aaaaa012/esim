@@ -21,7 +21,7 @@ API documentation is available at `http://localhost:4000/api/docs` after the API
 - A Clerk development application
 - Redis with a TCP/TLS endpoint when BullMQ processing is required
 
-Cloudinary, Gmail, Khalti, eSewa, WhatsApp, and live connectivity-provider credentials are optional for simulator-based development.
+Cloudinary, Gmail, Khalti, WhatsApp, and live connectivity-provider credentials are optional for simulator-based development.
 
 ## First-time installation
 
