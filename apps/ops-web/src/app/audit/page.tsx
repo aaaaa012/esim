@@ -1,2 +1,13 @@
 import AuditClient from './audit-client';
-export default function Audit(){return <AuditClient/>}
+import { PageHeader } from '@/components/page-header';
+export default function Audit() {
+  return (
+    <>
+      <PageHeader
+        title="Audit log"
+        description="Immutable operational events ordered newest first."
+      />
+      <AuditClient />
+    </>
+  );
+}

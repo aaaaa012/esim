@@ -2,6 +2,7 @@
 import { useAuth } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext } from "react";
+import { Spinner } from "@/components/spinner";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type AuthFetch = typeof window.fetch;
 const Context = createContext<AuthFetch | null>(null);
@@ -37,7 +38,11 @@ export default function AuthenticatedApiProvider({
     [getToken],
   );
   if (!isLoaded)
-    return <main className="empty-table">Securing operator session…</main>;
+    return (
+      <div className="flex min-h-screen items-center justify-center gap-3 text-sm text-muted-foreground">
+        <Spinner /> Securing operator session…
+      </div>
+    );
   if (
     !isSignedIn &&
     !pathname.startsWith("/sign-in") &&
@@ -45,9 +50,9 @@ export default function AuthenticatedApiProvider({
     !pathname.startsWith("/staff-onboarding")
   )
     return (
-      <main className="empty-table">
+      <div className="flex min-h-screen items-center justify-center px-4 text-sm text-muted-foreground">
         Your session has ended. Sign in again to continue.
-      </main>
+      </div>
     );
   return <Context.Provider value={authFetch}>{children}</Context.Provider>;
 }

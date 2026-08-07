@@ -5,6 +5,7 @@ const isPublic = createRouteMatcher([
   "/sign-up(.*)",
   "/staff-onboarding(.*)",
   "/unauthorized",
+  "/super-admin(.*)",
 ]);
 const isSecurity = createRouteMatcher(["/security(.*)"]);
 const isChangePassword = createRouteMatcher(["/change-password(.*)"]);

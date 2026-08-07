@@ -1,5 +1,4 @@
 import CustomerProfile from "./customer-profile-client";
-import "../customers.css";
 
 export default async function Page({
   params,

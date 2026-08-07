@@ -4,11 +4,29 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowRight,
   CheckCircle2,
   ClipboardCheck,
-  LoaderCircle,
   RotateCcw,
+  ServerCrash,
 } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
+import { StatCard } from "@/components/stat-card";
+import { Panel } from "@/components/panel";
+import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/empty-state";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Spinner } from "@/components/spinner";
+import { cn } from "@/lib/utils";
+
 type Order = {
   id: string;
   orderNumber: string;
@@ -30,6 +48,7 @@ type Dashboard = {
 };
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1",
   headers = {};
+
 export default function DashboardClient() {
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Dashboard | null>(null);
@@ -38,114 +57,172 @@ export default function DashboardClient() {
       .then((r) => r.json())
       .then((v) => setData(v.data));
   }, []);
+
   if (!data)
     return (
-      <div className="empty-table">
-        <LoaderCircle className="spin" />
-        Loading live overview…
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <Spinner /> Loading live overview…
+        </div>
       </div>
     );
+
   const metrics = [
-    ["Pending reviews", data.counts.reviewPending, ClipboardCheck],
-    ["Awaiting customer", data.counts.awaitingCustomer, RotateCcw],
-    ["Provisioning failed", data.counts.provisioningFailed, AlertTriangle],
-    ["Completed today", data.counts.completedToday, CheckCircle2],
-  ] as const;
+    {
+      label: "Pending reviews",
+      value: data.counts.reviewPending,
+      icon: <ClipboardCheck className="size-4" />,
+      tone: "info" as const,
+      hint: "Orders awaiting an operations decision",
+    },
+    {
+      label: "Awaiting customer",
+      value: data.counts.awaitingCustomer,
+      icon: <RotateCcw className="size-4" />,
+      tone: "warning" as const,
+      hint: "Waiting on customer documents",
+    },
+    {
+      label: "Provisioning failed",
+      value: data.counts.provisioningFailed,
+      icon: <ServerCrash className="size-4" />,
+      tone: "danger" as const,
+      hint: "Require attention",
+    },
+    {
+      label: "Completed today",
+      value: data.counts.completedToday,
+      icon: <CheckCircle2 className="size-4" />,
+      tone: "success" as const,
+      hint: "Fulfilled orders since midnight",
+    },
+  ];
+
   return (
     <>
-      <div className="top">
-        <div>
-          <h1>Operations overview</h1>
-          <p>
-            {new Intl.DateTimeFormat("en-NP", {
-              dateStyle: "full",
-              timeZone: "Asia/Kathmandu",
-            }).format(new Date())}{" "}
-            · Asia/Kathmandu
-          </p>
-        </div>
-        <Link className="primary-action" href="/work-queue">
-          Open work queue
-        </Link>
-      </div>
-      <section className="grid">
-        {metrics.map(([label, value, Icon]) => (
-          <article className="metric" key={label}>
-            <span className="metric-label">{label}</span>
-            <div className="metric-row">
-              <strong>{value}</strong>
-              <span className="icon">
-                <Icon size={18} />
-              </span>
-            </div>
-          </article>
+      <PageHeader
+        title="Operations overview"
+        description={`${new Intl.DateTimeFormat("en-NP", {
+          dateStyle: "full",
+          timeZone: "Asia/Kathmandu",
+        }).format(new Date())} · Asia/Kathmandu`}
+        actions={
+          <Button asChild>
+            <Link href="/work-queue">
+              Open work queue
+              <ArrowRight className="size-4" />
+            </Link>
+          </Button>
+        }
+      />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {metrics.map((metric) => (
+          <StatCard key={metric.label} {...metric} />
         ))}
-      </section>
-      <section className="panel">
-        <div className="panel-head">
-          <h2>Integration health</h2>
-          <Link href="/integration-events">View events</Link>
-        </div>
-        <div className="health">
-          {data.integrations.map((item) => (
-            <div className="health-item" key={item.name}>
-              <span className={`dot ${item.status === "UP" ? "" : "amber"}`} />
-              {item.name}
-              <small>{item.status.replaceAll("_", " ")}</small>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="panel">
-        <div className="panel-head">
-          <h2>Recent orders</h2>
-          <Link href="/orders">View all orders</Link>
-        </div>
-        {data.recentOrders.length === 0 ? (
-          <div className="empty-table">No orders yet.</div>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Order</th>
-                  <th>Customer</th>
-                  <th>Destination</th>
-                  <th>Status</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
+      </div>
+      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <Panel
+          title="Integration health"
+          actions={
+            <Link
+              href="/integration-events"
+              className="text-sm font-medium text-primary hover:underline"
+            >
+              View events
+            </Link>
+          }
+          className="xl:col-span-1"
+        >
+          <ul className="space-y-1">
+            {data.integrations.map((item) => (
+              <li
+                key={item.name}
+                className="flex items-center justify-between rounded-lg px-3 py-2.5 transition-colors hover:bg-muted/50"
+              >
+                <div className="flex items-center gap-3">
+                  <span
+                    className={cn(
+                      "size-2 rounded-full",
+                      item.status === "UP" ? "bg-success" : "bg-warning",
+                    )}
+                  />
+                  <div className="leading-tight">
+                    <p className="text-sm font-medium">{item.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {item.status.replaceAll("_", " ")}
+                    </p>
+                  </div>
+                </div>
+                <StatusBadge
+                  label={item.status}
+                  tone={item.status === "UP" ? "success" : "warning"}
+                />
+              </li>
+            ))}
+          </ul>
+        </Panel>
+        <Panel
+          title="Recent orders"
+          description="Latest activity across all orders"
+          actions={
+            <Link
+              href="/orders"
+              className="text-sm font-medium text-primary hover:underline"
+            >
+              View all orders
+            </Link>
+          }
+          className="xl:col-span-2"
+          noPadding
+        >
+          {data.recentOrders.length === 0 ? (
+            <EmptyState title="No orders yet" description="New orders will appear here." />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Order</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Destination</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Created</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {data.recentOrders.map((order) => (
-                  <tr key={order.id}>
-                    <td>
-                      <Link href={`/orders/${order.id}`}>
-                        <b>{order.orderNumber}</b>
+                  <TableRow key={order.id}>
+                    <TableCell>
+                      <Link
+                        href={`/orders/${order.id}`}
+                        className="font-medium text-primary hover:underline"
+                      >
+                        {order.orderNumber}
                       </Link>
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       {order.traveler
                         ? `${order.traveler.firstName} ${order.traveler.surname}`
                         : order.ownerId}
-                    </td>
-                    <td>
-                      {order.plan.countryCode} · {order.plan.name}
-                    </td>
-                    <td>
-                      <span
-                        className={`pill ${order.status === "REVIEW_PENDING" || order.status === "COMPLETED" ? "green" : ""}`}
-                      >
-                        {order.status.replaceAll("_", " ")}
-                      </span>
-                    </td>
-                    <td>{new Date(order.createdAt).toLocaleDateString()}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-medium">
+                        {order.plan.countryCode}
+                      </span>{" "}
+                      · {order.plan.name}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge label={order.status} />
+                    </TableCell>
+                    <TableCell className="text-right text-muted-foreground">
+                      {new Date(order.createdAt).toLocaleDateString()}
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+              </TableBody>
+            </Table>
+          )}
+        </Panel>
+      </div>
     </>
   );
 }

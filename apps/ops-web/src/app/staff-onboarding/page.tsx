@@ -2,6 +2,8 @@
 
 import { useAuth, useClerk } from "@clerk/nextjs";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/spinner";
 
 export default function StaffOnboardingPage() {
   const { isLoaded, isSignedIn } = useAuth();
@@ -16,21 +18,24 @@ export default function StaffOnboardingPage() {
   };
 
   return (
-    <main className="grid min-h-screen place-items-center bg-slate-50 px-4 dark:bg-slate-950">
-      <section className="panel" style={{ maxWidth: 520 }}>
-        <h1>Continue with your staff account</h1>
-        <p>
+    <main className="grid min-h-screen place-items-center bg-muted/30 px-4">
+      <section className="w-full max-w-xl rounded-xl border bg-card p-8 shadow-card">
+        <h1 className="text-xl font-semibold tracking-tight">
+          Continue with your staff account
+        </h1>
+        <p className="mt-3 text-sm text-muted-foreground">
           Staff and Customer identities must remain separate. Continuing will
           sign out the current account, then open the staff sign-in. Your super
           admin has created your account and provided your credentials.
         </p>
-        <button
-          className="primary-action"
+        <Button
+          className="mt-6"
           disabled={!isLoaded || working}
           onClick={() => void continueOnboarding()}
         >
+          {working ? <Spinner className="text-primary-foreground" /> : null}
           {working ? "Switching account…" : "Continue to staff sign-in"}
-        </button>
+        </Button>
       </section>
     </main>
   );

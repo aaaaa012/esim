@@ -2,12 +2,15 @@
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import {
-  ChevronLeft,
-  LoaderCircle,
-  RefreshCcw,
-  UserRound,
-} from "lucide-react";
+import { ArrowLeft, RefreshCcw, UserRound } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
+import { Panel } from "@/components/panel";
+import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/empty-state";
+import { Spinner } from "@/components/spinner";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = { "content-type": "application/json" };
 type Esim = {
@@ -41,6 +44,10 @@ type Profile = {
   name?: string;
   orders: Order[];
 };
+
+const usageTone = (used?: number, total?: number) =>
+  used != null && total ? Math.min(100, Math.round((used / total) * 100)) : 0;
+
 export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const authFetch = useAuthenticatedFetch();
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -55,7 +62,9 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
           throw new Error(value.error?.message ?? "Profile could not be loaded");
         setProfile(value.data);
       })
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "Load failed"));
+      .catch((cause) =>
+        setError(cause instanceof Error ? cause.message : "Load failed"),
+      );
   }, [authFetch, ownerId]);
   useEffect(() => {
     void load();
@@ -70,22 +79,14 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
       );
       const value = await response.json();
       if (!response.ok)
-        throw new Error(
-          value.error?.message ?? "Usage could not be refreshed",
-        );
+        throw new Error(value.error?.message ?? "Usage could not be refreshed");
       setProfile((previous) =>
         previous
           ? {
               ...previous,
               orders: previous.orders.map((order) =>
                 order.id === orderId && order.esim
-                  ? {
-                      ...order,
-                      esim: {
-                        ...order.esim,
-                        usage: value.data,
-                      },
-                    }
+                  ? { ...order, esim: { ...order.esim, usage: value.data } }
                   : order,
               ),
             }
@@ -101,141 +102,152 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
     () => profile?.orders.filter((order) => order.status === "COMPLETED") ?? [],
     [profile],
   );
+
   return (
     <>
-      <div className="top">
-        <div>
-          <Link className="back-link" href="/customers">
-            <ChevronLeft size={16} /> Customers
-          </Link>
-          <h1>{profile ? (profile.name ?? "Customer profile") : "Loading…"}</h1>
-          <p>
-            {profile
-              ? `${profile.customerCode ?? profile.ownerId}${
-                  profile.email ? ` · ${profile.email}` : ""
-                }`
-              : "Identity and order history"}
-          </p>
+      <PageHeader
+        title={profile ? (profile.name ?? "Customer profile") : "Loading…"}
+        description={
+          profile
+            ? `${profile.customerCode ?? profile.ownerId}${profile.email ? ` · ${profile.email}` : ""}`
+            : "Identity and order history"
+        }
+        badge={
+          <span className="inline-flex items-center gap-2 rounded-full bg-success-soft px-3 py-1 text-xs font-semibold text-success-foreground">
+            <UserRound className="size-3.5" />
+            {profile?.orders?.length ?? "—"} orders · {completed.length} completed eSIM
+            {completed.length === 1 ? "" : "s"}
+          </span>
+        }
+        actions={
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/customers">
+              <ArrowLeft className="size-4" /> Customers
+            </Link>
+          </Button>
+        }
+      />
+      {error && (
+        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {error}
         </div>
-        <span className="profile-identity">
-          <UserRound size={16} />
-          {profile?.orders?.length ?? 0} orders · {completed.length} completed{" "}
-          {completed.length === 1 ? "eSIM" : "eSIMs"}
-        </span>
-      </div>
-      {error && <div className="form-error">{error}</div>}
+      )}
       {!profile && !error ? (
-        <div className="panel">
-          <div className="empty-table">
-            <LoaderCircle className="spin" />
-            Loading customer profile…
-          </div>
+        <div className="flex h-40 items-center justify-center">
+          <Spinner />
         </div>
       ) : null}
       {profile ? (
-        <section className="panel">
-          <div className="panel-head">
-            <h2>Order history</h2>
-            <span>{profile.orders.length} orders</span>
-          </div>
+        <Panel
+          title="Order history"
+          description={`${profile.orders.length} orders`}
+          noPadding
+        >
           {!profile.orders.length ? (
-            <div className="empty-table">No orders for this customer.</div>
+            <EmptyState title="No orders yet" description="This customer has no orders." />
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Order</th>
-                    <th>Plan</th>
-                    <th>Status</th>
-                    <th>Traveler</th>
-                    <th>eSIM / Usage</th>
-                    <th>Total</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {profile.orders.map((order) => {
-                    const usage = order.esim?.usage;
-                    return (
-                      <tr key={order.id}>
-                        <td>
-                          <b>{order.orderNumber}</b>
-                          <small>
-                            {new Date(order.createdAt).toLocaleDateString()}
-                          </small>
-                        </td>
-                        <td>
-                          {order.plan.countryCode} · {order.plan.name}
-                          <small>
-                            {order.plan.dataAllowance} · {order.plan.validityDays}
-                            {" "}days
-                          </small>
-                        </td>
-                        <td>
-                          <span
-                            className={`health-badge ${
-                              order.status === "COMPLETED" ? "healthy" : "warning"
-                            }`}
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Order</TableHead>
+                  <TableHead>Plan</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Traveler</TableHead>
+                  <TableHead>eSIM / Usage</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {profile.orders.map((order) => {
+                  const usage = order.esim?.usage;
+                  const used = usage?.usedMb;
+                  const total = usage?.totalMb;
+                  return (
+                    <TableRow key={order.id}>
+                      <TableCell>
+                        <p className="font-medium">{order.orderNumber}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(order.createdAt).toLocaleDateString()}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <span className="font-medium">{order.plan.countryCode}</span> ·{" "}
+                        {order.plan.name}
+                        <p className="text-xs text-muted-foreground">
+                          {order.plan.dataAllowance} · {order.plan.validityDays} days
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge label={order.status} />
+                      </TableCell>
+                      <TableCell>
+                        {order.traveler
+                          ? `${order.traveler.firstName} ${order.traveler.surname}`
+                          : "—"}
+                        {order.traveler?.mobile ? (
+                          <p className="text-xs text-muted-foreground">
+                            {order.traveler.mobile}
+                          </p>
+                        ) : null}
+                      </TableCell>
+                      <TableCell>
+                        {order.esim ? (
+                          <>
+                            <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
+                              {order.esim.iccid}
+                            </code>
+                            {usage ? (
+                              <div className="mt-1.5 space-y-1">
+                                <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
+                                  <div
+                                    className="h-full rounded-full bg-primary"
+                                    style={{ width: `${usageTone(used, total)}%` }}
+                                  />
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                  {used?.toLocaleString() ?? 0} / {total?.toLocaleString() ?? "?"} MB
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">
+                                Status: {order.esim.status}
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        NPR {order.totalAmountNpr.toLocaleString()}
+                      </TableCell>
+                      <TableCell>
+                        {order.esim?.usage ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busy === order.id}
+                            onClick={() => refreshUsage(order.id)}
                           >
-                            {order.status.replaceAll("_", " ")}
-                          </span>
-                        </td>
-                        <td>
-                          {order.traveler
-                            ? `${order.traveler.firstName} ${order.traveler.surname}`
-                            : "—"}
-                          {order.traveler?.mobile ? (
-                            <small>{order.traveler.mobile}</small>
-                          ) : null}
-                        </td>
-                        <td>
-                          {order.esim ? (
-                            <>
-                              <code>{order.esim.iccid}</code>
-                              {usage ? (
-                                <small>
-                                  {usage.usedMb.toLocaleString()} /{" "}
-                                  {usage.totalMb.toLocaleString()} MB ·{" "}
-                                  {new Date(
-                                    usage.lastCheckedAt,
-                                  ).toLocaleDateString()}
-                                </small>
-                              ) : (
-                                <small>Status: {order.esim.status}</small>
-                              )}
-                            </>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                        <td>NPR {order.totalAmountNpr.toLocaleString()}</td>
-                        <td>
-                          {order.esim?.usage ? (
-                            <button
-                              className="admin-action"
-                              disabled={busy === order.id}
-                              onClick={() => refreshUsage(order.id)}
-                            >
-                              {busy === order.id ? (
-                                <LoaderCircle className="spin" size={14} />
-                              ) : (
-                                <RefreshCcw size={14} />
-                              )}
-                              Refresh usage
-                            </button>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                            {busy === order.id ? (
+                              <Spinner />
+                            ) : (
+                              <RefreshCcw className="size-3.5" />
+                            )}
+                            Refresh usage
+                          </Button>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
-        </section>
+        </Panel>
       ) : null}
     </>
   );

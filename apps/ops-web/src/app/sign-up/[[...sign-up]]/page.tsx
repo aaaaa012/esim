@@ -2,10 +2,10 @@ import { SignUp } from "@clerk/nextjs";
 
 export default function BootstrapSignUpPage() {
   return (
-    <main className="grid min-h-screen place-items-center bg-slate-50 px-4 dark:bg-slate-950">
-      <div style={{ width: "100%", maxWidth: 480 }}>
+    <main className="grid min-h-screen place-items-center bg-muted/30 px-4">
+      <div className="w-full max-w-md">
         <SignUp routing="path" path="/sign-up" forceRedirectUrl="/" />
-        <p className="panel" style={{ marginTop: 12, fontSize: 13 }}>
+        <p className="mt-3 rounded-xl border bg-card p-4 text-sm text-muted-foreground">
           Staff accounts are created by your administrator. Registration here is
           only for the one-time initial Super Admin bootstrap; any other sign-up
           is treated as a customer identity and cannot access this console.

@@ -4,12 +4,24 @@ import { useEffect, useState } from "react";
 import {
   FlaskConical,
   History,
-  LoaderCircle,
   Pencil,
   RefreshCcw,
   Settings2,
   ShieldCheck,
 } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
+import { Panel } from "@/components/panel";
+import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Spinner } from "@/components/spinner";
+import { EmptyState } from "@/components/empty-state";
+import { toast } from "sonner";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = { "content-type": "application/json" };
 type Integration = {
@@ -22,11 +34,7 @@ type Integration = {
   secretValue: string;
   checkedAt: string;
 };
-type Plan = {
-  id: string;
-  countryCode: string;
-  name: string;
-};
+type Plan = { id: string; countryCode: string; name: string };
 type IntegrationLog = {
   id: string;
   operation: string;
@@ -38,6 +46,7 @@ type IntegrationLog = {
   errorMessage?: string;
   createdAt: string;
 };
+
 export default function IntegrationsClient() {
   const authFetch = useAuthenticatedFetch();
   const request = async <T,>(path: string, init?: RequestInit) => {
@@ -53,7 +62,6 @@ export default function IntegrationsClient() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [logs, setLogs] = useState<IntegrationLog[]>([]);
   const [busy, setBusy] = useState("");
-  const [notice, setNotice] = useState("");
   const [eligibilityPlanId, setEligibilityPlanId] = useState("");
   const [eligibilityMsisdn, setEligibilityMsisdn] = useState("");
   const [logsBusy, setLogsBusy] = useState(false);
@@ -68,20 +76,19 @@ export default function IntegrationsClient() {
         setPlans(p);
         setLogs(l);
       })
-      .catch((e) => setNotice(e.message));
+      .catch((e) => toast.error(e.message));
   useEffect(() => {
     void load();
   }, []);
   const test = async (item: Integration) => {
     setBusy(item.id);
     try {
-      const result = await request<{ message: string }>(
-        `/admin/integrations/${item.id}/test`,
-        { method: "POST" },
-      );
-      setNotice(result.message);
+      const result = await request<{ message: string }>(`/admin/integrations/${item.id}/test`, {
+        method: "POST",
+      });
+      toast.success(result.message);
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Test failed");
+      toast.error(e instanceof Error ? e.message : "Test failed");
     } finally {
       setBusy("");
     }
@@ -93,19 +100,16 @@ export default function IntegrationsClient() {
         `/admin/integrations/transatel/${action}`,
         { method: "POST" },
       );
-      setNotice(
-        JSON.stringify(result, null, 2).slice(0, 400) ||
-          `${action.replace("-", " ")} complete`,
-      );
+      toast.success(JSON.stringify(result, null, 2).slice(0, 400) || `${action.replace("-", " ")} complete`);
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : `${action} failed`);
+      toast.error(e instanceof Error ? e.message : `${action} failed`);
     } finally {
       setBusy("");
     }
   };
   const checkEligibility = async () => {
     if (!eligibilityPlanId || !eligibilityMsisdn) {
-      setNotice("Choose a plan and enter an MSISDN first");
+      toast.error("Choose a plan and enter an MSISDN first");
       return;
     }
     setBusy("transatel:eligibility");
@@ -117,9 +121,9 @@ export default function IntegrationsClient() {
           body: JSON.stringify({ planId: eligibilityPlanId, msisdn: eligibilityMsisdn }),
         },
       );
-      setNotice(JSON.stringify(result, null, 2).slice(0, 400) || "Eligibility check complete");
+      toast.success(JSON.stringify(result, null, 2).slice(0, 400) || "Eligibility check complete");
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Eligibility check failed");
+      toast.error(e instanceof Error ? e.message : "Eligibility check failed");
     } finally {
       setBusy("");
     }
@@ -129,155 +133,186 @@ export default function IntegrationsClient() {
     try {
       setLogs(await request<IntegrationLog[]>("/operations/integration-logs"));
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Could not load integration logs");
+      toast.error(e instanceof Error ? e.message : "Could not load integration logs");
     } finally {
       setLogsBusy(false);
     }
   };
+
   return (
     <>
-      <div className="admin-title">
-        <div>
-          <h1>Integration health</h1>
-          <p>
-            Live status is shown without exposing stored secrets. Credentials
-            are managed as environment/secret values.
-          </p>
-        </div>
-        <span>
-          <ShieldCheck size={16} />
-          Super Admin access
-        </span>
-      </div>
-      {notice && (
-        <button className="admin-notice" onClick={() => setNotice("")}>
-          {notice}
-          <span>×</span>
-        </button>
-      )}
+      <PageHeader
+        title="Integration health"
+        description="Live status is shown without exposing stored secrets. Credentials are managed as environment/secret values."
+        badge={
+          <Badge variant="success" className="gap-1.5">
+            <ShieldCheck className="size-3" />
+            Super Admin access
+          </Badge>
+        }
+      />
       {!integrations.length ? (
-        <div className="admin-loading">
-          <LoaderCircle className="spin" />
-          Loading secure configuration…
+        <div className="flex h-60 items-center justify-center">
+          <Spinner />
         </div>
       ) : (
-        <div className="integration-grid">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {integrations.map((item) => (
-            <article className="integration-card" key={item.id}>
-              <div className="integration-head">
-                <span className="integration-icon">
-                  <Settings2 size={18} />
-                </span>
-                <div>
-                  <h2>{item.name}</h2>
-                  <small>
-                    {item.category} · {item.provider}
-                  </small>
+            <div key={item.id} className="rounded-xl border bg-card p-5 shadow-card">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="flex size-10 items-center justify-center rounded-lg bg-success-soft text-success-foreground">
+                    <Settings2 className="size-5" />
+                  </span>
+                  <div>
+                    <h3 className="font-semibold">{item.name}</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {item.category} · {item.provider}
+                    </p>
+                  </div>
                 </div>
-                <b
-                  className={`health-badge ${item.status === "HEALTHY" ? "healthy" : "warning"}`}
-                >
-                  {item.status.replaceAll("_", " ")}
-                </b>
+                <StatusBadge label={item.status} tone={item.status === "HEALTHY" ? "success" : "warning"} />
               </div>
-              <div className="integration-enabled">
-                <span>{item.enabled ? "Enabled" : "Environment setup required"}</span>
-                <code>{item.secretValue}</code>
+              <Separator className="my-4" />
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">
+                  {item.enabled ? "Enabled" : "Environment setup required"}
+                </span>
+                <code className="rounded bg-muted px-2 py-0.5 text-xs">{item.secretValue}</code>
               </div>
-              <small>Last checked: {new Date(item.checkedAt).toLocaleString()}</small>
-              <div className="integration-actions">
-                <button
-                  onClick={() => setNotice(`${item.name}: set ${item.provider} credentials as environment/secret values, then restart the API.`)}
+              <p className="mt-2 text-xs text-muted-foreground">
+                Last checked: {new Date(item.checkedAt).toLocaleString()}
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    toast.info(
+                      `${item.name}: set ${item.provider} credentials as environment/secret values, then restart the API.`,
+                    )
+                  }
                 >
-                  <Pencil size={15} />
+                  <Pencil className="size-4" />
                   Credential guidance
-                </button>
-                <button onClick={() => test(item)} disabled={busy === item.id}>
-                  {busy === item.id ? <LoaderCircle className="spin" size={15} /> : <FlaskConical size={15} />}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => test(item)} disabled={busy === item.id}>
+                  {busy === item.id ? <Spinner /> : <FlaskConical className="size-4" />}
                   Test
-                </button>
+                </Button>
                 {item.id === "transatel" && (
                   <>
-                    <button onClick={() => transatelAction("sync-catalog")} disabled={busy === "transatel:sync-catalog"}>
-                      {busy === "transatel:sync-catalog" ? <LoaderCircle className="spin" size={15} /> : <RefreshCcw size={15} />}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => transatelAction("sync-catalog")}
+                      disabled={busy === "transatel:sync-catalog"}
+                    >
+                      {busy === "transatel:sync-catalog" ? <Spinner /> : <RefreshCcw className="size-4" />}
                       Sync catalog
-                    </button>
-                    <button onClick={() => transatelAction("ensure-webhook")} disabled={busy === "transatel:ensure-webhook"}>
-                      {busy === "transatel:ensure-webhook" ? <LoaderCircle className="spin" size={15} /> : <Pencil size={15} />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => transatelAction("ensure-webhook")}
+                      disabled={busy === "transatel:ensure-webhook"}
+                    >
+                      {busy === "transatel:ensure-webhook" ? <Spinner /> : <Pencil className="size-4" />}
                       Register webhook
-                    </button>
-                    <div className="eligibility-box">
-                      <b>Eligibility check</b>
-                      <div className="config-row">
-                        <select value={eligibilityPlanId} onChange={(e) => setEligibilityPlanId(e.target.value)}>
-                          <option value="">Select plan…</option>
-                          {plans.map((plan) => (
-                            <option key={plan.id} value={plan.id}>
-                              {plan.countryCode} · {plan.name}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          placeholder="MSISDN, e.g. 97798…"
-                          value={eligibilityMsisdn}
-                          onChange={(e) => setEligibilityMsisdn(e.target.value)}
-                        />
-                        <button className="admin-action" disabled={busy === "transatel:eligibility"} onClick={() => void checkEligibility()}>
-                          Check
-                        </button>
-                      </div>
-                    </div>
+                    </Button>
                   </>
                 )}
               </div>
-            </article>
+              {item.id === "transatel" && (
+                <div className="mt-4 space-y-3 rounded-lg border border-dashed p-4">
+                  <p className="text-sm font-medium">Eligibility check</p>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Select value={eligibilityPlanId} onValueChange={setEligibilityPlanId}>
+                      <SelectTrigger className="w-full sm:w-auto">
+                        <SelectValue placeholder="Select plan…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {plans.map((plan) => (
+                          <SelectItem key={plan.id} value={plan.id}>
+                            {plan.countryCode} · {plan.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      placeholder="MSISDN, e.g. 97798…"
+                      value={eligibilityMsisdn}
+                      onChange={(e) => setEligibilityMsisdn(e.target.value)}
+                      className="w-full sm:w-auto sm:flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      disabled={busy === "transatel:eligibility"}
+                      onClick={() => void checkEligibility()}
+                    >
+                      {busy === "transatel:eligibility" ? <Spinner /> : <Settings2 className="size-4" />}
+                      Check
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
-      <section className="config-panel" style={{ marginTop: 22 }}>
-        <div className="admin-section-head">
-          <div>
-            <h2>Integration call log</h2>
-            <p>Outbound integration requests and outcomes (most recent 200).</p>
-          </div>
-          <button className="admin-action" onClick={() => void refreshLogs()} disabled={logsBusy}>
-            {logsBusy ? <LoaderCircle className="spin" size={15} /> : <History size={15} />}
+      <Panel
+        className="mt-6"
+        title="Integration call log"
+        description="Outbound integration requests and outcomes (most recent 200)."
+        actions={
+          <Button variant="outline" size="sm" onClick={() => void refreshLogs()} disabled={logsBusy}>
+            {logsBusy ? <Spinner /> : <History className="size-4" />}
             Refresh
-          </button>
-        </div>
+          </Button>
+        }
+        noPadding
+      >
         {!logs.length ? (
-          <p className="catalog-empty">No integration calls recorded yet.</p>
+          <EmptyState title="No integration calls recorded yet" />
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Operation</th>
-                  <th>Endpoint</th>
-                  <th>Status</th>
-                  <th>Duration</th>
-                  <th>Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.map((log) => (
-                  <tr key={log.id}>
-                    <td><small>{new Date(log.createdAt).toLocaleString()}</small></td>
-                    <td>{log.operation}</td>
-                    <td><code>{log.method} {log.endpoint}</code></td>
-                    <td>
-                      <span className={`health-badge ${log.status === "SUCCESS" ? "healthy" : "warning"}`}>{log.status}</span>
-                    </td>
-                    <td>{log.durationMs != null ? `${log.durationMs}ms` : "—"}</td>
-                    <td><small>{log.errorMessage ?? log.errorCode ?? "—"}</small></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Time</TableHead>
+                <TableHead>Operation</TableHead>
+                <TableHead>Endpoint</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Duration</TableHead>
+                <TableHead>Error</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {logs.map((log) => (
+                <TableRow key={log.id}>
+                  <TableCell className="text-muted-foreground">
+                    {new Date(log.createdAt).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="font-medium">{log.operation}</TableCell>
+                  <TableCell>
+                    <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
+                      {log.method} {log.endpoint}
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge label={log.status} tone={log.status === "SUCCESS" ? "success" : "warning"} />
+                  </TableCell>
+                  <TableCell className="tabular-nums">
+                    {log.durationMs != null ? `${log.durationMs}ms` : "—"}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {log.errorMessage ?? log.errorCode ?? "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </Panel>
     </>
   );
 }

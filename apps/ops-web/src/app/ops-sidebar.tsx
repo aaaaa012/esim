@@ -12,24 +12,50 @@ import {
   PlugZap,
   Settings,
   Users,
+  Compass,
 } from "lucide-react";
 import { useAuthenticatedFetch } from "./authenticated-api-provider";
+import { cn } from "@/lib/utils";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-const baseItems = [
-  ["/", Gauge, "Dashboard"],
-  ["/work-queue", ClipboardCheck, "Work Queue"],
-  ["/orders", PackageSearch, "Orders"],
-  ["/customers", Users, "Customers"],
-  ["/inventory", Boxes, "Inventory"],
-  ["/notifications", Bell, "Notifications"],
-  ["/integration-events", PlugZap, "Integration Events"],
-  ["/audit", History, "Audit Log"],
-] as const;
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+};
+const baseItems: NavItem[] = [
+  { href: "/", label: "Dashboard", icon: Gauge },
+  { href: "/work-queue", label: "Work Queue", icon: ClipboardCheck },
+  { href: "/orders", label: "Orders", icon: PackageSearch },
+  { href: "/customers", label: "Customers", icon: Users },
+  { href: "/inventory", label: "Inventory", icon: Boxes },
+  { href: "/notifications", label: "Notifications", icon: Bell },
+  { href: "/integration-events", label: "Integration Events", icon: PlugZap },
+  { href: "/audit", label: "Audit Log", icon: History },
+];
 type Profile = {
   email: string;
   accountType: "OPERATIONS" | "SUPER_ADMIN";
   effectiveCapabilities: string[];
 };
+
+function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
+  const Icon = item.icon;
+  return (
+    <Link
+      href={item.href}
+      className={cn(
+        "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+        active
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+      )}
+    >
+      <Icon className="size-4 shrink-0" />
+      {item.label}
+    </Link>
+  );
+}
+
 export default function OpsSidebar() {
   const path = usePathname(),
     authFetch = useAuthenticatedFetch();
@@ -39,43 +65,52 @@ export default function OpsSidebar() {
       .then((response) => response.json())
       .then((value) => setProfile(value.data ?? null));
   }, [authFetch]);
+  const adminItem: NavItem = { href: "/admin", label: "Administration", icon: Settings };
   const items = profile?.effectiveCapabilities.includes("admin:portal")
-    ? [...baseItems, ["/admin", Settings, "Administration"] as const]
+    ? [...baseItems, adminItem]
     : baseItems;
   return (
-    <aside className="sidebar">
-      <div className="brand">
-        Visa Compass<small>OPERATIONS PORTAL</small>
+    <aside className="sticky top-0 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar">
+      <div className="border-b border-sidebar-border px-5 py-5">
+        <div className="flex items-center gap-2.5">
+          <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <Compass className="size-4" />
+          </span>
+          <div className="leading-tight">
+            <p className="font-semibold tracking-tight">Visa Compass</p>
+            <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+              Operations
+            </p>
+          </div>
+        </div>
       </div>
-      <nav className="menu">
-        {items.map(([href, Icon, label]) => (
-          <Link
-            key={href}
-            href={href}
-            className={
-              href === "/"
+      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+        <p className="px-3 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Menu
+        </p>
+        {items.map((item) => (
+          <SidebarLink
+            key={item.href}
+            item={item}
+            active={
+              item.href === "/"
                 ? path === "/"
-                  ? "active"
-                  : ""
-                : path.startsWith(href)
-                  ? "active"
-                  : ""
+                : path.startsWith(item.href)
             }
-          >
-            <Icon size={16} />
-            {label}
-          </Link>
+          />
         ))}
       </nav>
-      <div className="profile">
-        <span className="profile-avatar">
-          {profile?.email.slice(0, 1).toUpperCase() ?? "…"}
-        </span>
-        <div>
-          <b>{profile?.email ?? "Loading identity…"}</b>
-          <span>
-            {profile?.accountType.replace("_", " ") ?? "AUTHENTICATING"}
+      <div className="border-t border-sidebar-border p-3">
+        <div className="flex items-center gap-3 rounded-lg bg-secondary px-3 py-2.5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
+            {profile?.email.slice(0, 1).toUpperCase() ?? "…"}
           </span>
+          <div className="min-w-0 leading-tight">
+            <p className="truncate text-xs font-medium">{profile?.email ?? "Loading…"}</p>
+            <p className="text-[11px] text-muted-foreground">
+              {profile?.accountType.replace("_", " ") ?? "Authenticating"}
+            </p>
+          </div>
         </div>
       </div>
     </aside>

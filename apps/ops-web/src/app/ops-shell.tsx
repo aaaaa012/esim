@@ -2,9 +2,13 @@
 
 import { useClerk, UserButton, useAuth } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
-import { LogOut } from "lucide-react";
+import { ExternalLink, LogOut } from "lucide-react";
 import OpsSidebar from "./ops-sidebar";
 import ThemeToggle from "./theme-toggle";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/spinner";
+import { cn } from "@/lib/utils";
 
 export default function OpsShell({ children }: { children: React.ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -17,29 +21,53 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
   )
     return children;
   if (!isLoaded || !isSignedIn)
-    return <main className="empty-table">Securing operator session…</main>;
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <Spinner /> Securing operator session…
+        </div>
+      </div>
+    );
   return (
-    <div className="layout">
+    <div className="min-h-screen bg-muted/30 lg:flex">
       <OpsSidebar />
-      <div className="content-shell">
-        <header className="portal-topbar">
-          <b>Visa Compass Operations</b>
-          <div>
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-card px-4 sm:px-6">
+          <div className="flex items-center">
+            <span className="text-sm font-semibold tracking-tight sm:hidden">
+              Visa Compass
+            </span>
+            <span className="hidden text-sm font-semibold tracking-tight sm:block">
+              Visa Compass Operations
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
             <ThemeToggle />
-            <a href={process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL ?? "http://localhost:3000"}>← Customer Portal</a>
-            <button
-              type="button"
-              className="sign-out"
-              onClick={() => void signOut()}
-              title="Sign out of the operations console"
+            <Separator orientation="vertical" className="h-5" />
+            <a
+              href={process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL ?? "http://localhost:3000"}
+              className="hidden items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:inline-flex"
             >
-              <LogOut size={15} />
-              Sign out
-            </button>
-            <UserButton />
+              Customer Portal
+              <ExternalLink className="size-3.5" />
+            </a>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void signOut()}
+              className="text-muted-foreground"
+            >
+              <LogOut className="size-4" />
+              <span className="hidden sm:inline">Sign out</span>
+            </Button>
+            <div className="ml-1">
+              <UserButton />
+            </div>
           </div>
         </header>
-        <main className="main">{children}</main>
+        <main className={cn("flex-1 px-4 py-6 sm:px-6 lg:px-8")}>
+          <div className="mx-auto w-full max-w-7xl">{children}</div>
+        </main>
       </div>
     </div>
   );

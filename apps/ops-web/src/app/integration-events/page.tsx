@@ -1,2 +1,13 @@
 import IntegrationEventsClient from './integration-events-client';
-export default function IntegrationEvents(){return <><div className="top"><div><h1>Integration events</h1><p>Payment and connectivity callbacks, processing results and replay protection.</p></div></div><IntegrationEventsClient/></>}
+import { PageHeader } from '@/components/page-header';
+export default function IntegrationEvents() {
+  return (
+    <>
+      <PageHeader
+        title="Integration events"
+        description="Payment and connectivity callbacks, processing results and replay protection."
+      />
+      <IntegrationEventsClient />
+    </>
+  );
+}

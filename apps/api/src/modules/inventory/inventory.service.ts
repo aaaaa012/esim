@@ -42,9 +42,11 @@ export class InventoryService implements OnModuleInit {
     const existingSet = new Set(existing.map((item) => item.iccid));
     const toImport = rows.filter((row) => !existingSet.has(row.iccid));
     if (!toImport.length) return { imported: 0, skipped: rows.length, batch: null };
+    const submitter = submittedById ? await this.localUser(submittedById) : null;
+    const submittedByLocalId = submitter?.id;
     const batchReference = `MANUAL-${source ?? 'ops'}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     const batch = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.inventoryBatch.create({ data: { batchReference, totalProfiles: rows.length, importedCount: toImport.length, status: BatchStatus.PENDING, ...(submittedById ? { submittedById } : {}) } });
+      const created = await tx.inventoryBatch.create({ data: { batchReference, totalProfiles: rows.length, importedCount: toImport.length, status: BatchStatus.PENDING, ...(submittedByLocalId ? { submittedById: submittedByLocalId } : {}) } });
       await tx.esimInventory.createMany({
         data: toImport.map((row) => ({
           batchId: created.id,
@@ -73,6 +75,7 @@ export class InventoryService implements OnModuleInit {
       const msisdn = (row.msisdn ?? '').trim() || null;
       if (!/^\d{15,25}$/.test(iccid)) { rowErrors.push(`Line ${line}: invalid ICCID '${iccid || '(empty)'}'`); continue; }
       if (eid && !/^[A-Z0-9-]{16,80}$/.test(eid)) { rowErrors.push(`Line ${line}: invalid EID '${eid}'`); continue; }
+      if (msisdn && !/^\+?\d{6,15}$/.test(msisdn)) { rowErrors.push(`Line ${line}: invalid MSISDN '${msisdn}'`); continue; }
       candidates.push({ line, iccid, eid, msisdn });
     }
     const seen = new Set<string>();
@@ -93,9 +96,11 @@ export class InventoryService implements OnModuleInit {
       return true;
     });
     if (!toImport.length) return { imported: 0, skipped: rowErrors.length, errors: rowErrors.slice(0, 100), batch: null };
+    const submitter = submittedById ? await this.localUser(submittedById) : null;
+    const submittedByLocalId = submitter?.id;
     const batchReference = `MANUAL-CSV-${source?.trim() || 'ops'}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     const batch = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.inventoryBatch.create({ data: { batchReference, totalProfiles: toImport.length, importedCount: toImport.length, status: BatchStatus.PENDING, ...(submittedById ? { submittedById } : {}) } });
+      const created = await tx.inventoryBatch.create({ data: { batchReference, totalProfiles: toImport.length, importedCount: toImport.length, status: BatchStatus.PENDING, ...(submittedByLocalId ? { submittedById: submittedByLocalId } : {}) } });
       await tx.esimInventory.createMany({
         data: toImport.map((row) => ({
           batchId: created.id,
@@ -318,6 +323,68 @@ export class InventoryService implements OnModuleInit {
     const [groups, batches] = await Promise.all([this.prisma.esimInventory.groupBy({ by: ['status'], _count: { _all: true } }), this.prisma.inventoryBatch.findMany({ orderBy: { createdAt: 'desc' }, take: 20 })]);
     const count = (status: InventoryStatus) => groups.find((item) => item.status === status)?._count._all ?? 0;
     const available = count(InventoryStatus.AVAILABLE);
-    return { counts: { available, reserved: count(InventoryStatus.RESERVED), assigned: count(InventoryStatus.ASSIGNED), activated: count(InventoryStatus.ACTIVATED), pending: count(InventoryStatus.IMPORTED) }, lowStockThreshold: 10, lowStock: available <= 10, batches: batches.map((batch) => ({ id: batch.id, batchReference: batch.batchReference, totalProfiles: batch.totalProfiles, importedCount: batch.importedCount, failedCount: batch.failedCount, status: batch.status, rejectionReason: batch.rejectionReason, createdAt: batch.createdAt.toISOString() })) };
+    return { counts: { available, reserved: count(InventoryStatus.RESERVED), assigned: count(InventoryStatus.ASSIGNED), activated: count(InventoryStatus.ACTIVATED), pending: count(InventoryStatus.IMPORTED), expired: count(InventoryStatus.EXPIRED), terminated: count(InventoryStatus.TERMINATED) }, lowStockThreshold: 10, lowStock: available <= 10, batches: batches.map((batch) => ({ id: batch.id, batchReference: batch.batchReference, totalProfiles: batch.totalProfiles, importedCount: batch.importedCount, failedCount: batch.failedCount, status: batch.status, rejectionReason: batch.rejectionReason, createdAt: batch.createdAt.toISOString() })) };
+  }
+
+  /**
+   * Lists eSIM profiles with the overseas linkage back to the sale: which order
+   * reserved/owns each SIM, which customer bought it, and which package (plan)
+   * it belongs to. Available to OPERATIONS and SUPER_ADMIN.
+   */
+  async profiles(params?: { status?: InventoryStatus; limit?: number; offset?: number }) {
+    if (!this.prisma.enabled) return { total: 0, items: [] };
+    const limit = Math.min(params?.limit ?? 50, 200);
+    const skip = params?.offset ? Number(params.offset) : 0;
+    const statusFilter = params?.status ? { status: params.status } : undefined;
+    const [total, items] = await Promise.all([
+      this.prisma.esimInventory.count({ ...(statusFilter ? { where: statusFilter } : {}) }),
+      this.prisma.esimInventory.findMany({
+        ...(statusFilter ? { where: statusFilter } : {}),
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          batch: { select: { batchReference: true, status: true } },
+          assignedOrder: {
+            select: {
+              orderNumber: true,
+              status: true,
+              plan: { select: { name: true, dataAllowance: true, providerPlanId: true, country: { select: { isoCode: true, name: true } } } },
+              customer: { select: { email: true, customerCode: true } },
+            },
+          },
+        },
+      }),
+    ]);
+    return {
+      total,
+      items: items.map((profile) => ({
+        id: profile.id,
+        iccid: profile.iccid,
+        eid: profile.eid,
+        msisdn: profile.msisdn,
+        status: profile.status,
+        smDpAddress: profile.smDpAddress,
+        providerSubscriptionId: profile.providerSubscriptionId,
+        providerStatus: profile.providerStatus,
+        activatedAt: profile.activatedAt?.toISOString() ?? null,
+        expiresAt: profile.expiresAt?.toISOString() ?? null,
+        batchReference: profile.batch?.batchReference ?? null,
+        batchStatus: profile.batch?.status ?? null,
+        order: profile.assignedOrder
+          ? {
+              orderNumber: profile.assignedOrder.orderNumber,
+              orderStatus: profile.assignedOrder.status,
+              customerEmail: profile.assignedOrder.customer.email,
+              customerCode: profile.assignedOrder.customer.customerCode,
+              planName: profile.assignedOrder.plan.name,
+              planCountry: profile.assignedOrder.plan.country.name,
+              planCountryCode: profile.assignedOrder.plan.country.isoCode,
+              dataAllowance: profile.assignedOrder.plan.dataAllowance,
+            }
+          : null,
+      })),
+      page: { limit, skip },
+    };
   }
 }
