@@ -101,9 +101,10 @@ export class OrdersPersistenceService {
     if (!order.ownerId) {
       const suffix = createHash('sha256').update(order.id).digest('hex').slice(0, 12);
       const clerkId = `guest-${suffix}`;
-      const email = order.traveler?.email ?? `${suffix}@guest.visacompass.invalid`;
-      const user = await tx.user.upsert({ where: { clerkId }, update: { email }, create: { clerkId, email } });
-      const customer = await tx.customer.upsert({ where: { userId: user.id }, update: { email }, create: { userId: user.id, email, customerCode: `G-${suffix.toUpperCase()}` } });
+      const email = `${suffix}@guest.visacompass.invalid`;
+      const user = await tx.user.upsert({ where: { clerkId }, update: {}, create: { clerkId, email } });
+      const customerCode = `G-${suffix.toUpperCase()}`;
+      const customer = await tx.customer.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id, email, customerCode } });
       return { userId: user.id, customerId: customer.id };
     }
     const suffix = createHash('sha256').update(order.ownerId).digest('hex').slice(0, 12);

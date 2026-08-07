@@ -93,40 +93,90 @@ export default function CheckoutClient({
 }) {
   const authFetch = useAuthenticatedFetch();
   const { isLoaded, isSignedIn } = useAuth();
-  const [guestToken, setGuestToken] = useState(() => {
+  const readToken = () => {
+    let t = "";
     try {
-      return sessionStorage.getItem("vc_guest_token") ?? "";
+      t = sessionStorage.getItem("vc_guest_token") ?? "";
+    } catch {
+      t = "";
+    }
+    if (t) return t;
+    try {
+      return localStorage.getItem("vc_guest_token") ?? "";
     } catch {
       return "";
     }
-  });
-  const guest = isLoaded ? !isSignedIn : Boolean(guestToken);
+  };
+  const [guestToken, setGuestToken] = useState(readToken);
+  const guestTokenRef = useRef(guestToken);
+  guestTokenRef.current = guestToken;
+  const currentToken = () => guestTokenRef.current || readToken();
+  const storeGuestToken = (t: string) => {
+    guestTokenRef.current = t;
+    setGuestToken(t);
+    try {
+      sessionStorage.setItem("vc_guest_token", t);
+    } catch {
+      /* sessionStorage unavailable */
+    }
+    try {
+      localStorage.setItem("vc_guest_token", t);
+    } catch {
+      /* localStorage unavailable */
+    }
+  };
+  const [guest, setGuest] = useState<boolean>(() =>
+    readToken() ? true : isSignedIn === true ? false : true,
+  );
+  const guestRef = useRef(guest);
+  guestRef.current = guest;
+  useEffect(() => {
+    if (isLoaded && !guestRef.current) setGuest(isSignedIn === true ? false : true);
+  }, [isLoaded, isSignedIn]);
+
   const api = async <T,>(path: string, init?: RequestInit) => {
     let url = `${API}${path}`;
     let body = init?.body as BodyInit | null | undefined;
     const isGet = !init?.method || init.method.toUpperCase() === "GET";
-    if (guest) {
+    const currentGuest = guestRef.current;
+    const toGuest = () => {
+      const token = currentToken();
       url = url.replace(`${API}/customer/orders`, `${API}/guest/orders`);
       if (isGet) {
-        url += `${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(guestToken)}`;
+        url += `${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
       } else if (typeof body === "string") {
         const parsed = JSON.parse(body);
-        parsed.token = guestToken;
+        parsed.token = token;
         body = JSON.stringify(parsed);
       } else if (!body) {
-        body = JSON.stringify({ token: guestToken });
+        body = JSON.stringify({ token });
       }
-    }
-    const requestInit: RequestInit = {
-      ...init,
-      headers: { "content-type": "application/json", "x-idempotency-key": crypto.randomUUID(), ...init?.headers },
     };
-    if (body !== undefined) requestInit.body = body;
-    const response = await authFetch(url, requestInit);
-    const payload = (await response.json()) as Envelope<T>;
+    const makeInit = () => ({
+      ...init,
+      body,
+      headers: { "content-type": "application/json", "x-idempotency-key": crypto.randomUUID(), ...init?.headers },
+    });
+    if (currentGuest) toGuest();
+    let response = await authFetch(url, makeInit());
+    let payload = (await response.json()) as Envelope<T>;
+    if (
+      !response.ok &&
+      ["AUTHENTICATION_REQUIRED", "FORBIDDEN"].includes(payload.error?.code ?? "")
+    ) {
+      toGuest();
+      setGuest((g) => {
+        const next = g || true;
+        guestRef.current = next;
+        return next;
+      });
+      response = await authFetch(url, makeInit());
+      payload = (await response.json()) as Envelope<T>;
+    }
     if (!response.ok) throw new Error(apiErrorMessage(payload.error?.code ?? "", payload.error?.message ?? "Something went wrong"));
     return payload.data;
   };
+
   const [step, setStep] = useState(1),
     [compatible, setCompatible] = useState(false),
     [traveler, setTraveler] = useState(initial);
@@ -264,12 +314,7 @@ export default function CheckoutClient({
           }),
         });
         setOrder(created.order);
-        setGuestToken(created.token);
-        try {
-          sessionStorage.setItem("vc_guest_token", created.token);
-        } catch {
-          /* storage unavailable */
-        }
+        storeGuestToken(created.token);
         if (created.order.purchaseType === "TOPUP") {
           setStep(4);
           await initiate(created.order);
@@ -278,14 +323,24 @@ export default function CheckoutClient({
         }
         return;
       }
-      const value = await api<Order>("/customer/orders", {
+      const payload: { order: Order; token: string } | Order = await api<
+        { order: Order; token: string } | Order
+      >("/customer/orders", {
         method: "POST",
         body: JSON.stringify({ planId, compatibilityAccepted: true }),
       });
-      setOrder(value);
-      if (value.purchaseType === "TOPUP") {
+      const isGuestPayload =
+        typeof payload === "object" && payload !== null && "order" in payload && "token" in payload;
+      const finalOrder: Order = isGuestPayload
+        ? (payload as { order: Order }).order
+        : (payload as Order);
+      setOrder(finalOrder);
+      if (isGuestPayload) {
+        storeGuestToken((payload as { token: string }).token);
+      }
+      if (finalOrder.purchaseType === "TOPUP") {
         setStep(4);
-        await initiate(value);
+        await initiate(finalOrder);
       } else {
         setStep(2);
       }

@@ -27,7 +27,11 @@ type ClerkUserEvent = {
     }[];
     primary_email_address_id?: string;
   };
+  origin?: string;
 };
+
+const normalizeOrigin = (value: string | undefined) =>
+  (value ?? "").trim().toLowerCase().replace(/\/+$/, "");
 
 @Injectable()
 export class ClerkSyncService {
@@ -86,26 +90,25 @@ export class ClerkSyncService {
       },
       orderBy: { createdAt: "desc" },
     });
-    let accountType = invitation?.accountType ?? UserRoleName.CUSTOMER;
+    let accountType = invitation?.accountType ?? this.defaultAccountType(event.origin);
     let bootstrap = false;
-    if (accountType === UserRoleName.CUSTOMER) {
-      const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
-      const tokenConfigured = Boolean(process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim());
-      if (
-        bootstrapEmail &&
-        email === bootstrapEmail &&
-        (process.env.NODE_ENV !== "production" || tokenConfigured)
-      ) {
-        const activeSuperAdmins = await this.prisma.user.count({
-          where: {
-            accountType: UserRoleName.SUPER_ADMIN,
-            status: UserStatus.ACTIVE,
-          },
-        });
-        if (activeSuperAdmins === 0) {
-          accountType = UserRoleName.SUPER_ADMIN;
-          bootstrap = true;
-        }
+    const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+    const tokenConfigured = Boolean(process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim());
+    if (
+      accountType !== UserRoleName.SUPER_ADMIN &&
+      bootstrapEmail &&
+      email === bootstrapEmail &&
+      (process.env.NODE_ENV !== "production" || tokenConfigured)
+    ) {
+      const activeSuperAdmins = await this.prisma.user.count({
+        where: {
+          accountType: UserRoleName.SUPER_ADMIN,
+          status: UserStatus.ACTIVE,
+        },
+      });
+      if (activeSuperAdmins === 0) {
+        accountType = UserRoleName.SUPER_ADMIN;
+        bootstrap = true;
       }
     }
     await this.prisma.$transaction(async (tx) => {
@@ -165,10 +168,13 @@ export class ClerkSyncService {
     });
     return { persisted: true, accountType };
   }
-  async ensureUser(clerkId: string) {
+  async ensureUser(clerkId: string, origin = "") {
     if (!this.prisma.enabled) return;
     const existing = await this.prisma.user.findUnique({ where: { clerkId } });
-    if (existing) return;
+    if (existing) {
+      await this.promoteByPortal(existing, origin);
+      return;
+    }
     if (!process.env.CLERK_SECRET_KEY)
       throw new Error("Clerk server credentials are not configured");
     const clerk = createClerkClient({
@@ -184,6 +190,7 @@ export class ClerkSyncService {
     }));
     await this.sync({
       type: "user.created",
+      origin,
       data: {
         id: user.id,
         email_addresses: emailAddresses,
@@ -195,6 +202,52 @@ export class ClerkSyncService {
           : {}),
       },
     });
+  }
+
+  private async promoteByPortal(
+    existing: { id: string; accountType: UserRoleName; email: string; status: UserStatus },
+    origin: string,
+  ) {
+    if (existing.accountType !== UserRoleName.CUSTOMER) return;
+    if (this.defaultAccountType(origin) === UserRoleName.CUSTOMER) return;
+    if (existing.status !== UserStatus.ACTIVE) return;
+    await this.prisma.$transaction(async (tx) => {
+      const accountType = UserRoleName.OPERATIONS;
+      await tx.user.update({
+        where: { id: existing.id },
+        data: { accountType },
+      });
+      const role = await tx.role.upsert({
+        where: { name: accountType },
+        update: {},
+        create: { name: accountType },
+      });
+      await tx.userRole.upsert({
+        where: { userId_roleId: { userId: existing.id, roleId: role.id } },
+        update: {},
+        create: { userId: existing.id, roleId: role.id },
+      });
+      await tx.auditLog.create({
+        data: {
+          module: "IDENTITY",
+          entity: "User",
+          entityId: existing.id,
+          action: "PORTAL_PROMOTION",
+          performedById: existing.id,
+          newValue: { from: UserRoleName.CUSTOMER, to: accountType, origin },
+        },
+      });
+    });
+    this.logger.warn(`Promoted ${existing.email} to OPERATIONS from ops portal sign-in`);
+  }
+
+  private defaultAccountType(origin?: string): UserRoleName {
+    const originValue = normalizeOrigin(origin);
+    const opsBase = normalizeOrigin(
+      process.env.OPS_WEB_URL ?? "http://localhost:3001",
+    );
+    if (originValue === opsBase) return UserRoleName.OPERATIONS;
+    return UserRoleName.CUSTOMER;
   }
 
   private async handleUserDeleted(clerkId: string) {

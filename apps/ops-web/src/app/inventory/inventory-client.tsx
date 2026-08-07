@@ -38,6 +38,16 @@ type Overview = {
   batches: Batch[];
 };
 type ImportResult = { imported: number; skipped: number; errors?: string[]; batch: string | null };
+type Plan = {
+  id: string;
+  name: string;
+  countryCode: string;
+  countryName: string;
+  dataAllowance: string;
+  validityDays: number;
+  sellingPriceNpr: number;
+  status: 'DRAFT' | 'ACTIVE' | 'DISABLED' | 'ARCHIVED';
+};
 const fileToTabularContent = async (file: File): Promise<string> => {
   if (/\.xlsx?$/i.test(file.name)) {
     const buffer = await file.arrayBuffer();
@@ -63,7 +73,14 @@ export default function InventoryClient() {
     [csvErrors, setCsvErrors] = useState<string[]>([]),
     [isSuperAdmin, setIsSuperAdmin] = useState(false),
     [decision, setDecision] = useState(''),
-    csvInput = useRef<HTMLInputElement>(null);
+    csvInput = useRef<HTMLInputElement>(null),
+    [planFile, setPlanFile] = useState<File | null>(null),
+    [planBusy, setPlanBusy] = useState(false),
+    [planNotice, setPlanNotice] = useState(''),
+    [planErrors, setPlanErrors] = useState<string[]>([]),
+    [draftPlans, setDraftPlans] = useState<Plan[]>([]),
+    [planDecision, setPlanDecision] = useState(''),
+    planCsvInput = useRef<HTMLInputElement>(null);
   const load = () => {
     void authFetch(`${API}/operations/inventory`, { headers: {} })
       .then(async (r) => {
@@ -82,6 +99,7 @@ export default function InventoryClient() {
       })
       .catch(() => undefined);
     load();
+    loadPlans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const submit = async () => {
@@ -162,6 +180,65 @@ export default function InventoryClient() {
       setNotice(e instanceof Error ? e.message : 'Decision failed');
     } finally {
       setDecision('');
+    }
+  };
+  const loadPlans = () => {
+    void authFetch(`${API}/admin/plans`, { headers: {} })
+      .then(async (r) => {
+        const v = await r.json();
+        if (!r.ok) throw new Error(v.error?.message);
+        setDraftPlans((v.data?.plans ?? []).filter((p: Plan) => p.status === 'DRAFT'));
+      })
+      .catch((e) => setPlanNotice(e.message));
+  };
+  const submitPlans = async () => {
+    if (!planFile) { setPlanNotice('Choose a CSV or Excel file first'); return; }
+    setPlanBusy(true);
+    setPlanNotice('');
+    setPlanErrors([]);
+    try {
+      const content = await fileToTabularContent(planFile);
+      const r = await authFetch(`${API}/admin/plans/import-csv`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content, fileName: planFile.name }),
+      });
+      const v = await r.json();
+      if (!r.ok) throw new Error(v.error?.message);
+      const result = v.data as ImportResult;
+      setPlanNotice(
+        `Imported ${result.imported} package(s), skipped ${result.skipped} row(s). They are DRAFT; Super Admin approval makes them sellable.`,
+      );
+      setPlanErrors(result.errors ?? []);
+      if (result.imported > 0) {
+        setPlanFile(null);
+        if (planCsvInput.current) planCsvInput.current.value = '';
+      }
+      loadPlans();
+    } catch (e) {
+      setPlanNotice(e instanceof Error ? e.message : 'Package import failed');
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+  const decidePlan = async (plan: Plan, approve: boolean) => {
+    setPlanDecision(plan.id);
+    setPlanNotice('');
+    try {
+      const r = await authFetch(`${API}/admin/plans/${plan.id}/${approve ? 'approve' : 'reject'}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      });
+      const v = await r.json();
+      if (!r.ok) throw new Error(v.error?.message);
+      setPlanNotice(
+        approve ? `Package "${plan.name}" approved and now sellable` : `Package "${plan.name}" rejected`,
+      );
+      loadPlans();
+    } catch (e) {
+      setPlanNotice(e instanceof Error ? e.message : 'Package decision failed');
+    } finally {
+      setPlanDecision('');
     }
   };
   if (!data) return <div className="empty-table">{error || <><LoaderCircle className="spin" />Loading inventory…</>}</div>;
@@ -303,6 +380,94 @@ export default function InventoryClient() {
             </div>
           )}
         </div>
+      </section>
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Bulk upload packages (CSV / Excel)</h2>
+          <span>Columns: countryIso2, name, providerPlanId, dataAllowance, validityDays, costPrice, sellingPrice (currency, popular, status optional)</span>
+        </div>
+        <div className="import-form">
+          <input
+            ref={planCsvInput}
+            type="file"
+            accept=".csv,.xlsx,.xls,text/csv"
+            onChange={(e) => setPlanFile(e.target.files?.[0] ?? null)}
+          />
+          <div className="import-actions">
+            <button onClick={submitPlans} disabled={planBusy || !planFile}>
+              {planBusy ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />} Upload packages
+            </button>
+          </div>
+          {planNotice && <div className="import-notice">{planNotice}</div>}
+          {planErrors.length > 0 && (
+            <div className="csv-error-detail">
+              {planErrors.slice(0, 20).join(' · ')}
+              {planErrors.length > 20 && ` (+${planErrors.length - 20} more)`}
+            </div>
+          )}
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Packages awaiting approval</h2>
+          <span>Uploaded packages are DRAFT; Super Admin approval releases them for sale</span>
+        </div>
+        {draftPlans.length === 0 ? (
+          <p className="catalog-empty">No packages are awaiting approval.</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Package</th>
+                  <th>Country</th>
+                  <th>Data</th>
+                  <th>Price (NPR)</th>
+                  <th>Decision</th>
+                </tr>
+              </thead>
+              <tbody>
+                {draftPlans.map((plan) => (
+                  <tr key={plan.id}>
+                    <td>
+                      <b>{plan.name}</b>
+                      <small>{plan.id}</small>
+                    </td>
+                    <td>{plan.countryCode} · {plan.countryName}</td>
+                    <td>{plan.dataAllowance} / {plan.validityDays} days</td>
+                    <td>Rs {plan.sellingPriceNpr}</td>
+                    <td>
+                      {isSuperAdmin ? (
+                        <div className="import-actions">
+                          <button
+                            className="approve"
+                            disabled={planDecision === plan.id}
+                            onClick={() => void decidePlan(plan, true)}
+                          >
+                            {planDecision === plan.id ? <LoaderCircle className="spin" size={15} /> : <CheckCircle2 size={15} />}
+                            Approve
+                          </button>
+                          <button
+                            className="reject"
+                            disabled={planDecision === plan.id}
+                            onClick={() => void decidePlan(plan, false)}
+                          >
+                            <XCircle size={15} />
+                            Reject
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="health-badge warning">
+                          <ShieldCheck size={13} /> Awaiting Super Admin
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
       <section className="panel">
         <div className="panel-head">

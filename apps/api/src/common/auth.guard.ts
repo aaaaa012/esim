@@ -76,7 +76,7 @@ export class AuthGuard implements CanActivate {
         secretKey: process.env.CLERK_SECRET_KEY,
         authorizedParties: allowed,
       });
-      await this.clerkSync.ensureUser(payload.sub);
+      await this.clerkSync.ensureUser(payload.sub, String(payload.azp ?? ""));
       const user = await this.prisma.user.findUnique({
         where: { clerkId: payload.sub },
         include: { customer: true },

@@ -209,7 +209,16 @@ export class AdminService {
           coverage,
         };
         if (existing) {
-          await this.prisma.plan.update({ where: { id: existing.id }, data });
+          const effectiveStatus =
+            (row.status ?? "").trim().toUpperCase()
+              ? status
+              : existing.status === PlanStatus.ACTIVE
+                ? PlanStatus.ACTIVE
+                : status;
+          await this.prisma.plan.update({
+            where: { id: existing.id },
+            data: { ...data, status: effectiveStatus },
+          });
           updated++;
         } else {
           await this.prisma.plan.create({

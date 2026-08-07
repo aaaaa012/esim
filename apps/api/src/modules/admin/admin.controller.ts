@@ -24,10 +24,11 @@ import { AdminService } from "./admin.service.js";
 @AccountTypes(UserRoleName.SUPER_ADMIN)
 export class AdminController {
   constructor(private readonly admin: AdminService) {}
-  @Get("plans") plans() {
+  @Get("plans") @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  plans() {
     return this.admin.plans();
   }
-  @Post("plans/import-csv")
+  @Post("plans/import-csv") @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
   importPlansCsv(@Body() body: { csv?: string; content?: string; fileName?: string }, @Req() req: AuthenticatedRequest) {
     const content = typeof body.content === "string" && body.content.trim()
       ? body.content
