@@ -41,7 +41,7 @@ export class OrdersService implements OnModuleInit {
       const orders = this.list(ownerId);
       return { ownerId, orders: orders.map((order) => ({ id: order.id, orderNumber: order.orderNumber, status: order.status, plan: order.plan, createdAt: order.createdAt, totalAmountNpr: order.totalAmountNpr, usage: order.usage })) };
     }
-    const customer = await this.prisma.customer.findFirst({ where: { OR: [{ id: ownerId }, { user: { clerkId: ownerId } }] }, include: { user: true } });
+    const customer = await this.prisma.customer.findFirst({ where: { OR: this.customerMatch(ownerId) }, include: { user: true } });
     if (!customer) throw new NotFoundException('Customer not found');
     const orders = await this.prisma.order.findMany({ where: { customerId: customer.id }, include: { plan: { include: { country: true } }, traveler: true, customerEsim: { include: { inventory: true, subscriptions: true } } }, orderBy: { createdAt: 'desc' } });
     return {
@@ -74,6 +74,16 @@ export class OrdersService implements OnModuleInit {
     }
     return this.redact(order);
   }
+  /**
+   * Builds the Prisma `OR` filter for looking up a customer by either its
+   * internal UUID id or the Clerk identity id. Clerk ids are not UUIDs, so the
+   * `id` clause is only included when the value can legally cast to the UUID
+   * column, otherwise CockroachDB rejects the query with a cast error.
+   */
+  private customerMatch(ownerId: string) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return [{ user: { clerkId: ownerId } }, ...(uuid.test(ownerId) ? [{ id: ownerId }] : [])];
+  }
   private async priorOrderEmail(mobile: string): Promise<string | undefined> {
     const target = normalizeMsisdn(mobile);
     const prior = [...this.orders.values()].find((order) => order.status === OrderStatus.COMPLETED && order.traveler && normalizeMsisdn(order.traveler.mobile) === target);
@@ -86,7 +96,7 @@ export class OrdersService implements OnModuleInit {
   }
   private async customerEmail(ownerId: string): Promise<string | undefined> {
     if (!this.prisma.enabled) return [...this.orders.values()].find((order) => order.ownerId === ownerId && order.traveler)?.traveler?.email;
-    const customer = await this.prisma.customer.findFirst({ where: { OR: [{ id: ownerId }, { user: { clerkId: ownerId } }] }, select: { email: true } });
+    const customer = await this.prisma.customer.findFirst({ where: { OR: this.customerMatch(ownerId) }, select: { email: true } });
     return customer?.email ?? undefined;
   }
   private async resolvePurchaseType(ownerId: string | null, mobile?: string) {
@@ -107,7 +117,7 @@ export class OrdersService implements OnModuleInit {
     const anyCompleted = [...this.orders.values()].some((order) => order.ownerId === ownerId && order.status === OrderStatus.COMPLETED);
     if (anyCompleted) return true;
     if (!this.prisma.enabled) return false;
-    const customer = await this.prisma.customer.findFirst({ where: { OR: [{ id: ownerId }, { user: { clerkId: ownerId } }] }, select: { id: true } });
+    const customer = await this.prisma.customer.findFirst({ where: { OR: this.customerMatch(ownerId) }, select: { id: true } });
     if (!customer) return false;
     return Boolean(await this.prisma.order.findFirst({ where: { customerId: customer.id, status: 'COMPLETED' }, select: { id: true } }));
   }
