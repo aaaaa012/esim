@@ -20,7 +20,7 @@ export enum OrderStatus {
   REFUNDED = 'REFUNDED',
 }
 
-export enum PaymentProvider { KHALTI = 'KHALTI' }
+export enum PaymentProvider { KHALTI = 'KHALTI', ESEWA = 'ESEWA' }
 export enum PaymentStatus { INITIATED = 'INITIATED', PENDING = 'PENDING', COMPLETED = 'COMPLETED', FAILED = 'FAILED', CANCELLED = 'CANCELLED', REFUNDED = 'REFUNDED' }
 export enum DocumentType { PASSPORT = 'PASSPORT', TICKET = 'TICKET', VISA = 'VISA' }
 export enum DocumentStatus { PENDING = 'PENDING', APPROVED = 'APPROVED', REJECTED = 'REJECTED', REUPLOAD_REQUIRED = 'REUPLOAD_REQUIRED' }

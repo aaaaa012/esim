@@ -31,6 +31,7 @@ export class OrdersService implements OnModuleInit {
   private readonly orders = new Map<string, DemoOrder>();
   private readonly logger = new Logger(OrdersService.name);
   constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService, private readonly metrics?: MetricsService) {}
+  async refreshFromPersistence(orderId?: string) { for (const order of await this.persistence.load()) if (!orderId || order.id === orderId) this.orders.set(order.id, order); }
   async onModuleInit() { for (const order of await this.persistence.load()) this.orders.set(order.id, order); this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`); }
   list(ownerId?: string) { return [...this.orders.values()].filter((o) => !ownerId || o.ownerId === ownerId).map((order) => ownerId ? this.redact(order) : this.expand(order)); }
   audit() { return this.persistence.audit(); }

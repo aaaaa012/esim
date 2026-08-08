@@ -26,6 +26,7 @@ enum CustomerSource {
   WEBSITE
   PARTNER
   KHALTI
+  ESEWA
 }
 enum CustomerStatus {
   ACTIVE
@@ -58,6 +59,7 @@ enum OrderStatus {
 }
 enum PaymentProvider {
   KHALTI
+  ESEWA
 }
 enum PaymentStatus {
   INITIATED
@@ -110,6 +112,60 @@ enum SubscriptionStatus {
   ACTIVE
   EXPIRED
   TERMINATED
+  FAILED
+}
+enum PartnerStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+enum PartnerCredentialStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+enum PartnerPriceListStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+enum PartnerSettlementMethod {
+  PARTNER_ACCOUNT
+  HOSTED_PAYMENT
+}
+enum PartnerQuoteStatus {
+  ACTIVE
+  CONSUMED
+  EXPIRED
+  CANCELLED
+}
+enum PartnerLedgerEntryType {
+  CREDIT
+  DEBIT
+  RESERVATION
+  CAPTURE
+  RELEASE
+  REFUND
+  ADJUSTMENT
+}
+enum PartnerRefundStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+enum PartnerWebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  RETRYING
+  FAILED
+}
+enum PartnerIdempotencyStatus {
+  PROCESSING
+  COMPLETED
   FAILED
 }
 
@@ -169,6 +225,7 @@ model Customer {
   orders Order[]
   esims CustomerEsim[]
   consents CustomerConsent[]
+  partnerIdentity PartnerCustomer?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   deletedAt DateTime?
@@ -195,6 +252,9 @@ model Plan {
   popular Boolean @default(false)
   status PlanStatus @default(DRAFT)
   orders Order[]
+  partnerPrices PartnerPriceListItem[]
+  partnerQuotes PartnerQuote[]
+  updatedAt DateTime @updatedAt
   @@unique([countryId, providerPlanId])
 }
 model Order {
@@ -202,6 +262,16 @@ model Order {
   orderNumber String @unique
   customerId String @db.Uuid
   customer Customer @relation(fields: [customerId], references: [id])
+  partnerId String? @db.Uuid
+  partner Partner? @relation(fields: [partnerId], references: [id])
+  partnerCustomerId String? @db.Uuid
+  partnerCustomer PartnerCustomer? @relation(fields: [partnerCustomerId], references: [id])
+  externalOrderId String?
+  partnerQuoteId String? @unique @db.Uuid
+  partnerQuote PartnerQuote? @relation(fields: [partnerQuoteId], references: [id])
+  partnerSettlementMethod PartnerSettlementMethod?
+  partnerPaymentProvider PaymentProvider?
+  partnerMetadata Json?
   planId String @db.Uuid
   plan Plan @relation(fields: [planId], references: [id])
   orderType OrderType @default(INITIAL_PURCHASE)
@@ -224,9 +294,14 @@ model Order {
   events OrderEvent[]
   provisioningAttempts ProvisioningAttempt[]
   notifications Notification[]
+  partnerLedgerEntries PartnerLedgerEntry[]
+  partnerHostedSessions PartnerHostedCheckoutSession[]
+  partnerRefundRequests PartnerRefundRequest[]
+  partnerEvents PartnerEvent[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   version Int @default(0)
+  @@unique([partnerId, externalOrderId])
   @@index([customerId, status])
   @@index([status, createdAt])
 }
@@ -246,11 +321,12 @@ model Traveler {
   email String
   mobile String
   passportNumberEncrypted String
-  passportNumberHash String @unique
+  passportNumberHash String
   passportExpiryEncrypted String
   pointOfSaleCode String?
   countryOfPurchase String @default("NP")
   subscriberLanguage String @default("en")
+  @@index([passportNumberHash])
 }
 model TravelerDocument {
   id String @id @default(uuid()) @db.Uuid
@@ -346,6 +422,242 @@ model Subscription {
   usedMb Int @default(0)
   totalMb Int @default(0)
   usageLastCheckedAt DateTime?
+}
+model Partner {
+  id String @id @default(uuid()) @db.Uuid
+  code String @unique
+  name String
+  status PartnerStatus @default(PENDING)
+  allowedSettlementMethods Json
+  rateLimitPerMinute Int @default(120)
+  redirectAllowlist Json
+  credentials PartnerCredential[]
+  customers PartnerCustomer[]
+  priceLists PartnerPriceList[]
+  quotes PartnerQuote[]
+  orders Order[]
+  account PartnerAccount?
+  ledgerEntries PartnerLedgerEntry[]
+  webhooks PartnerWebhookEndpoint[]
+  events PartnerEvent[]
+  idempotencyRecords PartnerIdempotencyRecord[]
+  refundRequests PartnerRefundRequest[]
+  hostedSessions PartnerHostedCheckoutSession[]
+  rateBuckets PartnerRateBucket[]
+  documentUploadIntents PartnerDocumentUploadIntent[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model PartnerDocumentUploadIntent {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  externalOrderId String
+  type DocumentType
+  fileName String
+  contentType String
+  declaredSizeBytes Int
+  privateAssetId String @unique
+  expiresAt DateTime
+  consumedAt DateTime?
+  consumedOrderId String? @db.Uuid
+  createdAt DateTime @default(now())
+  @@index([partnerId, externalOrderId, expiresAt])
+  @@index([partnerId, consumedAt])
+}
+model PartnerCredential {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  name String
+  keyPrefix String @unique
+  secretHash String
+  scopes Json
+  status PartnerCredentialStatus @default(ACTIVE)
+  expiresAt DateTime?
+  lastUsedAt DateTime?
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([partnerId, status])
+}
+model PartnerCustomer {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  externalCustomerId String
+  customerId String @unique @db.Uuid
+  customer Customer @relation(fields: [customerId], references: [id])
+  orders Order[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([partnerId, externalCustomerId])
+}
+model PartnerPriceList {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  name String
+  version Int
+  currency String @default("NPR")
+  status PartnerPriceListStatus @default(DRAFT)
+  effectiveFrom DateTime
+  effectiveTo DateTime?
+  items PartnerPriceListItem[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([partnerId, version])
+  @@index([partnerId, status, effectiveFrom])
+}
+model PartnerPriceListItem {
+  id String @id @default(uuid()) @db.Uuid
+  priceListId String @db.Uuid
+  priceList PartnerPriceList @relation(fields: [priceListId], references: [id])
+  planId String @db.Uuid
+  plan Plan @relation(fields: [planId], references: [id])
+  wholesaleAmountPaisa Int
+  retailAmountPaisa Int
+  @@unique([priceListId, planId])
+}
+model PartnerQuote {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  planId String @db.Uuid
+  plan Plan @relation(fields: [planId], references: [id])
+  priceListId String? @db.Uuid
+  settlementMethod PartnerSettlementMethod
+  wholesaleAmountPaisa Int
+  retailAmountPaisa Int
+  currency String @default("NPR")
+  pricingSnapshot Json
+  status PartnerQuoteStatus @default(ACTIVE)
+  expiresAt DateTime
+  consumedAt DateTime?
+  order Order?
+  createdAt DateTime @default(now())
+  @@index([partnerId, status, expiresAt])
+}
+model PartnerAccount {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @unique @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  balancePaisa Int @default(0)
+  creditLimitPaisa Int @default(0)
+  reservedPaisa Int @default(0)
+  version Int @default(0)
+  updatedAt DateTime @updatedAt
+}
+model PartnerLedgerEntry {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  orderId String? @db.Uuid
+  order Order? @relation(fields: [orderId], references: [id])
+  type PartnerLedgerEntryType
+  amountPaisa Int
+  balanceAfterPaisa Int
+  reference String @unique
+  metadata Json?
+  createdAt DateTime @default(now())
+  @@index([partnerId, createdAt])
+}
+model PartnerHostedCheckoutSession {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  orderId String @db.Uuid
+  order Order @relation(fields: [orderId], references: [id])
+  tokenHash String @unique
+  redirectUrl String
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([partnerId, expiresAt])
+}
+model PartnerRefundRequest {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  orderId String @db.Uuid
+  order Order @relation(fields: [orderId], references: [id])
+  amountPaisa Int
+  reason String
+  status PartnerRefundStatus @default(REQUESTED)
+  decidedById String? @db.Uuid
+  decidedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([partnerId, status, createdAt])
+}
+model PartnerWebhookEndpoint {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  url String
+  secretEncrypted String
+  eventTypes Json
+  active Boolean @default(true)
+  deliveries PartnerWebhookDelivery[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model PartnerEvent {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  orderId String? @db.Uuid
+  order Order? @relation(fields: [orderId], references: [id])
+  type String
+  version String @default("1.0")
+  resourceId String
+  correlationId String
+  payload Json
+  occurredAt DateTime @default(now())
+  deliveries PartnerWebhookDelivery[]
+  @@index([partnerId, occurredAt])
+}
+model PartnerWebhookDelivery {
+  id String @id @default(uuid()) @db.Uuid
+  eventId String @db.Uuid
+  event PartnerEvent @relation(fields: [eventId], references: [id])
+  endpointId String @db.Uuid
+  endpoint PartnerWebhookEndpoint @relation(fields: [endpointId], references: [id])
+  status PartnerWebhookDeliveryStatus @default(PENDING)
+  attempt Int @default(0)
+  responseStatus Int?
+  latencyMs Int?
+  nextRetryAt DateTime?
+  errorMessage String?
+  deliveredAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([eventId, endpointId])
+  @@index([status, nextRetryAt])
+}
+model PartnerIdempotencyRecord {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  method String
+  route String
+  key String
+  requestHash String
+  status PartnerIdempotencyStatus @default(PROCESSING)
+  responseStatus Int?
+  response Json?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([partnerId, method, route, key])
+  @@index([expiresAt])
+}
+model PartnerRateBucket {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  partner Partner @relation(fields: [partnerId], references: [id])
+  windowStart DateTime
+  count Int @default(0)
+  @@unique([partnerId, windowStart])
 }
 model OrderReview {
   id String @id @default(uuid()) @db.Uuid
