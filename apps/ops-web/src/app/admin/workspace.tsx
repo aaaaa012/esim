@@ -2,9 +2,11 @@
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { useEffect, useState } from "react";
 import {
+  Building2,
   CheckCircle2,
   FlaskConical,
   History,
+  KeyRound,
   Pencil,
   RefreshCcw,
   Save,
@@ -91,6 +93,20 @@ type IntegrationLog = {
   errorMessage?: string;
   createdAt: string;
 };
+type Partner = {
+  id: string;
+  code: string;
+  name: string;
+  status: "PENDING" | "ACTIVE" | "SUSPENDED" | "DISABLED";
+  rateLimitPerMinute: number;
+  account?: {
+    balancePaisa: number;
+    creditLimitPaisa: number;
+    reservedPaisa: number;
+  } | null;
+  credentials: Array<{ id: string; keyPrefix: string; status: string }>;
+  _count: { orders: number; quotes: number };
+};
 
 const fileToTabularContent = async (file: File): Promise<string> => {
   if (/\.xlsx?$/i.test(file.name)) {
@@ -121,6 +137,13 @@ export default function AdminWorkspace() {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteType, setInviteType] = useState<"OPERATIONS" | "SUPER_ADMIN">("OPERATIONS");
+  const [partners, setPartners] = useState<Partner[]>([]);
+  const [partnerCode, setPartnerCode] = useState("");
+  const [partnerName, setPartnerName] = useState("");
+  const [issuedPartnerKey, setIssuedPartnerKey] = useState<{
+    partnerName: string;
+    apiKey: string;
+  } | null>(null);
   const [busy, setBusy] = useState("");
   const [planCsvFile, setPlanCsvFile] = useState<File | null>(null);
   const [planCsvBusy, setPlanCsvBusy] = useState(false);
@@ -135,12 +158,14 @@ export default function AdminWorkspace() {
       request<Integration[]>("/admin/integrations"),
       request<User[]>("/admin/users"),
       request<Invitation[]>("/admin/staff-invitations"),
+      request<Partner[]>("/admin/partners"),
     ])
-      .then(([p, i, u, invitationsValue]) => {
+      .then(([p, i, u, invitationsValue, partnerValues]) => {
         setPlans(p);
         setIntegrations(i);
         setUsers(u);
         setInvitations(invitationsValue);
+        setPartners(partnerValues);
       })
       .catch((e) => toast.error(e.message));
   useEffect(() => {
@@ -288,6 +313,94 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
+  const createPartner = async () => {
+    setBusy("partner-create");
+    try {
+      await request("/admin/partners", {
+        method: "POST",
+        body: JSON.stringify({
+          code: partnerCode,
+          name: partnerName,
+          settlementMethods: ["PARTNER_ACCOUNT", "HOSTED_PAYMENT"],
+          redirectAllowlist: [],
+        }),
+      });
+      setPartnerCode("");
+      setPartnerName("");
+      await load();
+      toast.success("Partner created in pending state");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Partner creation failed");
+    } finally {
+      setBusy("");
+    }
+  };
+  const changePartnerStatus = async (partner: Partner, status: Partner["status"]) => {
+    setBusy(partner.id);
+    try {
+      await request(`/admin/partners/${partner.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      await load();
+      toast.success(`${partner.name} is now ${status.toLowerCase()}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Partner update failed");
+    } finally {
+      setBusy("");
+    }
+  };
+  const issuePartnerKey = async (partner: Partner) => {
+    setBusy(`key-${partner.id}`);
+    try {
+      const result = await request<{ apiKey: string }>(`/admin/partners/${partner.id}/credentials`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: `Key ${partner.credentials.length + 1}`,
+          scopes: [
+            "catalog:read",
+            "quotes:write",
+            "orders:read",
+            "orders:write",
+            "documents:write",
+            "payments:write",
+            "refunds:write",
+            "usage:read",
+          ],
+        }),
+      });
+      setIssuedPartnerKey({ partnerName: partner.name, apiKey: result.apiKey });
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(result.apiKey);
+        copied = true;
+      } catch {
+        // The one-time key remains visible below when clipboard access is denied.
+      }
+      await load();
+      toast.success(
+        copied
+          ? "New API key issued and copied. Verify the visible value before use."
+          : "New API key issued. Copy the visible value before dismissing it.",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Credential creation failed");
+    } finally {
+      setBusy("");
+    }
+  };
+  const revokePartnerKey = async (partner: Partner, credentialId: string) => {
+    setBusy(`revoke-${credentialId}`);
+    try {
+      await request(`/admin/partners/${partner.id}/credentials/${credentialId}`, { method: "DELETE" });
+      await load();
+      toast.success(`Credential revoked for ${partner.name}.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Credential revocation failed");
+    } finally {
+      setBusy("");
+    }
+  };
   const checkEligibility = async () => {
     if (!eligibilityPlanId || !eligibilityMsisdn) {
       toast.error("Choose a plan and enter an MSISDN first");
@@ -340,7 +453,7 @@ export default function AdminWorkspace() {
       />
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="mb-6 flex h-10 w-full justify-start overflow-x-auto rounded-lg bg-transparent p-0">
-          {["Plans", "Pricing", "Integrations", "Document Rules", "Inventory Settings", "Users", "System Config"].map((item) => (
+          {["Plans", "Pricing", "Integrations", "Document Rules", "Inventory Settings", "Users", "Partners", "System Config"].map((item) => (
             <TabsTrigger
               key={item}
               value={item}
@@ -804,6 +917,163 @@ export default function AdminWorkspace() {
                           {busy === user.id ? <Spinner /> : <Save className="size-4" />}
                           Apply
                         </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Panel>
+          </TabsContent>
+        )}
+
+        {tab === "Partners" && (
+          <TabsContent value="Partners" className="mt-0">
+            <Panel
+              title="Agency and reseller partners"
+              description="Approve tenants, rotate scoped credentials, and monitor commercial exposure."
+              actions={
+                <span className="flex size-9 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+                  <Building2 className="size-4" />
+                </span>
+              }
+              noPadding
+            >
+              <div className="flex flex-col gap-3 border-b p-6 sm:flex-row sm:items-end">
+                <div className="grid w-full gap-3 sm:grid-cols-[1fr_1fr_auto]">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Partner code</Label>
+                    <Input
+                      placeholder="agency-code"
+                      value={partnerCode}
+                      onChange={(event) => setPartnerCode(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Legal/display name</Label>
+                    <Input
+                      placeholder="Agency name"
+                      value={partnerName}
+                      onChange={(event) => setPartnerName(event.target.value)}
+                    />
+                  </div>
+                  <Button
+                    className="self-end"
+                    disabled={!partnerCode || !partnerName || busy === "partner-create"}
+                    onClick={() => void createPartner()}
+                  >
+                    {busy === "partner-create" ? <Spinner className="text-primary-foreground" /> : <Building2 className="size-4" />}
+                    Create partner
+                  </Button>
+                </div>
+              </div>
+              {issuedPartnerKey && (
+                <section className="m-6 space-y-3 rounded-lg border border-dashed p-4" role="status">
+                  <div>
+                    <p className="text-sm font-medium">New key for {issuedPartnerKey.partnerName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      This secret is shown once. Store it securely, test it, then dismiss this message.
+                    </p>
+                  </div>
+                  <code className="block break-all rounded-lg bg-muted px-3 py-2 text-xs">
+                    {issuedPartnerKey.apiKey}
+                  </code>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(issuedPartnerKey.apiKey);
+                          toast.success("The displayed API key was copied.");
+                        } catch {
+                          toast.error("Clipboard permission was denied. Select and copy the displayed key manually.");
+                        }
+                      }}
+                    >
+                      Copy key
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setIssuedPartnerKey(null)}>
+                      Dismiss
+                    </Button>
+                  </div>
+                </section>
+              )}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Partner</TableHead>
+                    <TableHead>Settlement account</TableHead>
+                    <TableHead>Activity</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Credentials</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {partners.map((partner) => (
+                    <TableRow key={partner.id}>
+                      <TableCell>
+                        <p className="font-medium">{partner.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {partner.code} · {partner.rateLimitPerMinute}/min
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <p className="font-medium tabular-nums">
+                          NPR {((partner.account?.balancePaisa ?? 0) / 100).toLocaleString()}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Reserved NPR {((partner.account?.reservedPaisa ?? 0) / 100).toLocaleString()} · credit NPR{" "}
+                          {((partner.account?.creditLimitPaisa ?? 0) / 100).toLocaleString()}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <p>{partner._count.orders} orders</p>
+                        <p className="text-xs text-muted-foreground">{partner._count.quotes} quotes</p>
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          disabled={busy === partner.id}
+                          value={partner.status}
+                          onValueChange={(value) => void changePartnerStatus(partner, value as Partner["status"])}
+                        >
+                          <SelectTrigger className="w-32">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="PENDING">PENDING</SelectItem>
+                            <SelectItem value="ACTIVE">ACTIVE</SelectItem>
+                            <SelectItem value="SUSPENDED">SUSPENDED</SelectItem>
+                            <SelectItem value="DISABLED">DISABLED</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col items-start gap-1.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy === `key-${partner.id}`}
+                            onClick={() => void issuePartnerKey(partner)}
+                          >
+                            {busy === `key-${partner.id}` ? <Spinner /> : <KeyRound className="size-4" />}
+                            Issue key
+                          </Button>
+                          <span className="text-xs text-muted-foreground">
+                            {partner.credentials.filter((creditKey) => creditKey.status === "ACTIVE").length} active
+                          </span>
+                          {partner.credentials
+                            .filter((key) => key.status === "ACTIVE")
+                            .map((key) => (
+                              <button
+                                key={key.id}
+                                className="text-xs text-destructive underline-offset-2 hover:underline disabled:opacity-50"
+                                disabled={busy === `revoke-${key.id}`}
+                                onClick={() => void revokePartnerKey(partner, key.id)}
+                              >
+                                Revoke {key.keyPrefix}
+                              </button>
+                            ))}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
