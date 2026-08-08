@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Globe2, MapPin } from "lucide-react";
+import { AlertTriangle, CheckCircle2, MapPin } from "lucide-react";
+import CountryPicker, { flagEmoji } from "./country-picker";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -20,10 +21,6 @@ type Plan = {
 type Country = { code: string; name: string };
 
 type Envelope<T> = { data: T; meta: { correlationId: string; timestamp: string } };
-
-function flagEmoji(countryCode: string) {
-  return countryCode.toUpperCase().replace(/./g, (char) => String.fromCodePoint(127397 + char.charCodeAt(0)));
-}
 
 function npr(amount: number) {
   return `NPR ${amount.toLocaleString("en-NP")}`;
@@ -106,22 +103,7 @@ export default function CatalogPlans() {
   return (
     <>
       <div className="destination-picker">
-        <label htmlFor="destination-select">
-          <Globe2 size={16} /> Choose your destination
-        </label>
-        <select
-          id="destination-select"
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-          disabled={!plans}
-        >
-          <option value="">Select a destination…</option>
-          {countryList.map(({ code, name }) => (
-            <option key={code} value={code}>
-              {flagEmoji(code)} {name}
-            </option>
-          ))}
-        </select>
+        <CountryPicker countries={countryList} value={selected} onChange={setSelected} disabled={!plans} />
         {topUpMobile && selected && (
           <small className="topup-context">
             Recharging {selected ? countryList.find((country) => country.code === selected)?.name ?? selected : ""} for

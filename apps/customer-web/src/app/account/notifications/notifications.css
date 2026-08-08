@@ -1,1 +1,77 @@
-.customer-notification-list{display:grid;gap:10px}.customer-notification-list article{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:13px;padding:16px 18px;background:white;border:1px solid var(--line);border-radius:14px}.customer-notification-list span{display:grid;gap:4px}.customer-notification-list small{color:var(--muted)}.customer-notification-list em{font-style:normal;font-size:10px;font-weight:800;color:var(--blue)}.customer-notification-list a{font-size:11px;font-weight:750}@media(max-width:650px){.customer-notification-list article{grid-template-columns:auto 1fr}.customer-notification-list em,.customer-notification-list a{grid-column:2}}
+.customer-notification-list {
+  display: grid;
+  gap: 12px;
+}
+
+.customer-notification-list article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.customer-notification-list article:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.customer-notification-list article > svg {
+  color: var(--primary);
+}
+
+.customer-notification-list span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.customer-notification-list b {
+  font-size: 14px;
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.customer-notification-list small {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.customer-notification-list em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 5px 11px;
+}
+
+.customer-notification-list a {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.customer-notification-list a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 650px) {
+  .customer-notification-list article {
+    grid-template-columns: auto 1fr;
+  }
+
+  .customer-notification-list em,
+  .customer-notification-list a {
+    grid-column: 2;
+  }
+}

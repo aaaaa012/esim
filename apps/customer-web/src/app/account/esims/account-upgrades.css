@@ -1,1 +1,77 @@
-.customer-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-bottom:18px}.customer-stats button{display:flex;align-items:center;gap:14px;text-align:left;padding:17px;border:1px solid var(--line);border-radius:16px;background:white;color:var(--blue);cursor:pointer}.customer-stats span{display:grid;color:var(--muted);font-size:11px}.customer-stats b{font-size:22px;color:var(--navy)}.customer-filters{display:flex;gap:7px;margin:8px 0 18px}.customer-filters button{border:1px solid var(--line);border-radius:99px;padding:7px 12px;background:white;color:var(--muted);font-size:11px;font-weight:750;cursor:pointer}.customer-filters button.selected{background:var(--navy);border-color:var(--navy);color:white}.account-empty.compact{min-height:140px}.nav-active{color:var(--blue)!important;border-color:#67e8f9!important}@media(max-width:700px){.customer-stats{grid-template-columns:1fr}}
+.customer-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.customer-stats button {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--primary);
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.customer-stats button:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.customer-stats span {
+  display: grid;
+  gap: 2px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.customer-stats b {
+  font-size: 24px;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.customer-filters {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0 20px;
+  flex-wrap: wrap;
+}
+
+.customer-filters button {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 8px 15px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.customer-filters button:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.customer-filters button.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+
+@media (max-width: 700px) {
+  .customer-stats {
+    grid-template-columns: 1fr;
+  }
+}

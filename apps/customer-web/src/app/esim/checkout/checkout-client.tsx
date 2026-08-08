@@ -4,16 +4,8 @@ import { useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  Check,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  FileCheck2,
-  LoaderCircle,
-  LockKeyhole,
-  ShieldCheck,
-} from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, ShieldCheck, Signal } from "lucide-react";
+import { flagEmoji } from "../../country-picker";
 import {
   DocumentType,
   PaymentProvider,
@@ -154,7 +146,7 @@ export default function CheckoutClient({
     };
     const makeInit = () => ({
       ...init,
-      body,
+      ...(body !== undefined ? { body } : {}),
       headers: { "content-type": "application/json", "x-idempotency-key": crypto.randomUUID(), ...init?.headers },
     });
     if (currentGuest) toGuest();
@@ -181,6 +173,22 @@ export default function CheckoutClient({
     [compatible, setCompatible] = useState(false),
     [traveler, setTraveler] = useState(initial);
   const isTopUpIntent = Boolean(mobile) && !orderId;
+  const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
+  useEffect(() => {
+    if (!planId || orderId) return;
+    let cancelled = false;
+    fetch(`${API}/public/plans`)
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("catalog unavailable"))))
+      .then((data: Envelope<PlanSummary[]>) => {
+        if (cancelled) return;
+        const plan = data.data.find((item) => item.id === planId);
+        if (plan) setPreviewPlan(plan);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [planId, orderId]);
   const [files, setFiles] = useState<{
     passport: File | undefined;
     ticket: File | undefined;
@@ -188,6 +196,7 @@ export default function CheckoutClient({
   }>({ passport: undefined, ticket: undefined, visa: undefined });
   const [order, setOrder] = useState<Order | null>(null),
     [payment, setPayment] = useState<Payment | null>(null);
+  const summaryPlan = order?.plan ?? previewPlan;
   const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
   const [provider, setProvider] = useState<PaymentProvider>(
       PaymentProvider.KHALTI,
@@ -798,23 +807,31 @@ export default function CheckoutClient({
             )}
           </section>
           <aside className="order-summary">
-            <span>Order summary</span>
-            <h3>{order?.plan.name ?? "Selected eSIM plan"}</h3>
+            <div className="summary-plan">
+              <span className="summary-flag">
+                {summaryPlan ? flagEmoji(summaryPlan.countryCode) : <Signal size={22} />}
+              </span>
+              <span className="summary-plan-info">
+                <span className="summary-label">Order summary</span>
+                <b>{summaryPlan?.name ?? "Selected eSIM plan"}</b>
+                <small>
+                  {summaryPlan ? `${summaryPlan.countryCode} · ${summaryPlan.dataAllowance}` : "Loaded securely"}
+                </small>
+              </span>
+            </div>
             <div>
               <small>Destination</small>
-              <b>{order?.plan.countryCode ?? "—"}</b>
+              <b>{summaryPlan?.countryCode ?? "—"}</b>
             </div>
             <div>
               <small>Data & validity</small>
               <b>
-                {order
-                  ? `${order.plan.dataAllowance} · ${order.plan.validityDays} days`
-                  : "Loaded securely"}
+                {summaryPlan ? `${summaryPlan.dataAllowance} · ${summaryPlan.validityDays} days` : "Loaded securely"}
               </b>
             </div>
             <div className="summary-total">
               <small>Total</small>
-              <b>NPR {(order?.totalAmountNpr ?? 0).toLocaleString()}</b>
+              <b>NPR {(order?.totalAmountNpr ?? summaryPlan?.sellingPriceNpr ?? 0).toLocaleString()}</b>
             </div>
             <p>
               <LockKeyhole size={14} /> Price is frozen when your order is

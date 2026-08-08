@@ -1,0 +1,51 @@
+.compatibility-page {
+  padding: 84px 0 110px;
+  background: var(--hero-bg);
+}
+
+.compatibility-shell {
+  max-width: 720px;
+  margin: auto;
+}
+
+.compatibility-page h1 {
+  font-size: clamp(34px, 4.6vw, 48px);
+  letter-spacing: -0.035em;
+  margin: 18px 0 12px;
+  color: var(--text);
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.compatibility-intro {
+  color: var(--text-2);
+  font-size: 17px;
+  line-height: 1.65;
+  margin: 0 0 32px;
+}
+
+.compatibility-page .card h3 {
+  margin: 0 0 12px;
+  font-size: 19px;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.compatibility-page .card p {
+  color: var(--text-2);
+  line-height: 1.65;
+  margin: 0 0 14px;
+}
+
+.compatibility-page .card p:last-child {
+  margin-bottom: 0;
+}
+
+.compatibility-page .card .card-note {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-strong);
+  color: var(--warning);
+  font-size: 14px;
+  font-weight: 600;
+}

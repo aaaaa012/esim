@@ -90,7 +90,7 @@ export class ClerkSyncService {
       },
       orderBy: { createdAt: "desc" },
     });
-    let accountType = invitation?.accountType ?? this.defaultAccountType(event.origin);
+    let accountType = invitation?.accountType ?? UserRoleName.CUSTOMER;
     let bootstrap = false;
     const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
     const tokenConfigured = Boolean(process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim());
@@ -211,8 +211,17 @@ export class ClerkSyncService {
     if (existing.accountType !== UserRoleName.CUSTOMER) return;
     if (this.defaultAccountType(origin) === UserRoleName.CUSTOMER) return;
     if (existing.status !== UserStatus.ACTIVE) return;
+    const invitation = await this.prisma.staffInvitation.findFirst({
+      where: {
+        email: existing.email,
+        status: StaffInvitationStatus.PENDING,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!invitation) return;
     await this.prisma.$transaction(async (tx) => {
-      const accountType = UserRoleName.OPERATIONS;
+      const accountType = invitation.accountType;
       await tx.user.update({
         where: { id: existing.id },
         data: { accountType },
@@ -227,6 +236,14 @@ export class ClerkSyncService {
         update: {},
         create: { userId: existing.id, roleId: role.id },
       });
+      await tx.staffInvitation.update({
+        where: { id: invitation.id },
+        data: {
+          status: StaffInvitationStatus.ACCEPTED,
+          acceptedById: existing.id,
+          acceptedAt: new Date(),
+        },
+      });
       await tx.auditLog.create({
         data: {
           module: "IDENTITY",
@@ -238,7 +255,9 @@ export class ClerkSyncService {
         },
       });
     });
-    this.logger.warn(`Promoted ${existing.email} to OPERATIONS from ops portal sign-in`);
+    this.logger.warn(
+      `Promoted ${existing.email} to ${invitation.accountType} via staff invitation from ops portal sign-in`,
+    );
   }
 
   private defaultAccountType(origin?: string): UserRoleName {
