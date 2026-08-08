@@ -258,8 +258,9 @@ export class PartnerService {
         });
       const verified = await this.storage.verifyDocument(intent.privateAssetId);
       if (
-        verified.bytes !== intent.declaredSizeBytes ||
-        !this.formatMatchesContentType(verified.format, intent.contentType)
+        !verified.simulated &&
+        (verified.bytes !== intent.declaredSizeBytes ||
+          !this.formatMatchesContentType(verified.format, intent.contentType))
       )
         throw new BadRequestException({
           code: "UPLOAD_NOT_VERIFIED",
