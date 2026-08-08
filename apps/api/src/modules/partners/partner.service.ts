@@ -302,7 +302,7 @@ export class PartnerService {
       );
       const status =
         settlementMethod === PartnerSettlementMethod.PARTNER_ACCOUNT
-          ? OrderStatus.REVIEW_PENDING
+          ? OrderStatus.APPROVED
           : OrderStatus.PAYMENT_PENDING;
       const pricingSnapshot = {
         pricingSource: "PUBLIC_CATALOGUE",
@@ -387,6 +387,20 @@ export class PartnerService {
             ? result.reason.message
             : "Partner order post-commit handoff failed",
         );
+    if (settlementMethod === PartnerSettlementMethod.PARTNER_ACCOUNT) {
+      try {
+        await this.applicationOrders.approveToProvisioning(
+          orderId,
+          "Partner order auto-approved",
+        );
+      } catch (error) {
+        this.logger.error(
+          `Partner order provision handoff failed for ${orderId}: ${
+            error instanceof Error ? error.message : "unknown"
+          }`,
+        );
+      }
+    }
     const order = await this.order(partnerId, orderId);
     if (input.settlement.method !== "HOSTED_PAYMENT" || !hostedPayment)
       return order;
@@ -858,7 +872,7 @@ export class PartnerService {
     const nextStatus =
       PartnerSettlementMethod.HOSTED_PAYMENT === order.partnerSettlementMethod
         ? OrderStatus.PAYMENT_PENDING
-        : OrderStatus.REVIEW_PENDING;
+        : OrderStatus.APPROVED;
     const result = await this.prisma.$transaction(async (tx) => {
       const consumed = await tx.partnerHostedCheckoutSession.updateMany({
         where: {
@@ -915,6 +929,24 @@ export class PartnerService {
       };
     });
     await this.partnerWebhooks.enqueuePending();
+    if (
+      nextStatus === OrderStatus.APPROVED &&
+      order.partnerSettlementMethod === PartnerSettlementMethod.PARTNER_ACCOUNT
+    ) {
+      try {
+        await this.applicationOrders.refreshFromPersistence(order.id);
+        await this.applicationOrders.approveToProvisioning(
+          order.id,
+          "Partner hosted checkout auto-approved",
+        );
+      } catch (error) {
+        this.logger.error(
+          `Partner checkout provision handoff failed for order ${order.id}: ${
+            error instanceof Error ? error.message : "unknown"
+          }`,
+        );
+      }
+    }
     return result;
   }
 
