@@ -131,6 +131,13 @@ export class AdminService {
   async importPlansFromTabular(content: string, fileName?: string, actorClerkId?: string) {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
+    const actor = actorClerkId ? await this.actor(actorClerkId) : null;
+    // Super admins import straight to ACTIVE (final); operators land as DRAFT
+    // for review and approval by a super admin.
+    const roleDefaultStatus: PlanStatus =
+      actor?.accountType === UserRoleName.SUPER_ADMIN
+        ? PlanStatus.ACTIVE
+        : PlanStatus.DRAFT;
     const { records, errors } = await tabularToRecords(
       content,
       ["countryiso2", "name", "providerplanid", "dataallowance", "validitydays", "costprice", "sellingprice"],
@@ -149,8 +156,11 @@ export class AdminService {
       const providerPlanId = (row.providerplanid ?? "").trim();
       const dataAllowance = (row.dataallowance ?? "").trim();
       const validityDays = this.parseValidityToDays(row.validitydays);
-      const costPrice = Number(row.costprice);
       const sellingPrice = Number(row.sellingprice);
+      const rawCost = (row.costprice ?? "").toString().trim();
+      const parsedCost = rawCost ? Number(rawCost) : NaN;
+      // costPrice is optional; when omitted it defaults to the selling price.
+      const costPrice = Number.isFinite(parsedCost) && parsedCost >= 0 ? parsedCost : sellingPrice;
       const currency = (row.currency ?? "NPR").trim().toUpperCase();
       const popular =
         (row.popular ?? "").toLowerCase() === "true" ||
@@ -161,7 +171,7 @@ export class AdminService {
         statusRaw === "DISABLED" ||
         statusRaw === "ARCHIVED"
           ? statusRaw
-          : PlanStatus.DRAFT;
+          : roleDefaultStatus;
       const coverageCountries = (row.coveragecountries ?? "")
         .split(/[|;]/)
         .map((value) => value.trim())
@@ -239,7 +249,6 @@ export class AdminService {
       errors: rowErrors.slice(0, 100),
     };
     if (this.prisma.enabled && actorClerkId) {
-      const actor = await this.actor(actorClerkId);
       await this.prisma.auditLog.create({
         data: {
           module: "PLAN_ADMIN",
@@ -409,6 +418,53 @@ export class AdminService {
   async syncTransatelCatalog() {
     this.requireTransatel();
     return this.connectivity.syncCatalog();
+  }
+
+  /**
+   * Fetches the Transatel catalog and renders it as a CSV report that can be
+   * edited and re-imported via the plans import endpoint. Column order matches
+   * the expected import headers (see importPlansFromTabular).
+   */
+  async exportTransatelCatalog(cos?: string) {
+    this.requireTransatel();
+    const { rows, skipped } = await this.connectivity.catalogReport(cos?.trim() || undefined);
+    const columns = [
+      "countryiso2",
+      "countryname",
+      "name",
+      "providerplanid",
+      "dataallowance",
+      "validitydays",
+      "costprice",
+      "sellingprice",
+      "currency",
+      "coveragecountries",
+      "status",
+    ] as const;
+    const renderRow = (row: Record<string, unknown>) =>
+      columns.map((column) => this.csvCell(row[column])).join(",");
+    const csv = [
+      columns.join(","),
+      ...rows.map((row) =>
+        renderRow({
+          ...row,
+          coveragecountries: row.coveragecountries,
+        }),
+      ),
+    ].join("\n");
+    return {
+      fileName: `transatel-catalog-${new Date().toISOString().slice(0, 10)}.csv`,
+      count: rows.length,
+      skipped: skipped.length,
+      skippedIds: skipped,
+      csv,
+    };
+  }
+
+  private csvCell(value: unknown): string {
+    const raw = String(value ?? "");
+    if (/[",\n\r]/.test(raw)) return `"${raw.replace(/"/g, '""')}"`;
+    return raw;
   }
 
   async ensureTransatelWebhook() {

@@ -38,6 +38,7 @@ export class ConnectivityService implements OnModuleInit {
   getUsage(subscriptionId: string) { return this.transatel.getUsage(subscriptionId); }
   getEsimDetails(subscriptionId: string) { return this.transatel.getEsimDetails(subscriptionId); }
   syncCatalog() { return this.transatel.syncCatalog(); }
+  catalogReport(cos?: string) { return this.transatel.catalogReport(cos); }
   checkEligibility(planId: string, msisdn: string) { return this.transatel.checkEligibility(planId, msisdn); }
   ensureWebhook() { return this.transatel.ensureWebhook(); }
   handleWebhook(payload: unknown) { return this.transatel.handleWebhook(payload); }

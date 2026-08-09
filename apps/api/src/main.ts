@@ -14,7 +14,44 @@ import { RateLimitGuard } from './common/rate-limit.guard.js';
 import { MetricsService } from './observability/metrics.service.js';
 import { PrismaService } from './infrastructure/prisma.service.js';
 
+const BOOT_DB_RETRIES = Number(process.env.BOOT_DB_RETRIES ?? 12);
+const BOOT_DB_RETRY_BASE_MS = Number(process.env.BOOT_DB_RETRY_BASE_MS ?? 1500);
+
+function isDbUnreachable(err: unknown): boolean {
+  const anyErr = err as {
+    code?: string;
+    errorCode?: string;
+    message?: string;
+    error?: { code?: string };
+  };
+  const candidate = anyErr?.code ?? anyErr?.errorCode ?? anyErr?.error?.code;
+  const message = anyErr?.message ?? '';
+  return (
+    candidate === 'P1001' ||
+    /Can't reach database server|P1001/i.test(message)
+  );
+}
+
 async function bootstrap() {
+  let attempt = 0;
+  for (;;) {
+    try {
+      await bootOnce();
+      return;
+    } catch (err) {
+      if (!isDbUnreachable(err) || attempt >= BOOT_DB_RETRIES) throw err;
+      const delay = Math.min(BOOT_DB_RETRY_BASE_MS * 2 ** attempt, 8000);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[bootstrap] Database unreachable (P1001) on attempt ${attempt + 1}/${BOOT_DB_RETRIES}. Retrying in ${delay}ms...`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      attempt += 1;
+    }
+  }
+}
+
+async function bootOnce() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
   app.use(helmet({ referrerPolicy: { policy: 'no-referrer' } }));
   app.enableCors({ origin: [process.env.CUSTOMER_WEB_URL ?? 'http://localhost:3000', process.env.OPS_WEB_URL ?? 'http://localhost:3001'], credentials: true });

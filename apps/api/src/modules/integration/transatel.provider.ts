@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ApiErrorCode } from '@visa-compass/shared';
 import { ApiException } from '../../common/api-error.js';
-import type { ConnectivityProvider, ProvisionRequest, ProvisionResult, EsimDetailsResult, EligibilityResult, CatalogSyncResult, ProviderWebhookResult, ProviderWebhookEvent } from './connectivity-provider.js';
+import type { ConnectivityProvider, ProvisionRequest, ProvisionResult, EsimDetailsResult, EligibilityResult, CatalogSyncResult, CatalogExportRow, CatalogExportResult, ProviderWebhookResult, ProviderWebhookEvent } from './connectivity-provider.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 
 /*
@@ -411,7 +411,7 @@ export class TransatelProvider implements ConnectivityProvider {
       }
 
       const names = definition.description;
-      const name = names?.productLabel || names?.productShortText || definition.productId;
+      const name = names?.productShortText || names?.productLabel || definition.productId;
 
       try {
         await this.prisma.$transaction(async (tx) => {
@@ -457,6 +457,64 @@ export class TransatelProvider implements ConnectivityProvider {
 
     this.logger.log(`Transatel catalog sync finished: ${synced} plan(s) synced, ${skipped.length} skipped`);
     return { synced, skipped: skipped.length };
+  }
+
+  /**
+   * Fetches the Transatel catalog and returns normalized rows (no DB writes),
+   * shaped so they can be re-imported via the plans import endpoint. Products
+   * that can't be represented (no mapped country, invalid validity, missing
+   * price/FX) are reported back in `skipped` instead of being persisted.
+   */
+  async catalogReport(cos?: string): Promise<CatalogExportResult> {
+    const c = cos || process.env.TRANSATEL_COS || 'WW_COS_UBG_MKP_EUR';
+    const url = `${this.baseUrl('ocs/catalog')}/api/cos/${encodeURIComponent(c)}/products?availabilityStatus=AVAILABLE&categories=One-off`;
+
+    const response = await this.authorizedFetch(url, { method: 'GET', headers: { Accept: 'application/json', 'Accept-Language': 'en_US' }, operation: 'catalog' });
+    if (!response.ok) throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Catalog export is unavailable right now.', status: 502, details: `Transatel catalog fetch failed: ${await this.errorText(response)}` });
+
+    const data = (await response.json()) as ProductCatalogResponse;
+    const rows: CatalogExportRow[] = [];
+    const skipped: string[] = [];
+
+    for (const product of data.products) {
+      const definition = product.productDefinition;
+      const countries = (definition.countryList ?? []).map((iso3) => this.iso3ToIso2(iso3)).filter((iso2): iso2 is string => Boolean(iso2));
+      if (!definition.productId || !countries.length) {
+        skipped.push(definition.productId ?? 'unknown-product');
+        continue;
+      }
+      const validityDays = this.validityDays(definition.validityPeriod);
+      if (validityDays <= 0) {
+        skipped.push(definition.productId);
+        continue;
+      }
+      const allowanceMb = this.allowanceMb(definition.allowances);
+      const price = this.priceNpr(product.prices?.subscriptionFee);
+      if (price === null) {
+        skipped.push(definition.productId);
+        continue;
+      }
+      const names = definition.description;
+      const name = names?.productShortText || names?.productLabel || definition.productId;
+
+      for (const isoCode of countries) {
+        rows.push({
+          countryiso2: isoCode,
+          countryname: this.countryName(isoCode),
+          name,
+          providerplanid: definition.productId,
+          dataallowance: allowanceMb !== null ? `${allowanceMb} MB` : 'Unlimited',
+          validitydays: validityDays,
+          costprice: price,
+          sellingprice: price,
+          currency: 'NPR',
+          coveragecountries: (definition.countryList ?? []).join('|'),
+          status: '',
+        });
+      }
+    }
+
+    return { rows, skipped };
   }
 
   async checkEligibility(planId: string, msisdn: string): Promise<EligibilityResult> {
@@ -618,7 +676,7 @@ export class TransatelProvider implements ConnectivityProvider {
   private allowanceMb(allowances: unknown): number | null {
     const data = this.allowanceEntries(allowances);
     if (!data.length) return null;
-    const main = data.find((entry) => String(entry.resourceName ?? '').toUpperCase() === 'DATA') ?? data[0];
+    const main = data.find((entry) => /^DATA/i.test(String(entry.resourceName ?? ''))) ?? data[0];
     if (!main) return null;
     const value = Number(main.startValue);
     if (!Number.isFinite(value)) return null;
@@ -634,22 +692,29 @@ export class TransatelProvider implements ConnectivityProvider {
     const list = Array.isArray(candidate.data) ? candidate.data : Array.isArray(candidate.entries) ? candidate.entries : null;
     return (list ?? []).map((entry) => (typeof entry === 'object' && entry !== null ? entry as Record<string, unknown> : {})).map((entry) => ({
       ...(typeof entry.resourceName === 'string' ? { resourceName: entry.resourceName } : typeof entry.name === 'string' ? { resourceName: entry.name } : {}),
-      ...(typeof entry.startValue === 'number' || typeof entry.startValue === 'string' ? { startValue: entry.startValue } : typeof entry.value === 'number' ? { startValue: entry.value } : {}),
-      ...(typeof entry.unit === 'string' ? { unit: entry.unit } : {}),
+      ...(typeof entry.startValue === 'number' || typeof entry.startValue === 'string' ? { startValue: entry.startValue }
+        : typeof entry.resourceValue === 'number' || typeof entry.resourceValue === 'string' ? { startValue: entry.resourceValue }
+          : typeof entry.value === 'number' ? { startValue: entry.value } : {}),
+      ...(typeof entry.unit === 'string' ? { unit: entry.unit }
+        : typeof entry.resourceUnit === 'string' ? { unit: entry.resourceUnit } : {}),
     }));
   }
 
+  /**
+   * Returns the raw provider subscription fee as a base-unit number (no FX
+   * conversion). Minor units ("CENT"/"CENTS") are divided by 100 so the value
+   * reflects the provider's amount in its major currency; currency is kept as
+   * a reference only and never converted to NPR.
+   */
   private priceNpr(fee?: Price[][]): number | null {
     if (!Array.isArray(fee) || !fee.length) return null;
     const first = Array.isArray(fee[0]) ? fee[0][0] : undefined;
     if (!first) return null;
     const amount = Number(first.amount);
     if (!Number.isFinite(amount) || amount <= 0) return null;
-    const fx = Number(process.env.TRANSATEL_FX_TO_NPR);
-    if (!Number.isFinite(fx) || fx <= 0) return null;
     const minor = /^(CENT|CENTS)$/i.test(String(first.unit ?? ''));
     const value = minor ? amount / 100 : amount;
-    return Math.max(1, Math.round(value * fx));
+    return Math.max(1, Math.round(value));
   }
 
   private iso3ToIso2(iso3: string): string | undefined {

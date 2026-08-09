@@ -3,6 +3,7 @@ import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { useEffect, useState } from "react";
 import {
   CheckCircle2,
+  Download,
   FlaskConical,
   History,
   Pencil,
@@ -124,6 +125,7 @@ export default function AdminWorkspace() {
   const [busy, setBusy] = useState("");
   const [planCsvFile, setPlanCsvFile] = useState<File | null>(null);
   const [planCsvBusy, setPlanCsvBusy] = useState(false);
+  const [catalogBusy, setCatalogBusy] = useState(false);
   const [eligibilityPlanId, setEligibilityPlanId] = useState("");
   const [eligibilityMsisdn, setEligibilityMsisdn] = useState("");
   const [logs, setLogs] = useState<IntegrationLog[]>([]);
@@ -214,6 +216,31 @@ export default function AdminWorkspace() {
       toast.error(e instanceof Error ? e.message : "CSV import failed");
     } finally {
       setPlanCsvBusy(false);
+    }
+  };
+  const downloadCatalog = async () => {
+    setCatalogBusy(true);
+    try {
+      const result = await request<{ fileName: string; csv: string; count: number; skipped: number }>(
+        "/admin/integrations/transatel/catalog-export",
+        { method: "POST" },
+      );
+      const blob = new Blob(["\uFEFF" + result.csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast.success(
+        `Downloaded ${result.count} catalog row(s)${result.skipped ? ` (${result.skipped} skipped)` : ""}`,
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Catalog download failed");
+    } finally {
+      setCatalogBusy(false);
     }
   };
   const test = async (item: Integration) => {
@@ -324,7 +351,7 @@ export default function AdminWorkspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  const planTabVisible = tab === "Plans" || tab === "Pricing";
+  const planTabVisible = tab === "Plans";
 
   return (
     <>
@@ -340,7 +367,7 @@ export default function AdminWorkspace() {
       />
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="mb-6 flex h-10 w-full justify-start overflow-x-auto rounded-lg bg-transparent p-0">
-          {["Plans", "Pricing", "Integrations", "Document Rules", "Inventory Settings", "Users", "System Config"].map((item) => (
+          {["Plans", "Integrations", "Document Rules", "Inventory Settings", "Users", "System Config"].map((item) => (
             <TabsTrigger
               key={item}
               value={item}
@@ -357,10 +384,18 @@ export default function AdminWorkspace() {
         {(planTabVisible) && (
           <TabsContent value={planTabVisible ? tab : ""} className="mt-0">
             <Panel
-              title={tab === "Plans" ? "Plan catalogue" : "Pricing management"}
+              title="Plan catalogue"
               description="Changes affect new immutable order quotes only."
               actions={
                 <div className="flex items-center gap-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => void downloadCatalog()}
+                    disabled={catalogBusy}
+                  >
+                    {catalogBusy ? <Spinner /> : <Download className="size-4" />}
+                    Download catalog
+                  </Button>
                   <Input
                     type="file"
                     accept=".csv,.xlsx,.xls,text/csv"

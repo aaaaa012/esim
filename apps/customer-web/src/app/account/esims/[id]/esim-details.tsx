@@ -290,6 +290,18 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                   Resume purchase
                 </Link>
               </>
+            ) : order.status === "QR_READY" ? (
+              <>
+                <p>
+                  Your activation QR was emailed to you as a password-protected
+                  PDF. Install the eSIM and connect once to activate it — your
+                  order will then be marked complete.
+                </p>
+                <div className="processing">
+                  <QrCode size={18} />
+                  Activation QR delivered — awaiting activation
+                </div>
+              </>
             ) : order.status === "COMPLETED" ? (
               <>
                 <p>

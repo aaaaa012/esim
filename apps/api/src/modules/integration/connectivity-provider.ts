@@ -24,6 +24,27 @@ export type ProviderWebhookEvent = {
 export type ProviderWebhookResult = { handled: boolean; event?: ProviderWebhookEvent; reason?: string };
 export type CatalogSyncResult = { synced: number; skipped: number };
 
+/**
+ * One normalized row of the Transatel catalog, shaped exactly like the
+ * upload columns accepted by AdminService.importPlansFromTabular so a
+ * generated report can be re-uploaded without transformation.
+ */
+export type CatalogExportRow = {
+  countryiso2: string;
+  countryname: string;
+  name: string;
+  providerplanid: string;
+  dataallowance: string;
+  validitydays: number;
+  costprice: number;
+  sellingprice: number;
+  currency: string;
+  coveragecountries: string;
+  status: string;
+};
+
+export type CatalogExportResult = { rows: CatalogExportRow[]; skipped: string[] };
+
 export interface ConnectivityProvider {
   readonly name: string;
   health(): Promise<{ ok: boolean }>;

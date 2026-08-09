@@ -49,6 +49,7 @@ enum OrderStatus {
   AWAITING_CUSTOMER
   APPROVED
   PROVISIONING
+  QR_READY
   COMPLETED
   PAYMENT_FAILED
   CANCELLED
@@ -215,6 +216,8 @@ model Order {
   compatibilityAcceptedAt DateTime
   providerSubscriptionId String?
   providerStatus String?
+  qrDeliveredAt DateTime?
+  activatedAt DateTime?
   traveler Traveler?
   documents TravelerDocument[]
   payments Payment[]
@@ -280,6 +283,7 @@ model Payment {
   paidAt DateTime?
   expiresAt DateTime?
   returnUrl String?
+  redirectUrl String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@unique([provider, providerTransactionId])

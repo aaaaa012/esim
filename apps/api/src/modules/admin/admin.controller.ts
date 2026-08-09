@@ -63,6 +63,10 @@ export class AdminController {
   syncCatalog() {
     return this.admin.syncTransatelCatalog();
   }
+  @Post("integrations/transatel/catalog-export") @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  exportCatalog(@Body() body: { cos?: string }) {
+    return this.admin.exportTransatelCatalog(body?.cos);
+  }
   @Post("integrations/transatel/ensure-webhook")
   ensureWebhook() {
     return this.admin.ensureTransatelWebhook();

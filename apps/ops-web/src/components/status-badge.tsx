@@ -22,6 +22,7 @@ const toneMap: Record<string, "success" | "warning" | "danger" | "info" | "destr
   completed: "success",
   active: "success",
   verified: "success",
+  qr_ready: "info",
   warning: "warning",
   pending: "warning",
   queued: "warning",

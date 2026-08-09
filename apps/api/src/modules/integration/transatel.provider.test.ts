@@ -314,7 +314,7 @@ describe('TransatelProvider', () => {
     expect(tx.plan.upsert).toHaveBeenCalledTimes(2);
     const planArgs = tx.plan.upsert.mock.calls.map((call) => call[0]);
     expect(planArgs[0].where).toEqual({ countryId_providerPlanId: { countryId: 'country-1', providerPlanId: 'TRVL-5GB-15D' } });
-    expect(planArgs[0].create).toMatchObject({ name: 'Travel 5GB', dataAllowance: '5120 MB', validityDays: 15, costPrice: 848, sellingPrice: 848, providerPlanId: 'TRVL-5GB-15D', status: 'ACTIVE' });
+    expect(planArgs[0].create).toMatchObject({ name: 'Travel 5GB', dataAllowance: '5120 MB', validityDays: 15, costPrice: 5, sellingPrice: 5, providerPlanId: 'TRVL-5GB-15D', status: 'ACTIVE' });
   });
 
   it('parses subscription fees expressed in major units without dividing', async () => {
@@ -349,7 +349,45 @@ describe('TransatelProvider', () => {
     const result = await provider.syncCatalog();
     expect(result).toEqual({ synced: 1, skipped: 0 });
     const create = tx.plan.upsert.mock.calls[0]![0].create;
-    expect(create.costPrice).toBe(848);
+    expect(create.costPrice).toBe(5);
+  });
+
+  it('maps real catalog allowances using resourceValue/resourceUnit and prefers productShortText', async () => {
+    const prisma = prismaStub();
+    const provider = new TransatelProvider(prisma);
+    route({
+      '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
+      '/ocs/catalog/api/cos/WW_COS_TEST/products': () => jsonResponse({
+        cos: 'WW_COS_TEST',
+        products: [{
+          availability: { available: true },
+          canSubscribe: { allowed: true },
+          display: { priority: 1 },
+          hasSubProducts: false,
+          inventoryActive: false,
+          prices: { subscriptionFee: [[{ currency: 'EUR', unit: 'CENTS', amount: 1800 }]] },
+          productDefinition: {
+            productId: 'WW_901O_STACK_ONEOFF_AFG_1GB_7D',
+            productCategory: 'One-off',
+            allowances: { data: [{ resourceName: 'DATA_BUNDLE_COUNTRY', resourceUnit: 'KB', resourceValue: 1048576 }] },
+            countryList: ['AFG'],
+            validityPeriod: { validityDuration: 7, validityDurationUnit: 'days' },
+            description: { productLabel: 'AFGHANISTAN', productShortText: 'One-off data plan Afghanistan 1GB 7 day(s)' },
+          },
+        }],
+      }),
+    });
+    const { rows } = await provider.catalogReport();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      countryiso2: 'AF',
+      name: 'One-off data plan Afghanistan 1GB 7 day(s)',
+      dataallowance: '1024 MB',
+      validitydays: 7,
+      costprice: 18,
+      sellingprice: 18,
+      currency: 'NPR',
+    });
   });
 
   it('registers a webhook when none exists for the target URL', async () => {

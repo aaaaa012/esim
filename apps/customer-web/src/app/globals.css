@@ -356,6 +356,7 @@ button {
 
 .status-chip.review_pending,
 .status-chip.payment_pending,
+.status-chip.qr_ready,
 .status-chip.ready {
   background: var(--warning-soft);
   color: var(--warning);

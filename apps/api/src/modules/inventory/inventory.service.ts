@@ -12,6 +12,9 @@ export class InventoryService implements OnModuleInit {
 
   async onModuleInit() {
     if (!this.prisma.enabled || process.env.NODE_ENV === 'production') return;
+    // Synthetic SIMs must never be offered for real Transatel provisioning.
+    // Only seed them for pure-local/simulator development when explicitly enabled.
+    if (process.env.ENABLE_MOCK_INVENTORY !== 'true') return;
     if (await this.prisma.esimInventory.count()) return;
     const batch = await this.prisma.inventoryBatch.create({ data: { batchReference: `DEV-MOCK-${new Date().getUTCFullYear()}`, totalProfiles: 20, importedCount: 20 } });
     await this.prisma.esimInventory.createMany({ data: Array.from({ length: 20 }, (_, index) => ({ batchId: batch.id, iccid: `899770100000000${String(index).padStart(3, '0')}`, eid: `890490320000000000000000000${String(index).padStart(3, '0')}`, msisdn: `8824700018${String(50000 + index)}`, status: InventoryStatus.AVAILABLE, activationCodeEncrypted: this.crypto.encrypt(`LPA:1$mock.smdp.visacompass.local$${batch.id}-${index}`), smDpAddress: 'mock.smdp.visacompass.local' })) });
@@ -31,6 +34,24 @@ export class InventoryService implements OnModuleInit {
   }
 
   async profileForOrder(orderId: string) { return this.reserve(orderId); }
+
+  /**
+   * Returns a reserved eSIM to the AVAILABLE pool when provisioning has failed
+   * terminally. A profile is only released if the provider never bound a
+   * subscription to it (providerSubscriptionId is null); otherwise it may be in
+   * use remotely and is kept reserved. This prevents failed ICCIDs from being
+   * stranded and lets a retry claim a fresh profile.
+   */
+  async release(orderId: string) {
+    if (!this.prisma.enabled) return;
+    const inventory = await this.prisma.esimInventory.findUnique({ where: { assignedOrderId: orderId } });
+    if (!inventory) return;
+    if (inventory.providerSubscriptionId) return;
+    await this.prisma.esimInventory.updateMany({
+      where: { id: inventory.id, assignedOrderId: orderId, providerSubscriptionId: null },
+      data: { status: InventoryStatus.AVAILABLE, assignedOrderId: null, version: { increment: 1 } },
+    });
+  }
 
   async importBatch(iccdsInput: string[], eidsInput?: (string | null)[], source?: string, msisdnsInput?: (string | null)[], submittedById?: string) {
     if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');

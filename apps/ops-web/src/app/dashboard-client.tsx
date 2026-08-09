@@ -7,6 +7,8 @@ import {
   ArrowRight,
   CheckCircle2,
   ClipboardCheck,
+  Clock3,
+  QrCode,
   RotateCcw,
   ServerCrash,
 } from "lucide-react";
@@ -41,7 +43,10 @@ type Dashboard = {
     reviewPending: number;
     awaitingCustomer: number;
     provisioningFailed: number;
+    qrReady: number;
+    activatedToday: number;
     completedToday: number;
+    expired: number;
   };
   integrations: { name: string; status: string }[];
   recentOrders: Order[];
@@ -90,11 +95,25 @@ export default function DashboardClient() {
       hint: "Require attention",
     },
     {
-      label: "Completed today",
-      value: data.counts.completedToday,
+      label: "QR sent — awaiting activation",
+      value: data.counts.qrReady,
+      icon: <QrCode className="size-4" />,
+      tone: "info" as const,
+      hint: "Provisioned, waiting for the device to activate",
+    },
+    {
+      label: "Activated today",
+      value: data.counts.activatedToday,
       icon: <CheckCircle2 className="size-4" />,
       tone: "success" as const,
-      hint: "Fulfilled orders since midnight",
+      hint: "eSIMs truly activated since midnight",
+    },
+    {
+      label: "Expired",
+      value: data.counts.expired,
+      icon: <Clock3 className="size-4" />,
+      tone: "warning" as const,
+      hint: "Completed plans past their validity window",
     },
   ];
 

@@ -4,7 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, ShieldCheck, Signal } from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import {
   DocumentType,
@@ -273,7 +273,7 @@ export default function CheckoutClient({
       setOrder(updated);
       setError("");
       if (
-        ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
+        ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
           updated.status,
         )
       ) {
@@ -704,7 +704,7 @@ export default function CheckoutClient({
               <div className="form-section">
                 <h2>
                   {order &&
-                  ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "COMPLETED"].includes(
+                  ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED"].includes(
                     order.status,
                   )
                     ? "Payment verified"
@@ -715,7 +715,21 @@ export default function CheckoutClient({
                       ? "Payment issue"
                       : "Choose payment method"}
                 </h2>
-                {order?.status === "COMPLETED" ? (
+                {order?.status === "QR_READY" ? (
+                  <div className="success-panel">
+                    <QrCode size={42} />
+                    <b>Your activation QR has been sent</b>
+                    <span>{order.orderNumber}</span>
+                    <p>
+                      Install your eSIM using the QR emailed to you as a
+                      password-protected PDF, then connect to the network once to
+                      activate it. Your order will complete automatically.
+                    </p>
+                    <Link className="button" href="/account/esims">
+                      View my eSIMs
+                    </Link>
+                  </div>
+                ) : order?.status === "COMPLETED" ? (
                   <div className="success-panel">
                     <CheckCircle2 size={42} />
                     <b>Your eSIM is ready</b>

@@ -75,3 +75,43 @@ describe('InventoryService.importBatchCsv', () => {
     expect(submittedById).toBe('local-user-1');
   });
 });
+
+describe('InventoryService.release', () => {
+  function releasePrisma(profile: { providerSubscriptionId: string | null }) {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    return {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'inv-1', ...profile }),
+        updateMany,
+      },
+    } as unknown as PrismaService;
+  }
+
+  it('returns an unreserved, provider-bound profile to AVAILABLE', async () => {
+    const prisma = releasePrisma({ providerSubscriptionId: null });
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivityStub());
+    await inventory.release('order-1');
+    expect(prisma.esimInventory.findUnique).toHaveBeenCalledWith({ where: { assignedOrderId: 'order-1' } });
+    expect(prisma.esimInventory.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'inv-1', assignedOrderId: 'order-1', providerSubscriptionId: null },
+        data: expect.objectContaining({ status: 'AVAILABLE', assignedOrderId: null }),
+      }),
+    );
+  });
+
+  it('does not release a profile that the provider has bound a subscription to', async () => {
+    const prisma = releasePrisma({ providerSubscriptionId: 'sub-9' });
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivityStub());
+    await inventory.release('order-1');
+    expect(prisma.esimInventory.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when no profile is reserved for the order', async () => {
+    const prisma = { enabled: true, esimInventory: { findUnique: vi.fn().mockResolvedValue(null), updateMany: vi.fn() } } as unknown as PrismaService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivityStub());
+    await inventory.release('order-1');
+    expect(prisma.esimInventory.updateMany).not.toHaveBeenCalled();
+  });
+});

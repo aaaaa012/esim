@@ -5,6 +5,7 @@ import { NotificationService } from '../modules/notification/notification.servic
 import { MetricsService } from '../observability/metrics.service.js';
 import { QueueService } from './queue.service.js';
 import { QUEUES } from './queues.js';
+import { OrdersService } from '../modules/orders/orders.service.js';
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -24,6 +25,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly connectivity: ConnectivityService,
     private readonly queues: QueueService,
     private readonly notifications: NotificationService,
+    private readonly orders: OrdersService,
     private readonly metrics?: MetricsService,
   ) {}
 
@@ -42,6 +44,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async run() {
+    await this.orders.failStaleReadyOrders();
     if (!this.prisma.enabled) return;
     await this.sweepLifecycle();
     const subscriptions = await this.prisma.subscription.findMany({
