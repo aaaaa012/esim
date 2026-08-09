@@ -728,6 +728,9 @@ export default function CheckoutClient({
                     <Link className="button" href="/account/esims">
                       View my eSIMs
                     </Link>
+                    <Link className="button" href={`/account/esims/${order.id}`}>
+                      Didn&apos;t get the QR? Recover it
+                    </Link>
                   </div>
                 ) : order?.status === "COMPLETED" ? (
                   <div className="success-panel">
@@ -741,6 +744,9 @@ export default function CheckoutClient({
                     </p>
                     <Link className="button" href="/account/esims">
                       View my eSIMs
+                    </Link>
+                    <Link className="button" href={`/account/esims/${order.id}`}>
+                      Didn&apos;t get the QR? Recover it
                     </Link>
                   </div>
                 ) : order &&

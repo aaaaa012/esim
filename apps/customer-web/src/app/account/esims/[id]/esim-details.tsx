@@ -51,6 +51,7 @@ type Order = {
 export default function EsimDetails({ id }: { id: string }) {const authFetch=useAuthenticatedFetch();
   const [order, setOrder] = useState<Order | null>(null),
     [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
     [busy, setBusy] = useState("");
   const [replacements, setReplacements] = useState<
     Record<string, File | undefined>
@@ -136,6 +137,52 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
       setBusy("");
     }
   };
+  const resendQrAction = async () => {
+    setBusy("qr-resend");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(`${API}/customer/orders/${id}/resend-qr`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "x-idempotency-key": crypto.randomUUID(),
+        },
+        body: "{}",
+      });
+      const value = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(value.error?.code ?? "", value.error?.message ?? "Something went wrong"));
+      setNotice("QR email sent — check your inbox (and spam) for the password-protected PDF.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The QR could not be resent");
+    } finally {
+      setBusy("");
+    }
+  };
+  const downloadQrAction = async () => {
+    setBusy("qr-download");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(`${API}/customer/orders/${id}/activation-qr`, { headers });
+      if (!response.ok) throw new Error("The QR document could not be loaded");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${order?.orderNumber ?? "esim"}-esim.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setNotice("QR PDF downloaded. Open it on your phone and enter your eSIM number (MSISDN) when prompted.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The QR document could not be loaded");
+    } finally {
+      setBusy("");
+    }
+  };
   if (error && !order)
     return (
       <main className="section">
@@ -175,6 +222,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
           </div>
         </div>
         {error && <div className="form-error">{error}</div>}
+        {notice && <div className="qr-notice ok">{notice}</div>}
         {resumable && (
           <section className="customer-action-banner">
             <AlertCircle />
@@ -301,6 +349,21 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                   <QrCode size={18} />
                   Activation QR delivered — awaiting activation
                 </div>
+                <div className="qr-recovery">
+                  <b>Did the QR email not arrive?</b>
+                  <small>
+                    Resend it or download the same password-protected PDF here.
+                    You&apos;ll enter your eSIM number (MSISDN) when opening it.
+                  </small>
+                  <div className="qr-recovery-buttons">
+                    <button className="button secondary" disabled={Boolean(busy)} onClick={() => void resendQrAction()}>
+                      {busy === "qr-resend" ? <LoaderCircle className="spin" size={16} /> : <Mail size={16} />} Resend email
+                    </button>
+                    <button className="button" disabled={Boolean(busy)} onClick={() => void downloadQrAction()}>
+                      {busy === "qr-download" ? <LoaderCircle className="spin" size={16} /> : <QrCode size={16} />} Download QR PDF
+                    </button>
+                  </div>
+                </div>
               </>
             ) : order.status === "COMPLETED" ? (
               <>
@@ -312,6 +375,21 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                 <div className="processing">
                   <Mail size={18} />
                   Check your email for the attachment
+                </div>
+                <div className="qr-recovery">
+                  <b>Did the QR email not arrive?</b>
+                  <small>
+                    Resend it or download the same password-protected PDF here.
+                    You&apos;ll enter your eSIM number (MSISDN) when opening it.
+                  </small>
+                  <div className="qr-recovery-buttons">
+                    <button className="button secondary" disabled={Boolean(busy)} onClick={() => void resendQrAction()}>
+                      {busy === "qr-resend" ? <LoaderCircle className="spin" size={16} /> : <Mail size={16} />} Resend email
+                    </button>
+                    <button className="button" disabled={Boolean(busy)} onClick={() => void downloadQrAction()}>
+                      {busy === "qr-download" ? <LoaderCircle className="spin" size={16} /> : <QrCode size={16} />} Download QR PDF
+                    </button>
+                  </div>
                 </div>
                 {order.usage ? (
                   <div className="usage-panel">

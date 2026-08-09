@@ -1,6 +1,7 @@
 "use client";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Building2,
   CheckCircle2,
@@ -348,8 +349,7 @@ export default function AdminWorkspace() {
         body: JSON.stringify({
           code: partnerCode,
           name: partnerName,
-          settlementMethods: ["PARTNER_ACCOUNT", "HOSTED_PAYMENT"],
-          redirectAllowlist: [],
+          settlementMethods: ["PARTNER_ACCOUNT"],
         }),
       });
       setPartnerCode("");
@@ -386,13 +386,12 @@ export default function AdminWorkspace() {
           name: `Key ${partner.credentials.length + 1}`,
           scopes: [
             "catalog:read",
-            "quotes:write",
             "orders:read",
             "orders:write",
             "documents:write",
-            "payments:write",
             "refunds:write",
             "usage:read",
+            "esims:read",
           ],
         }),
       });
@@ -1056,14 +1055,13 @@ export default function AdminWorkspace() {
                         <p className="font-medium tabular-nums">
                           NPR {((partner.account?.balancePaisa ?? 0) / 100).toLocaleString()}
                         </p>
-                        <p className="text-xs text-muted-foreground">
-                          Reserved NPR {((partner.account?.reservedPaisa ?? 0) / 100).toLocaleString()} · credit NPR{" "}
-                          {((partner.account?.creditLimitPaisa ?? 0) / 100).toLocaleString()}
-                        </p>
+                        <p className="text-xs text-muted-foreground">Prepaid available balance</p>
                       </TableCell>
                       <TableCell>
                         <p>{partner._count.orders} orders</p>
-                        <p className="text-xs text-muted-foreground">{partner._count.quotes} quotes</p>
+                        <Button asChild variant="link" size="sm" className="h-auto p-0 text-xs">
+                          <Link href={`/admin/partners/${partner.id}`}>Open workspace</Link>
+                        </Button>
                       </TableCell>
                       <TableCell>
                         <Select

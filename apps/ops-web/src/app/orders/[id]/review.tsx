@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   FileText,
+  QrCode,
   RefreshCcw,
   ShieldCheck,
   UserRound,
@@ -19,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/spinner";
 import { InfoRow } from "@/components/info-row";
 import { Panel } from "@/components/panel";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -50,6 +51,10 @@ export default function OrderReview({ id }: { id: string }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [reason, setReason] = useState("Please upload a clearer, complete copy");
+  const [confirmAction, setConfirmAction] = useState<{
+    kind: "refund" | "cancel";
+    reason: string;
+  } | null>(null);
   const [previewDocument, setPreviewDocument] = useState<{
     url: string;
     fileName: string;
@@ -162,6 +167,60 @@ export default function OrderReview({ id }: { id: string }) {
               className="mx-auto max-h-[70vh] rounded-lg"
             />
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!confirmAction} onOpenChange={(open) => { if (!open) setConfirmAction(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {confirmAction?.kind === "refund" ? "Refund order" : "Cancel order"}
+            </DialogTitle>
+            <DialogDescription>
+              This transition is appended to the immutable timeline and cannot
+              be undone. A reason is required for the record.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              Reason (shown in the timeline)
+            </Label>
+            <textarea
+              value={confirmAction?.reason ?? ""}
+              onChange={(event) =>
+                setConfirmAction((state) =>
+                  state ? { ...state, reason: event.target.value } : state,
+                )
+              }
+              rows={3}
+              className="w-full rounded-md border border-input bg-transparent p-3 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={Boolean(busy)}
+              onClick={() => setConfirmAction(null)}
+            >
+              Keep order
+            </Button>
+            <Button
+              variant={confirmAction?.kind === "cancel" ? "destructive" : "default"}
+              disabled={Boolean(busy) || !confirmAction?.reason.trim()}
+              onClick={() => {
+                if (confirmAction?.kind === "refund")
+                  action("payment/refund", { reason: confirmAction.reason.trim() });
+                else if (confirmAction?.kind === "cancel")
+                  action("cancel", { reason: confirmAction.reason.trim() });
+                setConfirmAction(null);
+              }}
+            >
+              {busy ? <Spinner /> : null}
+              {confirmAction?.kind === "refund"
+                ? "Confirm refund"
+                : "Confirm cancellation"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -348,6 +407,17 @@ export default function OrderReview({ id }: { id: string }) {
                 )}
                 Retry provisioning
               </Button>
+            ) : ["QR_READY", "COMPLETED"].includes(order.status) ? (
+              <Button
+                className="w-full"
+                variant="outline"
+                size="lg"
+                disabled={Boolean(busy)}
+                onClick={() => action("resend-qr")}
+              >
+                {busy === "resend-qr" ? <Spinner /> : <QrCode className="size-4" />}
+                Resend QR code
+              </Button>
             ) : (
               <div className="flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
@@ -361,10 +431,9 @@ export default function OrderReview({ id }: { id: string }) {
                   variant="outline"
                   disabled={Boolean(busy)}
                   onClick={() =>
-                    action("payment/refund", {
-                      reason:
-                        prompt("Reason for refund", "Customer requested cancellation") ??
-                        "Customer requested refund",
+                    setConfirmAction({
+                      kind: "refund",
+                      reason: "Customer requested cancellation",
                     })
                   }
                 >
@@ -378,10 +447,7 @@ export default function OrderReview({ id }: { id: string }) {
                 variant="outline"
                 disabled={Boolean(busy)}
                 onClick={() =>
-                  action("cancel", {
-                    reason:
-                      prompt("Reason for cancellation", "Customer request") ?? "Customer request",
-                  })
+                  setConfirmAction({ kind: "cancel", reason: "Customer request" })
                 }
               >
                 <AlertTriangle className="size-4" />

@@ -13,19 +13,18 @@ import {
   PartnerStatus,
   Prisma,
 } from "@prisma/client";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 
 export const PARTNER_SCOPES = [
   "catalog:read",
-  "quotes:write",
   "orders:read",
   "orders:write",
   "documents:write",
-  "payments:write",
   "refunds:write",
   "usage:read",
+  "esims:read",
 ] as const;
 
 @Injectable()
@@ -51,7 +50,7 @@ export class PartnerAdminService {
     input: {
       code: string;
       name: string;
-      settlementMethods: PartnerSettlementMethod[];
+      settlementMethods?: PartnerSettlementMethod[] | undefined;
       rateLimitPerMinute?: number | undefined;
       redirectAllowlist?: string[] | undefined;
       balancePaisa?: number | undefined;
@@ -64,30 +63,28 @@ export class PartnerAdminService {
       throw new BadRequestException(
         "Partner code must be 3-32 URL-safe characters",
       );
-    this.validateSettlementMethods(input.settlementMethods);
-    const redirectAllowlist = (input.redirectAllowlist ?? []).map((url) =>
-      this.validateRedirectUrl(url),
-    );
+    const settlementMethods = [PartnerSettlementMethod.PARTNER_ACCOUNT];
+    const redirectAllowlist: string[] = [];
     const partner = await this.prisma.$transaction(async (tx) => {
       const created = await tx.partner.create({
         data: {
           code,
           name: input.name.trim(),
           status: PartnerStatus.PENDING,
-          allowedSettlementMethods: input.settlementMethods,
+          allowedSettlementMethods: settlementMethods,
           rateLimitPerMinute: input.rateLimitPerMinute ?? 120,
           redirectAllowlist,
           account: {
             create: {
               balancePaisa: input.balancePaisa ?? 0,
-              creditLimitPaisa: input.creditLimitPaisa ?? 0,
+              creditLimitPaisa: 0,
             },
           },
         },
       });
       await this.audit(tx, actorClerkId, "Partner", created.id, "CREATED", {
         code,
-        settlementMethods: input.settlementMethods,
+        settlementMethods,
       });
       return created;
     });
@@ -106,8 +103,6 @@ export class PartnerAdminService {
     actorClerkId: string,
   ) {
     const previous = await this.requirePartner(id);
-    if (input.settlementMethods)
-      this.validateSettlementMethods(input.settlementMethods);
     const redirectAllowlist = input.redirectAllowlist?.map((url) =>
       this.validateRedirectUrl(url),
     );
@@ -117,13 +112,11 @@ export class PartnerAdminService {
         data: {
           ...(input.name ? { name: input.name.trim() } : {}),
           ...(input.status ? { status: input.status } : {}),
-          ...(input.settlementMethods
-            ? { allowedSettlementMethods: input.settlementMethods }
-            : {}),
+          allowedSettlementMethods: [PartnerSettlementMethod.PARTNER_ACCOUNT],
           ...(input.rateLimitPerMinute !== undefined
             ? { rateLimitPerMinute: input.rateLimitPerMinute }
             : {}),
-          ...(redirectAllowlist ? { redirectAllowlist } : {}),
+          ...(redirectAllowlist ? { redirectAllowlist: [] } : {}),
         },
       });
       await this.audit(tx, actorClerkId, "Partner", id, "UPDATED", {
@@ -300,20 +293,16 @@ export class PartnerAdminService {
         create: { partnerId },
       });
       const balance = account.balancePaisa + input.amountPaisa;
-      if (
-        balance + (input.creditLimitPaisa ?? account.creditLimitPaisa) <
-        account.reservedPaisa
-      )
+      if (balance < 0)
         throw new BadRequestException(
-          "Adjustment would exceed available partner credit",
+          "Adjustment would make the prepaid partner balance negative",
         );
       const updated = await tx.partnerAccount.update({
         where: { id: account.id },
         data: {
           balancePaisa: balance,
-          ...(input.creditLimitPaisa !== undefined
-            ? { creditLimitPaisa: input.creditLimitPaisa }
-            : {}),
+          creditLimitPaisa: 0,
+          reservedPaisa: 0,
           version: { increment: 1 },
         },
       });
@@ -348,12 +337,71 @@ export class PartnerAdminService {
     });
   }
 
-  ledger(partnerId: string) {
+  ledger(partnerId: string, input: { from?: string; to?: string; type?: PartnerLedgerEntryType; q?: string; limit?: number } = {}) {
     return this.prisma.partnerLedgerEntry.findMany({
-      where: { partnerId },
+      where: {
+        partnerId,
+        ...(input.from || input.to ? { createdAt: { ...(input.from ? { gte: new Date(input.from) } : {}), ...(input.to ? { lte: new Date(input.to) } : {}) } } : {}),
+        ...(input.type ? { type: input.type } : {}),
+        ...(input.q ? { OR: [
+          { reference: { contains: input.q, mode: "insensitive" } },
+          { order: { is: { OR: [
+            { orderNumber: { contains: input.q, mode: "insensitive" } },
+            { externalOrderId: { contains: input.q, mode: "insensitive" } },
+          ] } } },
+        ] } : {}),
+      },
+      include: { order: { select: { id: true, orderNumber: true, externalOrderId: true } } },
       orderBy: { createdAt: "desc" },
-      take: 500,
+      take: Math.min(1000, Math.max(1, input.limit ?? 500)),
     });
+  }
+
+  async orders(partnerId: string, input: { from?: string; to?: string; status?: OrderStatus; q?: string; limit?: number } = {}) {
+    await this.requirePartner(partnerId);
+    return this.prisma.order.findMany({
+      where: {
+        partnerId,
+        ...(input.from || input.to ? { createdAt: { ...(input.from ? { gte: new Date(input.from) } : {}), ...(input.to ? { lte: new Date(input.to) } : {}) } } : {}),
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.q ? { OR: [
+          { orderNumber: { contains: input.q, mode: "insensitive" } },
+          { externalOrderId: { contains: input.q, mode: "insensitive" } },
+        ] } : {}),
+      },
+      include: { plan: { include: { country: true } }, traveler: { select: { firstName: true, surname: true, email: true } } },
+      orderBy: { createdAt: "desc" },
+      take: Math.min(1000, Math.max(1, input.limit ?? 500)),
+    });
+  }
+
+  async summary(partnerId: string, from?: string, to?: string) {
+    await this.requirePartner(partnerId);
+    const createdAt = from || to ? { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } : undefined;
+    const [account, orders, ledger] = await Promise.all([
+      this.prisma.partnerAccount.findUnique({ where: { partnerId } }),
+      this.prisma.order.findMany({ where: { partnerId, ...(createdAt ? { createdAt } : {}) }, select: { status: true, totalAmount: true } }),
+      this.prisma.partnerLedgerEntry.findMany({ where: { partnerId, ...(createdAt ? { createdAt } : {}) }, select: { type: true, amountPaisa: true } }),
+    ]);
+    const byStatus = orders.reduce<Record<string, number>>((result, order) => ({ ...result, [order.status]: (result[order.status] ?? 0) + 1 }), {});
+    const totalOrderValuePaisa = orders.reduce((sum, order) => sum + Math.round(Number(order.totalAmount) * 100), 0);
+    const sum = (types: PartnerLedgerEntryType[]) => ledger.filter((entry) => types.includes(entry.type)).reduce((total, entry) => total + entry.amountPaisa, 0);
+    return {
+      currency: "NPR",
+      currentBalancePaisa: account?.balancePaisa ?? 0,
+      ordersCreated: orders.length,
+      ordersByStatus: byStatus,
+      fulfilledOrders: (byStatus.QR_READY ?? 0) + (byStatus.COMPLETED ?? 0),
+      failedOrders: byStatus.PROVISIONING_FAILED ?? 0,
+      totalOrderValuePaisa,
+      averageOrderValuePaisa: orders.length ? Math.round(totalOrderValuePaisa / orders.length) : 0,
+      totalCreditedPaisa: sum([PartnerLedgerEntryType.CREDIT]),
+      totalDebitedPaisa: sum([PartnerLedgerEntryType.DEBIT]),
+      totalRefundedPaisa: sum([PartnerLedgerEntryType.REFUND]),
+      totalAdjustedPaisa: sum([PartnerLedgerEntryType.ADJUSTMENT]),
+      from: from ?? null,
+      to: to ?? null,
+    };
   }
 
   async createWebhook(
@@ -490,6 +538,9 @@ export class PartnerAdminService {
             reason: "Partner refund approved",
           },
         });
+        const endpoints = await tx.partnerWebhookEndpoint.findMany({ where: { partnerId: refund.partnerId, active: true } });
+        const eligible = endpoints.filter((endpoint) => { const types = Array.isArray(endpoint.eventTypes) ? endpoint.eventTypes.filter((value): value is string => typeof value === "string") : []; return types.includes("*") || types.includes("order.refunded"); });
+        await tx.partnerEvent.create({ data: { partnerId: refund.partnerId, orderId: refund.orderId, type: "order.refunded", resourceId: refund.orderId, correlationId: randomUUID(), payload: { orderId: refund.orderId, externalOrderId: refund.order.externalOrderId, status: OrderStatus.REFUNDED, fulfillmentStatus: "NOT_READY", refundRequestId: refund.id }, deliveries: { create: eligible.map((endpoint) => ({ endpointId: endpoint.id })) } } });
       }
       await this.audit(
         tx,

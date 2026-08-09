@@ -16,7 +16,6 @@ import { GuestOrdersController } from "./modules/orders/guest-orders.controller.
 import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
 import { KhaltiGateway } from "./modules/payments/gateways/khalti.gateway.js";
-import { EsewaGateway } from "./modules/payments/gateways/esewa.gateway.js";
 import { PaymentSimulatorGateway } from "./modules/payments/gateways/simulator.gateway.js";
 import { CryptoService } from "./infrastructure/crypto.service.js";
 import {
@@ -89,7 +88,6 @@ OperationsController,
     AdminService,
     PaymentsService,
     KhaltiGateway,
-    EsewaGateway,
     PaymentSimulatorGateway,
     AurigaMockProvider,
     TransatelProvider,

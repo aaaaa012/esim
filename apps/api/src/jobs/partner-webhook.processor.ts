@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { PartnerWebhookDeliveryStatus } from "@prisma/client";
 import type { Job } from "bullmq";
 import { createHmac } from "node:crypto";
@@ -16,8 +16,9 @@ export function signPartnerWebhook(secret: string, timestamp: string, rawBody: s
 }
 
 @Injectable()
-export class PartnerWebhookProcessor implements OnModuleInit {
+export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PartnerWebhookProcessor.name);
+  private reconciliationTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly queues: QueueService,
@@ -36,6 +37,16 @@ export class PartnerWebhookProcessor implements OnModuleInit {
           : "Webhook reconciliation failed",
       ),
     );
+    if (this.queues.enabled)
+      this.reconciliationTimer = setInterval(() => {
+        void this.enqueuePending().catch((error: unknown) =>
+          this.logger.error(error instanceof Error ? error.message : "Webhook reconciliation failed"),
+        );
+      }, 30_000);
+  }
+
+  onModuleDestroy() {
+    if (this.reconciliationTimer) clearInterval(this.reconciliationTimer);
   }
 
   async enqueuePending() {

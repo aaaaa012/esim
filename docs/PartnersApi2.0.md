@@ -17,7 +17,8 @@ The Visa Compass Partner API 2.0 provides commercial agencies and resellers with
   * `orders:read`: Querying orders, timeline events, and account status.
   * `orders:write`: Submitting new orders, notifications, and cancellations.
   * `documents:write`: Requesting presigned document upload sessions.
-  * `payments:write`: Initiating hosted payment sessions.
+  * `payments:write`: Deprecated; hosted payments are disabled for the MVP.
+  * `esims:read`: Retrieving activation details after an order reaches `QR_READY`.
   * `refunds:write`: Submitting formal refund requests.
   * `usage:read`: Real-time eSIM data consumption queries.
 
@@ -77,8 +78,8 @@ Returns API capabilities, supported settlement methods, enabled payment gateways
     "data": {
       "apiVersion": "v1",
       "currency": "NPR",
-      "settlementMethods": ["PARTNER_ACCOUNT", "HOSTED_PAYMENT"],
-      "payments": ["KHALTI", "ESEWA"],
+      "settlementMethods": ["PARTNER_ACCOUNT"],
+      "payments": [],
       "notifications": ["EMAIL", "WHATSAPP"],
       "connectivity": {
         "provider": "AURIGA_MOCK",
@@ -154,7 +155,7 @@ Requests presigned Cloudinary upload signatures for traveler documents.
   ```
 
 #### `POST /api/v1/partners/orders` *(Complete Order)*
-Submits a complete order. The server verifies uploaded document file bytes in Cloudinary, charges `PARTNER_ACCOUNT`, auto-approves the order, reserves an eSIM profile, and returns status `COMPLETED`.
+Submits a complete order. The server verifies uploaded document bytes, snapshots the plan's public selling price, atomically debits the partner's prepaid balance, and durably submits provisioning. It returns immediately with the current state (normally `APPROVED` or `PROVISIONING`) and never waits for `QR_READY` or `COMPLETED`. The optional `settlement` field defaults to `{ "method": "PARTNER_ACCOUNT" }`.
 * **Scope:** `orders:write`
 * **Headers:** `Idempotency-Key: <unique-key>`
 * **Request Body:**
@@ -196,7 +197,10 @@ Submits a complete order. The server verifies uploaded document file bytes in Cl
       "id": "fe40a630-8154-47ab-866d-52a0e4e94241",
       "orderNumber": "VC-2026-FE40A630",
       "externalOrderId": "flow-agency-order-3001",
-      "status": "COMPLETED",
+      "status": "PROVISIONING",
+      "fulfillmentStatus": "PENDING",
+      "nextAction": { "type": "WAIT_FOR_PROVISIONING" },
+      "retryAfterSeconds": 5,
       "settlementMethod": "PARTNER_ACCOUNT",
       "totalAmountPaisa": 249900,
       "travelerComplete": true,
@@ -204,7 +208,7 @@ Submits a complete order. The server verifies uploaded document file bytes in Cl
       "timeline": [
         { "from": null, "to": "APPROVED", "at": "2026-08-08T22:07:17.517Z" },
         { "from": "APPROVED", "to": "PROVISIONING", "reason": "Partner order auto-approved; inventory 899770100000000007 reserved", "at": "2026-08-08T22:07:19.980Z" },
-        { "from": "PROVISIONING", "to": "COMPLETED", "reason": "Provisioned on attempt 1", "at": "2026-08-08T22:07:21.828Z" }
+        { "from": "APPROVED", "to": "PROVISIONING", "reason": "Partner order auto-approved", "at": "2026-08-08T22:07:19.980Z" }
       ]
     }
   }
@@ -217,7 +221,14 @@ Submits a complete order. The server verifies uploaded document file bytes in Cl
 #### `GET /api/v1/partners/orders`
 Lists orders created by the authenticated partner.
 * **Scope:** `orders:read`
-* **Query Parameters:** `cursor`, `status` (`DRAFT`, `APPROVED`, `PROVISIONING`, `COMPLETED`, `CANCELLED`), `externalOrderId`, `limit` (max 100)
+* **Query Parameters:** `cursor`, `status` (`APPROVED`, `PROVISIONING`, `QR_READY`, `COMPLETED`, `PROVISIONING_FAILED`, `CANCELLED`, `REFUND_PENDING`, `REFUNDED`), `externalOrderId`, `limit` (max 100)
+
+`QR_READY` is the commercial fulfillment milestone: the partner may retrieve and deliver the eSIM. `COMPLETED` means the connectivity provider has confirmed activation.
+
+#### `GET /api/v1/partners/orders/:id/esim`
+Returns the protected activation package when the order is `QR_READY` or `COMPLETED`.
+* **Scope:** `esims:read`
+* Activation secrets are never included in order lists, ledger records, webhook payloads, or logs.
 
 #### `GET /api/v1/partners/orders/by-external-id/:externalOrderId`
 Fetches order status by external order reference ID.
@@ -291,4 +302,4 @@ The following v1 routes are marked `@deprecated` with `Deprecation: true` header
 * `POST /api/v1/partners/quotes` $\rightarrow$ Use `POST /orders` (Complete Order).
 * `POST /api/v1/partners/orders/:id/traveler` $\rightarrow$ Include `traveler` payload in `POST /orders`.
 * `POST /api/v1/partners/orders/:id/documents` $\rightarrow$ Use `POST /document-upload-sessions`.
-* `POST /api/v1/partners/orders/:id/hosted-checkout-session` $\rightarrow$ Set `settlement: { method: "HOSTED_PAYMENT" }` in `POST /orders`.
+* Hosted-payment mutations are disabled and return HTTP `410` with `HOSTED_PAYMENT_DEPRECATED`. Historical hosted-checkout records remain readable.

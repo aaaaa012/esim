@@ -42,7 +42,8 @@ function toneFor(label: string, tone?: StatusTone): StatusTone {
 }
 
 export function StatusBadge({ label, tone, className, children }: StatusBadgeProps) {
-  const resolved = toneFor(label, tone);
+  const text = label == null ? "" : String(label);
+  const resolved = toneFor(text, tone);
   return (
     <Badge
       variant={
@@ -59,7 +60,7 @@ export function StatusBadge({ label, tone, className, children }: StatusBadgePro
       className={cn("capitalize", className)}
     >
       {children}
-      {label.replaceAll("_", " ")}
+      {text.replaceAll("_", " ")}
     </Badge>
   );
 }

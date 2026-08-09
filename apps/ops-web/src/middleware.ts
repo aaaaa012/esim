@@ -9,6 +9,7 @@ const isPublic = createRouteMatcher([
 ]);
 const isSecurity = createRouteMatcher(["/security(.*)"]);
 const isChangePassword = createRouteMatcher(["/change-password(.*)"]);
+const isAdmin = createRouteMatcher(["/admin(.*)"]);
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 export default clerkMiddleware(async (auth, request) => {
   if (isPublic(request)) return;
@@ -35,6 +36,11 @@ export default clerkMiddleware(async (auth, request) => {
       };
     };
     if (!["OPERATIONS", "SUPER_ADMIN"].includes(envelope.data.accountType))
+      return NextResponse.redirect(new URL("/unauthorized", request.url));
+    if (
+      isAdmin(request) &&
+      envelope.data.accountType !== "SUPER_ADMIN"
+    )
       return NextResponse.redirect(new URL("/unauthorized", request.url));
     if (
       envelope.data.mustChangePassword &&

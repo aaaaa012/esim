@@ -6,11 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from "@nestjs/common";
 import {
+  OrderStatus,
   PartnerPriceListStatus,
+  PartnerLedgerEntryType,
   PartnerRefundStatus,
   PartnerSettlementMethod,
   PartnerStatus,
@@ -32,11 +35,11 @@ import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js
 const partnerSchema = z.object({
   code: z.string().min(3).max(32),
   name: z.string().min(2).max(120),
-  settlementMethods: z.array(z.enum(PartnerSettlementMethod)).min(1),
+  settlementMethods: z.array(z.enum(PartnerSettlementMethod)).optional(),
   rateLimitPerMinute: z.number().int().min(1).max(10_000).optional(),
   redirectAllowlist: z.array(z.string().url()).max(20).optional(),
   balancePaisa: z.number().int().min(0).optional(),
-  creditLimitPaisa: z.number().int().min(0).optional(),
+  creditLimitPaisa: z.literal(0).optional(),
 });
 const updateSchema = partnerSchema
   .omit({ code: true, balancePaisa: true, creditLimitPaisa: true })
@@ -134,8 +137,18 @@ export class PartnerAdminController {
   }
 
   @Get(":id/ledger")
-  ledger(@Param("id") id: string) {
-    return this.partners.ledger(id);
+  ledger(@Param("id") id: string, @Query("from") from?: string, @Query("to") to?: string, @Query("type") type?: PartnerLedgerEntryType, @Query("q") q?: string, @Query("limit") limit?: string) {
+    return this.partners.ledger(id, { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(type ? { type } : {}), ...(q ? { q } : {}), ...(limit ? { limit: Number(limit) } : {}) });
+  }
+
+  @Get(":id/orders")
+  orders(@Param("id") id: string, @Query("from") from?: string, @Query("to") to?: string, @Query("status") status?: OrderStatus, @Query("q") q?: string, @Query("limit") limit?: string) {
+    return this.partners.orders(id, { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(status ? { status } : {}), ...(q ? { q } : {}), ...(limit ? { limit: Number(limit) } : {}) });
+  }
+
+  @Get(":id/summary")
+  summary(@Param("id") id: string, @Query("from") from?: string, @Query("to") to?: string) {
+    return this.partners.summary(id, from, to);
   }
 
   @Post(":id/ledger-adjustments")

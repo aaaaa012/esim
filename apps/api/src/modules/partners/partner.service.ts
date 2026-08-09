@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  GoneException,
   Injectable,
   Logger,
   NotFoundException,
@@ -17,7 +18,7 @@ import {
   PartnerStatus,
   Prisma,
 } from "@prisma/client";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   DocumentType as SharedDocumentType,
   type TravelerInput,
@@ -42,13 +43,13 @@ type CompleteOrderInput = {
   externalOrderId: string;
   externalCustomerId: string;
   planId: string;
-  settlement:
+  settlement?: (
     | { method: "PARTNER_ACCOUNT" }
     | {
         method: "HOSTED_PAYMENT";
         provider: PaymentProvider;
         redirectUrl: string;
-      };
+      }) | undefined;
   traveler: TravelerInput;
   documents: Array<{ type: DocumentType; uploadId: string }>;
   consent: {
@@ -99,12 +100,12 @@ export class PartnerService {
   ) {}
 
   async capabilities(partnerId: string) {
-    const partner = await this.partner(partnerId);
+    await this.partner(partnerId);
     return {
       apiVersion: "v1",
       currency: "NPR",
-      settlementMethods: partner.allowedSettlementMethods,
-      payments: ["KHALTI", "ESEWA"],
+      settlementMethods: [PartnerSettlementMethod.PARTNER_ACCOUNT],
+      payments: [],
       notifications: ["EMAIL", "WHATSAPP"],
       connectivity: {
         ...this.connectivity.descriptor(),
@@ -151,10 +152,6 @@ export class PartnerService {
           "Refund eligibility depends on payment, review, provisioning, and activation status.",
         updatedAt: plan.updatedAt,
         currency: "NPR",
-        wholesaleAmountPaisa: publicAmountPaisa,
-        retailAmountPaisa: publicAmountPaisa,
-        priceListId: null,
-        priceListVersion: null,
       };
     });
   }
@@ -201,17 +198,13 @@ export class PartnerService {
     requestContext: { ipAddress: string; userAgent: string },
   ) {
     const partner = await this.partner(partnerId);
-    const settlementMethod = input.settlement.method as PartnerSettlementMethod;
-    if (!this.stringArray(partner.allowedSettlementMethods).includes(settlementMethod))
-      throw new BadRequestException({
-        code: "SETTLEMENT_METHOD_UNAVAILABLE",
-        message: "Settlement method is not enabled for partner",
+    const settlement = input.settlement ?? { method: "PARTNER_ACCOUNT" as const };
+    if (settlement.method === "HOSTED_PAYMENT")
+      throw new GoneException({
+        code: "HOSTED_PAYMENT_DEPRECATED",
+        message: "Hosted payment is no longer available; partners collect customer payment directly and use their prepaid Visa Compass balance",
       });
-    if (input.settlement.method === "HOSTED_PAYMENT")
-      this.assertRedirectAllowed(
-        partner.redirectAllowlist,
-        input.settlement.redirectUrl,
-      );
+    const settlementMethod = PartnerSettlementMethod.PARTNER_ACCOUNT;
     const plan = await this.prisma.plan.findFirst({
       where: { id: input.planId, status: "ACTIVE", country: { active: true } },
       include: { country: true },
@@ -269,13 +262,6 @@ export class PartnerService {
     }
     const amountPaisa = Math.round(Number(plan.sellingPrice) * 100);
     const orderId = randomUUID();
-    const hostedPayment =
-      input.settlement.method === "HOSTED_PAYMENT"
-        ? {
-            token: randomBytes(32).toString("base64url"),
-            expiresAt: new Date(Date.now() + 30 * 60_000),
-          }
-        : null;
     await this.prisma.$transaction(async (tx) => {
       const duplicate = await tx.order.findFirst({
         where: { partnerId, externalOrderId: input.externalOrderId },
@@ -300,10 +286,7 @@ export class PartnerService {
         partnerId,
         input.externalCustomerId,
       );
-      const status =
-        settlementMethod === PartnerSettlementMethod.PARTNER_ACCOUNT
-          ? OrderStatus.APPROVED
-          : OrderStatus.PAYMENT_PENDING;
+      const status = OrderStatus.APPROVED;
       const pricingSnapshot = {
         pricingSource: "PUBLIC_CATALOGUE",
         planId: plan.id,
@@ -324,10 +307,7 @@ export class PartnerService {
           partnerCustomerId: partnerCustomer.id,
           externalOrderId: input.externalOrderId,
           partnerSettlementMethod: settlementMethod,
-          partnerPaymentProvider:
-            input.settlement.method === "HOSTED_PAYMENT"
-              ? input.settlement.provider
-              : null,
+          partnerPaymentProvider: null,
           partnerMetadata: input.metadata ?? Prisma.JsonNull,
           planId: plan.id,
           status,
@@ -356,22 +336,13 @@ export class PartnerService {
           acceptedAt: new Date(input.consent.acceptedAt),
         })),
       });
-      if (settlementMethod === PartnerSettlementMethod.PARTNER_ACCOUNT)
-        await this.debitAccount(tx, partnerId, orderId, amountPaisa, input.externalOrderId);
-      if (hostedPayment && input.settlement.method === "HOSTED_PAYMENT")
-        await tx.partnerHostedCheckoutSession.create({
-          data: {
-            partnerId,
-            orderId,
-            tokenHash: createHash("sha256").update(hostedPayment.token).digest("hex"),
-            redirectUrl: input.settlement.redirectUrl,
-            expiresAt: hostedPayment.expiresAt,
-          },
-        });
-      await this.createEvent(tx, partnerId, orderId, "order.created", orderId, {
+      await this.debitAccount(tx, partnerId, orderId, amountPaisa, input.externalOrderId);
+      await this.createEvent(tx, partnerId, orderId, "order.accepted", orderId, {
         orderId,
         externalOrderId: input.externalOrderId,
         status,
+        fulfillmentStatus: "PENDING",
+        version: 0,
         amountPaisa,
         currency: "NPR",
       });
@@ -387,32 +358,19 @@ export class PartnerService {
             ? result.reason.message
             : "Partner order post-commit handoff failed",
         );
-    if (settlementMethod === PartnerSettlementMethod.PARTNER_ACCOUNT) {
-      try {
-        await this.applicationOrders.approveToProvisioning(
-          orderId,
-          "Partner order auto-approved",
-        );
-      } catch (error) {
-        this.logger.error(
-          `Partner order provision handoff failed for ${orderId}: ${
-            error instanceof Error ? error.message : "unknown"
-          }`,
-        );
-      }
+    try {
+      await this.applicationOrders.approveToProvisioning(
+        orderId,
+        "Partner order auto-approved",
+      );
+    } catch (error) {
+      this.logger.error(
+        `Partner order provision handoff failed for ${orderId}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
     }
-    const order = await this.order(partnerId, orderId);
-    if (input.settlement.method !== "HOSTED_PAYMENT" || !hostedPayment)
-      return order;
-    return {
-      ...order,
-      nextAction: {
-        type: "HOSTED_PAYMENT",
-        provider: input.settlement.provider,
-        checkoutUrl: `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/partner-checkout/${hostedPayment.token}`,
-        expiresAt: hostedPayment.expiresAt,
-      },
-    };
+    return this.order(partnerId, orderId);
   }
 
   async createQuote(
@@ -420,6 +378,12 @@ export class PartnerService {
     planId: string,
     settlementMethod: PartnerSettlementMethod,
   ) {
+    void partnerId; void planId; void settlementMethod;
+    throw new GoneException({
+      code: "PARTNER_QUOTES_DEPRECATED",
+      message: "Partner quotes and channel-specific prices are disabled; submit a complete order using the active plan selling price",
+    });
+    /* Retained below for historical schema compatibility; no new quotes are created.
     const partner = await this.partner(partnerId);
     const allowed = this.stringArray(partner.allowedSettlementMethods);
     if (!allowed.includes(settlementMethod))
@@ -436,8 +400,8 @@ export class PartnerService {
         partnerId,
         planId,
         settlementMethod,
-        wholesaleAmountPaisa: plan.wholesaleAmountPaisa,
-        retailAmountPaisa: plan.retailAmountPaisa,
+        wholesaleAmountPaisa: plan.price.amountPaisa,
+        retailAmountPaisa: plan.price.amountPaisa,
         currency: "NPR",
         expiresAt,
         pricingSnapshot: {
@@ -446,8 +410,8 @@ export class PartnerService {
           countryCode: plan.countryCode,
           dataAllowance: plan.dataAllowance,
           validityDays: plan.validityDays,
-          wholesaleAmountPaisa: plan.wholesaleAmountPaisa,
-          retailAmountPaisa: plan.retailAmountPaisa,
+          wholesaleAmountPaisa: plan.price.amountPaisa,
+          retailAmountPaisa: plan.price.amountPaisa,
           priceListVersion: null,
           pricingSource: "PUBLIC_CATALOGUE",
           currency: "NPR",
@@ -462,10 +426,16 @@ export class PartnerService {
         currency: true,
         expiresAt: true,
       },
-    });
+    }); */
   }
 
   async createOrder(partnerId: string, input: CreateOrderInput) {
+    void partnerId; void input;
+    throw new GoneException({
+      code: "LEGACY_PARTNER_ORDER_DEPRECATED",
+      message: "Quote-based partner orders are disabled; submit a complete order using planId",
+    });
+    /* Retained below for historical schema compatibility; no new quote orders are created.
     const result = await this.prisma.$transaction(async (tx) => {
       const quote = await tx.partnerQuote.findFirst({
         where: { id: input.quoteId, partnerId },
@@ -541,7 +511,7 @@ export class PartnerService {
       return order;
     });
     await this.partnerWebhooks.enqueuePending();
-    return this.order(partnerId, result.id);
+    return this.order(partnerId, result.id); */
   }
 
   async listOrders(
@@ -582,7 +552,7 @@ export class PartnerService {
       update: {},
       create: { partnerId },
     });
-    const [debits, credits] = await Promise.all([
+    const [debits, credits, refunds, adjustments, orders] = await Promise.all([
       this.prisma.partnerLedgerEntry.aggregate({
         where: {
           partnerId,
@@ -593,18 +563,30 @@ export class PartnerService {
       this.prisma.partnerLedgerEntry.aggregate({
         where: {
           partnerId,
-          type: { in: [PartnerLedgerEntryType.CREDIT, PartnerLedgerEntryType.REFUND] },
+          type: PartnerLedgerEntryType.CREDIT,
         },
         _sum: { amountPaisa: true },
       }),
+      this.prisma.partnerLedgerEntry.aggregate({ where: { partnerId, type: PartnerLedgerEntryType.REFUND }, _sum: { amountPaisa: true } }),
+      this.prisma.partnerLedgerEntry.aggregate({ where: { partnerId, type: PartnerLedgerEntryType.ADJUSTMENT }, _sum: { amountPaisa: true } }),
+      this.prisma.order.findMany({ where: { partnerId }, select: { status: true, totalAmount: true } }),
     ]);
+    const ordersByStatus = orders.reduce<Record<string, number>>((result, order) => ({ ...result, [order.status]: (result[order.status] ?? 0) + 1 }), {});
+    const totalOrderValuePaisa = orders.reduce((total, order) => total + Math.round(Number(order.totalAmount) * 100), 0);
     return {
       currency: "NPR",
       balancePaisa: account.balancePaisa,
-      outstandingPaisa: Math.max(0, -account.balancePaisa),
-      reservedPaisa: account.reservedPaisa,
+      availableBalancePaisa: account.balancePaisa,
       totalDebitsPaisa: debits._sum.amountPaisa ?? 0,
       totalCreditsPaisa: credits._sum.amountPaisa ?? 0,
+      totalRefundedPaisa: refunds._sum.amountPaisa ?? 0,
+      totalAdjustedPaisa: adjustments._sum.amountPaisa ?? 0,
+      ordersCreated: orders.length,
+      ordersByStatus,
+      fulfilledOrders: (ordersByStatus.QR_READY ?? 0) + (ordersByStatus.COMPLETED ?? 0),
+      failedOrders: ordersByStatus.PROVISIONING_FAILED ?? 0,
+      totalOrderValuePaisa,
+      averageOrderValuePaisa: orders.length ? Math.round(totalOrderValuePaisa / orders.length) : 0,
       updatedAt: account.updatedAt,
     };
   }
@@ -616,6 +598,9 @@ export class PartnerService {
       from?: string | undefined;
       to?: string | undefined;
       externalOrderId?: string | undefined;
+      orderNumber?: string | undefined;
+      reference?: string | undefined;
+      type?: "CREDIT" | "DEBIT" | "REFUND" | "ADJUSTMENT" | undefined;
       limit?: number | undefined;
     },
   ) {
@@ -632,9 +617,16 @@ export class PartnerService {
               },
             }
           : {}),
-        ...(input.externalOrderId
-          ? { order: { externalOrderId: input.externalOrderId } }
+        ...(input.externalOrderId || input.orderNumber
+          ? { order: {
+              ...(input.externalOrderId ? { externalOrderId: input.externalOrderId } : {}),
+              ...(input.orderNumber ? { orderNumber: input.orderNumber } : {}),
+            } }
           : {}),
+        ...(input.reference
+          ? { reference: { contains: input.reference, mode: "insensitive" } }
+          : {}),
+        ...(input.type ? { type: input.type as PartnerLedgerEntryType } : {}),
       },
       include: {
         order: { select: { id: true, externalOrderId: true, orderNumber: true } },
@@ -676,6 +668,33 @@ export class PartnerService {
     });
     if (!order) throw new NotFoundException("Order not found");
     return this.order(partnerId, order.id);
+  }
+
+  async activationDetails(partnerId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, partnerId },
+      include: {
+        customerEsim: { include: { inventory: true, subscriptions: { take: 1 } } },
+      },
+    });
+    if (!order) throw new NotFoundException("Order not found");
+    if (order.status !== OrderStatus.QR_READY && order.status !== OrderStatus.COMPLETED)
+      throw new ConflictException("Activation details are available when the order is QR_READY or COMPLETED");
+    if (!order.customerEsim)
+      throw new NotFoundException("Activation details are not available");
+    const subscription = order.customerEsim.subscriptions[0];
+    return {
+      orderId: order.id,
+      externalOrderId: order.externalOrderId,
+      status: order.status,
+      fulfillmentStatus: this.fulfillmentStatus(order.status),
+      iccid: order.customerEsim.inventory.iccid,
+      msisdn: order.customerEsim.inventory.msisdn,
+      smDpAddress: order.customerEsim.inventory.smDpAddress,
+      activationCode: this.crypto.decrypt(order.customerEsim.qrPayloadEncrypted),
+      activatedAt: order.activatedAt,
+      expiresAt: subscription?.expiresAt ?? order.customerEsim.inventory.expiresAt,
+    };
   }
 
   async setTraveler(
@@ -769,27 +788,8 @@ export class PartnerService {
   }
 
   async hostedSession(partnerId: string, orderId: string, redirectUrl: string) {
-    const order = await this.mutableOrder(partnerId, orderId, [
-      OrderStatus.DRAFT,
-      OrderStatus.PAYMENT_PENDING,
-    ]);
-    const partner = await this.partner(partnerId);
-    this.assertRedirectAllowed(partner.redirectAllowlist, redirectUrl);
-    const token = randomBytes(32).toString("base64url");
-    const session = await this.prisma.partnerHostedCheckoutSession.create({
-      data: {
-        partnerId,
-        orderId,
-        tokenHash: createHash("sha256").update(token).digest("hex"),
-        redirectUrl,
-        expiresAt: new Date(Date.now() + 30 * 60_000),
-      },
-    });
-    return {
-      sessionId: session.id,
-      checkoutUrl: `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/partner-checkout/${token}`,
-      expiresAt: session.expiresAt,
-    };
+    void partnerId; void orderId; void redirectUrl;
+    throw this.hostedPaymentDeprecated();
   }
 
   async hostedCheckout(token: string) {
@@ -831,123 +831,29 @@ export class PartnerService {
   }
 
   async setHostedTraveler(token: string, traveler: TravelerInput) {
-    const session = await this.hostedCheckoutSession(token);
-    return this.setTraveler(session.partnerId, session.orderId, traveler);
+    void token; void traveler;
+    throw this.hostedPaymentDeprecated();
   }
 
   async addHostedDocument(
     token: string,
     input: { type: DocumentType; fileName: string },
   ) {
-    const session = await this.hostedCheckoutSession(token);
-    return this.addDocument(session.partnerId, session.orderId, input);
+    void token; void input;
+    throw this.hostedPaymentDeprecated();
   }
 
   async confirmHostedDocument(token: string, documentId: string) {
-    const session = await this.hostedCheckoutSession(token);
-    return this.confirmDocument(session.partnerId, session.orderId, documentId);
+    void token; void documentId;
+    throw this.hostedPaymentDeprecated();
   }
 
   async completeHostedCheckout(
     token: string,
     consent: { ipAddress: string; userAgent: string },
   ) {
-    const session = await this.hostedCheckoutSession(token);
-    const order = await this.prisma.order.findUnique({
-      where: { id: session.orderId },
-      include: { traveler: true, documents: true },
-    });
-    if (!order?.traveler)
-      throw new BadRequestException("Traveler details are required");
-    const documentTypes = new Set(
-      order.documents.map((document) => document.type),
-    );
-    if (
-      !documentTypes.has(DocumentType.PASSPORT) ||
-      !documentTypes.has(DocumentType.TICKET)
-    )
-      throw new BadRequestException(
-        "Passport and ticket documents are required",
-      );
-    const nextStatus =
-      PartnerSettlementMethod.HOSTED_PAYMENT === order.partnerSettlementMethod
-        ? OrderStatus.PAYMENT_PENDING
-        : OrderStatus.APPROVED;
-    const result = await this.prisma.$transaction(async (tx) => {
-      const consumed = await tx.partnerHostedCheckoutSession.updateMany({
-        where: {
-          id: session.id,
-          consumedAt: null,
-          expiresAt: { gt: new Date() },
-        },
-        data: { consumedAt: new Date() },
-      });
-      if (consumed.count !== 1)
-        throw new ConflictException("Hosted checkout was already completed");
-      const updated = await tx.order.updateMany({
-        where: {
-          id: order.id,
-          version: order.version,
-          status: OrderStatus.DRAFT,
-        },
-        data: { status: nextStatus, version: { increment: 1 } },
-      });
-      if (updated.count !== 1)
-        throw new ConflictException("Order was changed; reload and retry");
-      await tx.customerConsent.create({
-        data: {
-          customerId: order.customerId,
-          type: "PARTNER_HOSTED_CHECKOUT",
-          version: "1.0",
-          ipAddress: consent.ipAddress,
-          userAgent: consent.userAgent.slice(0, 500),
-        },
-      });
-      await tx.orderEvent.create({
-        data: {
-          orderId: order.id,
-          fromStatus: order.status,
-          toStatus: nextStatus,
-        },
-      });
-      await this.createEvent(
-        tx,
-        session.partnerId,
-        order.id,
-        "checkout.completed",
-        order.id,
-        {
-          orderId: order.id,
-          externalOrderId: order.externalOrderId,
-          status: nextStatus,
-        },
-      );
-      return {
-        redirectUrl: session.redirectUrl,
-        orderId: order.id,
-        status: nextStatus,
-      };
-    });
-    await this.partnerWebhooks.enqueuePending();
-    if (
-      nextStatus === OrderStatus.APPROVED &&
-      order.partnerSettlementMethod === PartnerSettlementMethod.PARTNER_ACCOUNT
-    ) {
-      try {
-        await this.applicationOrders.refreshFromPersistence(order.id);
-        await this.applicationOrders.approveToProvisioning(
-          order.id,
-          "Partner hosted checkout auto-approved",
-        );
-      } catch (error) {
-        this.logger.error(
-          `Partner checkout provision handoff failed for order ${order.id}: ${
-            error instanceof Error ? error.message : "unknown"
-          }`,
-        );
-      }
-    }
-    return result;
+    void token; void consent;
+    throw this.hostedPaymentDeprecated();
   }
 
   async cancel(partnerId: string, orderId: string, reason: string) {
@@ -956,6 +862,7 @@ export class PartnerService {
       OrderStatus.PAYMENT_PENDING,
       OrderStatus.AWAITING_CUSTOMER,
       OrderStatus.REVIEW_PENDING,
+      OrderStatus.APPROVED,
     ]);
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.order.updateMany({
@@ -1149,7 +1056,17 @@ export class PartnerService {
         reason: event.reason,
         at: event.createdAt,
       })),
-      esimDetailsAvailable: order.status === OrderStatus.COMPLETED,
+      fulfillmentStatus: this.fulfillmentStatus(order.status),
+      nextAction: order.status === OrderStatus.APPROVED || order.status === OrderStatus.PROVISIONING
+        ? { type: "WAIT_FOR_PROVISIONING" }
+        : null,
+      retryAfterSeconds: order.status === OrderStatus.APPROVED || order.status === OrderStatus.PROVISIONING ? 5 : null,
+      links: {
+        order: `/api/v1/partners/orders/${order.id}`,
+        events: `/api/v1/partners/orders/${order.id}/events`,
+        esim: `/api/v1/partners/orders/${order.id}/esim`,
+      },
+      esimDetailsAvailable: order.status === OrderStatus.QR_READY || order.status === OrderStatus.COMPLETED,
       version: order.version,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
@@ -1281,9 +1198,14 @@ export class PartnerService {
       update: {},
       create: { partnerId },
     });
+    if (account.balancePaisa < amountPaisa)
+      throw new BadRequestException({
+        code: "INSUFFICIENT_PARTNER_BALANCE",
+        message: "Partner prepaid balance is insufficient",
+      });
     const balanceAfterPaisa = account.balancePaisa - amountPaisa;
     const updated = await tx.partnerAccount.updateMany({
-      where: { id: account.id, version: account.version },
+      where: { id: account.id, version: account.version, balancePaisa: { gte: amountPaisa } },
       data: {
         balancePaisa: balanceAfterPaisa,
         version: { increment: 1 },
@@ -1468,5 +1390,20 @@ export class PartnerService {
     return Array.isArray(value)
       ? value.filter((item): item is string => typeof item === "string")
       : [];
+  }
+
+  private fulfillmentStatus(status: OrderStatus) {
+    if (status === OrderStatus.QR_READY) return "READY";
+    if (status === OrderStatus.COMPLETED) return "ACTIVATED";
+    if (status === OrderStatus.PROVISIONING_FAILED) return "FAILED";
+    if (status === OrderStatus.APPROVED || status === OrderStatus.PROVISIONING) return "PENDING";
+    return "NOT_READY";
+  }
+
+  private hostedPaymentDeprecated() {
+    return new GoneException({
+      code: "HOSTED_PAYMENT_DEPRECATED",
+      message: "Hosted payment is disabled; partners collect customer payment directly and use their prepaid Visa Compass balance",
+    });
   }
 }

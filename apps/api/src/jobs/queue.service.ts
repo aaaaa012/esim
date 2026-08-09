@@ -13,6 +13,11 @@ export class QueueService implements OnModuleDestroy {
   private readonly workers = new Map<QueueName, Worker>();
   readonly enabled = Boolean(process.env.REDIS_URL);
 
+  constructor() {
+    if (process.env.NODE_ENV === 'production' && !this.enabled)
+      throw new Error('REDIS_URL is required in production for durable order processing');
+  }
+
   async add(name: QueueName, jobName: string, payload: object, jobId: string) {
     if (!this.enabled) {
       this.logger.debug(`Queue simulator accepted ${name}:${jobName}:${jobId}`);

@@ -12,6 +12,7 @@ import { InventoryService } from '../inventory/inventory.service.js';
 import { QueueService } from '../../jobs/queue.service.js';
 import { QUEUES } from '../../jobs/queues.js';
 import { NotificationService } from '../notification/notification.service.js';
+import { QrPdfService } from '../notification/qr-pdf.service.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 import { MetricsService } from '../../observability/metrics.service.js';
 import { normalizeMsisdn, msisdnVariants } from '../../common/msisdn.util.js';
@@ -24,15 +25,31 @@ export type DemoOrder = {
   providerSubscriptionId?: string; providerStatus?: string; qrDeliveredAt?: string; activatedAt?: string; usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
   purchaseType?: 'INITIAL_PURCHASE' | 'TOPUP';
   topUpMobile?: string;
+  partner?: { id: string; code: string; name: string };
+  externalOrderId?: string;
 };
 
 @Injectable()
 export class OrdersService implements OnModuleInit {
   private readonly orders = new Map<string, DemoOrder>();
   private readonly logger = new Logger(OrdersService.name);
-  constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService, private readonly metrics?: MetricsService) {}
+  private readonly activationRefetchAttempts = new Map<string, number>();
+  private readonly maxActivationRefetches = (() => { const parsed = Number(process.env.ACTIVATION_REFETCH_ATTEMPTS); return Number.isFinite(parsed) && parsed > 0 ? parsed : 3; })();
+  constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService, private readonly qrPdf: QrPdfService, private readonly metrics?: MetricsService) {}
   async refreshFromPersistence(orderId?: string) { for (const order of await this.persistence.load()) if (!orderId || order.id === orderId) this.orders.set(order.id, order); }
-  async onModuleInit() { for (const order of await this.persistence.load()) this.orders.set(order.id, order); this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`); }
+  async onModuleInit() {
+    for (const order of await this.persistence.load()) this.orders.set(order.id, order);
+    this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`);
+    for (const order of this.orders.values()) {
+      if (!order.partner || ![OrderStatus.APPROVED, OrderStatus.PROVISIONING].includes(order.status)) continue;
+      const recovery = order.status === OrderStatus.APPROVED
+        ? this.approveToProvisioning(order.id, 'Recovered accepted partner order')
+        : this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`);
+      void recovery.catch((error) =>
+        this.logger.error(`Could not recover partner order ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`),
+      );
+    }
+  }
   list(ownerId?: string) { return [...this.orders.values()].filter((o) => !ownerId || o.ownerId === ownerId).map((order) => ownerId ? this.redact(order) : this.expand(order)); }
   audit() { return this.persistence.audit(); }
   get(id: string, ownerId?: string) { const order = this.orders.get(id); if (!order || (ownerId && order.ownerId !== ownerId)) throw new NotFoundException('Order not found'); return order; }
@@ -271,7 +288,7 @@ export class OrdersService implements OnModuleInit {
   async requestReupload(id: string, reason: string) { const order = this.get(id); this.transition(order, OrderStatus.AWAITING_CUSTOMER, reason); order.documents.forEach((d) => { d.status = DocumentStatus.REUPLOAD_REQUIRED; }); await this.persistence.save(order); return order; }
   async reviewDocument(id: string, documentId: string, actorId: string, decision: 'APPROVE' | 'REUPLOAD', reason?: string) { const order = this.get(id); if (order.status !== OrderStatus.REVIEW_PENDING) throw new BadRequestException('Order is not awaiting review'); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); if (decision === 'APPROVE') { document.status = DocumentStatus.APPROVED; order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `${document.type} approved by ${actorId}` }); } else { if (!reason?.trim()) throw new BadRequestException('Re-upload reason is required'); document.status = DocumentStatus.REUPLOAD_REQUIRED; this.transition(order, OrderStatus.AWAITING_CUSTOMER, `${document.type}: ${reason.trim()} (requested by ${actorId})`); } await this.persistence.save(order); await this.persistence.recordReview(order.id, documentId, actorId, decision, reason); return this.redact(order); }
   async approve(id: string, actorId: string) { const order = this.get(id); const required = order.documents.filter((document) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type)); if (required.length !== 2 || required.some((document) => document.status !== DocumentStatus.APPROVED)) throw new BadRequestException('Passport and ticket must be individually approved first'); const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.APPROVED, `Approved by ${actorId}; inventory ${profile.iccid} reserved`); this.transition(order, OrderStatus.PROVISIONING); await this.persistence.save(order); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); if (!this.queues.enabled) await this.processLocally(order.id); return this.redact(order); }
-  async approveToProvisioning(orderId: string, note: string) { const order = this.get(orderId); if (order.status !== OrderStatus.APPROVED) throw new BadRequestException(`Order in ${order.status} cannot be auto-approved`); const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.PROVISIONING, `${note}; inventory ${profile.iccid} reserved`); await this.persistence.save(order); let queued = true; try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); } catch (error) { this.logger.warn(`Provisioning queue unavailable for ${order.id}; provisioning locally: ${error instanceof Error ? error.message : 'unknown'}`); queued = false; } if (!queued || !this.queues.enabled) await this.processLocally(order.id); return this.redact(order); }
+  async approveToProvisioning(orderId: string, note: string) { const order = this.get(orderId); if (order.status !== OrderStatus.APPROVED) throw new BadRequestException(`Order in ${order.status} cannot be auto-approved`); const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.PROVISIONING, `${note}; inventory ${profile.iccid} reserved`); await this.persistence.save(order); let queued = true; try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); } catch (error) { this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`); if (process.env.NODE_ENV === 'production') throw error; queued = false; } if ((!queued || !this.queues.enabled) && process.env.NODE_ENV !== 'production') await this.processLocally(order.id); return this.redact(order); }
   async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); const isTopUp = order.purchaseType === 'TOPUP'; const prior = isTopUp && order.topUpMobile ? await this.priorCompletedOrderFor(order.topUpMobile) : null; const reuseExisting = Boolean(isTopUp && prior?.inventory && prior.planCountryCode === order.plan.countryCode); const profile = reuseExisting ? prior!.inventory! : await this.inventory.profileForOrder(order.id); const identity = isTopUp ? prior?.traveler ?? { email: (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail ?? '', mobile: order.topUpMobile ?? '', firstName: 'Existing', surname: 'Customer', city: '', countryOfResidence: 'NP' } : { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence }; const request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: identity }; try { const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.qrPayload) throw new Error('Connectivity provider has not delivered activation details'); order.qrPayload = result.qrPayload; order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'PRELOADED'; order.qrDeliveredAt = new Date().toISOString(); const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString(); const providerInfo = { provider: this.connectivity.descriptor().provider, ...(result.providerSubscriptionId ? { providerSubscriptionId: result.providerSubscriptionId } : {}), expiresAt }; if (reuseExisting) await this.inventory.assignTopup(order.id, await this.inventory.customerIdForOrder(order.id), profile.iccid, result.qrPayload, providerInfo); else await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, providerInfo); this.transition(order, OrderStatus.QR_READY, `Provisioned on attempt ${attempt}; activation QR delivered`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
     const errorCode = error instanceof ApiException
       ? `${error.code} (HTTP ${error.getStatus()})${error.internalDetail !== undefined ? `: ${typeof error.internalDetail === 'string' ? error.internalDetail : JSON.stringify(error.internalDetail)}` : ''}`.slice(0, 2000)
@@ -302,16 +319,7 @@ export class OrdersService implements OnModuleInit {
     if (event.status === 'ACTIVATED' && (order.status === OrderStatus.PROVISIONING || order.status === OrderStatus.QR_READY)) {
       const qrPayload = event.qrPayload ?? order.qrPayload;
       if (!qrPayload) throw new BadRequestException('Activation event is missing activation details');
-      const wasReady = order.status === OrderStatus.QR_READY;
-      order.qrPayload = qrPayload;
-      if (event.subscriptionId) order.providerSubscriptionId = event.subscriptionId;
-      order.providerStatus = 'ACTIVATED';
-      order.activatedAt = event.activatedAt ?? new Date().toISOString();
-      await this.activateOrder(order, qrPayload, provider, event.subscriptionId);
-      await this.inventory.applyLifecycle(order.id, lifecycle);
-      this.transition(order, OrderStatus.COMPLETED, `Provider ${event.eventType} delivered activation`);
-      await this.persistence.save(order);
-      if (!wasReady) await this.safeNotify(order, 'QR_READY');
+      await this.completeProviderActivation(order, { qrPayload, ...(event.subscriptionId ? { subscriptionId: event.subscriptionId } : {}), ...(event.activatedAt ? { activatedAt: event.activatedAt } : {}), label: event.eventType });
       return { accepted: true, eventType: event.eventType };
     }
 
@@ -322,17 +330,97 @@ export class OrdersService implements OnModuleInit {
     return { accepted: true, eventType: event.eventType };
   }
   retry(id: string) { const order = this.get(id); if (order.status !== OrderStatus.PROVISIONING_FAILED) throw new BadRequestException('Order is not retryable'); return this.approveProvisioning(order); }
-  async failStaleReadyOrders() {
+  /**
+   * Re-delivers the activation QR email for an order whose customer never
+   * received the original notification. When an owner id is provided the
+   * caller can only resend for their own order. Reuses the same delivery
+   * pipeline as the original QR_READY notification (password-protected PDF).
+   */
+  async resendQr(id: string, ownerId?: string) { const order = this.get(id, ownerId ?? undefined); if (![OrderStatus.QR_READY, OrderStatus.COMPLETED].includes(order.status)) throw new BadRequestException('QR can only be resent for a ready or completed order'); if (!order.qrPayload) throw new BadRequestException('Order has no activation QR to resend'); await this.safeNotify(order, 'QR_READY'); this.logger.log(`QR re-sent for order ${order.orderNumber} (${order.id})`); return this.redact(order); }
+  /**
+   * Builds the same password-protected QR PDF emailed at QR_READY so an
+   * authenticated owner can download it in-account when they did not receive
+   * the email. The MSISDN is the PDF password, matching the email flow.
+   */
+  async activationQr(id: string, ownerId?: string) { const order = this.get(id, ownerId ?? undefined); if (![OrderStatus.QR_READY, OrderStatus.COMPLETED].includes(order.status)) throw new BadRequestException('QR is only available for a ready or completed order'); if (!order.qrPayload) throw new BadRequestException('Order has no activation QR'); const inventory = await this.inventory.inventoryForOrder(order.id); const msisdn = inventory?.msisdn ?? order.traveler?.mobile ?? order.topUpMobile; if (!msisdn) throw new BadRequestException('eSIM number is required to open the QR document'); const bytes = await this.qrPdf.build({ qrPayload: order.qrPayload, orderNumber: order.orderNumber, password: msisdn }); return { filename: `${order.orderNumber}-esim.pdf`, contentType: 'application/pdf', bytes }; }
+  /**
+   * Reconciliation sweep for QR_READY orders whose activation window has
+   * elapsed. Instead of failing immediately it re-queries the provider details
+   * endpoint a bounded number of times, so a dropped/lost ACTIVATED webhook is
+   * recovered when the provider now reports activation details; otherwise the
+   * order is failed and released after ACTIVATION_REFETCH_ATTEMPTS.
+   */
+  async reconcileStaleActivationOrders() {
     const now = Date.now();
+    const recovered: string[] = [];
+    const failed: string[] = [];
+    const capabilities = this.connectivity.descriptor().capabilities;
     for (const order of this.orders.values()) {
       if (order.status !== OrderStatus.QR_READY || !order.qrDeliveredAt || !order.plan.validityDays) continue;
       const expiry = new Date(new Date(order.qrDeliveredAt).getTime() + order.plan.validityDays * 86_400_000).getTime();
       if (now <= expiry) continue;
+      const attempt = (this.activationRefetchAttempts.get(order.id) ?? 0) + 1;
+      this.activationRefetchAttempts.set(order.id, attempt);
+      if (attempt <= this.maxActivationRefetches && capabilities.esimDetails) {
+        try {
+          const details = await this.connectivity.getEsimDetails(await this.providerRefFor(order));
+          const qrPayload = (details as { qrPayload?: string }).qrPayload;
+          if (qrPayload) {
+            await this.completeProviderActivation(order, { qrPayload, ...(order.providerSubscriptionId ? { subscriptionId: order.providerSubscriptionId } : {}), label: 'activation re-fetch' });
+            this.activationRefetchAttempts.delete(order.id);
+            recovered.push(order.id);
+            this.logger.log(`Order ${order.orderNumber} (${order.id}) recovered after activation re-fetch attempt ${attempt}`);
+          } else {
+            this.logger.debug(`Order ${order.orderNumber} (${order.id}) not active at provider yet (re-fetch attempt ${attempt}/${this.maxActivationRefetches})`);
+          }
+          continue;
+        } catch (error) {
+          this.metrics?.recordFailure('reconciliation', 'activation-refetch');
+          this.logger.warn(`Activation re-fetch failed for order ${order.id} (attempt ${attempt}/${this.maxActivationRefetches}): ${error instanceof Error ? error.message : 'unknown'}`);
+          continue;
+        }
+      }
       this.transition(order, OrderStatus.PROVISIONING_FAILED, 'Activation window expired without an ACTIVATED event');
       await this.persistence.save(order);
       await this.alertProvisioningFailure(order);
-      this.logger.warn(`Order ${order.orderNumber} (${order.id}) QR_READY activation window expired; marked PROVISIONING_FAILED`);
+      failed.push(order.id);
+      this.activationRefetchAttempts.delete(order.id);
+      this.logger.warn(`Order ${order.orderNumber} (${order.id}) QR_READY activation window expired without ACTIVATED after ${attempt - 1} re-fetch attempt(s); marked PROVISIONING_FAILED`);
     }
+    return { recovered, failed };
+  }
+  /**
+   * Resolves the reference handed to the provider's details endpoint: the ICCID
+   * from the reserved inventory when available, else the provider subscription
+   * id, else the order id (which Transatel can resolve back to an inventory).
+   */
+  private async providerRefFor(order: DemoOrder): Promise<string> {
+    if (this.prisma.enabled) {
+      try {
+        const inventory = await this.inventory.inventoryForOrder(order.id);
+        if (inventory?.iccid) return inventory.iccid;
+      } catch { /* fall through to the subscription/reference id */ }
+    }
+    return order.providerSubscriptionId ?? order.id;
+  }
+  /**
+   * Completes an order once the provider has delivered its activation details
+   * and QR payload. Shared by the ACTIVATED webhook handler and the QR_READY
+   * recovery sweep so a recovered order follows the exact webhook path.
+   */
+  private async completeProviderActivation(order: DemoOrder, input: { qrPayload: string; subscriptionId?: string; activatedAt?: string; label?: string }) {
+    const wasReady = order.status === OrderStatus.QR_READY;
+    order.qrPayload = input.qrPayload;
+    if (input.subscriptionId) order.providerSubscriptionId = input.subscriptionId;
+    order.providerStatus = 'ACTIVATED';
+    order.activatedAt = input.activatedAt ?? new Date().toISOString();
+    const provider = this.connectivity.descriptor().provider;
+    const lifecycle = { provider, status: 'ACTIVATED' as const, ...(input.subscriptionId ? { subscriptionId: input.subscriptionId } : {}), ...(order.activatedAt ? { activatedAt: order.activatedAt } : {}) };
+    await this.activateOrder(order, input.qrPayload, provider, input.subscriptionId);
+    await this.inventory.applyLifecycle(order.id, lifecycle);
+    this.transition(order, OrderStatus.COMPLETED, `Provider ${input.label ? `${input.label} ` : ''}delivered activation`);
+    await this.persistence.save(order);
+    if (!wasReady) await this.safeNotify(order, 'QR_READY');
   }
   private async activateOrder(order: DemoOrder, qrPayload: string, provider: string, subscriptionId?: string) {
     const customerId = await this.inventory.customerIdForOrder(order.id);
@@ -372,7 +460,7 @@ export class OrdersService implements OnModuleInit {
   }
   private expand(order: DemoOrder) { const { qrPayload: _qrPayload, ...safe } = order; return safe; }
   private redact(order: DemoOrder) {
-    const { ownerId: _ownerId, providerSubscriptionId: _providerSubscriptionId, providerStatus: _providerStatus, ...safe } = order;
+    const { ownerId: _ownerId, providerSubscriptionId: _providerSubscriptionId, providerStatus: _providerStatus, qrPayload: _qrPayload, ...safe } = order;
     const documents = safe.documents.map(({ privateAssetId: _privateAssetId, ...document }) => document);
     const payment = safe.payment ? (({ correlationId: _correlationId, providerTransactionId: _providerTransactionId, ...rest }) => rest)(safe.payment) : undefined;
     const timeline = safe.timeline.map((event) => ({ ...event, ...(event.reason ? { reason: event.reason.replace(/\s+\(?(requested by|approved by|assigned by)\s+user_[A-Za-z0-9_]+\)?\.?$/i, '').trim() || undefined } : {}) }));

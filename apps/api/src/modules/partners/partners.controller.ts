@@ -74,7 +74,7 @@ export const completeCreateSchema = z.object({
       provider: z.enum(PaymentProvider),
       redirectUrl: z.url(),
     }),
-  ]),
+  ]).optional(),
   traveler: travelerSchema,
   documents: z
     .array(z.object({ type: z.enum(DocumentType), uploadId: z.string().uuid() }))
@@ -110,6 +110,9 @@ const ledgerSchema = z.object({
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),
   externalOrderId: z.string().max(120).optional(),
+  orderNumber: z.string().max(40).optional(),
+  reference: z.string().max(120).optional(),
+  type: z.enum(["CREDIT", "DEBIT", "REFUND", "ADJUSTMENT"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
@@ -229,7 +232,6 @@ export class PartnersController {
             "externalOrderId",
             "externalCustomerId",
             "planId",
-            "settlement",
             "traveler",
             "documents",
             "consent",
@@ -311,6 +313,12 @@ export class PartnersController {
   @PartnerScopes("orders:read")
   status(@Param("id") id: string, @Req() request: PartnerRequest) {
     return this.partners.order(request.partner!.id, id);
+  }
+
+  @Get("orders/:id/esim")
+  @PartnerScopes("esims:read")
+  activationDetails(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.activationDetails(request.partner!.id, id);
   }
 
   @Post("orders/:id/traveler")

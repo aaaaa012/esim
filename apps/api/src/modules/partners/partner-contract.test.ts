@@ -44,6 +44,27 @@ describe("simplified partner order contract", () => {
     ).toBe(true);
   });
 
+  it("defaults complete orders to the prepaid partner account", () => {
+    const result = completeCreateSchema.safeParse({
+      externalOrderId: "agency-order-1043",
+      externalCustomerId: "customer-91",
+      planId: "f17d6006-69fe-42ed-9ec8-47777f7569f1",
+      traveler,
+      documents: [
+        { type: "PASSPORT", uploadId: "00000000-0000-4000-8000-000000000001" },
+        { type: "TICKET", uploadId: "00000000-0000-4000-8000-000000000002" },
+      ],
+      consent: {
+        compatibilityAccepted: true,
+        termsAccepted: true,
+        privacyAccepted: true,
+        acceptedAt: "2026-08-08T00:00:00.000Z",
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.settlement).toBeUndefined();
+  });
+
   it("requires hosted payment provider and redirect URL", () => {
     const result = completeCreateSchema.safeParse({
       externalOrderId: "agency-order-1042",
