@@ -270,7 +270,8 @@ export class PartnersController {
     const input = createSchema.parse(body);
     if ("quoteId" in input)
       return this.partners.createOrder(request.partner!.id, input);
-    return this.partners.createCompleteOrder(request.partner!.id, input, {
+    const { settlement, ...rest } = input;
+    return this.partners.createCompleteOrder(request.partner!.id, { ...rest, ...(settlement ? { settlement } : {}) }, {
       ipAddress,
       userAgent: userAgent ?? "unknown",
     });
