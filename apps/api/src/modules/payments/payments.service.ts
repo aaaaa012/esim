@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PaymentProvider, PaymentStatus } from '@visa-compass/shared';
 import { OrdersService } from '../orders/orders.service.js';
+import { EsewaGateway } from './gateways/esewa.gateway.js';
 import { KhaltiGateway } from './gateways/khalti.gateway.js';
 import { PaymentSimulatorGateway } from './gateways/simulator.gateway.js';
 
@@ -14,12 +15,12 @@ export class PaymentsService {
     const order = this.orders.get(orderId);
     await this.orders.requestRefund(orderId, actorId, reason);
     const context = this.context(order, order.payment!.reference);
-    const gateway = this.gateway();
+    const gateway = this.gateway(order.payment!.provider);
     if (!gateway.refund) throw new BadRequestException('Selected provider does not support automated refunds');
     const result = await gateway.refund(order.payment!.providerTransactionId ?? order.payment!.reference, context, order.totalAmountNpr);
     return this.orders.markRefunded(orderId, result.reference);
   }
   async simulate(orderId: string, ownerId: string | null, reference: string, scenario: 'SUCCESS'|'CANCELLED'|'PENDING'|'WRONG_AMOUNT'|'REFUNDED'|'TIMEOUT' = 'SUCCESS') { if (process.env.NODE_ENV === 'production') throw new BadRequestException('Simulator is disabled'); if (scenario === 'TIMEOUT') throw new BadRequestException('Simulated payment provider timeout'); const order = this.orders.get(orderId, ownerId ?? undefined); const context=this.context(order,reference); this.simulator.apply(reference, scenario, context); const result = await this.simulator.verify(reference,context); if (result.status !== PaymentStatus.COMPLETED || result.orderId !== orderId || result.amountNpr !== order.totalAmountNpr) throw new BadRequestException(`Payment verification failed: ${result.status}`); return await this.orders.confirmPayment(orderId, reference, result.providerTransactionId); }
   private context(order:ReturnType<OrdersService['get']>,reference:string){if(order.payment?.reference!==reference)throw new BadRequestException('Payment reference mismatch');return {orderId:order.id,amountNpr:order.totalAmountNpr,...(order.payment.correlationId?{correlationId:order.payment.correlationId}:{})};}
-  private gateway() { return process.env.PAYMENT_MODE === 'sandbox' || process.env.NODE_ENV === 'production' ? this.khalti : this.simulator; }
+  private gateway(provider: PaymentProvider) { return process.env.PAYMENT_MODE === 'sandbox' || process.env.NODE_ENV === 'production' ? (provider === PaymentProvider.KHALTI ? this.khalti : this.esewa) : this.simulator; }
 }

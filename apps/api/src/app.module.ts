@@ -16,6 +16,7 @@ import { GuestOrdersController } from "./modules/orders/guest-orders.controller.
 import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
 import { KhaltiGateway } from "./modules/payments/gateways/khalti.gateway.js";
+import { EsewaGateway } from "./modules/payments/gateways/esewa.gateway.js";
 import { PaymentSimulatorGateway } from "./modules/payments/gateways/simulator.gateway.js";
 import { CryptoService } from "./infrastructure/crypto.service.js";
 import {
@@ -35,7 +36,13 @@ import { AdminService } from "./modules/admin/admin.service.js";
 import { ProvisioningProcessor } from "./jobs/provisioning.processor.js";
 import { PartnersController } from "./modules/partners/partners.controller.js";
 import { PartnerAuthGuard } from "./modules/partners/partner-auth.guard.js";
+import { PartnerService } from "./modules/partners/partner.service.js";
+import { PartnerAdminController } from "./modules/partners/partner-admin.controller.js";
+import { PartnerAdminService } from "./modules/partners/partner-admin.service.js";
+import { PartnerCheckoutController } from "./modules/partners/partner-checkout.controller.js";
+import { PartnerWebhookProcessor } from "./jobs/partner-webhook.processor.js";
 import { ConnectivityService } from "./modules/integration/connectivity.service.js";
+import { AurigaMockProvider } from "./modules/integration/auriga-mock.provider.js";
 import { TransatelProvider } from "./modules/integration/transatel.provider.js";
 import { NotificationController } from "./modules/notification/notification.controller.js";
 import { NotificationService } from "./modules/notification/notification.service.js";
@@ -69,6 +76,8 @@ OperationsController,
     OperationsIntegrationEventsController,
     OperationsIntegrationLogsController,
     PartnersController,
+    PartnerAdminController,
+    PartnerCheckoutController,
     NotificationController,
   ],
   providers: [
@@ -80,9 +89,14 @@ OperationsController,
     AdminService,
     PaymentsService,
     KhaltiGateway,
+    EsewaGateway,
     PaymentSimulatorGateway,
+    AurigaMockProvider,
     TransatelProvider,
     ConnectivityService,
+    PartnerService,
+    PartnerAdminService,
+    PartnerWebhookProcessor,
     CryptoService,
     PrismaService,
     CloudinaryStorageService,

@@ -76,6 +76,33 @@ async function bootOnce() {
   if (process.env.SWAGGER_ENABLED === 'true') {
     const config = new DocumentBuilder().setTitle('Visa Compass eSIM API').setVersion('1.0').addBearerAuth().build();
     SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, config));
+
+    const partnerConfig = new DocumentBuilder()
+      .setTitle('Visa Compass Partner API')
+      .setDescription(
+        'Commercial agency and reseller API. Monetary amounts are integer NPR paisa. Mutations require Idempotency-Key.',
+      )
+      .setVersion('1.0')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'vc_partner_<prefix>.<secret>',
+        },
+        'partner-key',
+      )
+      .build();
+    const partnerDocument = SwaggerModule.createDocument(app, partnerConfig);
+    partnerDocument.paths = Object.fromEntries(
+      Object.entries(partnerDocument.paths).filter(
+        ([path]) =>
+          path.startsWith('/api/v1/partners') ||
+          path.startsWith('/api/v1/partner-checkout'),
+      ),
+    );
+    SwaggerModule.setup('api/partner-docs', app, partnerDocument, {
+      jsonDocumentUrl: 'api/partner-docs/openapi.json',
+    });
   }
 
   await app.listen(Number(process.env.PORT ?? 4000));
