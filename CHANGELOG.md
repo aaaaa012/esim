@@ -21,6 +21,88 @@ section when a release/tag is cut.
 
 ---
 
+## 2026-08-09 — Partner API MVP & prepaid flow
+
+Commit: `cc165aa` · Branch: `API-integratedv1`
+
+### Added
+- Partner activation delivery endpoint
+  `GET /api/v1/partners/orders/:id/esim`, protected by the new
+  `esims:read` scope and available when an order is `QR_READY` or
+  `COMPLETED`.
+- Partner order responses now expose `fulfillmentStatus`, asynchronous
+  `nextAction`, polling guidance, resource links and eSIM-detail
+  availability without leaking activation secrets in ordinary responses or
+  webhooks.
+- Durable partner lifecycle events and signed webhook deliveries for order
+  acceptance, provisioning, QR readiness, activation, failure, cancellation
+  and refunds; pending deliveries are reconciled every 30 seconds.
+- Partner account summaries with prepaid balance, credit/debit/refund totals,
+  order counts by status, fulfilled/failed counts, total order value and
+  average order value.
+- Partner ledger filters for date, transaction type, reference, internal order
+  number and partner external order ID.
+- Super Admin partner workspace at `/admin/partners/:id` with overview,
+  partner-specific orders, financial ledger, date filters and CSV exports.
+- Operations Orders filters for direct versus partner sales, partner, status
+  and date range, with partner identity and external references included in
+  search and CSV exports.
+- Customer and operations recovery actions for downloading or resending a
+  password-protected activation QR after an eSIM reaches `QR_READY` or
+  `COMPLETED`.
+
+### Changed
+- Partner orders now use the same active `Plan.sellingPrice` as direct
+  customer orders. The price is snapshotted at acceptance so later catalogue
+  changes cannot alter an existing order or ledger debit.
+- Partner settlement is prepaid-only for the MVP. The order and its linked
+  `DEBIT` ledger entry are created atomically, insufficient balances are
+  rejected, overdrafts are disabled, and retries never create a second debit.
+- Partner fulfillment is asynchronous:
+  `APPROVED → PROVISIONING → QR_READY → COMPLETED`. `QR_READY` means the eSIM
+  can be delivered; `COMPLETED` is reserved for provider-confirmed activation.
+- Accepted partner orders are recovered after API restarts, and production now
+  requires `REDIS_URL` so provisioning and notification work cannot silently
+  fall back to in-process execution.
+- Partner cancellation and approved refunds credit the original prepaid debit
+  exactly once while `PROVISIONING_FAILED` remains paid and retryable.
+- New partner credentials expose only the active catalogue, order, document,
+  refund, usage and eSIM scopes. Partner quotes, channel-specific price lists
+  and payment scopes are no longer part of the active MVP contract.
+- Partner API documentation now describes prepaid settlement, unified public
+  pricing, asynchronous order states, polling, activation retrieval and
+  webhook behavior.
+- Payment and customer-source contracts now standardize on Khalti as the only
+  hosted payment provider.
+
+### Fixed
+- Prepaid debits now use an optimistic, balance-guarded update so concurrent
+  orders cannot overspend the same partner balance.
+- `StatusBadge` now handles missing labels safely instead of throwing while
+  rendering operations data.
+- QR-ready orders no longer appear incomplete to partner clients; activation
+  details are available at both `QR_READY` and `COMPLETED`.
+
+### Removed
+- ESEWA payment enums, gateway registration, gateway implementation and
+  advertised Partner API capability.
+- Hosted-payment and quote-based partner order creation. These mutation paths
+  now return HTTP `410` with stable deprecation codes while historical records
+  remain readable.
+- Partner-specific wholesale/retail pricing from active order creation and the
+  operations workflow; historical price-list tables are retained for data
+  compatibility.
+
+### Tests
+- Added `apps/api/src/modules/partners/partner-prepaid.test.ts` covering hosted
+  payment deprecation, insufficient prepaid balance and guarded order-linked
+  debits; expanded `partner-contract.test.ts` for default prepaid settlement.
+- Full validation at implementation time: API, customer web, operations web
+  and shared TypeScript checks passed; API build passed; 117/117 tests passed
+  across 17 test files.
+
+---
+
 ## 2026-08-09 — security & resilience hardening
 
 Tag: `updated-in-terms-of-security-fixes` · Branch: `API-integratedv1`
