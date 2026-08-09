@@ -16,6 +16,7 @@ type LookupResult = {
     hasActiveEsim: boolean;
   };
   topUpAvailable?: boolean;
+  lookupToken?: string;
 };
 
 export default function TopupLookup() {
@@ -44,6 +45,7 @@ export default function TopupLookup() {
       try {
         if (value?.found && value.topUpAvailable) {
           sessionStorage.setItem("vc_topup_mobile", mobile.trim());
+          if (value.lookupToken) sessionStorage.setItem("vc_topup_token", value.lookupToken);
           if (value.subscriber?.countryCode) {
             sessionStorage.setItem("vc_topup_country", value.subscriber.countryCode);
           } else {
@@ -51,6 +53,7 @@ export default function TopupLookup() {
           }
         } else {
           sessionStorage.removeItem("vc_topup_mobile");
+          sessionStorage.removeItem("vc_topup_token");
           sessionStorage.removeItem("vc_topup_country");
         }
       } catch {

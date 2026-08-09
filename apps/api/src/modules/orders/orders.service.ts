@@ -25,6 +25,7 @@ export type DemoOrder = {
   providerSubscriptionId?: string; providerStatus?: string; qrDeliveredAt?: string; activatedAt?: string; usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
   purchaseType?: 'INITIAL_PURCHASE' | 'TOPUP';
   topUpMobile?: string;
+  assignment?: { inventoryId: string; iccid: string; msisdn?: string; providerSubscriptionId?: string; verificationStatus?: string; verifiedAt?: string; providerLastSeenAt?: string };
   partner?: { id: string; code: string; name: string };
   externalOrderId?: string;
 };
@@ -34,6 +35,7 @@ export class OrdersService implements OnModuleInit {
   private readonly orders = new Map<string, DemoOrder>();
   private readonly logger = new Logger(OrdersService.name);
   private readonly activationRefetchAttempts = new Map<string, number>();
+  private readonly confirmLocks = new Map<string, Promise<unknown>>();
   private readonly maxActivationRefetches = (() => { const parsed = Number(process.env.ACTIVATION_REFETCH_ATTEMPTS); return Number.isFinite(parsed) && parsed > 0 ? parsed : 3; })();
   constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService, private readonly qrPdf: QrPdfService, private readonly metrics?: MetricsService) {}
   async refreshFromPersistence(orderId?: string) { for (const order of await this.persistence.load()) if (!orderId || order.id === orderId) this.orders.set(order.id, order); }
@@ -79,13 +81,17 @@ export class OrdersService implements OnModuleInit {
       })),
     };
   }
-  async create(ownerId: string | null, planId: string, compatibilityAccepted: boolean, meta?: { ipAddress?: string; userAgent?: string; mobile?: string; email?: string }) {
+  async create(ownerId: string | null, planId: string, compatibilityAccepted: boolean, meta?: { ipAddress?: string; userAgent?: string; mobile?: string; email?: string; targetEsimId?: string }) {
     if (!compatibilityAccepted) throw new BadRequestException('Compatibility declaration is required');
     const plan = await this.catalog.findActive(planId); if (!plan) throw new BadRequestException('Invalid or inactive plan');
     const id = randomUUID(); const now = new Date().toISOString();
-    const purchaseType = await this.resolvePurchaseType(ownerId, meta?.mobile);
+    const target = meta?.targetEsimId && ownerId ? await this.targetEsim(ownerId, meta.targetEsimId) : null;
+    const mobileTarget = !target && meta?.mobile ? await this.targetForMobile(meta.mobile) : null;
+    const selectedTarget = target ?? mobileTarget;
+    const purchaseType = selectedTarget?.countryCodes.includes(plan.countryCode) ? 'TOPUP' as const : 'INITIAL_PURCHASE' as const;
     const topUpEmail = purchaseType === 'TOPUP' ? (meta?.mobile ? await this.priorOrderEmail(meta.mobile) : ownerId ? await this.customerEmail(ownerId) : undefined) : undefined;
-    const order: DemoOrder = { id, ownerId, orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`, status: OrderStatus.DRAFT, version: 0, plan, totalAmountNpr: plan.sellingPriceNpr, pricingSnapshot: { planId, name: plan.name, amount: plan.sellingPriceNpr, currency: 'NPR', ...(meta?.mobile ? { topUpMobile: meta.mobile } : {}), ...(topUpEmail ? { topUpEmail } : {}) }, compatibilityAcceptedAt: now, documents: [], timeline: [{ from: null, to: OrderStatus.DRAFT, at: now }], createdAt: now, purchaseType, ...(meta?.mobile ? { topUpMobile: meta.mobile } : {}) };
+    const reusableTraveler = target && purchaseType === 'INITIAL_PURCHASE' ? target.traveler : undefined;
+    const order: DemoOrder = { id, ownerId, orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`, status: OrderStatus.DRAFT, version: 0, plan, totalAmountNpr: plan.sellingPriceNpr, pricingSnapshot: { planId, name: plan.name, amount: plan.sellingPriceNpr, currency: 'NPR', ...(selectedTarget ? { targetEsimId: selectedTarget.inventoryId } : {}), ...(meta?.mobile ? { topUpMobile: meta.mobile } : {}), ...(topUpEmail ? { topUpEmail } : {}) }, compatibilityAcceptedAt: now, ...(reusableTraveler ? { traveler: reusableTraveler } : {}), documents: [], timeline: [{ from: null, to: OrderStatus.DRAFT, at: now }], createdAt: now, purchaseType, ...(meta?.mobile ? { topUpMobile: meta.mobile } : {}) };
     this.orders.set(id, order); await this.persistence.save(order);
     if (meta?.ipAddress || meta?.userAgent) {
       await this.persistence.recordConsent(id, ownerId ?? 'guest', 'E_SIM_COMPATIBILITY', '1.0', meta.ipAddress ?? 'unknown', meta.userAgent ?? 'unknown').catch((error) => this.logger.warn(`Consent recording failed for order ${id}: ${error instanceof Error ? error.message : 'unknown'}`));
@@ -117,19 +123,18 @@ export class OrdersService implements OnModuleInit {
     const customer = await this.prisma.customer.findFirst({ where: { OR: this.customerMatch(ownerId) }, select: { email: true } });
     return customer?.email ?? undefined;
   }
-  private async resolvePurchaseType(ownerId: string | null, mobile?: string) {
-    if (ownerId && (await this.hasCompletedOrderForOwner(ownerId))) return 'TOPUP' as const;
-    if (mobile) {
-      const target = normalizeMsisdn(mobile);
-      const prior = [...this.orders.values()].find((order) => order.status === OrderStatus.COMPLETED && order.traveler && normalizeMsisdn(order.traveler.mobile) === target);
-      if (prior) return 'TOPUP' as const;
-      if (this.prisma.enabled) {
-        const variants = [...msisdnVariants(mobile)];
-        const found = await this.prisma.order.findFirst({ where: { status: 'COMPLETED', traveler: { is: { mobile: { in: variants } } } }, select: { id: true, traveler: { select: { mobile: true } } } });
-        if (found?.traveler && normalizeMsisdn(found.traveler.mobile) === target) return 'TOPUP' as const;
-      }
-    }
-    return 'INITIAL_PURCHASE' as const;
+  private async targetEsim(ownerId: string, inventoryId: string) {
+    if (!this.prisma.enabled) throw new BadRequestException('Target eSIM selection requires database persistence');
+    const customer = await this.prisma.customer.findFirst({ where: { OR: this.customerMatch(ownerId) }, select: { id: true } });
+    if (!customer) throw new NotFoundException('eSIM not found');
+    const rows = await this.prisma.customerEsim.findMany({ where: { customerId: customer.id, inventoryId }, select: { inventoryId: true, orderId: true, assignedAt: true, order: { select: { plan: { select: { country: { select: { isoCode: true } } } } } } }, orderBy: { assignedAt: 'desc' } });
+    if (!rows.length) throw new NotFoundException('eSIM not found');
+    const traveler = rows.map((row) => this.orders.get(row.orderId)?.traveler).find(Boolean);
+    return { inventoryId, countryCodes: [...new Set(rows.map((row) => row.order.plan.country.isoCode))], ...(traveler ? { traveler } : {}) };
+  }
+  private async targetForMobile(mobile: string) {
+    const prior = await this.priorCompletedOrderFor(mobile);
+    return prior?.inventory ? { inventoryId: prior.inventory.id, countryCodes: [prior.planCountryCode] } : null;
   }
   private async hasCompletedOrderForOwner(ownerId: string) {
     const anyCompleted = [...this.orders.values()].some((order) => order.ownerId === ownerId && order.status === OrderStatus.COMPLETED);
@@ -156,6 +161,18 @@ export class OrdersService implements OnModuleInit {
   async documentContent(id: string, documentId: string) { const order = this.get(id); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); return { ...(await this.storage.downloadDocument(document.privateAssetId)), fileName: document.fileName }; }
   async beginPayment(id: string, ownerId: string | null, provider: PaymentProvider, initiation: { reference: string; correlationId?: string; expiresAt?: string; returnUrl: string; redirectUrl?: string }) { const order = this.get(id, ownerId ?? undefined); if (order.purchaseType !== 'TOPUP') { const required = order.documents.filter((d) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type)); if (!order.traveler || required.length !== 2) throw new BadRequestException('Traveler, passport, and ticket are required'); await Promise.all(required.map((document) => this.storage.verifyDocument(document.privateAssetId))); required.forEach((document) => { document.uploadVerified = true; }); } if (order.status !== OrderStatus.PAYMENT_PENDING) this.transition(order, OrderStatus.PAYMENT_PENDING); order.payment = { provider, reference: initiation.reference, status: PaymentStatus.PENDING, ...(initiation.correlationId ? { correlationId: initiation.correlationId } : {}), ...(initiation.expiresAt ? { expiresAt: initiation.expiresAt } : {}), returnUrl: initiation.returnUrl, ...(initiation.redirectUrl ? { redirectUrl: initiation.redirectUrl } : {}) }; await this.persistence.save(order); return this.redact(order); }
   async confirmPayment(id: string, reference: string, transactionId?: string) {
+    return this.runExclusive(id, () => this.confirmPaymentUnlocked(id, reference, transactionId));
+  }
+
+  /**
+   * Guards payment confirmation per order id. Browser verification, the
+   * callback path and the background reconcile can all reach confirmation for
+   * the same order simultaneously; without this, two callers could read
+   * PENDING before either persists COMPLETED and both auto-approve/provision.
+   * This is a single-instance safeguard — multi-instance deployments need an
+   * atomic database transition (see plan follow-up).
+   */
+  private async confirmPaymentUnlocked(id: string, reference: string, transactionId?: string) {
     const order = this.get(id);
     if (order.payment?.reference !== reference) throw new BadRequestException('Payment reference mismatch');
     if (order.payment.status === PaymentStatus.COMPLETED) return this.redact(order);
@@ -166,14 +183,25 @@ export class OrdersService implements OnModuleInit {
     await this.persistence.save(order);
     return this.redact(order);
   }
-  async resolvePaymentFailure(id: string, ownerId: string | null, reason: string) {
+  async resolvePaymentFailure(id: string, ownerId: string | null, reason: string, paymentStatus: PaymentStatus = PaymentStatus.FAILED) {
     const order = this.get(id, ownerId ?? undefined);
     if (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.REFUNDED) return this.redact(order);
     if (![OrderStatus.PAYMENT_PENDING, OrderStatus.PAYMENT_FAILED].includes(order.status)) return this.redact(order);
-    if (order.payment && order.payment.status !== PaymentStatus.COMPLETED) order.payment.status = PaymentStatus.FAILED;
+    if (order.payment && order.payment.status !== PaymentStatus.COMPLETED) order.payment.status = paymentStatus;
     if (order.status !== OrderStatus.PAYMENT_FAILED) this.transition(order, OrderStatus.PAYMENT_FAILED, reason);
     await this.persistence.save(order);
     return this.redact(order);
+  }
+
+  /** Serializes async tasks that share a key (e.g. per-order confirmation). */
+  private runExclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = (this.confirmLocks.get(key) ?? Promise.resolve()) as Promise<unknown>;
+    const run = previous.catch(() => undefined).then(task);
+    this.confirmLocks.set(key, run);
+    void run.finally(() => {
+      if (this.confirmLocks.get(key) === run) this.confirmLocks.delete(key);
+    });
+    return run;
   }
   async cancel(id: string, ownerId: string | null, reason: string) {
     const order = this.get(id, ownerId ?? undefined);
@@ -282,14 +310,14 @@ export class OrdersService implements OnModuleInit {
     return {
       planCountryCode: prior.plan.country.isoCode,
       traveler: { firstName: prior.traveler.firstName, surname: prior.traveler.surname, email: prior.traveler.email, mobile: prior.traveler.mobile, city: prior.traveler.city, countryOfResidence: prior.traveler.countryOfResidence },
-      inventory: prior.customerEsim?.inventory ? { eid: prior.customerEsim.inventory.eid, iccid: prior.customerEsim.inventory.iccid } : null,
+      inventory: prior.customerEsim?.inventory ? { id: prior.customerEsim.inventory.id, eid: prior.customerEsim.inventory.eid, iccid: prior.customerEsim.inventory.iccid } : null,
     };
   }
   async requestReupload(id: string, reason: string) { const order = this.get(id); this.transition(order, OrderStatus.AWAITING_CUSTOMER, reason); order.documents.forEach((d) => { d.status = DocumentStatus.REUPLOAD_REQUIRED; }); await this.persistence.save(order); return order; }
   async reviewDocument(id: string, documentId: string, actorId: string, decision: 'APPROVE' | 'REUPLOAD', reason?: string) { const order = this.get(id); if (order.status !== OrderStatus.REVIEW_PENDING) throw new BadRequestException('Order is not awaiting review'); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); if (decision === 'APPROVE') { document.status = DocumentStatus.APPROVED; order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `${document.type} approved by ${actorId}` }); } else { if (!reason?.trim()) throw new BadRequestException('Re-upload reason is required'); document.status = DocumentStatus.REUPLOAD_REQUIRED; this.transition(order, OrderStatus.AWAITING_CUSTOMER, `${document.type}: ${reason.trim()} (requested by ${actorId})`); } await this.persistence.save(order); await this.persistence.recordReview(order.id, documentId, actorId, decision, reason); return this.redact(order); }
   async approve(id: string, actorId: string) { const order = this.get(id); const required = order.documents.filter((document) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type)); if (required.length !== 2 || required.some((document) => document.status !== DocumentStatus.APPROVED)) throw new BadRequestException('Passport and ticket must be individually approved first'); const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.APPROVED, `Approved by ${actorId}; inventory ${profile.iccid} reserved`); this.transition(order, OrderStatus.PROVISIONING); await this.persistence.save(order); let queued = true; try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); } catch (error) { this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`); if (process.env.NODE_ENV === 'production') throw error; queued = false; } if ((!queued || !this.queues.enabled) && process.env.NODE_ENV !== 'production') await this.processLocally(order.id); return this.redact(order); }
   async approveToProvisioning(orderId: string, note: string) { const order = this.get(orderId); if (order.status !== OrderStatus.APPROVED) throw new BadRequestException(`Order in ${order.status} cannot be auto-approved`); const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.PROVISIONING, `${note}; inventory ${profile.iccid} reserved`); await this.persistence.save(order); let queued = true; try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); } catch (error) { this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`); if (process.env.NODE_ENV === 'production') throw error; queued = false; } if ((!queued || !this.queues.enabled) && process.env.NODE_ENV !== 'production') await this.processLocally(order.id); return this.redact(order); }
-  async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); if (order.qrPayload) { this.logger.debug(`Order ${id} already provisioned; skipping re-provision`); return; } const isTopUp = order.purchaseType === 'TOPUP'; const prior = isTopUp && order.topUpMobile ? await this.priorCompletedOrderFor(order.topUpMobile) : null; const reuseExisting = Boolean(isTopUp && prior?.inventory && prior.planCountryCode === order.plan.countryCode); const profile = reuseExisting ? prior!.inventory! : await this.inventory.profileForOrder(order.id); const identity = isTopUp ? prior?.traveler ?? { email: (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail ?? '', mobile: order.topUpMobile ?? '', firstName: 'Existing', surname: 'Customer', city: '', countryOfResidence: 'NP' } : { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence }; const request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: identity }; try { const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.qrPayload) throw new Error('Connectivity provider has not delivered activation details'); order.qrPayload = result.qrPayload; order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'PRELOADED'; order.qrDeliveredAt = new Date().toISOString(); const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString(); const providerInfo = { provider: this.connectivity.descriptor().provider, ...(result.providerSubscriptionId ? { providerSubscriptionId: result.providerSubscriptionId } : {}), expiresAt }; if (reuseExisting) await this.inventory.assignTopup(order.id, await this.inventory.customerIdForOrder(order.id), profile.iccid, result.qrPayload, providerInfo); else await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, providerInfo); this.transition(order, OrderStatus.QR_READY, `Provisioned on attempt ${attempt}; activation QR delivered`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
+  async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); if (order.qrPayload) { this.logger.debug(`Order ${id} already provisioned; skipping re-provision`); return; } const target = await this.provisioningTarget(order); const reuseExisting = Boolean(target); const profile = target?.inventory ?? await this.inventory.profileForOrder(order.id); const identity = order.purchaseType === 'TOPUP' ? target?.traveler ?? { email: (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail ?? '', mobile: order.topUpMobile ?? '', firstName: 'Existing', surname: 'Customer', city: '', countryOfResidence: 'NP' } : { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence }; const request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: identity }; try { const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.providerSubscriptionId) throw new Error('Connectivity provider did not return a subscription id'); if (!result.qrPayload) throw new Error('Connectivity provider has not delivered activation details'); order.qrPayload = result.qrPayload; order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'PRELOADED'; order.qrDeliveredAt = new Date().toISOString(); const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString(); const providerInfo = { provider: this.connectivity.descriptor().provider, providerSubscriptionId: result.providerSubscriptionId, expiresAt }; if (reuseExisting) await this.inventory.assignTopup(order.id, await this.inventory.customerIdForOrder(order.id), profile.iccid, result.qrPayload, providerInfo); else await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, providerInfo); const assigned = await this.inventory.inventoryForOrder(order.id); if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), providerSubscriptionId: result.providerSubscriptionId, verificationStatus: 'PENDING' }; this.transition(order, OrderStatus.QR_READY, `Provisioned on attempt ${attempt}; activation QR delivered`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
     const errorCode = error instanceof ApiException
       ? `${error.code} (HTTP ${error.getStatus()})${error.internalDetail !== undefined ? `: ${typeof error.internalDetail === 'string' ? error.internalDetail : JSON.stringify(error.internalDetail)}` : ''}`.slice(0, 2000)
       : (error instanceof Error ? error.name : 'UNKNOWN');
@@ -310,6 +338,7 @@ export class OrdersService implements OnModuleInit {
     const provider = this.connectivity.descriptor().provider;
     const lifecycle = {
       provider,
+      ...(event.iccid ? { iccid: event.iccid } : {}),
       ...(event.status ? { status: event.status } : {}),
       ...(event.subscriptionId ? { subscriptionId: event.subscriptionId } : {}),
       ...(event.activatedAt ? { activatedAt: event.activatedAt } : {}),
@@ -319,11 +348,13 @@ export class OrdersService implements OnModuleInit {
     if (event.status === 'ACTIVATED' && (order.status === OrderStatus.PROVISIONING || order.status === OrderStatus.QR_READY)) {
       const qrPayload = event.qrPayload ?? order.qrPayload;
       if (!qrPayload) throw new BadRequestException('Activation event is missing activation details');
-      await this.completeProviderActivation(order, { qrPayload, ...(event.subscriptionId ? { subscriptionId: event.subscriptionId } : {}), ...(event.activatedAt ? { activatedAt: event.activatedAt } : {}), label: event.eventType });
+      await this.completeProviderActivation(order, { qrPayload, ...(event.subscriptionId ? { subscriptionId: event.subscriptionId } : {}), ...(event.iccid ? { iccid: event.iccid } : {}), ...(event.activatedAt ? { activatedAt: event.activatedAt } : {}), label: event.eventType });
       return { accepted: true, eventType: event.eventType };
     }
 
     await this.inventory.applyLifecycle(order.id, lifecycle);
+    const assigned = await this.inventory.inventoryForOrder(order.id);
+    if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), ...(event.subscriptionId ? { providerSubscriptionId: event.subscriptionId } : {}), verificationStatus: event.status === 'ACTIVATED' ? 'VERIFIED' : 'PENDING', ...(event.status === 'ACTIVATED' ? { verifiedAt: new Date().toISOString() } : {}), providerLastSeenAt: new Date().toISOString() };
     if (event.subscriptionId) order.providerSubscriptionId = event.subscriptionId;
     if (event.status) order.providerStatus = event.status;
     await this.persistence.save(order);
@@ -408,16 +439,25 @@ export class OrdersService implements OnModuleInit {
    * and QR payload. Shared by the ACTIVATED webhook handler and the QR_READY
    * recovery sweep so a recovered order follows the exact webhook path.
    */
-  private async completeProviderActivation(order: DemoOrder, input: { qrPayload: string; subscriptionId?: string; activatedAt?: string; label?: string }) {
+  private async completeProviderActivation(order: DemoOrder, input: { qrPayload: string; subscriptionId?: string; iccid?: string; activatedAt?: string; label?: string }) {
     const wasReady = order.status === OrderStatus.QR_READY;
     order.qrPayload = input.qrPayload;
     if (input.subscriptionId) order.providerSubscriptionId = input.subscriptionId;
     order.providerStatus = 'ACTIVATED';
     order.activatedAt = input.activatedAt ?? new Date().toISOString();
     const provider = this.connectivity.descriptor().provider;
-    const lifecycle = { provider, status: 'ACTIVATED' as const, ...(input.subscriptionId ? { subscriptionId: input.subscriptionId } : {}), ...(order.activatedAt ? { activatedAt: order.activatedAt } : {}) };
+    const lifecycle = { provider, status: 'ACTIVATED' as const, ...(input.subscriptionId ? { subscriptionId: input.subscriptionId } : {}), ...(input.iccid ? { iccid: input.iccid } : {}), ...(order.activatedAt ? { activatedAt: order.activatedAt } : {}) };
     await this.activateOrder(order, input.qrPayload, provider, input.subscriptionId);
+    if (provider === 'TRANSATEL' && input.subscriptionId) {
+      const target = await this.inventory.inventoryForOrder(order.id);
+      if (!target?.iccid) throw new Error('Assigned eSIM could not be resolved for provider verification');
+      if (input.iccid && input.iccid !== target.iccid) await this.inventory.applyLifecycle(order.id, lifecycle);
+      const usage = await this.connectivity.getUsage(target.iccid);
+      if (!usage.subscriptions?.some((item) => item.providerSubscriptionId === input.subscriptionId)) throw new Error('Provider subscription is not present on the assigned eSIM');
+    }
     await this.inventory.applyLifecycle(order.id, lifecycle);
+    const assigned = await this.inventory.inventoryForOrder(order.id);
+    if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), ...(input.subscriptionId ? { providerSubscriptionId: input.subscriptionId } : {}), verificationStatus: 'VERIFIED', verifiedAt: new Date().toISOString(), providerLastSeenAt: new Date().toISOString() };
     this.transition(order, OrderStatus.COMPLETED, `Provider ${input.label ? `${input.label} ` : ''}delivered activation`);
     await this.persistence.save(order);
     if (!wasReady) await this.safeNotify(order, 'QR_READY');
@@ -425,14 +465,17 @@ export class OrdersService implements OnModuleInit {
   private async activateOrder(order: DemoOrder, qrPayload: string, provider: string, subscriptionId?: string) {
     const customerId = await this.inventory.customerIdForOrder(order.id);
     const providerInfo = { provider, ...(subscriptionId ? { providerSubscriptionId: subscriptionId } : {}) };
-    if (order.purchaseType === 'TOPUP') {
-      const prior = order.topUpMobile ? await this.priorCompletedOrderFor(order.topUpMobile) : null;
-      if (prior?.inventory && prior.planCountryCode === order.plan.countryCode) {
-        await this.inventory.assignTopup(order.id, customerId, prior.inventory.iccid, qrPayload, providerInfo);
-        return;
-      }
-    }
+    const target = await this.provisioningTarget(order);
+    if (target) { await this.inventory.assignTopup(order.id, customerId, target.inventory.iccid, qrPayload, providerInfo); return; }
     await this.inventory.assign(order.id, customerId, qrPayload, providerInfo);
+  }
+  private async provisioningTarget(order: DemoOrder) {
+    const targetEsimId = (order.pricingSnapshot as { targetEsimId?: string }).targetEsimId;
+    if (!targetEsimId || !this.prisma.enabled) return null;
+    const row = await this.prisma.esimInventory.findUnique({ where: { id: targetEsimId }, include: { customerEsims: { take: 1, orderBy: { assignedAt: 'desc' }, include: { order: { include: { traveler: true } } } } } });
+    if (!row) throw new NotFoundException('Target eSIM is no longer available');
+    const traveler = row.customerEsims[0]?.order.traveler;
+    return { inventory: { id: row.id, eid: row.eid, iccid: row.iccid }, ...(traveler ? { traveler: { firstName: traveler.firstName, surname: traveler.surname, email: traveler.email, mobile: traveler.mobile, city: traveler.city, countryOfResidence: traveler.countryOfResidence } } : {}) };
   }
   private async autoApprove(order: DemoOrder) { this.transition(order, OrderStatus.APPROVED, 'Auto-approved after payment'); this.transition(order, OrderStatus.PROVISIONING); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); if (!this.queues.enabled) await this.processLocally(order.id); }
   private async approveProvisioning(order: DemoOrder) { this.transition(order, OrderStatus.PROVISIONING, 'Manual retry'); await this.persistence.save(order); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `retry-${order.id}-${Date.now()}`); if (!this.queues.enabled) return this.processLocally(order.id); return this.redact(order); }
@@ -460,13 +503,15 @@ export class OrdersService implements OnModuleInit {
   }
   private expand(order: DemoOrder) { const { qrPayload: _qrPayload, ...safe } = order; return safe; }
   private redact(order: DemoOrder) {
-    const { ownerId: _ownerId, providerSubscriptionId: _providerSubscriptionId, providerStatus: _providerStatus, qrPayload: _qrPayload, ...safe } = order;
+    const { ownerId: _ownerId, providerSubscriptionId: _providerSubscriptionId, providerStatus: _providerStatus, qrPayload: _qrPayload, assignment: rawAssignment, ...safe } = order;
     const documents = safe.documents.map(({ privateAssetId: _privateAssetId, ...document }) => document);
     const payment = safe.payment ? (({ correlationId: _correlationId, providerTransactionId: _providerTransactionId, ...rest }) => rest)(safe.payment) : undefined;
     const timeline = safe.timeline.map((event) => ({ ...event, ...(event.reason ? { reason: event.reason.replace(/\s+\(?(requested by|approved by|assigned by)\s+user_[A-Za-z0-9_]+\)?\.?$/i, '').trim() || undefined } : {}) }));
     const pricingSnapshot = { ...(safe.pricingSnapshot as Record<string, unknown>) };
     delete pricingSnapshot.topUpEmail;
     delete pricingSnapshot.topUpIdentity;
-    return { ...safe, pricingSnapshot, documents, ...(payment ? { payment } : {}), timeline } as DemoOrder;
+    const assignment = rawAssignment ? { verificationStatus: rawAssignment.verificationStatus, verifiedAt: rawAssignment.verifiedAt, providerLastSeenAt: rawAssignment.providerLastSeenAt } : undefined;
+    const purchaseContext = safe.purchaseType === 'TOPUP' ? 'TOPUP' : typeof pricingSnapshot.targetEsimId === 'string' ? 'NEW_DESTINATION' : 'FIRST_PURCHASE';
+    return { ...safe, purchaseContext, pricingSnapshot, documents, ...(payment ? { payment } : {}), ...(assignment ? { assignment } : {}), timeline } as unknown as DemoOrder;
   }
 }

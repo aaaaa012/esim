@@ -3,6 +3,7 @@ export type ProvisionResult = { providerSubscriptionId: string; status: 'COMPLET
 export type EsimDetailsResult = { subscriptionId: string; status: string; smDpAddress?: string; qrPayload?: string };
 export type EligibilityResult = { allowed: boolean; errorKey?: string; errorMessage?: string };
 export type ConnectivityCapabilities = { catalogSync: boolean; provisioning: boolean; usage: boolean; esimDetails: boolean; topUp: boolean; callbacks: boolean };
+export type UsageBreakdown = { usedMb: number; totalMb: number; subscriptions?: { providerSubscriptionId: string; status: string; usedMb: number; totalMb: number; priority?: number }[] };
 
 /**
  * Normalized provider lifecycle event emitted by the connectivity provider.
@@ -50,7 +51,7 @@ export interface ConnectivityProvider {
   health(): Promise<{ ok: boolean }>;
   capabilities(): ConnectivityCapabilities;
   provision(request: ProvisionRequest): Promise<ProvisionResult>;
-  getUsage(subscriptionId: string): Promise<{ usedMb: number; totalMb: number }>;
+  getUsage(subscriptionId: string): Promise<UsageBreakdown>;
   getEsimDetails(subscriptionId: string): Promise<EsimDetailsResult>;
   syncCatalog?(): Promise<CatalogSyncResult>;
   checkEligibility?(planId: string, msisdn: string): Promise<EligibilityResult>;

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ApiErrorCode } from '@visa-compass/shared';
 import { ApiException } from '../../common/api-error.js';
-import type { ConnectivityProvider, ProvisionRequest, ProvisionResult, EsimDetailsResult, EligibilityResult, CatalogSyncResult, CatalogExportRow, CatalogExportResult, ProviderWebhookResult, ProviderWebhookEvent } from './connectivity-provider.js';
+import type { ConnectivityProvider, ProvisionRequest, ProvisionResult, EsimDetailsResult, EligibilityResult, CatalogSyncResult, CatalogExportRow, CatalogExportResult, ProviderWebhookResult, ProviderWebhookEvent, UsageBreakdown } from './connectivity-provider.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 
 /*
@@ -328,7 +328,7 @@ export class TransatelProvider implements ConnectivityProvider {
     return { providerSubscriptionId, status: 'DELAYED' };
   }
 
-  async getUsage(subscriptionId: string): Promise<{ usedMb: number; totalMb: number }> {
+  async getUsage(subscriptionId: string): Promise<UsageBreakdown> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
     const msisdn = subscriber.msisdn ?? subscriber.iccid ?? '';
     if (!msisdn) throw new ApiException({ code: ApiErrorCode.USAGE_UNAVAILABLE, message: 'Usage details are not available yet. Please check back shortly.', status: 404, details: 'No subscriber identifier found for usage lookup' });
@@ -342,9 +342,10 @@ export class TransatelProvider implements ConnectivityProvider {
     const subscriptions = data.productSubscriptions.filter((item) => item.status !== 'terminated');
     if (!subscriptions.length) throw new ApiException({ code: ApiErrorCode.USAGE_UNAVAILABLE, message: 'Usage details are not available yet. Please check back shortly.', status: 404, details: 'No active subscription found for this subscriber' });
 
-    const usage = subscriptions.map((item) => this.usageFromBalances(item.balances)).filter((item): item is { usedMb: number; totalMb: number } => Boolean(item));
+    const usage = subscriptions.map((item) => ({ item, usage: this.usageFromBalances(item.balances) })).filter((entry): entry is { item: ProductSubscription; usage: { usedMb: number; totalMb: number } } => Boolean(entry.usage));
     if (!usage.length) return { usedMb: 0, totalMb: 0 };
-    return usage.reduce((acc, item) => ({ usedMb: acc.usedMb + item.usedMb, totalMb: acc.totalMb + item.totalMb }), { usedMb: 0, totalMb: 0 });
+    const aggregate = usage.reduce((acc, entry) => ({ usedMb: acc.usedMb + entry.usage.usedMb, totalMb: acc.totalMb + entry.usage.totalMb }), { usedMb: 0, totalMb: 0 });
+    return { ...aggregate, subscriptions: usage.map(({ item, usage: balance }, index) => ({ providerSubscriptionId: item.subscriptionId, status: item.status, ...balance, priority: index + 1 })) };
   }
 
   private usageFromBalances(balances?: ProductSubscription['balances']): { usedMb: number; totalMb: number } | null {

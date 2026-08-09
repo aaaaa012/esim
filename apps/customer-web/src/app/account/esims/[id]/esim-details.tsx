@@ -43,7 +43,7 @@ type Order = {
     validityDays: number;
   };
   documents: { id: string; type: string; status: string; fileName: string }[];
-  payment?: { provider: string; status: string };
+  payment?: { provider: string; status: string; reference?: string };
   timeline: { from: string | null; to: string; at: string; reason?: string }[];
   usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
 };
@@ -196,14 +196,20 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
         Loading secure order…
       </main>
     );
-  const resumable = ["DRAFT", "PAYMENT_PENDING"].includes(order.status);
+  const resumable = ["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(order.status);
+  const paymentPending = order.status === "PAYMENT_PENDING" && Boolean(order.payment?.reference);
   const needsReupload = order.status === "AWAITING_CUSTOMER";
+  const resumeLabel = paymentPending
+    ? "Check payment status"
+    : order.status === "PAYMENT_FAILED"
+      ? "Retry payment"
+      : "Resume checkout";
   return (
     <main className="detail-page">
       <div className="shell">
-        <Link className="back-link-detail" href="/account/esims">
+        <Link className="back-link-detail" href="/account/orders">
           <ChevronLeft size={16} />
-          My eSIMs
+          Orders
         </Link>
         <div className="detail-head">
           <div>
@@ -227,13 +233,15 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
           <section className="customer-action-banner">
             <AlertCircle />
             <span>
-              <b>Complete your purchase</b>
+              <b>{paymentPending ? "Confirm your payment" : "Complete your purchase"}</b>
               <small>
-                Your saved traveller and document information will be restored.
+                {paymentPending
+                  ? "Your payment returned to us but is still being confirmed. We re-check it automatically."
+                  : "Your saved traveller and document information will be restored."}
               </small>
             </span>
             <Link className="button" href={`/esim/checkout?order=${order.id}`}>
-              Resume checkout
+              {resumeLabel}
             </Link>
           </section>
         )}
@@ -328,14 +336,15 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
             {resumable ? (
               <>
                 <p>
-                  Continue checkout to submit traveller documents and complete
-                  payment.
+                  {paymentPending
+                    ? "We re-check the payment with your wallet automatically and will activate the eSIM as soon as it is confirmed."
+                    : "Continue checkout to submit traveller documents and complete payment."}
                 </p>
                 <Link
                   className="button"
                   href={`/esim/checkout?order=${order.id}`}
                 >
-                  Resume purchase
+                  {resumeLabel}
                 </Link>
               </>
             ) : order.status === "QR_READY" ? (

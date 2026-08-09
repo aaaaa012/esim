@@ -53,6 +53,8 @@ import { IntegrationProcessor } from "./jobs/integration.processor.js";
 import { ReconciliationService } from "./jobs/reconciliation.service.js";
 import { AuthController } from "./modules/identity/auth.controller.js";
 import { AccountGuard } from "./common/auth.guard.js";
+import { CustomerEsimsController } from "./modules/esims/customer-esims.controller.js";
+import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
 
 @Module({
   imports: [
@@ -80,6 +82,7 @@ OperationsController,
     PartnerAdminController,
     PartnerCheckoutController,
     NotificationController,
+    CustomerEsimsController,
   ],
   providers: [
     AccountGuard,
@@ -111,6 +114,7 @@ OperationsController,
     GmailChannel,
     WhatsappChannel,
     QrPdfService,
+    CustomerEsimsService,
   ],
 })
 export class AppModule {}

@@ -43,6 +43,7 @@ type Detail = OpsOrder & {
   timeline: { to: string; at: string; reason?: string }[];
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   topUpMobile?: string;
+  assignment?: { inventoryId?: string; iccid?: string; msisdn?: string; providerSubscriptionId?: string; verificationStatus?: string; verifiedAt?: string; providerLastSeenAt?: string };
 };
 
 export default function OrderReview({ id }: { id: string }) {
@@ -281,6 +282,10 @@ export default function OrderReview({ id }: { id: string }) {
             ) : (
               <p className="text-sm text-muted-foreground">Traveller details incomplete</p>
             )}
+          </Panel>
+
+          <Panel title={<span className="flex items-center gap-2"><ShieldCheck className="size-4 text-primary" />eSIM assignment</span>}>
+            {order.assignment ? <div className="space-y-4"><div className="flex flex-wrap gap-2"><Badge variant={order.assignment.verificationStatus === "VERIFIED" ? "success" : order.assignment.verificationStatus === "MISMATCH" ? "destructive" : "secondary"}>{order.assignment.verificationStatus ?? "PENDING"}</Badge>{order.traveler?.passportExpiryDate && <Badge variant={new Date(order.traveler.passportExpiryDate) > new Date() ? "success" : "destructive"}>{new Date(order.traveler.passportExpiryDate) > new Date() ? "PASSPORT VALID" : "PASSPORT EXPIRED"}</Badge>}</div><dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2"><InfoRow label="ICCID" value={order.assignment.iccid ?? "—"}/><InfoRow label="MSISDN" value={order.assignment.msisdn ?? "—"}/><InfoRow label="Provider subscription" value={order.assignment.providerSubscriptionId ?? "Awaiting provider"}/><InfoRow label="Last provider confirmation" value={order.assignment.providerLastSeenAt ? new Date(order.assignment.providerLastSeenAt).toLocaleString() : "Pending"}/></dl></div>:<p className="text-sm text-muted-foreground">Plan has not been assigned to an eSIM yet.</p>}
           </Panel>
 
           <Panel

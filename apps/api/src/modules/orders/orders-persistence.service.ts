@@ -13,7 +13,7 @@ export class OrdersPersistenceService {
 
   async load(): Promise<DemoOrder[]> {
     if (!this.prisma.enabled) return [];
-    const rows = await this.prisma.order.findMany({ include: { customer: { include: { user: true } }, partner: { select: { id: true, code: true, name: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: { include: { subscriptions: true } }, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
+    const rows = await this.prisma.order.findMany({ include: { customer: { include: { user: true } }, partner: { select: { id: true, code: true, name: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: { include: { inventory: true, subscriptions: true } }, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
     return rows.map((row) => {
       const traveler: TravelerInput | undefined = row.traveler ? {
         title: row.traveler.title as TravelerInput['title'], firstName: row.traveler.firstName, surname: row.traveler.surname,
@@ -44,6 +44,7 @@ export class OrdersPersistenceService {
         ...(row.externalOrderId ? { externalOrderId: row.externalOrderId } : {}),
         ...(() => { const snapshot = row.pricingSnapshot as { topUpMobile?: string }; return snapshot?.topUpMobile ? { topUpMobile: snapshot.topUpMobile } : {}; })(),
         ...(() => { if (!row.customerEsim?.subscriptions?.length) return {}; const latest = [...row.customerEsim.subscriptions].sort((a, b) => (b.usageLastCheckedAt?.getTime() ?? 0) - (a.usageLastCheckedAt?.getTime() ?? 0))[0]; if (!latest?.usageLastCheckedAt) return {}; return { usage: { usedMb: latest.usedMb, totalMb: latest.totalMb, lastCheckedAt: latest.usageLastCheckedAt.toISOString() } }; })(),
+        ...(() => { const subscription = row.customerEsim?.subscriptions[0]; const inventory = row.customerEsim?.inventory; if (!inventory) return {}; return { assignment: { inventoryId: inventory.id, iccid: inventory.iccid, ...(inventory.msisdn ? { msisdn: inventory.msisdn } : {}), ...(subscription?.providerSubscriptionId ? { providerSubscriptionId: subscription.providerSubscriptionId } : {}), ...(subscription ? { verificationStatus: subscription.assignmentVerificationStatus } : {}), ...(subscription?.assignmentVerifiedAt ? { verifiedAt: subscription.assignmentVerifiedAt.toISOString() } : {}), ...(subscription?.providerLastSeenAt ? { providerLastSeenAt: subscription.providerLastSeenAt.toISOString() } : {}) } }; })(),
         createdAt: row.createdAt.toISOString(),
       };
     });

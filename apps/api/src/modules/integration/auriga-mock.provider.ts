@@ -11,6 +11,6 @@ export class AurigaMockProvider implements ConnectivityProvider {
     const suffix = createHash('sha256').update(request.orderId).digest('hex').slice(0, 16);
     return { providerSubscriptionId: `auriga-${suffix}`, status: 'COMPLETED' as const, qrPayload: `LPA:1$mock.visacompass.com$${suffix}`, smDpAddress: 'mock.visacompass.com' };
   }
-  async getUsage() { return { usedMb: 0, totalMb: 5120 }; }
+  async getUsage(): Promise<import('./connectivity-provider.js').UsageBreakdown> { return { usedMb: 0, totalMb: 5120 }; }
   async getEsimDetails(subscriptionId: string) { return { subscriptionId, status: 'ACTIVE', smDpAddress: 'mock.visacompass.com' }; }
 }

@@ -70,6 +70,7 @@ describe('OrdersService.reconcileStaleActivationOrders', () => {
       customerIdForOrder: vi.fn().mockResolvedValue('cust-1'),
       assign: vi.fn().mockResolvedValue(undefined),
       applyLifecycle: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({ id: 'inventory-1', iccid: '8900000000000000001', msisdn: '882470001' }),
     } as unknown as InventoryService;
     const orders = ordersService([readyOrder()], connectivity, inventory);
     await orders.refreshFromPersistence();

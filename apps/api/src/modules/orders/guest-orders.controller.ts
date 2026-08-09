@@ -11,6 +11,21 @@ const tokenFor = (orderId: string) => {
   if (!secret && process.env.NODE_ENV === 'production') throw new Error('GUEST_ORDER_SECRET is required in production');
   return createHmac('sha256', secret ?? 'local-guest-checkout-secret').update(orderId).digest('hex');
 };
+const lookupTokenFor = (mobile: string) => {
+  const secret = process.env.GUEST_ORDER_SECRET ?? 'local-guest-checkout-secret';
+  const payload = Buffer.from(JSON.stringify({ mobile, expiresAt: Date.now() + 15 * 60_000 })).toString('base64url');
+  return `${payload}.${createHmac('sha256', secret).update(payload).digest('base64url')}`;
+};
+const mobileFromLookupToken = (token: string) => {
+  const [payload, signature] = token.split('.');
+  if (!payload || !signature) throw new ForbiddenException('Invalid or expired top-up lookup');
+  const expected = Buffer.from(createHmac('sha256', process.env.GUEST_ORDER_SECRET ?? 'local-guest-checkout-secret').update(payload).digest('base64url'));
+  const actual = Buffer.from(signature);
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new ForbiddenException('Invalid or expired top-up lookup');
+  const value = JSON.parse(Buffer.from(payload, 'base64url').toString()) as { mobile?: string; expiresAt?: number };
+  if (!value.mobile || !value.expiresAt || value.expiresAt < Date.now()) throw new ForbiddenException('Invalid or expired top-up lookup');
+  return value.mobile;
+};
 
 // Login-free ("guest") checkout. Orders are created with no owner and every
 // mutation is gated by an HMAC token bound to the order id, so the browser can
@@ -22,14 +37,16 @@ export class GuestOrdersController {
   @Post() async create(@Body() body: unknown, @Req() req: { ip?: string; socket?: { remoteAddress?: string }; headers?: { 'user-agent'?: string } }) {
     const parsed = createOrderSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.message);
-    const input = parsed.data as { planId: string; compatibilityAccepted: boolean } & Partial<{ mobile: string }>;
-    const candidate = body as { mobile?: unknown; email?: unknown };
+    const input = parsed.data as { planId: string; compatibilityAccepted: boolean; targetEsimId?: string } & Partial<{ mobile: string }>;
+    const candidate = body as { mobile?: unknown; email?: unknown; lookupToken?: unknown };
     if (candidate.mobile !== undefined && typeof candidate.mobile !== 'string') throw new BadRequestException('mobile must be a string');
     if (candidate.email !== undefined && typeof candidate.email !== 'string') throw new BadRequestException('email must be a string');
     const ipAddress = clientIp(req);
     const userAgent = req.headers?.['user-agent'];
+    const verifiedMobile = candidate.lookupToken !== undefined ? mobileFromLookupToken(String(candidate.lookupToken)) : undefined;
+    if (candidate.mobile !== undefined && !verifiedMobile) throw new ForbiddenException('A valid top-up lookup is required');
     const order = await this.orders.create(null, input.planId, input.compatibilityAccepted, {
-      ...(candidate.mobile !== undefined ? { mobile: candidate.mobile as string } : {}),
+      ...(verifiedMobile ? { mobile: verifiedMobile } : {}),
       ...(candidate.email !== undefined ? { email: candidate.email as string } : {}),
       ...(ipAddress ? { ipAddress } : {}),
       ...(userAgent ? { userAgent } : {}),
@@ -57,7 +74,7 @@ export class GuestOrdersController {
 
   @Post('topup-lookup')
   @UseGuards(GuestLookupRateLimitGuard)
-  topUpLookup(@Body() body: { mobile: string }) { if (!body.mobile?.trim()) throw new BadRequestException('mobile is required'); return this.orders.topUpLookup(body.mobile); }
+  async topUpLookup(@Body() body: { mobile: string }) { if (!body.mobile?.trim()) throw new BadRequestException('mobile is required'); const result = await this.orders.topUpLookup(body.mobile); return { ...result, ...(result.found ? { lookupToken: lookupTokenFor(body.mobile.trim()) } : {}) }; }
 
   private assert(id: string, token: string) {
     if (!this.orders.get(id)) throw new NotFoundException('Order not found');

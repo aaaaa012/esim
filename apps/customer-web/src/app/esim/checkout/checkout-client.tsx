@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
+import DatePicker from "./date-picker";
 import {
   DocumentType,
   PaymentProvider,
@@ -78,23 +79,30 @@ export default function CheckoutClient({
   planId,
   orderId,
   mobile,
+  lookupToken,
+  targetEsimId,
+  targetCountry,
 }: {
   planId: string;
   orderId: string;
   mobile?: string;
+  lookupToken?: string;
+  targetEsimId?: string;
+  targetCountry?: string;
 }) {
   const authFetch = useAuthenticatedFetch();
   const { isLoaded, isSignedIn } = useAuth();
-  const readToken = () => {
+  const tokenKey = (id?: string) => `vc_guest_token_${id || orderId || 'new'}`;
+  const readToken = (id?: string) => {
     let t = "";
     try {
-      t = sessionStorage.getItem("vc_guest_token") ?? "";
+      t = sessionStorage.getItem(tokenKey(id)) ?? "";
     } catch {
       t = "";
     }
     if (t) return t;
     try {
-      return localStorage.getItem("vc_guest_token") ?? "";
+      return localStorage.getItem(tokenKey(id)) ?? "";
     } catch {
       return "";
     }
@@ -103,27 +111,28 @@ export default function CheckoutClient({
   const guestTokenRef = useRef(guestToken);
   guestTokenRef.current = guestToken;
   const currentToken = () => guestTokenRef.current || readToken();
-  const storeGuestToken = (t: string) => {
+  const storeGuestToken = (t: string, id: string) => {
     guestTokenRef.current = t;
     setGuestToken(t);
     try {
-      sessionStorage.setItem("vc_guest_token", t);
+      sessionStorage.setItem(tokenKey(id), t);
     } catch {
       /* sessionStorage unavailable */
     }
     try {
-      localStorage.setItem("vc_guest_token", t);
+      localStorage.setItem(tokenKey(id), t);
     } catch {
       /* localStorage unavailable */
     }
   };
-  const [guest, setGuest] = useState<boolean>(() =>
-    readToken() ? true : isSignedIn === true ? false : true,
-  );
+  const [guest, setGuest] = useState<boolean>(() => Boolean(readToken()));
   const guestRef = useRef(guest);
   guestRef.current = guest;
   useEffect(() => {
-    if (isLoaded && !guestRef.current) setGuest(isSignedIn === true ? false : true);
+    if (!isLoaded) return;
+    const next = isSignedIn !== true;
+    setGuest(next);
+    guestRef.current = next;
   }, [isLoaded, isSignedIn]);
 
   const api = async <T,>(path: string, init?: RequestInit) => {
@@ -154,6 +163,7 @@ export default function CheckoutClient({
     let payload = (await response.json()) as Envelope<T>;
     if (
       !response.ok &&
+      isLoaded && isSignedIn !== true &&
       ["AUTHENTICATION_REQUIRED", "FORBIDDEN"].includes(payload.error?.code ?? "")
     ) {
       toGuest();
@@ -165,15 +175,22 @@ export default function CheckoutClient({
       response = await authFetch(url, makeInit());
       payload = (await response.json()) as Envelope<T>;
     }
-    if (!response.ok) throw new Error(apiErrorMessage(payload.error?.code ?? "", payload.error?.message ?? "Something went wrong"));
+    if (!response.ok) {
+      const error = new Error(apiErrorMessage(payload.error?.code ?? "", payload.error?.message ?? "Something went wrong")) as Error & { code?: string; status?: number };
+      if (payload.error?.code) error.code = payload.error.code;
+      error.status = response.status;
+      throw error;
+    }
     return payload.data;
   };
 
   const [step, setStep] = useState(1),
     [compatible, setCompatible] = useState(false),
     [traveler, setTraveler] = useState(initial);
-  const isTopUpIntent = Boolean(mobile) && !orderId;
   const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
+  const [planLoadFailed, setPlanLoadFailed] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof Traveler,string>>>({});
+  const isTopUpIntent = Boolean((mobile || targetEsimId) && targetCountry && previewPlan?.countryCode === targetCountry) && !orderId;
   useEffect(() => {
     if (!planId || orderId) return;
     let cancelled = false;
@@ -182,9 +199,9 @@ export default function CheckoutClient({
       .then((data: Envelope<PlanSummary[]>) => {
         if (cancelled) return;
         const plan = data.data.find((item) => item.id === planId);
-        if (plan) setPreviewPlan(plan);
+        if (plan) setPreviewPlan(plan); else setPlanLoadFailed(true);
       })
-      .catch(() => {});
+      .catch(() => setPlanLoadFailed(true));
     return () => {
       cancelled = true;
     };
@@ -196,6 +213,8 @@ export default function CheckoutClient({
   }>({ passport: undefined, ticket: undefined, visa: undefined });
   const [order, setOrder] = useState<Order | null>(null),
     [payment, setPayment] = useState<Payment | null>(null);
+  const verifyRunToken = useRef(0);
+  useEffect(() => () => { verifyRunToken.current += 1; }, []);
   const summaryPlan = order?.plan ?? previewPlan;
   const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
   const [provider, setProvider] = useState<PaymentProvider>(
@@ -215,7 +234,7 @@ export default function CheckoutClient({
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
       .then((value) => {
-        if (!["DRAFT", "PAYMENT_PENDING"].includes(value.status))
+        if (!["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(value.status))
           throw new Error("This order can no longer be resumed from checkout");
         setOrder(value);
         setCompatible(true);
@@ -224,7 +243,7 @@ export default function CheckoutClient({
           setStep(4);
           if (value.status === "PAYMENT_PENDING" && value.payment) {
             setPayment({ reference: value.payment.reference, redirectUrl: "", expiresAt: "" });
-            if (hasReturnReference()) void verifyPayment(value);
+            void verifyPayment(value);
           }
           return;
         }
@@ -239,7 +258,10 @@ export default function CheckoutClient({
             expiresAt: "",
           });
           setStep(4);
-          if (hasReturnReference()) void verifyPayment(value);
+          void verifyPayment(value);
+        } else if (value.status === "PAYMENT_FAILED") {
+          setPayment(null);
+          setStep(4);
         } else if (!value.traveler) setStep(2);
         else if (!hasRequiredDocs) setStep(3);
         else setStep(4);
@@ -251,45 +273,72 @@ export default function CheckoutClient({
       )
       .finally(() => setBusy(false));
   }, [orderId, isLoaded, guestToken]);
-  const hasReturnReference = () => {
-    const params = new URLSearchParams(window.location.search);
-    return params.has("reference") || params.has("pidx");
+  const VERIFY_DELAYS = [0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000];
+  const VERIFY_BUDGET_MS = 120_000;
+  const TERMINAL_STATUSES = ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"];
+  const stripReturnParams = () => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (!["reference", "pidx", "simulated"].some((key) => url.searchParams.has(key))) return;
+    for (const key of ["reference", "pidx", "simulated", "status", "purchase_order_id", "transaction_id", "amount"]) url.searchParams.delete(key);
+    window.history.replaceState({}, "", url.toString());
   };
   const verifyPayment = async (initialOrder: Order) => {
+    const token = ++verifyRunToken.current;
     setVerifying(true);
-    try {
-      await api(`/customer/orders/${initialOrder.id}/payment/verify`, {
-        method: "POST",
-        body: JSON.stringify({ reference: initialOrder.payment?.reference }),
-      });
-    } catch {
-      // Verification may fail until the provider webhook lands; polling below retries.
-    }
-    for (let attempt = 0; attempt < 30; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
-      const updated = await api<Order>(
-        `/customer/orders/${initialOrder.id}`,
-      ).catch(() => initialOrder);
-      setOrder(updated);
-      setError("");
-      if (
-        ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
-          updated.status,
-        )
-      ) {
-        setVerifying(false);
-        break;
+    setError("");
+    stripReturnParams();
+    const started = Date.now();
+    let current = initialOrder;
+    let attempt = 0;
+    while (Date.now() - started < VERIFY_BUDGET_MS) {
+      if (verifyRunToken.current !== token) return;
+      const wait = VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
+      if (wait > 0) {
+        await new Promise((resolve) => setTimeout(resolve, wait));
+        if (verifyRunToken.current !== token) return;
       }
-      if (attempt === 29) {
-        setError(
-          "Your payment is still being confirmed. Check your eSIMs shortly.",
-        );
-        setVerifying(false);
+      attempt += 1;
+      try {
+        // Retry the verification lookup itself (not just the order poll):
+        // Khalti can report pending/initiated for a few seconds after the
+        // wallet redirect, so a single attempt is not enough.
+        const updated = await api<Order>(`/customer/orders/${current.id}/payment/verify`, {
+          method: "POST",
+          body: JSON.stringify({ reference: current.payment?.reference }),
+        });
+        setOrder(updated);
+        current = updated;
+        if (TERMINAL_STATUSES.includes(updated.status)) {
+          setVerifying(false);
+          return;
+        }
+      } catch (cause) {
+        const code = (cause as { code?: string })?.code;
+        if (code === "PAYMENT_EXPIRED" || code === "PAYMENT_REFERENCE_MISMATCH" || code === "PAYMENT_NOT_CONFIRMED") {
+          const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(() => current);
+          setOrder(refreshed);
+          current = refreshed;
+          setVerifying(false);
+          return;
+        }
+        // Transient network/provider errors retry; refresh the order so the
+        // UI stays current without treating an unknown error as "pending".
+        const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(() => current);
+        setOrder(refreshed);
+        current = refreshed;
+        if (TERMINAL_STATUSES.includes(refreshed.status)) {
+          setVerifying(false);
+          return;
+        }
       }
     }
+    setOrder(await api<Order>(`/customer/orders/${current.id}`).catch(() => current));
+    setError("Your payment is still being confirmed. Check your eSIMs shortly.");
+    setVerifying(false);
   };
   const update = (key: keyof Traveler, value: string) =>
-    setTraveler((v) => ({ ...v, [key]: value }));
+    { setTraveler((v) => ({ ...v, [key]: value })); setFieldErrors((current) => ({ ...current, [key]: undefined })); };
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
     setError("");
@@ -311,6 +360,7 @@ export default function CheckoutClient({
         setStep(order.traveler ? 3 : 2);
         return;
       }
+      if (!isLoaded) throw new Error("Finishing secure sign-in. Please try again in a moment.");
       if (!planId) throw new Error("Choose a plan before checkout");
       if (!compatible && !isTopUpIntent) throw new Error("Confirm device compatibility");
       if (guest) {
@@ -320,10 +370,11 @@ export default function CheckoutClient({
             planId,
             compatibilityAccepted: true,
             mobile: (mobile || traveler.mobile) || undefined,
+            lookupToken: lookupToken || undefined,
           }),
         });
         setOrder(created.order);
-        storeGuestToken(created.token);
+        storeGuestToken(created.token, created.order.id);
         if (created.order.purchaseType === "TOPUP") {
           setStep(4);
           await initiate(created.order);
@@ -336,7 +387,7 @@ export default function CheckoutClient({
         { order: Order; token: string } | Order
       >("/customer/orders", {
         method: "POST",
-        body: JSON.stringify({ planId, compatibilityAccepted: true }),
+        body: JSON.stringify({ planId, compatibilityAccepted: true, ...(targetEsimId ? { targetEsimId } : {}) }),
       });
       const isGuestPayload =
         typeof payload === "object" && payload !== null && "order" in payload && "token" in payload;
@@ -344,8 +395,9 @@ export default function CheckoutClient({
         ? (payload as { order: Order }).order
         : (payload as Order);
       setOrder(finalOrder);
+      if (finalOrder.traveler) setTraveler({ ...initial, ...finalOrder.traveler });
       if (isGuestPayload) {
-        storeGuestToken((payload as { token: string }).token);
+        storeGuestToken((payload as { token: string }).token, finalOrder.id);
       }
       if (finalOrder.purchaseType === "TOPUP") {
         setStep(4);
@@ -364,13 +416,21 @@ export default function CheckoutClient({
         ["passportNumber", "Passport number"],
         ["passportExpiryDate", "Passport expiry"],
         ["city", "City / district"],
+        ["nationality", "Nationality"],
+        ["countryOfResidence", "Country of residence"],
         ["email", "Email"],
         ["mobile", "Mobile / WhatsApp"],
       ];
-      const missing = required.find(([key]) => !traveler[key].trim());
-      if (missing) throw new Error(`${missing[1]} is required`);
-      if (!/^\S+@\S+\.\S+$/.test(traveler.email))
-        throw new Error("Enter a valid email address");
+      const nextErrors: Partial<Record<keyof Traveler,string>> = {};
+      for (const [key,label] of required) if (!traveler[key].trim()) nextErrors[key]=`${label} is required`;
+      if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email)) nextErrors.email="Enter a valid email address";
+      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile)) nextErrors.mobile="Enter a valid mobile number";
+      if (traveler.passportNumber && traveler.passportNumber.length < 5) nextErrors.passportNumber="Passport number must be at least 5 characters";
+      if (traveler.dateOfBirth && new Date(traveler.dateOfBirth) >= new Date()) nextErrors.dateOfBirth="Date of birth must be in the past";
+      if (traveler.passportExpiryDate && new Date(traveler.passportExpiryDate) <= new Date()) nextErrors.passportExpiryDate="Passport must not be expired";
+      setFieldErrors(nextErrors);
+      const firstError = Object.keys(nextErrors)[0];
+      if (firstError) { document.querySelector<HTMLElement>(`[name="${firstError}"]`)?.focus(); throw new Error("Check the highlighted traveller details"); }
       if (
         traveler.nationality.length !== 2 ||
         traveler.countryOfResidence.length !== 2
@@ -467,22 +527,25 @@ export default function CheckoutClient({
   const complete = () =>
     run(async () => {
       if (!order || !payment) return;
-      const endpoint = SIMULATOR
-        ? guest
+      if (SIMULATOR) {
+        const endpoint = guest
           ? `/customer/orders/${order.id}/payment/simulate`
-          : `/customer/orders/${order.id}/payment/simulate-complete`
-        : `/customer/orders/${order.id}/payment/verify`;
-      setOrder(
-        await api<Order>(
-          endpoint,
-          {
-            method: "POST",
-            body: JSON.stringify({ reference: payment.reference }),
-          },
-        ),
-      );
+          : `/customer/orders/${order.id}/payment/simulate-complete`;
+        setOrder(
+          await api<Order>(
+            endpoint,
+            {
+              method: "POST",
+              body: JSON.stringify({ reference: payment.reference }),
+            },
+          ),
+        );
+        return;
+      }
+      void verifyPayment(order);
     });
 
+  if ((!planId && !orderId) || planLoadFailed) return <main className="checkout-page"><div className="checkout-recovery"><QrCode/><h1>We could not load this checkout</h1><p>The plan link may be incomplete or no longer available.</p><div><Link className="button" href="/#plans">Choose a plan</Link><Link className="button secondary" href="/account/orders">Order history</Link></div></div></main>;
   return (
     <main className="checkout-page">
       <div className="checkout-shell">
@@ -573,8 +636,9 @@ export default function CheckoutClient({
                       <option>MRS</option>
                     </select>
                   </Field>
-                  <Field label="First name">
+                  <Field label="First name" error={fieldErrors.firstName}>
                     <input
+                      name="firstName" autoComplete="given-name"
                       value={traveler.firstName}
                       onChange={(e) => update("firstName", e.target.value)}
                     />
@@ -585,38 +649,43 @@ export default function CheckoutClient({
                       onChange={(e) => update("middleName", e.target.value)}
                     />
                   </Field>
-                  <Field label="Surname">
+                  <Field label="Surname" error={fieldErrors.surname}>
                     <input
+                      name="surname" autoComplete="family-name"
                       value={traveler.surname}
                       onChange={(e) => update("surname", e.target.value)}
                     />
                   </Field>
-                  <Field label="Date of birth">
-                    <input
-                      type="date"
+                  <Field label="Date of birth" error={fieldErrors.dateOfBirth}>
+                    <DatePicker
+                      name="dateOfBirth"
                       value={traveler.dateOfBirth}
-                      onChange={(e) => update("dateOfBirth", e.target.value)}
+                      max={new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)}
+                      placeholder="Choose date of birth"
+                      onChange={(value) => update("dateOfBirth", value)}
                     />
                   </Field>
-                  <Field label="Passport number">
+                  <Field label="Passport number" error={fieldErrors.passportNumber}>
                     <input
+                      name="passportNumber"
                       value={traveler.passportNumber}
                       onChange={(e) =>
                         update("passportNumber", e.target.value.toUpperCase())
                       }
                     />
                   </Field>
-                  <Field label="Passport expiry">
-                    <input
-                      type="date"
+                  <Field label="Passport expiry" error={fieldErrors.passportExpiryDate}>
+                    <DatePicker
+                      name="passportExpiryDate"
                       value={traveler.passportExpiryDate}
-                      onChange={(e) =>
-                        update("passportExpiryDate", e.target.value)
-                      }
+                      min={new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}
+                      placeholder="Choose passport expiry"
+                      onChange={(value) => update("passportExpiryDate", value)}
                     />
                   </Field>
-                  <Field label="Nationality">
+                  <Field label="Nationality" error={fieldErrors.nationality}>
                     <input
+                      name="nationality" placeholder="NP" list="country-codes"
                       maxLength={2}
                       value={traveler.nationality}
                       onChange={(e) =>
@@ -624,14 +693,16 @@ export default function CheckoutClient({
                       }
                     />
                   </Field>
-                  <Field label="City / district">
+                  <Field label="City / district" error={fieldErrors.city}>
                     <input
+                      name="city" autoComplete="address-level2"
                       value={traveler.city}
                       onChange={(e) => update("city", e.target.value)}
                     />
                   </Field>
-                  <Field label="Country of residence">
+                  <Field label="Country of residence" error={fieldErrors.countryOfResidence}>
                     <input
+                      name="countryOfResidence" placeholder="NP" list="country-codes" autoComplete="country"
                       maxLength={2}
                       value={traveler.countryOfResidence}
                       onChange={(e) =>
@@ -642,15 +713,17 @@ export default function CheckoutClient({
                       }
                     />
                   </Field>
-                  <Field label="Email">
+                  <Field label="Email" error={fieldErrors.email}>
                     <input
+                      name="email" autoComplete="email"
                       type="email"
                       value={traveler.email}
                       onChange={(e) => update("email", e.target.value)}
                     />
                   </Field>
-                  <Field label="Mobile / WhatsApp">
+                  <Field label="Mobile / WhatsApp" error={fieldErrors.mobile}>
                     <input
+                      name="mobile" inputMode="tel" autoComplete="tel"
                       value={traveler.mobile}
                       onChange={(e) => update("mobile", e.target.value)}
                     />
@@ -664,6 +737,7 @@ export default function CheckoutClient({
                     />
                   </Field>
                 </div>
+                <datalist id="country-codes"><option value="NP">Nepal</option><option value="IN">India</option><option value="US">United States</option><option value="GB">United Kingdom</option><option value="AU">Australia</option><option value="CA">Canada</option><option value="AE">United Arab Emirates</option><option value="JP">Japan</option><option value="KR">South Korea</option></datalist>
                 <Nav back={() => setStep(1)} busy={busy} next={saveTraveler} />
               </div>
             )}
@@ -867,16 +941,19 @@ export default function CheckoutClient({
 function Field({
   label,
   full,
+  error,
   children,
 }: {
   label: string;
   full?: boolean;
+  error?: string | undefined;
   children: React.ReactNode;
 }) {
   return (
-    <label className={full ? "full" : ""}>
+    <label className={`${full ? "full " : ""}${error ? "field-invalid" : ""}`}>
       {label}
       {children}
+      {error&&<small className="field-error">{error}</small>}
     </label>
   );
 }

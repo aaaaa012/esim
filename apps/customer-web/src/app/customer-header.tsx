@@ -41,6 +41,9 @@ export default function CustomerHeader() {
               <Link className={`button secondary ${path.startsWith('/account/esims') ? 'nav-active' : ''}`} href="/account/esims">
                 My eSIMs
               </Link>
+              <Link href="/account/orders" aria-label="Orders" className={path.startsWith('/account/orders') ? 'nav-active' : ''}>
+                Orders
+              </Link>
               <UserButton />
             </SignedIn>
           </span>
@@ -63,6 +66,7 @@ export default function CustomerHeader() {
             </SignedOut>
             <SignedIn>
               {navLink('/account/esims', 'My eSIMs')}
+              {navLink('/account/orders', 'Orders')}
               {navLink('/account/notifications', 'Notifications')}
             </SignedIn>
           </div>

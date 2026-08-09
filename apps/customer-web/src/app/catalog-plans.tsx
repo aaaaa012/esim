@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { AlertTriangle, CheckCircle2, MapPin } from "lucide-react";
 import CountryPicker, { flagEmoji } from "./country-picker";
 
@@ -27,6 +28,9 @@ function npr(amount: number) {
 }
 
 export default function CatalogPlans() {
+  const searchParams = useSearchParams();
+  const targetEsimId = searchParams.get('esim') ?? '';
+  const targetCountry = searchParams.get('country') ?? '';
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [countries, setCountries] = useState<Country[]>([]);
   const [selected, setSelected] = useState<string>("");
@@ -34,16 +38,21 @@ export default function CatalogPlans() {
   const [error, setError] = useState<string | null>(null);
   const [topUpMobile, setTopUpMobile] = useState("");
   const [topUpCountry, setTopUpCountry] = useState("");
+  const [topUpToken, setTopUpToken] = useState("");
 
   useEffect(() => {
     try {
       setTopUpMobile(sessionStorage.getItem("vc_topup_mobile") ?? "");
       setTopUpCountry(sessionStorage.getItem("vc_topup_country") ?? "");
+      setTopUpToken(sessionStorage.getItem("vc_topup_token") ?? "");
     } catch {
       setTopUpMobile("");
       setTopUpCountry("");
+      setTopUpToken("");
     }
   }, []);
+
+  useEffect(() => { if (targetCountry) setSelected(targetCountry); }, [targetCountry]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,8 +141,8 @@ export default function CatalogPlans() {
               </p>
               <div className="price">
                 <b>{npr(plan.sellingPriceNpr)}</b>
-                <Link className="button" href={`/esim/checkout?plan=${plan.id}${topUpMobile ? `&mobile=${encodeURIComponent(topUpMobile)}` : ""}`}>
-                  {topUpMobile ? "Recharge" : "Choose"}
+                <Link className="button" href={`/esim/checkout?plan=${plan.id}${topUpMobile ? `&mobile=${encodeURIComponent(topUpMobile)}&lookup=${encodeURIComponent(topUpToken)}&country=${encodeURIComponent(topUpCountry)}` : ""}${targetEsimId ? `&esim=${encodeURIComponent(targetEsimId)}&country=${encodeURIComponent(targetCountry)}` : ""}`}>
+                  {topUpMobile || (targetEsimId && plan.countryCode === targetCountry) ? "Recharge" : "Choose"}
                 </Link>
               </div>
             </article>

@@ -271,12 +271,16 @@ export class InventoryService implements OnModuleInit {
     return viaEsim?.inventory ?? null;
   }
 
-  async applyLifecycle(orderId: string, event: { provider: string; status?: 'PRELOADED' | 'ACTIVATED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER'; subscriptionId?: string; activatedAt?: string; expiresAt?: string }) {
+  async applyLifecycle(orderId: string, event: { provider: string; status?: 'PRELOADED' | 'ACTIVATED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER'; subscriptionId?: string; iccid?: string; activatedAt?: string; expiresAt?: string }) {
     if (!this.prisma.enabled) return;
     const resolved = await this.inventoryForOrder(orderId);
     if (!resolved) throw new NotFoundException('No inventory is associated with this order');
     const inventory = await this.prisma.esimInventory.findUnique({ where: { id: resolved.id } });
     if (!inventory) throw new NotFoundException('Reserved inventory was not found');
+    if (event.iccid && event.iccid !== inventory.iccid) {
+      if (event.subscriptionId) await this.prisma.subscription.updateMany({ where: { providerSubscriptionId: event.subscriptionId }, data: { assignmentVerificationStatus: 'MISMATCH', providerLastSeenAt: new Date() } });
+      throw new ConflictException('Provider subscription was assigned to a different eSIM');
+    }
 
     const inventoryStatus = this.mapInventoryStatus(event.status);
     const subscriptionStatus = this.mapSubscriptionStatus(event.status);
@@ -299,10 +303,12 @@ export class InventoryService implements OnModuleInit {
         where: { providerSubscriptionId },
         update: {
           status: subscriptionStatus,
+          providerLastSeenAt: new Date(),
+          ...(event.status === 'ACTIVATED' ? { assignmentVerificationStatus: 'VERIFIED' as const, assignmentVerifiedAt: new Date() } : {}),
           ...(event.activatedAt ? { activatedAt: new Date(event.activatedAt) } : {}),
           ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
         },
-        create: { customerEsimId: customerEsim.id, provider: event.provider, providerSubscriptionId, status: subscriptionStatus, ...(event.activatedAt ? { activatedAt: new Date(event.activatedAt) } : {}), ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}) },
+        create: { customerEsimId: customerEsim.id, provider: event.provider, providerSubscriptionId, status: subscriptionStatus, providerLastSeenAt: new Date(), ...(event.status === 'ACTIVATED' ? { assignmentVerificationStatus: 'VERIFIED', assignmentVerifiedAt: new Date() } : {}), ...(event.activatedAt ? { activatedAt: new Date(event.activatedAt) } : {}), ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}) },
       });
     });
   }

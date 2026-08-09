@@ -83,6 +83,34 @@
 .checkout-card {
   overflow: hidden;
 }
+.checkout-recovery{max-width:620px;margin:80px auto;padding:42px;text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);box-shadow:var(--shadow-md)}
+.checkout-recovery svg{color:var(--primary);width:42px;height:42px}.checkout-recovery h1{margin:16px 0 8px}.checkout-recovery p{color:var(--text-2)}.checkout-recovery>div{display:flex;justify-content:center;gap:12px;margin-top:24px}
+.field-invalid input,.field-invalid select{border-color:var(--danger)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 12%,transparent)}
+.field-error{display:block;color:var(--danger);font-size:12px;margin-top:5px;font-weight:600}
+.field-invalid .date-picker-trigger{border-color:var(--danger)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 12%,transparent)}
+
+.date-picker{position:relative;width:100%}
+.date-picker-trigger{width:100%;height:46px;padding:0 13px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-3);display:flex;align-items:center;justify-content:space-between;font:inherit;font-size:15px;cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease}
+.date-picker-trigger.has-value{color:var(--text)}
+.date-picker-trigger:hover{border-color:color-mix(in srgb,var(--primary) 45%,var(--border-strong))}
+.date-picker-trigger:focus-visible{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-ring)}
+.date-picker-trigger svg{color:var(--primary)}
+.date-picker-popover{position:absolute;z-index:30;top:calc(100% + 8px);left:0;width:min(330px,calc(100vw - 48px));padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:0 18px 45px rgba(15,23,42,.18)}
+.date-picker-nav{display:grid;grid-template-columns:36px 1fr 36px;align-items:center;gap:8px;margin-bottom:12px}
+.date-picker-nav>div{display:grid;grid-template-columns:1fr 86px;gap:6px}
+.date-picker-nav button,.date-picker-footer button{border:0;background:var(--surface-2);color:var(--text-2);border-radius:9px;cursor:pointer;font:inherit;font-weight:700}
+.date-picker-nav button{width:36px;height:36px;display:grid;place-items:center}
+.date-picker-nav button:hover,.date-picker-footer button:hover{background:var(--primary-soft);color:var(--primary)}
+.date-picker-nav select{width:100%;height:36px;padding:0 8px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--text);font:inherit;font-size:13px;font-weight:700;outline:none}
+.date-picker-weekdays,.date-picker-days{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.date-picker-weekdays span{text-align:center;color:var(--text-3);font-size:11px;font-weight:800;padding:5px 0}
+.date-picker-days button{aspect-ratio:1;border:0;border-radius:9px;background:transparent;color:var(--text);font:inherit;font-size:13px;cursor:pointer}
+.date-picker-days button:hover:not(:disabled){background:var(--primary-soft);color:var(--primary)}
+.date-picker-days button.outside{color:var(--text-3);opacity:.5}
+.date-picker-days button.selected{background:var(--primary);color:var(--on-primary);font-weight:800;box-shadow:0 4px 10px var(--primary-ring)}
+.date-picker-days button:disabled{opacity:.25;cursor:not-allowed}
+.date-picker-footer{min-height:34px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;color:var(--text-2);font-size:12px}
+.date-picker-footer button{padding:7px 10px}
 
 /* ---------- Step tabs ---------- */
 

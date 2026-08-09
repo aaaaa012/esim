@@ -113,6 +113,11 @@ enum SubscriptionStatus {
   TERMINATED
   FAILED
 }
+enum AssignmentVerificationStatus {
+  PENDING
+  VERIFIED
+  MISMATCH
+}
 enum PartnerStatus {
   PENDING
   ACTIVE
@@ -426,6 +431,9 @@ model Subscription {
   usedMb Int @default(0)
   totalMb Int @default(0)
   usageLastCheckedAt DateTime?
+  assignmentVerificationStatus AssignmentVerificationStatus @default(PENDING)
+  assignmentVerifiedAt DateTime?
+  providerLastSeenAt DateTime?
 }
 model Partner {
   id String @id @default(uuid()) @db.Uuid

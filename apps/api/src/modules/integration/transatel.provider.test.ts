@@ -147,7 +147,7 @@ describe('TransatelProvider', () => {
       }),
     });
     const usage = await provider.getUsage(ORDER_UUID);
-    expect(usage).toEqual({ usedMb: 4096, totalMb: 5120 });
+    expect(usage).toEqual({ usedMb: 4096, totalMb: 5120, subscriptions: [{ providerSubscriptionId: 'sub-1', status: 'active', usedMb: 4096, totalMb: 5120, priority: 1 }] });
     const url = String(fetchMock.mock.calls.find((call) => String(call[0]).includes('/api/subscriptions/products'))![0]);
     expect(url).toContain('msisdn=8988247076000000319');
     expect(url).toContain('withBalances=true');
@@ -180,7 +180,7 @@ describe('TransatelProvider', () => {
       },
     });
     const usage = await provider.getUsage(ORDER_UUID);
-    expect(usage).toEqual({ usedMb: 0, totalMb: 1 });
+    expect(usage).toEqual({ usedMb: 0, totalMb: 1, subscriptions: [{ providerSubscriptionId: 'sub-1', status: 'active', usedMb: 0, totalMb: 1, priority: 1 }] });
     expect(tokenCalls).toBe(2);
     expect(productCalls).toBe(2);
   });

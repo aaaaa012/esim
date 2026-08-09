@@ -20,6 +20,8 @@ import { PaymentsService } from '../modules/payments/payments.service.js';
 export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ReconciliationService.name);
   private timer?: ReturnType<typeof setInterval>;
+  private pendingPaymentTimer?: ReturnType<typeof setInterval>;
+  private repairedReusableInventory = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -39,16 +41,30 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const intervalMs = Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 15 * 60_000;
     this.timer = setInterval(() => void this.run().catch(() => undefined), intervalMs);
     void this.run().catch(() => undefined);
+    // Separate, faster sweep for pending payments that are still inside their
+    // payment window (PAYMENT_RECONCILE_INTERVAL_SECONDS, default 45s). This is
+    // a backstop for browser verification: it confirms Completed payments and
+    // leaves Pending ones alone. It is kept apart from the expiry-phase
+    // reconcile so a normal pending result is never treated as a failure. On
+    // Render this only runs while the instance is awake — the browser return
+    // (which wakes the API) plus an external health cron are the primary
+    // recovery path.
+    const pendingSeconds = Number(process.env.PAYMENT_RECONCILE_INTERVAL_SECONDS ?? 45);
+    const pendingMs = Number.isFinite(pendingSeconds) && pendingSeconds > 0 ? pendingSeconds * 1000 : 45_000;
+    this.pendingPaymentTimer = setInterval(() => void this.payments.reconcileRecentPendingPayments().catch(() => undefined), pendingMs);
+    void this.payments.reconcileRecentPendingPayments().catch(() => undefined);
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
+    if (this.pendingPaymentTimer) clearInterval(this.pendingPaymentTimer);
   }
 
   private async run() {
     await this.orders.reconcileStaleActivationOrders();
     await this.payments.reconcilePendingPayments();
     if (!this.prisma.enabled) return;
+    if (!this.repairedReusableInventory) { await this.repairReusableEsims(); this.repairedReusableInventory = true; }
     await this.sweepLifecycle();
     const subscriptions = await this.prisma.subscription.findMany({
       where: { status: 'ACTIVE' },
@@ -96,10 +112,6 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       const exhausted = subscription.totalMb > 0 && subscription.usedMb >= subscription.totalMb;
       if (!expiredByDate && !exhausted) continue;
       await this.prisma.subscription.update({ where: { id: subscription.id }, data: { status: 'EXPIRED' } });
-      const remainingActive = await this.prisma.subscription.count({ where: { customerEsim: { inventoryId: inventory.id }, status: 'ACTIVE' } });
-      if (remainingActive === 0) {
-        await this.prisma.esimInventory.update({ where: { id: inventory.id }, data: { status: 'EXPIRED', expiresAt: expiry } });
-      }
       this.logger.log(`Marked subscription ${subscription.id} as EXPIRED (${expiredByDate ? 'date elapsed' : 'data exhausted'})`);
       await this.notifyLifecycle(order, expiredByDate ? 'PLAN_EXPIRED' : 'PLAN_EXHAUSTED');
     }
@@ -123,9 +135,11 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       });
       if (!subscription?.customerEsim?.inventory?.iccid) return;
       const usage = await this.connectivity.getUsage(subscription.customerEsim.inventory.iccid);
+      const own = usage.subscriptions?.find((item) => item.providerSubscriptionId === subscription.providerSubscriptionId);
+      if (usage.subscriptions && !own) { this.logger.warn(`Provider subscription ${subscription.providerSubscriptionId} was not found on its assigned eSIM`); return; }
       await this.prisma.subscription.update({
         where: { id: subscriptionId },
-        data: { usedMb: usage.usedMb, totalMb: usage.totalMb, usageLastCheckedAt: new Date() },
+        data: { usedMb: own?.usedMb ?? usage.usedMb, totalMb: own?.totalMb ?? usage.totalMb, usageLastCheckedAt: new Date(), ...(own ? { providerLastSeenAt: new Date(), assignmentVerificationStatus: 'VERIFIED', assignmentVerifiedAt: subscription.assignmentVerifiedAt ?? new Date() } : {}) },
       });
       this.logger.debug(`Reconciled usage for subscription ${subscriptionId}: ${usage.usedMb}/${usage.totalMb} MB`);
     } catch (error) {
@@ -137,5 +151,10 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`Usage reconciliation failed for ${subscriptionId}: ${error instanceof Error ? error.message : 'unknown error'}`);
       }
     }
+  }
+
+  private async repairReusableEsims() {
+    await this.prisma.esimInventory.updateMany({ where: { status: 'EXPIRED', activatedAt: { not: null }, customerEsims: { some: {} } }, data: { status: 'ACTIVATED' } });
+    await this.prisma.esimInventory.updateMany({ where: { status: 'EXPIRED', activatedAt: null, customerEsims: { some: {} } }, data: { status: 'ASSIGNED' } });
   }
 }
