@@ -8,6 +8,7 @@ import { Panel } from '@/components/panel';
 import { EmptyState } from '@/components/empty-state';
 import { SearchInput } from '@/components/search-input';
 import { Spinner } from '@/components/spinner';
+import { PaginationBar } from '@/components/pagination-bar';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
@@ -24,18 +25,32 @@ type Customer = {
 export default function CustomersClient() {
   const authFetch = useAuthenticatedFetch();
   const [items, setItems] = useState<Customer[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   useEffect(() => {
-    void authFetch(`${API}/operations/customers`, { headers: {} })
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+  useEffect(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ limit: '50', offset: String((page - 1) * 50) });
+    if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
+    void authFetch(`${API}/operations/customers?${params}`, { headers: {} })
       .then((r) => r.json())
-      .then((v) => setItems(v.data ?? []))
+      .then((v) => {
+        setItems(v.data?.items ?? []);
+        setTotal(v.data?.total ?? 0);
+      })
       .finally(() => setLoading(false));
-  }, []);
+  }, [page, debouncedQuery]);
 
-  const visible = items.filter((item) =>
-    `${item.name} ${item.email} ${item.ownerId}`.toLowerCase().includes(query.toLowerCase()),
-  );
+  const visible = items;
 
   return (
     <>
@@ -53,7 +68,7 @@ export default function CustomersClient() {
       />
       <Panel
         title="Customer directory"
-        description={`${visible.length} customers`}
+        description={`${total} customers`}
         noPadding
       >
         {loading ? (
@@ -101,6 +116,14 @@ export default function CustomersClient() {
               ))}
             </TableBody>
           </Table>
+        )}
+        {!loading && (
+          <PaginationBar
+            page={page}
+            pageSize={50}
+            total={total}
+            onPageChange={setPage}
+          />
         )}
       </Panel>
     </>

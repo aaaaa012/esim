@@ -3,7 +3,6 @@ import { useAuthenticatedFetch } from '../authenticated-api-provider';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Bell, ExternalLink, RefreshCcw } from 'lucide-react';
-import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -60,10 +59,6 @@ export default function NotificationsClient() {
 
   return (
     <>
-      <PageHeader
-        title="Notifications"
-        description="Delivery attempts, channel health, failures and controlled retries."
-      />
       {error && (
         <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {error}

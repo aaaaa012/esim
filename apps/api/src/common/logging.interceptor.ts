@@ -36,7 +36,7 @@ export class LoggingInterceptor implements NestInterceptor {
         } else {
           this.logger.log(`${fields.method} ${fields.path} ${fields.status} ${fields.durationMs}ms correlationId=${fields.correlationId} actor=${fields.actor}`);
         }
-        this.metrics?.recordRequest(fields.method, req.url, status, durationMs);
+        this.metrics?.recordRequest(fields.method, fields.path, status, durationMs);
         return data;
       }),
     );

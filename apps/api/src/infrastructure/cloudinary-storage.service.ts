@@ -11,14 +11,21 @@ export type SignedDocumentUpload = {
 @Injectable()
 export class CloudinaryStorageService {
   createDocumentUpload(orderId: string, type: DocumentType): SignedDocumentUpload {
+    return this.createSignedUpload(`visa-compass/private/orders/${orderId}`, type);
+  }
+
+  createPartnerDocumentUpload(uploadId: string, type: DocumentType): SignedDocumentUpload {
+    return this.createSignedUpload(`visa-compass/private/partner-uploads/${uploadId}`, type, 900);
+  }
+
+  private createSignedUpload(folder: string, type: DocumentType, expiresInSeconds = 600): SignedDocumentUpload {
     const assetId = `doc_${randomUUID()}`;
-    const folder = `visa-compass/private/orders/${orderId}`;
     const timestamp = Math.floor(Date.now() / 1000);
     const configured = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
     if (!configured) {
       if (process.env.NODE_ENV === "production")
         throw new ServiceUnavailableException('Private document storage is not configured');
-      return { assetId, upload: { mode: 'local-simulator', timestamp, signature: createHash('sha256').update(`${assetId}:${timestamp}`).digest('hex'), folder, expiresInSeconds: 600 } };
+      return { assetId, upload: { mode: 'local-simulator', timestamp, signature: createHash('sha256').update(`${assetId}:${timestamp}`).digest('hex'), folder, expiresInSeconds } };
     }
     const cloudName = process.env.CLOUDINARY_CLOUD_NAME!;
     const apiKey = process.env.CLOUDINARY_API_KEY!;
@@ -26,7 +33,7 @@ export class CloudinaryStorageService {
     cloudinary.config({ cloud_name: cloudName, api_key: apiKey, api_secret: apiSecret, secure: true });
     const publicId = `${type.toLowerCase()}-${assetId}`;
     const signature = cloudinary.utils.api_sign_request({ timestamp, folder, public_id: publicId, type: 'authenticated' }, apiSecret);
-    return { assetId: `${folder}/${publicId}`, upload: { mode: 'cloudinary-signed', endpoint: `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, cloudName, apiKey, publicId, deliveryType: 'authenticated', timestamp, signature, folder, expiresInSeconds: 600 } };
+    return { assetId: `${folder}/${publicId}`, upload: { mode: 'cloudinary-signed', endpoint: `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, cloudName, apiKey, publicId, deliveryType: 'authenticated', timestamp, signature, folder, expiresInSeconds } };
   }
 
   async verifyDocument(assetId: string) {

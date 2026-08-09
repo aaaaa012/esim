@@ -38,11 +38,10 @@ export class WebhooksController {
     const eventId = body.eventId;
     if (!eventId) throw new BadRequestException('eventId is required');
     if (typeof eventId !== 'string' || eventId.length < 8 || eventId.length > 256) throw new BadRequestException('eventId is invalid');
+    this.verifyPaymentSignature(JSON.stringify(body), signature);
     if (this.accepted.has(`${provider}:${eventId}`) || await this.webhookExists(provider, eventId)) return { accepted: true, duplicate: true };
-    if (signature) this.verifyLocalSignature(JSON.stringify(body), signature);
-    else if (process.env.NODE_ENV === 'production') throw new BadRequestException('Payment webhook signature is required');
     this.remember(`${provider}:${eventId}`);
-    await this.persistWebhook(provider, eventId, body, Boolean(signature));
+    await this.persistWebhook(provider, eventId, body, true);
     await this.queues.add(QUEUES.payments, 'payment-callback', { provider, eventId, payload: body }, `${provider}-${eventId}`);
     return { accepted: true, queued: true };
   }
@@ -78,10 +77,14 @@ export class WebhooksController {
 
   private async webhookExists(source: string, eventId: string) { if (!this.prisma.enabled) return false; return Boolean(await this.prisma.webhookEvent.findUnique({ where: { source_eventId: { source, eventId } }, select: { id: true } })); }
 
-  private verifyLocalSignature(payload: string, signature: string) {
-    const expected = createHmac('sha256', paymentSimulatorSecret()).update(payload).digest('hex');
-    const a = Buffer.from(expected); const b = Buffer.from(signature);
-    if (a.length !== b.length || !timingSafeEqual(a, b)) throw new BadRequestException('Invalid webhook signature');
+  private verifyPaymentSignature(payload: string, signature?: string) {
+    if (!signature) throw new BadRequestException('Payment webhook signature is required');
+    const secret = process.env.PAYMENT_WEBHOOK_SECRET ?? (process.env.NODE_ENV === 'production' ? undefined : paymentSimulatorSecret());
+    if (!secret) throw new BadRequestException('Payment webhook is not configured');
+    const raw = signature.startsWith('sha256=') ? signature.slice('sha256='.length) : signature;
+    const expected = createHmac('sha256', secret).update(payload).digest('hex');
+    const a = Buffer.from(expected); const b = Buffer.from(raw);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) throw new BadRequestException('Invalid payment webhook signature');
   }
   private verifyTransatelSignature(payload:string,signature:string){const secret=process.env.TRANSATEL_WEBHOOK_SECRET;if(!secret)throw new BadRequestException('Transatel webhook is not configured');const expected=`sha256=${createHmac('sha256',secret).update(payload).digest('hex')}`;const a=Buffer.from(expected);const b=Buffer.from(signature);if(a.length!==b.length||!timingSafeEqual(a,b))throw new BadRequestException('Invalid Transatel webhook signature')}
 }

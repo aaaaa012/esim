@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { validateEnv } from "./infrastructure/env-validation.js";
 import { HealthController } from "./observability/health.controller.js";
 import { MetricsController } from "./observability/metrics.controller.js";
 import { MetricsService } from "./observability/metrics.service.js";
@@ -35,7 +36,13 @@ import { AdminService } from "./modules/admin/admin.service.js";
 import { ProvisioningProcessor } from "./jobs/provisioning.processor.js";
 import { PartnersController } from "./modules/partners/partners.controller.js";
 import { PartnerAuthGuard } from "./modules/partners/partner-auth.guard.js";
+import { PartnerService } from "./modules/partners/partner.service.js";
+import { PartnerAdminController } from "./modules/partners/partner-admin.controller.js";
+import { PartnerAdminService } from "./modules/partners/partner-admin.service.js";
+import { PartnerCheckoutController } from "./modules/partners/partner-checkout.controller.js";
+import { PartnerWebhookProcessor } from "./jobs/partner-webhook.processor.js";
 import { ConnectivityService } from "./modules/integration/connectivity.service.js";
+import { AurigaMockProvider } from "./modules/integration/auriga-mock.provider.js";
 import { TransatelProvider } from "./modules/integration/transatel.provider.js";
 import { NotificationController } from "./modules/notification/notification.controller.js";
 import { NotificationService } from "./modules/notification/notification.service.js";
@@ -52,6 +59,7 @@ import { AccountGuard } from "./common/auth.guard.js";
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: [".env", "apps/api/.env", "../../.env"],
+      validate: validateEnv,
     }),
   ],
   controllers: [
@@ -69,6 +77,8 @@ OperationsController,
     OperationsIntegrationEventsController,
     OperationsIntegrationLogsController,
     PartnersController,
+    PartnerAdminController,
+    PartnerCheckoutController,
     NotificationController,
   ],
   providers: [
@@ -81,8 +91,12 @@ OperationsController,
     PaymentsService,
     KhaltiGateway,
     PaymentSimulatorGateway,
+    AurigaMockProvider,
     TransatelProvider,
     ConnectivityService,
+    PartnerService,
+    PartnerAdminService,
+    PartnerWebhookProcessor,
     CryptoService,
     PrismaService,
     CloudinaryStorageService,

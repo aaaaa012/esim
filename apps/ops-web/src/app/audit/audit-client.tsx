@@ -1,27 +1,34 @@
 'use client';
 import { useAuthenticatedFetch } from '../authenticated-api-provider';
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { ArrowRight } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Download } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { StatusBadge } from '@/components/status-badge';
 import { SearchInput } from '@/components/search-input';
 import { EmptyState } from '@/components/empty-state';
-import { Spinner } from '@/components/spinner';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { downloadCsv } from '@/lib/csv';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
 type Audit = {
   id: string;
-  orderId: string;
-  orderNumber: string;
   module: string;
+  entity: string;
+  entityId: string;
   action: string;
-  previousStatus: string | null;
-  reason?: string;
+  performedByEmail: string | null;
+  previousValue: unknown;
+  newValue: unknown;
   createdAt: string;
+};
+
+const detailOf = (value: unknown) => {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
 };
 
 export default function AuditClient() {
@@ -35,11 +42,30 @@ export default function AuditClient() {
       .then((v) => setItems(v.data ?? []))
       .finally(() => setLoading(false));
   }, []);
-  const visible = items.filter((item) =>
-    `${item.orderNumber} ${item.action} ${item.reason ?? ''}`
-      .toLowerCase()
-      .includes(query.toLowerCase()),
+  const visible = useMemo(
+    () =>
+      items.filter((item) =>
+        `${item.module} ${item.entity} ${item.action} ${item.performedByEmail ?? ''} ${detailOf(item.newValue)}`
+          .toLowerCase()
+          .includes(query.toLowerCase()),
+      ),
+    [items, query],
   );
+  const exportCsv = () => {
+    downloadCsv(
+      `audit-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['time', 'module', 'entity', 'action', 'actor', 'previous', 'new'],
+      visible.map((item) => [
+        new Date(item.createdAt).toISOString(),
+        item.module,
+        `${item.entity}${item.entityId ? `:${item.entityId}` : ''}`,
+        item.action,
+        item.performedByEmail ?? 'system',
+        detailOf(item.previousValue),
+        detailOf(item.newValue),
+      ]),
+    );
+  };
 
   return (
     <>
@@ -47,12 +73,23 @@ export default function AuditClient() {
         title="Audit log"
         description="Immutable operational events ordered newest first."
         actions={
-          <SearchInput
-            placeholder="Search order, action, reason…"
-            value={query}
-            onChange={setQuery}
-            className="w-full sm:w-80"
-          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <SearchInput
+              placeholder="Search action, module, actor…"
+              value={query}
+              onChange={setQuery}
+              className="w-full sm:w-80"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={visible.length === 0}
+              onClick={exportCsv}
+            >
+              <Download className="size-3.5" />
+              Export CSV
+            </Button>
+          </div>
         }
       />
       <Panel
@@ -64,15 +101,18 @@ export default function AuditClient() {
           <EmptyState loading>
             <span className="text-sm text-muted-foreground">Loading audit events…</span>
           </EmptyState>
+        ) : visible.length === 0 ? (
+          <EmptyState title="No matching events" description="Try adjusting your search." />
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Time</TableHead>
                 <TableHead>Module</TableHead>
-                <TableHead>Order</TableHead>
-                <TableHead>Transition</TableHead>
-                <TableHead>Reason</TableHead>
+                <TableHead>Entity</TableHead>
+                <TableHead>Action</TableHead>
+                <TableHead>Actor</TableHead>
+                <TableHead>Change</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -85,21 +125,26 @@ export default function AuditClient() {
                     <StatusBadge label={item.module} />
                   </TableCell>
                   <TableCell>
-                    <Button asChild variant="link" className="h-auto p-0 text-primary">
-                      <Link href={`/orders/${item.orderId}`}>
-                        {item.orderNumber}
-                        <ArrowRight className="size-3" />
-                      </Link>
-                    </Button>
+                    <span className="text-sm">
+                      {item.entity.replaceAll('_', ' ')}
+                      {item.entityId && (
+                        <span className="text-xs text-muted-foreground">
+                          {" "}· {item.entityId.slice(0, 8)}
+                        </span>
+                      )}
+                    </span>
                   </TableCell>
                   <TableCell>
-                    <span className="text-muted-foreground">
-                      {item.previousStatus?.replaceAll('_', ' ') ?? 'CREATED'}
+                    <span className="font-medium text-sm">
+                      {item.action.replaceAll('_', ' ')}
                     </span>
-                    {" → "}
-                    <span className="font-medium">{item.action.replaceAll('_', ' ')}</span>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{item.reason ?? '—'}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {item.performedByEmail ?? 'system'}
+                  </TableCell>
+                  <TableCell className="max-w-[240px] truncate text-xs text-muted-foreground">
+                    {detailOf(item.newValue)}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

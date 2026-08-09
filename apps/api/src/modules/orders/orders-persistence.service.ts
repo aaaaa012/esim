@@ -13,7 +13,7 @@ export class OrdersPersistenceService {
 
   async load(): Promise<DemoOrder[]> {
     if (!this.prisma.enabled) return [];
-    const rows = await this.prisma.order.findMany({ include: { customer: { include: { user: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: { include: { subscriptions: true } }, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
+    const rows = await this.prisma.order.findMany({ include: { customer: { include: { user: true } }, partner: { select: { id: true, code: true, name: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: { include: { subscriptions: true } }, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
     return rows.map((row) => {
       const traveler: TravelerInput | undefined = row.traveler ? {
         title: row.traveler.title as TravelerInput['title'], firstName: row.traveler.firstName, surname: row.traveler.surname,
@@ -40,6 +40,8 @@ export class OrdersPersistenceService {
         ...(row.qrDeliveredAt ? { qrDeliveredAt: row.qrDeliveredAt.toISOString() } : {}),
         ...(row.activatedAt ? { activatedAt: row.activatedAt.toISOString() } : {}),
         purchaseType: row.orderType as 'INITIAL_PURCHASE' | 'TOPUP',
+        ...(row.partner ? { partner: row.partner } : {}),
+        ...(row.externalOrderId ? { externalOrderId: row.externalOrderId } : {}),
         ...(() => { const snapshot = row.pricingSnapshot as { topUpMobile?: string }; return snapshot?.topUpMobile ? { topUpMobile: snapshot.topUpMobile } : {}; })(),
         ...(() => { if (!row.customerEsim?.subscriptions?.length) return {}; const latest = [...row.customerEsim.subscriptions].sort((a, b) => (b.usageLastCheckedAt?.getTime() ?? 0) - (a.usageLastCheckedAt?.getTime() ?? 0))[0]; if (!latest?.usageLastCheckedAt) return {}; return { usage: { usedMb: latest.usedMb, totalMb: latest.totalMb, lastCheckedAt: latest.usageLastCheckedAt.toISOString() } }; })(),
         createdAt: row.createdAt.toISOString(),
@@ -56,10 +58,18 @@ export class OrdersPersistenceService {
       const identity = await this.ensureIdentity(tx, order);
       const country = await tx.country.upsert({ where: { isoCode: order.plan.countryCode }, update: { name: order.plan.countryName, active: true }, create: { isoCode: order.plan.countryCode, name: order.plan.countryName } });
       await tx.plan.upsert({ where: { id: order.plan.id }, update: { name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' }, create: { id: order.plan.id, countryId: country.id, providerPlanId: `TRANSATEL-${order.plan.countryCode}`, name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, costPrice: Math.round(order.plan.sellingPriceNpr * 0.65), sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' } });
-      const existing = await tx.order.findUnique({ where: { id: order.id }, select: { id: true } });
+      const existing = await tx.order.findUnique({ where: { id: order.id }, select: { id: true, status: true, partnerId: true, externalOrderId: true } });
       if (existing) {
         const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, orderType: (order.purchaseType ?? 'INITIAL_PURCHASE') as DbOrderType, providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, qrDeliveredAt: order.qrDeliveredAt ? new Date(order.qrDeliveredAt) : null, activatedAt: order.activatedAt ? new Date(order.activatedAt) : null, version: { increment: 1 } } });
         if (updated.count !== 1) throw new ConflictException('Order was changed by another request; reload and retry');
+        if (existing.partnerId && existing.status !== order.status) {
+          const eventType = this.partnerEventType(order.status);
+          if (eventType) {
+            const endpoints = await tx.partnerWebhookEndpoint.findMany({ where: { partnerId: existing.partnerId, active: true } });
+            const eligible = endpoints.filter((endpoint) => { const types = Array.isArray(endpoint.eventTypes) ? endpoint.eventTypes.filter((value): value is string => typeof value === 'string') : []; return types.includes('*') || types.includes(eventType); });
+            await tx.partnerEvent.create({ data: { partnerId: existing.partnerId, orderId: order.id, type: eventType, resourceId: order.id, correlationId: randomUUID(), payload: { orderId: order.id, externalOrderId: existing.externalOrderId, status: order.status, fulfillmentStatus: this.fulfillmentStatus(order.status), version: order.version + 1 }, deliveries: { create: eligible.map((endpoint) => ({ endpointId: endpoint.id })) } } });
+          }
+        }
       } else {
         await tx.order.create({ data: { id: order.id, orderNumber: order.orderNumber, customerId: identity.customerId, planId: order.plan.id, orderType: (order.purchaseType ?? 'INITIAL_PURCHASE') as DbOrderType, status: order.status as DbOrderStatus, version: 1, subtotal: order.totalAmountNpr, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, compatibilityAcceptedAt: new Date(order.compatibilityAcceptedAt), providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, qrDeliveredAt: order.qrDeliveredAt ? new Date(order.qrDeliveredAt) : null, activatedAt: order.activatedAt ? new Date(order.activatedAt) : null, createdAt: new Date(order.createdAt) } });
       }
@@ -84,8 +94,8 @@ export class OrdersPersistenceService {
 
   async audit() {
     if (!this.prisma.enabled) return [];
-    const rows = await this.prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200 });
-    return rows.map((row) => ({ id: row.id, module: row.module, entity: row.entity, entityId: row.entityId, action: row.action, previousValue: row.previousValue, newValue: row.newValue, createdAt: row.createdAt.toISOString() }));
+    const rows = await this.prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200, include: { performedBy: { select: { email: true } } } });
+    return rows.map((row) => ({ id: row.id, module: row.module, entity: row.entity, entityId: row.entityId, action: row.action, performedByEmail: row.performedBy?.email ?? null, previousValue: row.previousValue, newValue: row.newValue, createdAt: row.createdAt.toISOString() }));
   }
 
   async recordReview(orderId: string, documentId: string, actorClerkId: string, decision: 'APPROVE'|'REUPLOAD', reason?: string) {
@@ -100,6 +110,26 @@ export class OrdersPersistenceService {
 
   private travelerData(traveler: TravelerInput) {
     return { title: traveler.title, firstName: traveler.firstName, middleName: traveler.middleName ?? null, surname: traveler.surname, dateOfBirthEncrypted: this.crypto.encrypt(traveler.dateOfBirth), nationality: traveler.nationality, city: traveler.city, countryOfResidence: traveler.countryOfResidence, employerOrBusinessName: traveler.employerOrBusinessName ?? null, email: traveler.email, mobile: traveler.mobile, passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber), passportNumberHash: this.crypto.blindIndex(traveler.passportNumber), passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate), pointOfSaleCode: traveler.pointOfSaleCode ?? null };
+  }
+
+  private partnerEventType(status: OrderStatus) {
+    const types: Partial<Record<OrderStatus, string>> = {
+      [OrderStatus.PROVISIONING]: 'order.provisioning',
+      [OrderStatus.QR_READY]: 'order.qr_ready',
+      [OrderStatus.COMPLETED]: 'order.activated',
+      [OrderStatus.PROVISIONING_FAILED]: 'order.provisioning_failed',
+      [OrderStatus.CANCELLED]: 'order.cancelled',
+      [OrderStatus.REFUNDED]: 'order.refunded',
+    };
+    return types[status];
+  }
+
+  private fulfillmentStatus(status: OrderStatus) {
+    if (status === OrderStatus.QR_READY) return 'READY';
+    if (status === OrderStatus.COMPLETED) return 'ACTIVATED';
+    if (status === OrderStatus.PROVISIONING_FAILED) return 'FAILED';
+    if ([OrderStatus.APPROVED, OrderStatus.PROVISIONING].includes(status)) return 'PENDING';
+    return 'NOT_READY';
   }
 
   private async ensureIdentity(tx: Prisma.TransactionClient, order: DemoOrder) {
