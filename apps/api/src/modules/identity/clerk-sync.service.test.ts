@@ -91,6 +91,48 @@ describe("ClerkSyncService re-registration recovery", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it("relinks an ACTIVE account when Clerk recreates the same verified email with a new user id", async () => {
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_EMAIL", "");
+    const active = {
+      id: "admin-1",
+      clerkId: "old-clerk-id",
+      email: "admin@example.com",
+      accountType: UserRoleName.SUPER_ADMIN,
+      status: UserStatus.ACTIVE,
+    };
+    const prisma = prismaStub();
+    (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockImplementation(
+      (args: { where: { clerkId?: string; email?: string } }) =>
+        Promise.resolve(
+          args.where.clerkId
+            ? null
+            : args.where.email === "admin@example.com"
+              ? active
+              : null,
+        ),
+    );
+    const service = new ClerkSyncService(prisma);
+
+    const result = await service.sync(
+      createdEvent("new-clerk-id", "admin@example.com"),
+    );
+
+    expect(result).toEqual({
+      persisted: true,
+      accountType: UserRoleName.SUPER_ADMIN,
+    });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "admin-1" },
+      data: {
+        clerkId: "new-clerk-id",
+        email: "admin@example.com",
+        status: UserStatus.ACTIVE,
+      },
+    });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it("still creates a new CUSTOMER when the email is not taken", async () => {
     vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_EMAIL", "");
     const prisma = prismaStub();

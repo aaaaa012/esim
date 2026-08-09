@@ -65,12 +65,12 @@ export class ClerkSyncService {
       });
       return { persisted: true, accountType: existing.accountType };
     }
-    const disabledWithSameEmail = await this.prisma.user.findUnique({
+    const userWithSameEmail = await this.prisma.user.findUnique({
       where: { email },
     });
-    if (disabledWithSameEmail && disabledWithSameEmail.status === UserStatus.DISABLED) {
+    if (userWithSameEmail) {
       await this.prisma.user.update({
-        where: { id: disabledWithSameEmail.id },
+        where: { id: userWithSameEmail.id },
         data: {
           clerkId: event.data.id,
           email,
@@ -79,7 +79,7 @@ export class ClerkSyncService {
       });
       return {
         persisted: true,
-        accountType: disabledWithSameEmail.accountType,
+        accountType: userWithSameEmail.accountType,
       };
     }
     const invitation = await this.prisma.staffInvitation.findFirst({
