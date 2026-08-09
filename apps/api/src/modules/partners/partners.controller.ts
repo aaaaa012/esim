@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  GoneException,
   Header,
   Headers,
   Ip,
@@ -34,10 +35,6 @@ import {
 } from "./partner-auth.guard.js";
 import { PartnerService } from "./partner.service.js";
 
-const quoteSchema = z.object({
-  planId: z.string().uuid(),
-  settlementMethod: z.enum(PartnerSettlementMethod),
-});
 const legacyCreateSchema = z.object({
   quoteId: z.string().uuid(),
   externalOrderId: z.string().trim().min(1).max(120),
@@ -99,7 +96,6 @@ const listSchema = z.object({
   externalOrderId: z.string().max(120).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
-const hostedSchema = z.object({ redirectUrl: z.url() });
 const reasonSchema = z.object({ reason: z.string().trim().min(3).max(1000) });
 const notificationSchema = z.object({
   channel: z.enum(["EMAIL", "WHATSAPP"]),
@@ -153,7 +149,7 @@ export class PartnersController {
   }
 
   @Post("quotes")
-  @PartnerScopes("quotes:write")
+  @PartnerScopes("catalog:read")
   @PartnerMutation()
   @LegacyPartnerRoute()
   @ApiBody({
@@ -173,13 +169,8 @@ export class PartnersController {
       },
     },
   })
-  quote(@Body() body: unknown, @Req() request: PartnerRequest) {
-    const input = quoteSchema.parse(body);
-    return this.partners.createQuote(
-      request.partner!.id,
-      input.planId,
-      input.settlementMethod,
-    );
+  quote() {
+    throw new GoneException({ code: "QUOTES_DEPRECATED", message: "Quote creation is deprecated; place a complete order directly" });
   }
 
   @Post("document-upload-sessions")
@@ -367,37 +358,19 @@ export class PartnersController {
   }
 
   @Post("orders/:id/hosted-checkout-session")
-  @PartnerScopes("payments:write")
+  @PartnerScopes("catalog:read")
   @PartnerMutation()
   @LegacyPartnerRoute()
-  hosted(
-    @Param("id") id: string,
-    @Body() body: unknown,
-    @Req() request: PartnerRequest,
-  ) {
-    const input = hostedSchema.parse(body);
-    return this.partners.hostedSession(
-      request.partner!.id,
-      id,
-      input.redirectUrl,
-    );
+  hosted() {
+    throw new GoneException({ code: "HOSTED_PAYMENT_DEPRECATED", message: "Hosted payments are deprecated; prepaid PARTNER_ACCOUNT is required" });
   }
 
   @Post("orders/:id/payment-session")
-  @PartnerScopes("payments:write")
+  @PartnerScopes("catalog:read")
   @PartnerMutation()
   @LegacyPartnerRoute()
-  payment(
-    @Param("id") id: string,
-    @Body() body: unknown,
-    @Req() request: PartnerRequest,
-  ) {
-    const input = hostedSchema.parse(body);
-    return this.partners.hostedSession(
-      request.partner!.id,
-      id,
-      input.redirectUrl,
-    );
+  payment() {
+    throw new GoneException({ code: "HOSTED_PAYMENT_DEPRECATED", message: "Hosted payments are deprecated; prepaid PARTNER_ACCOUNT is required" });
   }
 
   @Post("orders/:id/cancel")

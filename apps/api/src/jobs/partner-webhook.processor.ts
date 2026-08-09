@@ -2,6 +2,8 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/commo
 import { PartnerWebhookDeliveryStatus } from "@prisma/client";
 import type { Job } from "bullmq";
 import { createHmac } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { CryptoService } from "../infrastructure/crypto.service.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 import { QueueService } from "./queue.service.js";
@@ -13,6 +15,78 @@ export function signPartnerWebhook(secret: string, timestamp: string, rawBody: s
   return createHmac("sha256", secret)
     .update(`${timestamp}.${rawBody}`)
     .digest("hex");
+}
+
+/** Blocks destinations that could be used for SSRF (metadata, private, link-local, loopback). */
+export async function assertSafeWebhookUrl(url: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Webhook URL is invalid");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+    throw new Error("Webhook URL must use http(s)");
+  const host = parsed.hostname.toLowerCase();
+  if (
+    host === "localhost" ||
+    host === "metadata.google.internal" ||
+    host === "metadata" ||
+    host.endsWith(".internal")
+  ) {
+    throw new Error("Webhook URL host is not allowed");
+  }
+  const ipv = isIP(host);
+  if (ipv !== 0) {
+    assertSafeIp(ipv, host);
+    return;
+  }
+  let addresses: string[];
+  try {
+    addresses = (await lookup(host, { all: true })).map((entry) => addressOf(entry));
+  } catch {
+    throw new Error("Webhook URL host cannot be resolved");
+  }
+  for (const address of addresses) assertSafeIp(isIP(address), address);
+}
+
+function addressOf(entry: string | { address: string }): string {
+  return typeof entry === "string" ? entry : entry.address;
+}
+
+function assertSafeIp(version: number, address: string): void {
+  const v4 = version === 4 || address.toLowerCase().startsWith("::ffff:");
+  if (v4) {
+    const groups = address.toLowerCase().replace(/^::ffff:/, "").split(".").map(Number);
+    if (groups.length !== 4) throw new Error("Webhook URL host is not allowed");
+    const a = groups[0] ?? 0, b = groups[1] ?? 0, c = groups[2] ?? 0, d = groups[3] ?? 0;
+    const privateIp =
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 255 && d === 1);
+    if (privateIp) throw new Error("Webhook URL resolves to a private host");
+    return;
+  }
+  const lower = address.toLowerCase();
+  const privateV6 =
+    lower === "::" ||
+    lower === "::1" ||
+    lower.startsWith("fe8") ||
+    lower.startsWith("fe9") ||
+    lower.startsWith("fea") ||
+    lower.startsWith("feb") ||
+    lower.startsWith("fc") ||
+    lower.startsWith("fd") ||
+    lower.startsWith("::ffff:127") ||
+    lower.startsWith("::ffff:10.") ||
+    lower.startsWith("::ffff:192.168") ||
+    (lower.startsWith("::ffff:172.") && /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(lower));
+  if (privateV6) throw new Error("Webhook URL resolves to a private host");
 }
 
 @Injectable()
@@ -116,6 +190,7 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
     const signature = signPartnerWebhook(secret, timestamp, body);
     const started = Date.now();
     try {
+      await assertSafeWebhookUrl(delivery.endpoint.url);
       const response = await fetch(delivery.endpoint.url, {
         method: "POST",
         headers: {

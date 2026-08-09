@@ -31,6 +31,29 @@ import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
 import { OrdersService } from "../orders/orders.service.js";
 
+/** Opaque, deterministic composite cursor for (createdAt, id) keyset pagination. */
+function encodeCursor(createdAt: Date | undefined, id: string | undefined): string | null {
+  if (!createdAt || !id) return null;
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, "utf8").toString("base64url");
+}
+function decodeCursor(cursor?: string | undefined): { createdAt: Date; id: string } | null {
+  if (!cursor) return null;
+  let raw: string;
+  try {
+    raw = Buffer.from(cursor, "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+  const separator = raw.lastIndexOf("|");
+  if (separator <= 0) return null;
+  const iso = raw.slice(0, separator);
+  const id = raw.slice(separator + 1);
+  if (!id) return null;
+  const createdAt = new Date(iso);
+  if (Number.isNaN(createdAt.getTime())) return null;
+  return { createdAt, id };
+}
+
 type CreateOrderInput = {
   quoteId: string;
   externalOrderId: string;
@@ -524,6 +547,7 @@ export class PartnerService {
     },
   ) {
     const limit = Math.min(100, Math.max(1, input.limit ?? 25));
+    const bound = decodeCursor(input.cursor);
     const rows = await this.prisma.order.findMany({
       where: {
         partnerId,
@@ -531,17 +555,17 @@ export class PartnerService {
         ...(input.externalOrderId
           ? { externalOrderId: input.externalOrderId }
           : {}),
+        ...(bound ? { OR: [{ createdAt: { lt: bound.createdAt } }, { createdAt: bound.createdAt, id: { lt: bound.id } }] } : {}),
       },
       include: PARTNER_ORDER_INCLUDE,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
-      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
     });
     const more = rows.length > limit;
     const items = rows.slice(0, limit);
     return {
       items: items.map((order) => this.normalizeOrder(order)),
-      nextCursor: more ? (items.at(-1)?.id ?? null) : null,
+      nextCursor: more ? (encodeCursor(items.at(-1)?.createdAt, items.at(-1)?.id) ?? null) : null,
     };
   }
 
@@ -606,6 +630,7 @@ export class PartnerService {
   ) {
     await this.partner(partnerId);
     const limit = Math.min(100, Math.max(1, input.limit ?? 25));
+    const bound = decodeCursor(input.cursor);
     const rows = await this.prisma.partnerLedgerEntry.findMany({
       where: {
         partnerId,
@@ -627,13 +652,20 @@ export class PartnerService {
           ? { reference: { contains: input.reference, mode: "insensitive" } }
           : {}),
         ...(input.type ? { type: input.type as PartnerLedgerEntryType } : {}),
+        ...(bound
+          ? {
+              OR: [
+                { createdAt: { lt: bound.createdAt } },
+                { createdAt: bound.createdAt, id: { lt: bound.id } },
+              ],
+            }
+          : {}),
       },
       include: {
         order: { select: { id: true, externalOrderId: true, orderNumber: true } },
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
-      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
     });
     const more = rows.length > limit;
     const items = rows.slice(0, limit);
@@ -648,7 +680,7 @@ export class PartnerService {
         order: entry.order,
         createdAt: entry.createdAt,
       })),
-      nextCursor: more ? (items.at(-1)?.id ?? null) : null,
+      nextCursor: more ? (encodeCursor(items.at(-1)?.createdAt, items.at(-1)?.id) ?? null) : null,
     };
   }
 
@@ -1297,8 +1329,8 @@ export class PartnerService {
       where: { partnerId },
     });
     if (!account) return;
-    await tx.partnerAccount.update({
-      where: { id: account.id },
+    const updated = await tx.partnerAccount.updateMany({
+      where: { id: account.id, version: account.version },
       data: {
         reservedPaisa: {
           decrement: Math.min(account.reservedPaisa, amountPaisa),
@@ -1306,6 +1338,8 @@ export class PartnerService {
         version: { increment: 1 },
       },
     });
+    if (updated.count !== 1)
+      throw new ConflictException("Partner balance changed; retry");
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,

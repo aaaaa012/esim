@@ -590,7 +590,22 @@ export class PartnerAdminService {
       !(process.env.NODE_ENV !== "production" && url.hostname === "localhost")
     )
       throw new BadRequestException("Webhook URLs must use HTTPS");
-    if (["127.0.0.1", "0.0.0.0", "::1"].includes(url.hostname))
+    const host = url.hostname.toLowerCase();
+    const ip = host.split(".").map(Number);
+    const literalPrivate =
+      host === "localhost" ||
+      host === "metadata.google.internal" ||
+      host === "0.0.0.0" ||
+      host === "::" ||
+      host === "::1" ||
+      (ip.length === 4 &&
+        ((ip[0] ?? 0) === 0 ||
+          (ip[0] ?? 0) === 10 ||
+          (ip[0] ?? 0) === 127 ||
+          ((ip[0] ?? 0) === 169 && (ip[1] ?? 0) === 254) ||
+          ((ip[0] ?? 0) === 172 && (ip[1] ?? 0) >= 16 && (ip[1] ?? 0) <= 31) ||
+          ((ip[0] ?? 0) === 192 && (ip[1] ?? 0) === 168)));
+    if (literalPrivate)
       throw new BadRequestException("Webhook URL host is not allowed");
     return url.toString();
   }

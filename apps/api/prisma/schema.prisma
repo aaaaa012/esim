@@ -305,6 +305,7 @@ model Order {
   @@unique([partnerId, externalOrderId])
   @@index([customerId, status])
   @@index([status, createdAt])
+  @@index([partnerId])
 }
 model Traveler {
   id String @id @default(uuid()) @db.Uuid
@@ -361,6 +362,7 @@ model Payment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@unique([provider, providerTransactionId])
+  @@index([orderId])
 }
 model InventoryBatch {
   id String @id @default(uuid()) @db.Uuid
@@ -562,6 +564,7 @@ model PartnerLedgerEntry {
   metadata Json?
   createdAt DateTime @default(now())
   @@index([partnerId, createdAt])
+  @@index([orderId])
 }
 model PartnerHostedCheckoutSession {
   id String @id @default(uuid()) @db.Uuid

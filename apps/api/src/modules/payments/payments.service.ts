@@ -3,13 +3,14 @@ import { OrderStatus, PaymentProvider, PaymentStatus } from '@visa-compass/share
 import { OrdersService } from '../orders/orders.service.js';
 import { KhaltiGateway } from './gateways/khalti.gateway.js';
 import { PaymentSimulatorGateway } from './gateways/simulator.gateway.js';
+import { MetricsService } from '../../observability/metrics.service.js';
 
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
   private readonly verifyAttempts = new Map<string, number>();
   private readonly maxVerifyAttempts = (() => { const parsed = Number(process.env.PAYMENT_VERIFY_ATTEMPTS); return Number.isFinite(parsed) && parsed > 0 ? parsed : 3; })();
-  constructor(private orders: OrdersService, private khalti: KhaltiGateway, private simulator: PaymentSimulatorGateway) {}
+  constructor(private orders: OrdersService, private khalti: KhaltiGateway, private simulator: PaymentSimulatorGateway, private readonly metrics?: MetricsService) {}
   async initiate(orderId: string, ownerId: string | null, provider: PaymentProvider) { const order = this.orders.get(orderId, ownerId ?? undefined); const existing = order.payment; if (existing && existing.status === PaymentStatus.PENDING && existing.expiresAt && new Date(existing.expiresAt).getTime() > Date.now() && existing.redirectUrl) { return { reference: existing.reference, redirectUrl: existing.redirectUrl, expiresAt: existing.expiresAt, ...(existing.correlationId ? { correlationId: existing.correlationId } : {}) }; } const returnUrl = `${process.env.CUSTOMER_WEB_URL ?? 'http://localhost:3000'}/esim/checkout?order=${orderId}`; const result = await this.gateway().initiate({ orderId, orderNumber: order.orderNumber, amountNpr: order.totalAmountNpr, returnUrl }); await this.orders.beginPayment(orderId, ownerId, provider, { ...result, returnUrl }); return result; }
   async verify(orderId:string,ownerId:string|null,reference:string){const order=this.orders.get(orderId,ownerId ?? undefined);const context=this.context(order,reference);const result=await this.gateway().verify(reference,context);if(result.status!==PaymentStatus.COMPLETED||result.orderId!==order.id||result.amountNpr!==order.totalAmountNpr)throw new BadRequestException(`Payment lookup did not confirm the order: ${result.status}`);return this.orders.confirmPayment(orderId,reference,result.providerTransactionId)}
   async verifyCallback(orderId:string,reference:string){const order=this.orders.get(orderId);const context=this.context(order,reference);if(order.payment!.status===PaymentStatus.COMPLETED)return this.orders.view(orderId);const result=await this.gateway().verify(reference,context);if(result.status!==PaymentStatus.COMPLETED||result.orderId!==order.id||result.amountNpr!==order.totalAmountNpr)throw new BadRequestException(`Payment lookup did not confirm the order: ${result.status}`);return this.orders.confirmPayment(orderId,reference,result.providerTransactionId)}
@@ -64,7 +65,16 @@ export class PaymentsService {
     const gateway = this.gateway(order.payment!.provider);
     if (!gateway.refund) throw new BadRequestException('Selected provider does not support automated refunds');
     const result = await gateway.refund(order.payment!.providerTransactionId ?? order.payment!.reference, context, order.totalAmountNpr);
-    return this.orders.markRefunded(orderId, result.reference);
+    // Persist the provider refund outcome on the in-flight order first so the
+    // reference survives any subsequent local-state failure and can be
+    // reconciled by operations.
+    try {
+      return await this.orders.markRefunded(orderId, result.reference);
+    } catch (error) {
+      this.logger.error(`Gateway refund succeeded (ref=${result.reference}) but local order state write failed for ${orderId}: ${error instanceof Error ? error.message : 'unknown'}`);
+      this.metrics?.recordFailure('refund', 'state-write-after-gateway');
+      throw error;
+    }
   }
   async simulate(orderId: string, ownerId: string | null, reference: string, scenario: 'SUCCESS'|'CANCELLED'|'PENDING'|'WRONG_AMOUNT'|'REFUNDED'|'TIMEOUT' = 'SUCCESS') { if (process.env.NODE_ENV === 'production') throw new BadRequestException('Simulator is disabled'); if (scenario === 'TIMEOUT') throw new BadRequestException('Simulated payment provider timeout'); const order = this.orders.get(orderId, ownerId ?? undefined); const context=this.context(order,reference); this.simulator.apply(reference, scenario, context); const result = await this.simulator.verify(reference,context); if (result.status !== PaymentStatus.COMPLETED || result.orderId !== orderId || result.amountNpr !== order.totalAmountNpr) throw new BadRequestException(`Payment verification failed: ${result.status}`); return await this.orders.confirmPayment(orderId, reference, result.providerTransactionId); }
   private context(order:ReturnType<OrdersService['get']>,reference:string){if(order.payment?.reference!==reference)throw new BadRequestException('Payment reference mismatch');return {orderId:order.id,amountNpr:order.totalAmountNpr,...(order.payment.correlationId?{correlationId:order.payment.correlationId}:{})};}

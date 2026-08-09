@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { validateEnv } from "./infrastructure/env-validation.js";
 import { HealthController } from "./observability/health.controller.js";
 import { MetricsController } from "./observability/metrics.controller.js";
 import { MetricsService } from "./observability/metrics.service.js";
@@ -58,6 +59,7 @@ import { AccountGuard } from "./common/auth.guard.js";
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: [".env", "apps/api/.env", "../../.env"],
+      validate: validateEnv,
     }),
   ],
   controllers: [

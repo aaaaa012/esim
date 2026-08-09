@@ -479,7 +479,7 @@ export default function AdminWorkspace() {
       />
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="mb-6 flex h-10 w-full justify-start overflow-x-auto rounded-lg bg-transparent p-0">
-          {["Plans", "Pricing", "Integrations", "Document Rules", "Inventory Settings", "Users", "Partners", "System Config"].map((item) => (
+          {["Plans", "Integrations", "Document Rules", "Inventory Settings", "Users", "Partners", "System Config"].map((item) => (
             <TabsTrigger
               key={item}
               value={item}

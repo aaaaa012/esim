@@ -1,7 +1,6 @@
 'use client';
 import { useAuthenticatedFetch } from '../authenticated-api-provider';
 import { useEffect, useState } from 'react';
-import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { StatusBadge } from '@/components/status-badge';
 import { EmptyState } from '@/components/empty-state';
@@ -38,10 +37,6 @@ export default function IntegrationEventsClient() {
 
   return (
     <>
-      <PageHeader
-        title="Integration events"
-        description="Provider callbacks, signatures and processing outcomes."
-      />
       {error && (
         <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {error}
