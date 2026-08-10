@@ -62,6 +62,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
 
   private async run() {
     await this.orders.reconcileStaleActivationOrders();
+    await this.orders.recoverStuckProvisioningOrders();
     await this.payments.reconcilePendingPayments();
     if (!this.prisma.enabled) return;
     if (!this.repairedReusableInventory) { await this.repairReusableEsims(); this.repairedReusableInventory = true; }

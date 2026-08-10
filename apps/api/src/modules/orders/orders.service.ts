@@ -43,12 +43,12 @@ export class OrdersService implements OnModuleInit {
     for (const order of await this.persistence.load()) this.orders.set(order.id, order);
     this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`);
     for (const order of this.orders.values()) {
-      if (!order.partner || ![OrderStatus.APPROVED, OrderStatus.PROVISIONING].includes(order.status)) continue;
+      if (![OrderStatus.APPROVED, OrderStatus.PROVISIONING].includes(order.status)) continue;
       const recovery = order.status === OrderStatus.APPROVED
-        ? this.approveToProvisioning(order.id, 'Recovered accepted partner order')
+        ? this.approveToProvisioning(order.id, 'Recovered accepted order')
         : this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`);
       void recovery.catch((error) =>
-        this.logger.error(`Could not recover partner order ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`),
+        this.logger.error(`Could not recover order ${order.id} at boot: ${error instanceof Error ? error.message : 'unknown'}`),
       );
     }
   }
@@ -418,6 +418,43 @@ export class OrdersService implements OnModuleInit {
       this.activationRefetchAttempts.delete(order.id);
       this.logger.warn(`Order ${order.orderNumber} (${order.id}) QR_READY activation window expired without ACTIVATED after ${attempt - 1} re-fetch attempt(s); marked PROVISIONING_FAILED`);
     }
+    return { recovered, failed };
+  }
+  private readonly lastProvisioningRecovery = new Map<string, number>();
+  /**
+   * Periodic sweep that re-drives orders left in APPROVED/PROVISIONING without
+   * a QR payload. Jobs are idempotent (processProvisioning skips orders that
+   * already have a QR), and the shared job id keeps BullMQ from piling up
+   * duplicate work. Throttled per order so a persistently failing job is
+   * re-attempted periodically instead of hammering the queue every cycle.
+   */
+  async recoverStuckProvisioningOrders() {
+    const now = Date.now();
+    const recovered: string[] = [];
+    const failed: string[] = [];
+    const minAgeMs = Number(process.env.PROVISIONING_RECOVERY_MINUTES ?? 2) * 60_000;
+    const minGapMs = Number(process.env.PROVISIONING_RECOVERY_RETRY_MINUTES ?? 10) * 60_000;
+    for (const order of this.orders.values()) {
+      if (![OrderStatus.APPROVED, OrderStatus.PROVISIONING].includes(order.status)) continue;
+      if (order.qrPayload) continue;
+      const entered = [...order.timeline].reverse().find((event) => event.to === order.status)?.at;
+      const enteredAt = entered ? new Date(entered).getTime() : order.createdAt ? new Date(order.createdAt).getTime() : 0;
+      if (!enteredAt || now - enteredAt < minAgeMs) continue;
+      const lastRecovery = this.lastProvisioningRecovery.get(order.id) ?? 0;
+      if (now - lastRecovery < minGapMs) continue;
+      try {
+        await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`);
+        this.lastProvisioningRecovery.set(order.id, now);
+        recovered.push(order.id);
+        this.logger.log(`Recovery sweep re-queued provisioning for order ${order.orderNumber} (${order.id})`);
+      } catch (error) {
+        this.lastProvisioningRecovery.set(order.id, now);
+        failed.push(order.id);
+        this.metrics?.recordFailure('reconciliation', 'provisioning-recovery');
+        this.logger.warn(`Recovery sweep could not re-queue provisioning for order ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`);
+      }
+    }
+    if (recovered.length) this.logger.log(`Recovery sweep re-queued ${recovered.length} stuck order(s)`);
     return { recovered, failed };
   }
   /**
