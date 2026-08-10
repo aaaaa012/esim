@@ -70,7 +70,7 @@ export default function OpsSidebar() {
     ? [...baseItems, adminItem]
     : baseItems;
   return (
-    <aside className="sticky top-0 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar">
+    <aside className="sticky top-0 flex w-full flex-col border-b border-sidebar-border bg-sidebar lg:h-screen lg:w-64 lg:border-b-0 lg:border-r">
       <div className="border-b border-sidebar-border px-5 py-5">
         <div className="flex items-center gap-2.5">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -84,7 +84,7 @@ export default function OpsSidebar() {
           </div>
         </div>
       </div>
-      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+      <nav className="flex-1 space-y-1 overflow-x-auto overflow-y-auto p-3 lg:overflow-x-visible lg:overflow-y-auto">
         <p className="px-3 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Menu
         </p>

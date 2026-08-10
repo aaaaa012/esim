@@ -31,7 +31,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-muted/30 lg:flex">
       <OpsSidebar />
-      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-0">
         <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-card px-4 sm:px-6">
           <div className="flex items-center">
             <span className="text-sm font-semibold tracking-tight sm:hidden">
