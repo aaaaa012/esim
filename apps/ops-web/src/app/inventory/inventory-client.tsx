@@ -3,11 +3,13 @@ import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Boxes,
   CheckCircle2,
   ClipboardList,
   Clock,
   FileUp,
   Globe2,
+  Link2,
   PackageCheck,
   PackageOpen,
   RefreshCcw,
@@ -22,10 +24,12 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/empty-state";
 import { FileUploader } from "@/components/file-uploader";
 import { Spinner } from "@/components/spinner";
+import { PaginationBar } from "@/components/pagination-bar";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -76,6 +80,31 @@ type Plan = {
   sellingPriceNpr: number;
   status: "DRAFT" | "ACTIVE" | "DISABLED" | "ARCHIVED";
 };
+type Profile = {
+  id: string;
+  iccid: string;
+  eid: string;
+  msisdn?: string | null;
+  status: string;
+  smDpAddress?: string | null;
+  providerSubscriptionId?: string | null;
+  providerStatus?: string | null;
+  activatedAt?: string | null;
+  expiresAt?: string | null;
+  batchReference?: string | null;
+  batchStatus?: string | null;
+  order?: {
+    orderNumber: string;
+    orderStatus: string;
+    customerEmail: string;
+    customerCode: string;
+    planName: string;
+    planCountry: string;
+    planCountryCode: string;
+    dataAllowance: string;
+  } | null;
+};
+const PROFILE_STATUSES = ["AVAILABLE", "IMPORTED", "RESERVED", "ASSIGNED", "ACTIVATED", "EXPIRED", "TERMINATED"];
 const fileToTabularContent = async (file: File): Promise<string> => {
   if (/\.xlsx?$/i.test(file.name)) {
     const buffer = await file.arrayBuffer();
@@ -134,6 +163,35 @@ export default function InventoryClient() {
 
   const [draftPlans, setDraftPlans] = useState<Plan[]>([]);
   const [planDecision, setPlanDecision] = useState("");
+
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [profilesTotal, setProfilesTotal] = useState(0);
+  const [profilesPage, setProfilesPage] = useState(1);
+  const [profilesStatus, setProfilesStatus] = useState("ALL");
+  const [profilesLoading, setProfilesLoading] = useState(false);
+  const PAGE_SIZE = 50;
+
+  const loadProfiles = () => {
+    setProfilesLoading(true);
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE),
+      offset: String((profilesPage - 1) * PAGE_SIZE),
+    });
+    if (profilesStatus !== "ALL") params.set("status", profilesStatus);
+    authFetch(`${API}/operations/inventory/profiles?${params}`, { headers: {} })
+      .then(async (r) => {
+        const v = await r.json();
+        if (!r.ok) throw new Error(v.error?.message);
+        setProfiles(v.data?.items ?? []);
+        setProfilesTotal(v.data?.total ?? 0);
+      })
+      .catch((e) => toast.error(e.message))
+      .finally(() => setProfilesLoading(false));
+  };
+  useEffect(() => {
+    if (data) loadProfiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profilesPage, profilesStatus, data]);
 
   const load = () => {
     void authFetch(`${API}/operations/inventory`, { headers: {} })
@@ -375,6 +433,10 @@ export default function InventoryClient() {
           <TabsTrigger value="history" className="gap-1.5">
             <ClipboardList className="size-4" />
             Batch history
+          </TabsTrigger>
+          <TabsTrigger value="profiles" className="gap-1.5">
+            <Boxes className="size-4" />
+            eSIM Profiles
           </TabsTrigger>
         </TabsList>
 
@@ -648,6 +710,103 @@ export default function InventoryClient() {
                 </TableBody>
               </Table>
             )}
+          </Panel>
+        </TabsContent>
+        <TabsContent value="profiles" className="mt-4">
+          <Panel className="p-0">
+            <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="font-semibold">eSIM profiles</h3>
+                <p className="text-sm text-muted-foreground">
+                  {profilesTotal.toLocaleString()} pins · filter by status to see assignment / availability
+                </p>
+              </div>
+              <div className="w-full sm:w-56">
+                <Select value={profilesStatus} onValueChange={(v) => { setProfilesPage(1); setProfilesStatus(v); }}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All statuses</SelectItem>
+                    {PROFILE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {profilesLoading ? (
+              <div className="flex items-center justify-center gap-2 p-10 text-muted-foreground">
+                <Spinner /> Loading profiles…
+              </div>
+            ) : profiles.length === 0 ? (
+              <EmptyState
+                            icon={<Boxes className="size-6" />}
+                            title="No profiles"
+                            description="No eSIM profiles match the selected filters."
+                          />
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ICCID / Assignment</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>eID</TableHead>
+                      <TableHead>Orders</TableHead>
+                      <TableHead>Batch</TableHead>
+                      <TableHead className="text-right">SM-DP</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {profiles.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell>
+                          <div className="font-mono text-xs">{p.iccid}</div>
+                          {p.msisdn && <div className="text-xs text-muted-foreground">{p.msisdn}</div>}
+                          {p.order ? (
+                            <div className="flex items-center gap-1 text-xs text-emerald-600">
+                              <Link2 className="size-3" />
+                              Assigned to {p.order.customerCode}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">Unassigned</div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {p.status === "ACTIVATED" ? (
+                            <Badge className="bg-emerald-500/15 text-emerald-600"><CheckCircle2 className="size-3" /> ACTIVE</Badge>
+                          ) : p.status === "AVAILABLE" ? (
+                            <Badge className="bg-sky-500/15 text-sky-600">{p.status}</Badge>
+                          ) : (
+                            <StatusBadge label={p.status} />
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{p.eid}</TableCell>
+                        <TableCell>
+                          {p.order ? (
+                            <span className="text-xs font-medium">{p.order.orderNumber}</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-xs">{p.batchReference ?? "—"}</span>
+                          {p.batchReference && <div className="text-[11px] text-muted-foreground">{p.batchStatus}</div>}
+                        </TableCell>
+                        <TableCell className="text-right text-xs">{p.smDpAddress ?? "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            <div className="border-t p-4">
+              <PaginationBar
+                total={profilesTotal}
+                page={profilesPage}
+                pageSize={PAGE_SIZE}
+                onPageChange={setProfilesPage}
+              />
+            </div>
           </Panel>
         </TabsContent>
       </Tabs>

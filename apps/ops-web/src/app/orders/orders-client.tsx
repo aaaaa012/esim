@@ -52,8 +52,11 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
   const [to, setTo] = useState('');
   useEffect(() => {
     if (queueOnly) return;
-    const initialPartnerId = new URLSearchParams(window.location.search).get('partnerId');
+    const params = new URLSearchParams(window.location.search);
+    const initialPartnerId = params.get('partnerId');
     if (initialPartnerId) { setPartnerId(initialPartnerId); setSource('PARTNER'); }
+    const initialStatus = params.get('status');
+    if (initialStatus) setStatus(initialStatus);
     authFetch(`${API}/operations/partners/options`, { headers: opsHeaders })
       .then((response) => response.json())
       .then((value) => setPartners(value.data ?? []));

@@ -1,8 +1,9 @@
 import { Suspense } from 'react';
 import Link from 'next/link';
-import { ArrowRight, CheckCircle2, Globe2, Plane, QrCode, ShieldCheck, Smartphone } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Globe2, Headset, Plane, QrCode, ShieldCheck, Smartphone, Timer, Wifi, Zap } from 'lucide-react';
 import CatalogPlans from './catalog-plans';
 import TopupLookup from './topup-lookup';
+import Faq from './faq';
 import './home.css';
 
 export default function Home() {
@@ -96,6 +97,65 @@ export default function Home() {
               <p>After review, your eSIM QR stays available in your private Visa Compass account.</p>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="section" id="why-us">
+        <div className="shell">
+          <div className="section-title">
+            <span className="eyebrow">
+              <Zap size={14} />
+              Why Visa Compass
+            </span>
+            <h2>Travel light. Stay connected.</h2>
+            <p>Everything a traveller needs to land connected — priced clearly in NPR, without the roaming shock.</p>
+          </div>
+          <div className="why-grid">
+            <div className="why-card">
+              <span className="why-icon"><Wifi size={22} /></span>
+              <h3>Instant digital eSIM</h3>
+              <p>Receive your QR code in minutes after approval. No physical SIM, no airport counter, no plastic to carry.</p>
+            </div>
+            <div className="why-card">
+              <span className="why-icon"><Timer size={22} /></span>
+              <h3>Connect before you fly</h3>
+              <p>Activate your data the moment you land. Skip queues and start exploring while others wait in roaming lines.</p>
+            </div>
+            <div className="why-card">
+              <span className="why-icon"><ShieldCheck size={22} /></span>
+              <h3>Transparent NPR pricing</h3>
+              <p>Every plan shows its full cost in NPR before you pay. No hidden fees, no surprise roaming bills on return.</p>
+            </div>
+            <div className="why-card">
+              <span className="why-icon"><QrCode size={22} /></span>
+              <h3>One eSIM, many plans</h3>
+              <p>Store several country plans on a single eSIM and top up an existing one using just your mobile number.</p>
+            </div>
+            <div className="why-card">
+              <span className="why-icon"><Headset size={22} /></span>
+              <h3>Local support</h3>
+              <p>Travel document review, activation help and re-delivery of your QR — handled by a team that responds.</p>
+            </div>
+            <div className="why-card">
+              <span className="why-icon"><Globe2 size={22} /></span>
+              <h3>Real-time usage</h3>
+              <p>Track your data in your account and refresh live usage whenever you need a quick top-up decision.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="section section-alt" id="faq">
+        <div className="shell">
+          <div className="section-title">
+            <span className="eyebrow">
+              <Headset size={14} />
+              Questions, answered
+            </span>
+            <h2>Frequently asked questions</h2>
+            <p>Quick answers about compatibility, payment and activation.</p>
+          </div>
+          <Faq />
         </div>
       </section>
 

@@ -522,12 +522,23 @@
 
 .card {
   overflow: hidden;
+  position: relative;
+  padding-top: 28px;
+  background: linear-gradient(180deg, var(--surface) 0%, var(--surface) 100%);
 }
 
-.card:hover {
-  transform: translateY(-3px);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-md);
+.card:before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.card:hover:before {
+  opacity: 1;
 }
 
 .card .flag {
@@ -586,6 +597,11 @@
   font-size: 14px;
 }
 
+.price .button:hover {
+  box-shadow: 0 10px 22px -8px var(--primary-ring);
+  transform: translateY(-1px);
+}
+
 /* ---------- How it works ---------- */
 
 .steps {
@@ -626,6 +642,135 @@
   line-height: 1.6;
   font-size: 14px;
   margin: 0;
+}
+
+/* ---------- Why us ---------- */
+
+.section-alt {
+  background: var(--surface);
+  border-block: 1px solid var(--border);
+}
+
+.why-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.why-card {
+  padding: 26px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+
+.why-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.why-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  background: linear-gradient(140deg, var(--primary-soft), var(--accent-soft));
+  color: var(--accent-strong);
+}
+
+.why-card h3 {
+  margin: 16px 0 8px;
+  font-size: 18px;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.why-card p {
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+/* ---------- FAQ ---------- */
+
+.faq-list {
+  max-width: 760px;
+  margin: 0 auto;
+  display: grid;
+  gap: 12px;
+}
+
+.faq-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.faq-item.open {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.faq-question {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.faq-question > svg:first-child {
+  color: var(--accent-strong);
+  flex-shrink: 0;
+}
+
+.faq-question span {
+  flex: 1;
+}
+
+.faq-chevron {
+  color: var(--text-3);
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.faq-item.open .faq-chevron {
+  transform: rotate(180deg);
+}
+
+.faq-answer {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
+}
+
+.faq-item.open .faq-answer {
+  grid-template-rows: 1fr;
+}
+
+.faq-answer p {
+  overflow: hidden;
+  margin: 0;
+  padding: 0 20px 18px 50px;
+  color: var(--text-2);
+  line-height: 1.65;
+  font-size: 14px;
 }
 
 /* ---------- Compatibility banner ---------- */
@@ -696,7 +841,8 @@
   }
 
   .cards,
-  .steps {
+  .steps,
+  .why-grid {
     grid-template-columns: 1fr;
   }
 
@@ -704,6 +850,10 @@
     align-items: flex-start;
     flex-direction: column;
     padding: 32px;
+  }
+
+  .faq-answer p {
+    padding-left: 20px;
   }
 
   .hero h1 {

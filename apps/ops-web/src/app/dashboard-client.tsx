@@ -79,6 +79,7 @@ export default function DashboardClient() {
       icon: <ClipboardCheck className="size-4" />,
       tone: "info" as const,
       hint: "Orders awaiting an operations decision",
+      href: "/work-queue?status=REVIEW_PENDING",
     },
     {
       label: "Awaiting customer",
@@ -86,6 +87,7 @@ export default function DashboardClient() {
       icon: <RotateCcw className="size-4" />,
       tone: "warning" as const,
       hint: "Waiting on customer documents",
+      href: "/work-queue?status=AWAITING_CUSTOMER",
     },
     {
       label: "Provisioning failed",
@@ -93,6 +95,7 @@ export default function DashboardClient() {
       icon: <ServerCrash className="size-4" />,
       tone: "danger" as const,
       hint: "Require attention",
+      href: "/work-queue?status=PROVISIONING_FAILED",
     },
     {
       label: "QR sent — awaiting activation",
@@ -100,6 +103,7 @@ export default function DashboardClient() {
       icon: <QrCode className="size-4" />,
       tone: "info" as const,
       hint: "Provisioned, waiting for the device to activate",
+      href: "/orders?status=QR_READY",
     },
     {
       label: "Activated today",
@@ -107,6 +111,7 @@ export default function DashboardClient() {
       icon: <CheckCircle2 className="size-4" />,
       tone: "success" as const,
       hint: "eSIMs truly activated since midnight",
+      href: "/orders?status=COMPLETED",
     },
     {
       label: "Expired",
@@ -114,6 +119,7 @@ export default function DashboardClient() {
       icon: <Clock3 className="size-4" />,
       tone: "warning" as const,
       hint: "Completed plans past their validity window",
+      href: "/orders?type=expired",
     },
   ];
 
@@ -136,7 +142,12 @@ export default function DashboardClient() {
       />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {metrics.map((metric) => (
-          <StatCard key={metric.label} {...metric} />
+          <Link key={metric.label} href={metric.href} className="group">
+            <StatCard
+              {...metric}
+              className="transition-all group-hover:-translate-y-0.5 group-hover:border-primary/40 group-hover:shadow-md"
+            />
+          </Link>
         ))}
       </div>
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">

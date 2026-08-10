@@ -13,6 +13,7 @@ import {
   Settings,
   Users,
   Compass,
+  Server,
 } from "lucide-react";
 import { useAuthenticatedFetch } from "./authenticated-api-provider";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,7 @@ const baseItems: NavItem[] = [
   { href: "/inventory", label: "Inventory", icon: Boxes },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/integration-events", label: "Integration Events", icon: PlugZap },
+  { href: "/integration-logs", label: "Integration Logs", icon: Server },
   { href: "/audit", label: "Audit Log", icon: History },
 ];
 type Profile = {
