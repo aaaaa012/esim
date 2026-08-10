@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import Link from 'next/link';
 import { ArrowRight, CheckCircle2, Globe2, Plane, QrCode, ShieldCheck, Smartphone } from 'lucide-react';
 import CatalogPlans from './catalog-plans';
@@ -63,7 +64,9 @@ export default function Home() {
             <p>Clear NPR pricing, trusted coverage, and a QR code saved securely in your account.</p>
           </div>
           <TopupLookup />
-          <CatalogPlans />
+          <Suspense fallback={null}>
+            <CatalogPlans />
+          </Suspense>
         </div>
       </section>
 
