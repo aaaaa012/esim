@@ -58,7 +58,10 @@ type Overview = {
     reserved: number;
     assigned: number;
     activated: number;
+    expired: number;
+    terminated: number;
     pending: number;
+    quarantined?: number;
   };
   lowStockThreshold: number;
   lowStock: boolean;
@@ -375,6 +378,12 @@ export default function InventoryClient() {
       value: data.counts.activated,
       icon: <CheckCircle2 className="size-4" />,
       tone: "default" as const,
+    },
+    {
+      label: "Quarantined",
+      value: data.counts.quarantined ?? 0,
+      icon: <AlertTriangle className="size-4" />,
+      tone: data.counts.quarantined ? ("danger" as const) : ("default" as const),
     },
   ];
   const pendingBatches = data.batches.filter((batch) => batch.status === "PENDING");

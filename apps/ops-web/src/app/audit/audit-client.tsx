@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { downloadCsv } from '@/lib/csv';
+import { cn } from '@/lib/utils';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
 type Audit = {
@@ -30,6 +31,25 @@ const detailOf = (value: unknown) => {
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 };
+
+const ACTION_TONE: Record<string, string> = {
+  create: 'text-sky-600',
+  approve: 'text-emerald-600',
+  activate: 'text-emerald-600',
+  complete: 'text-emerald-600',
+  verified: 'text-emerald-600',
+  update: 'text-amber-600',
+  export: 'text-violet-600',
+  revoke: 'text-red-600',
+  cancel: 'text-red-600',
+  reject: 'text-red-600',
+  disable: 'text-red-600',
+  fail: 'text-red-600',
+};
+const actionTone = (action: string) =>
+  ACTION_TONE[action.toLowerCase()] ??
+  Object.entries(ACTION_TONE).find(([key]) => action.toLowerCase().startsWith(key))?.[1] ??
+  'text-muted-foreground';
 
 export default function AuditClient() {
   const authFetch = useAuthenticatedFetch();
@@ -135,7 +155,7 @@ export default function AuditClient() {
                     </span>
                   </TableCell>
                   <TableCell>
-                    <span className="font-medium text-sm">
+                    <span className={cn("font-medium text-sm capitalize", actionTone(item.action))}>
                       {item.action.replaceAll('_', ' ')}
                     </span>
                   </TableCell>

@@ -13,6 +13,7 @@ import {
   OperationsController,
 } from "./modules/orders/orders.controller.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
+import { PassportVerificationService } from "./modules/orders/passport-verification.service.js";
 import { GuestOrdersController } from "./modules/orders/guest-orders.controller.js";
 import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
@@ -89,6 +90,7 @@ OperationsController,
     CatalogService,
     OrdersService,
     OrdersPersistenceService,
+    PassportVerificationService,
     InventoryService,
     AdminService,
     PaymentsService,

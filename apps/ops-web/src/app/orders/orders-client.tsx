@@ -27,6 +27,7 @@ export type OpsOrder = {
   plan: { name: string; countryCode: string };
   traveler?: { firstName: string; surname: string; email: string };
   purchaseType?: 'INITIAL_PURCHASE' | 'TOPUP';
+  channel?: 'CUSTOMER_WEB' | 'PARTNER_API' | 'PARTNER_HOSTED';
   topUpMobile?: string;
   externalOrderId?: string | null;
   partner?: { id: string; code: string; name: string } | null;
@@ -47,6 +48,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
   const [partners, setPartners] = useState<Array<{ id: string; code: string; name: string }>>([]);
   const [source, setSource] = useState('ALL');
   const [partnerId, setPartnerId] = useState('ALL');
+  const [channel, setChannel] = useState('ALL');
   const [status, setStatus] = useState('ALL');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -88,6 +90,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
     if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
     if (source !== 'ALL') params.set('source', source);
     if (partnerId !== 'ALL') params.set('partnerId', partnerId);
+    if (channel !== 'ALL') params.set('channel', channel);
     if (status !== 'ALL') params.set('status', status);
     if (from) params.set('from', new Date(`${from}T00:00:00.000Z`).toISOString());
     if (to) params.set('to', new Date(`${to}T23:59:59.999Z`).toISOString());
@@ -98,7 +101,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
         setTotal(v.data?.total ?? 0);
       })
       .finally(() => setLoading(false));
-  }, [queueOnly, page, debouncedQuery, source, partnerId, status, from, to]);
+  }, [queueOnly, page, debouncedQuery, source, partnerId, channel, status, from, to]);
   const visible = queueOnly
     ? orders.filter(
         (o) =>
@@ -145,6 +148,10 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
             <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="Partner" /></SelectTrigger>
             <SelectContent><SelectItem value="ALL">All partners</SelectItem>{partners.map((partner) => <SelectItem key={partner.id} value={partner.id}>{partner.name}</SelectItem>)}</SelectContent>
           </Select>
+          <Select value={channel} onValueChange={(value) => { setChannel(value); setPage(1); }}>
+            <SelectTrigger className="w-full sm:w-44"><SelectValue placeholder="Channel" /></SelectTrigger>
+            <SelectContent><SelectItem value="ALL">All channels</SelectItem><SelectItem value="CUSTOMER_WEB">Customer web</SelectItem><SelectItem value="PARTNER_API">Partner API</SelectItem><SelectItem value="PARTNER_HOSTED">Checkout link</SelectItem></SelectContent>
+          </Select>
           <Select value={status} onValueChange={(value) => { setStatus(value); setPage(1); }}>
             <SelectTrigger className="w-full sm:w-44"><SelectValue placeholder="Status" /></SelectTrigger>
             <SelectContent><SelectItem value="ALL">All statuses</SelectItem>{['APPROVED','PROVISIONING','QR_READY','COMPLETED','PROVISIONING_FAILED','REFUND_PENDING','REFUNDED','CANCELLED'].map((value) => <SelectItem key={value} value={value}>{value.replaceAll('_', ' ')}</SelectItem>)}</SelectContent>
@@ -176,6 +183,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
             <TableHeader>
               <TableRow>
                 <TableHead>Order</TableHead>
+                <TableHead>Channel</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead>Destination</TableHead>
                 <TableHead>Partner</TableHead>
@@ -193,6 +201,11 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
                       {new Date(order.createdAt).toLocaleDateString()}
                       {order.topUpMobile ? ` · ${order.topUpMobile}` : ''}
                     </p>
+                  </TableCell>
+                  <TableCell>
+                    <span className="inline-block rounded bg-muted px-1.5 py-0.5 text-[11px] uppercase tracking-wide">
+                      {(order.channel ?? (order.partner ? (order.externalOrderId?.startsWith('vc-portal-') ? 'PARTNER_HOSTED' : 'PARTNER_API') : 'CUSTOMER_WEB')).replaceAll('_', ' ')}
+                    </span>
                   </TableCell>
                   <TableCell>
                     {order.traveler

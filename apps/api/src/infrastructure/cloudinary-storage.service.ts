@@ -65,7 +65,24 @@ export class CloudinaryStorageService {
     return { bytes: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get('content-type') ?? 'application/octet-stream' };
   }
 
-  private isConfigured() { return Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET); }
+  /**
+   * Downloads the document rasterized as a single JPEG image so OCR can read
+   * it. PDFs are converted to their first page image by Cloudinary (the same
+   * transformation the provider applies when an image is requested with a
+   * `.jpg` extension); JPG/PNG uploads are re-encoded as JPEG unchanged.
+   */
+  async downloadDocumentImage(assetId: string) {
+    if (!this.isConfigured()) throw new ServiceUnavailableException('Private document storage is not configured');
+    this.configure();
+    const url = cloudinary.url(assetId, { type: 'authenticated', resource_type: 'image', format: 'jpg', page: 1, sign_url: true, secure: true, expires_at: Math.floor(Date.now() / 1000) + 300 });
+    const response = await fetch(url);
+    if (!response.ok) throw new BadRequestException('Document content is unavailable');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length) throw new BadRequestException('Document could not be read as an image');
+    return { bytes, contentType: 'image/jpeg' };
+  }
+
+  isConfigured() { return Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET); }
 
   private configure() {
     const { CLOUDINARY_CLOUD_NAME: cloudName, CLOUDINARY_API_KEY: apiKey, CLOUDINARY_API_SECRET: apiSecret } = process.env;

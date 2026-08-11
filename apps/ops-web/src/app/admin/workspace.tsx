@@ -9,6 +9,7 @@ import {
   FlaskConical,
   History,
   KeyRound,
+  Link2,
   Pencil,
   RefreshCcw,
   Save,
@@ -17,6 +18,7 @@ import {
   Upload,
   UsersRound,
   XCircle,
+  Wallet,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
@@ -27,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/spinner";
@@ -100,6 +103,7 @@ type Partner = {
   code: string;
   name: string;
   status: "PENDING" | "ACTIVE" | "SUSPENDED" | "DISABLED";
+  integrationType: "API" | "CHECKOUT_LINK";
   rateLimitPerMinute: number;
   account?: {
     balancePaisa: number;
@@ -146,6 +150,34 @@ export default function AdminWorkspace() {
     partnerName: string;
     apiKey: string;
   } | null>(null);
+  const [partnerBalance, setPartnerBalance] = useState("");
+  const [partnerType, setPartnerType] = useState<"API" | "CHECKOUT_LINK">("API");
+  const [hostedLinkFor, setHostedLinkFor] = useState<Partner | null>(null);
+  const [hostedLinkPlanId, setHostedLinkPlanId] = useState("");
+  const [hostedLinkMobile, setHostedLinkMobile] = useState("");
+  const [hostedLinkResult, setHostedLinkResult] = useState<{
+    partnerName: string;
+    checkoutUrl: string;
+    orderType?: string;
+    topUpMobile?: string;
+  } | null>(null);
+  const [hostedLinkBusy, setHostedLinkBusy] = useState(false);
+  const [lookupState, setLookupState] = useState<{
+    status: "idle" | "checking" | "ok" | "error";
+    message?: string | undefined;
+    subscriber?: {
+      countryCode: string;
+      countryName: string;
+      currentPlan?: string | undefined;
+      hasActiveEsim?: boolean | undefined;
+    };
+    planCountryCode?: string | undefined;
+  } | null>(null);
+  const [adjustFor, setAdjustFor] = useState<Partner | null>(null);
+  const [adjustType, setAdjustType] = useState<"credit" | "debit">("credit");
+  const [adjustAmountNpr, setAdjustAmountNpr] = useState("");
+  const [adjustReference, setAdjustReference] = useState("");
+  const [adjustBusy, setAdjustBusy] = useState(false);
   const [busy, setBusy] = useState("");
   const [planCsvFile, setPlanCsvFile] = useState<File | null>(null);
   const [planCsvBusy, setPlanCsvBusy] = useState(false);
@@ -350,10 +382,15 @@ export default function AdminWorkspace() {
           code: partnerCode,
           name: partnerName,
           settlementMethods: ["PARTNER_ACCOUNT"],
+          integrationType: partnerType,
+          ...(partnerBalance
+            ? { balancePaisa: Math.round(Number(partnerBalance) * 100) }
+            : {}),
         }),
       });
       setPartnerCode("");
       setPartnerName("");
+      setPartnerBalance("");
       await load();
       toast.success("Partner created in pending state");
     } catch (error) {
@@ -384,15 +421,19 @@ export default function AdminWorkspace() {
         method: "POST",
         body: JSON.stringify({
           name: `Key ${partner.credentials.length + 1}`,
-          scopes: [
-            "catalog:read",
-            "orders:read",
-            "orders:write",
-            "documents:write",
-            "refunds:write",
-            "usage:read",
-            "esims:read",
-          ],
+          scopes:
+            partner.integrationType === "CHECKOUT_LINK"
+              ? ["catalog:read", "checkout:write", "orders:read"]
+              : [
+                  "catalog:read",
+                  "checkout:write",
+                  "orders:read",
+                  "orders:write",
+                  "documents:write",
+                  "refunds:write",
+                  "usage:read",
+                  "esims:read",
+                ],
         }),
       });
       setIssuedPartnerKey({ partnerName: partner.name, apiKey: result.apiKey });
@@ -425,6 +466,126 @@ export default function AdminWorkspace() {
       toast.error(error instanceof Error ? error.message : "Credential revocation failed");
     } finally {
       setBusy("");
+    }
+  };
+  const generateCheckoutLink = async () => {
+    if (!hostedLinkFor || !hostedLinkPlanId) {
+      toast.error("Choose a plan first");
+      return;
+    }
+    setHostedLinkBusy(true);
+    try {
+      const result = await request<{ checkoutUrl: string; orderType?: string; topUp?: { mobile?: string } }>(
+        `/admin/partners/${hostedLinkFor.id}/hosted-checkout-sessions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            planId: hostedLinkPlanId,
+            externalOrderId: `vc-portal-${Date.now()}`,
+            externalCustomerId: `portal-customer-${Date.now()}`,
+            ...(hostedLinkMobile.trim() ? { topUpMobile: hostedLinkMobile.trim() } : {}),
+          }),
+        },
+      );
+      setHostedLinkResult({
+        partnerName: hostedLinkFor.name,
+        checkoutUrl: result.checkoutUrl,
+        ...(result.orderType ? { orderType: result.orderType } : {}),
+        ...(result.topUp?.mobile ? { topUpMobile: result.topUp.mobile } : {}),
+      });
+      toast.success("Checkout link generated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Link generation failed");
+    } finally {
+      setHostedLinkBusy(false);
+    }
+  };
+  const validateMobile = async () => {
+    const mobile = hostedLinkMobile.trim();
+    const plan = plans.find((plan) => plan.id === hostedLinkPlanId);
+    if (!mobile) {
+      setLookupState(null);
+      return;
+    }
+    setLookupState({ status: "checking" });
+    try {
+      const result = await request<{
+        found: boolean;
+        subscriber?: {
+          countryCode: string;
+          countryName: string;
+          currentPlan?: { name?: string; countryCode?: string };
+          hasActiveEsim?: boolean | undefined;
+        };
+      }>(`/operations/topup/lookup?mobile=${encodeURIComponent(mobile)}`);
+      if (!result.found || !result.subscriber) {
+        setLookupState({
+          status: "error",
+          message:
+            "No completed order found for this number. This link will create a new purchase, not a top-up.",
+        });
+        return;
+      }
+      const sub = result.subscriber;
+      const sameCountry =
+        plan !== undefined &&
+        sub.countryCode.toUpperCase() === plan.countryCode.toUpperCase();
+      if (!sameCountry) {
+        setLookupState({
+          status: "error",
+          subscriber: { countryCode: sub.countryCode, countryName: sub.countryName, currentPlan: sub.currentPlan?.name, hasActiveEsim: sub.hasActiveEsim },
+          planCountryCode: plan?.countryCode,
+          message: `Subscriber's existing plan is in ${sub.countryName} (${sub.countryCode}), which does not match the selected plan (${plan?.countryCode ?? "?"}). A top-up requires the same country — this will be a new purchase.`,
+        });
+        return;
+      }
+      setLookupState({
+        status: "ok",
+        subscriber: { countryCode: sub.countryCode, countryName: sub.countryName, currentPlan: sub.currentPlan?.name, hasActiveEsim: sub.hasActiveEsim },
+        planCountryCode: plan?.countryCode,
+        message: sub.hasActiveEsim === false
+          ? "Subscriber found, but no active eSIM was detected. Confirm this is the correct number."
+          : undefined,
+      });
+    } catch (error) {
+      setLookupState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Lookup failed",
+      });
+    }
+  };
+  const applyAdjustment = async () => {
+    if (!adjustFor || !adjustAmountNpr) {
+      toast.error("Enter an amount first");
+      return;
+    }
+    setAdjustBusy(true);
+    try {
+      const amountNpr = Number(adjustAmountNpr);
+      if (!Number.isFinite(amountNpr) || amountNpr <= 0) {
+        toast.error("Enter a positive amount");
+        return;
+      }
+      const amountPaisa =
+        (adjustType === "credit" ? 1 : -1) * Math.round(amountNpr * 100);
+      await request(`/admin/partners/${adjustFor.id}/ledger-adjustments`, {
+        method: "POST",
+        body: JSON.stringify({
+          amountPaisa,
+          creditLimitPaisa: 0,
+          reference: adjustReference || `portal-adjustment-${Date.now()}`,
+          reason: `Balance ${adjustType} via portal`,
+        }),
+      });
+      toast.success(`Balance ${adjustType === "credit" ? "credited" : "debited"}`);
+      setAdjustFor(null);
+      setAdjustAmountNpr("");
+      setAdjustReference("");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Adjustment failed");
+    } finally {
+      setAdjustBusy(false);
     }
   };
   const checkEligibility = async () => {
@@ -973,7 +1134,7 @@ export default function AdminWorkspace() {
               noPadding
             >
               <div className="flex flex-col gap-3 border-b p-6 sm:flex-row sm:items-end">
-                <div className="grid w-full gap-3 sm:grid-cols-[1fr_1fr_auto]">
+                <div className="grid w-full gap-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
                   <div className="space-y-1.5">
                     <Label className="text-xs text-muted-foreground">Partner code</Label>
                     <Input
@@ -989,6 +1150,31 @@ export default function AdminWorkspace() {
                       value={partnerName}
                       onChange={(event) => setPartnerName(event.target.value)}
                     />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Starting balance (NPR)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      value={partnerBalance}
+                      onChange={(event) => setPartnerBalance(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Partner type</Label>
+                    <Select
+                      value={partnerType}
+                      onValueChange={(value) => setPartnerType(value as "API" | "CHECKOUT_LINK")}
+                    >
+                      <SelectTrigger className="w-40">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="API">API</SelectItem>
+                        <SelectItem value="CHECKOUT_LINK">Checkout link</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <Button
                     className="self-end"
@@ -1050,6 +1236,9 @@ export default function AdminWorkspace() {
                         <p className="text-xs text-muted-foreground">
                           {partner.code} · {partner.rateLimitPerMinute}/min
                         </p>
+                        <span className="mt-1 inline-block rounded bg-muted px-1.5 py-0.5 text-[11px] uppercase tracking-wide">
+                          {partner.integrationType === "CHECKOUT_LINK" ? "Checkout link" : "API"}
+                        </span>
                       </TableCell>
                       <TableCell>
                         <p className="font-medium tabular-nums">
@@ -1082,36 +1271,242 @@ export default function AdminWorkspace() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col items-start gap-1.5">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy === `key-${partner.id}`}
-                            onClick={() => void issuePartnerKey(partner)}
-                          >
-                            {busy === `key-${partner.id}` ? <Spinner /> : <KeyRound className="size-4" />}
-                            Issue key
-                          </Button>
-                          <span className="text-xs text-muted-foreground">
-                            {partner.credentials.filter((creditKey) => creditKey.status === "ACTIVE").length} active
-                          </span>
-                          {partner.credentials
-                            .filter((key) => key.status === "ACTIVE")
-                            .map((key) => (
-                              <button
-                                key={key.id}
-                                className="text-xs text-destructive underline-offset-2 hover:underline disabled:opacity-50"
-                                disabled={busy === `revoke-${key.id}`}
-                                onClick={() => void revokePartnerKey(partner, key.id)}
+                          {partner.integrationType === "API" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy === `key-${partner.id}`}
+                              onClick={() => void issuePartnerKey(partner)}
+                            >
+                              {busy === `key-${partner.id}` ? <Spinner /> : <KeyRound className="size-4" />}
+                              Issue key
+                            </Button>
+                          )}
+                          <div className="flex items-center gap-1.5">
+                            {partner.integrationType === "CHECKOUT_LINK" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy === `link-${partner.id}`}
+                                onClick={() => { setHostedLinkPlanId(""); setHostedLinkMobile(""); setHostedLinkResult(null); setLookupState(null); setHostedLinkFor(partner); }}
                               >
-                                Revoke {key.keyPrefix}
-                              </button>
-                            ))}
+                                <Link2 className="size-4" />
+                                Checkout link
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy === `adjust-${partner.id}`}
+                              onClick={() => { setAdjustType("credit"); setAdjustAmountNpr(""); setAdjustReference(""); setAdjustFor(partner); }}
+                            >
+                              <Wallet className="size-4" />
+                              Adjust balance
+                            </Button>
+                          </div>
+                          {partner.integrationType === "API" && (
+                            <>
+                              <span className="text-xs text-muted-foreground">
+                                {partner.credentials.filter((creditKey) => creditKey.status === "ACTIVE").length} active
+                              </span>
+                              {partner.credentials
+                                .filter((key) => key.status === "ACTIVE")
+                                .map((key) => (
+                                  <button
+                                    key={key.id}
+                                    className="text-xs text-destructive underline-offset-2 hover:underline disabled:opacity-50"
+                                    disabled={busy === `revoke-${key.id}`}
+                                    onClick={() => void revokePartnerKey(partner, key.id)}
+                                  >
+                                    Revoke {key.keyPrefix}
+                                  </button>
+                                ))}
+                            </>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+              <Dialog open={!!hostedLinkFor} onOpenChange={(open) => { if (!open) setHostedLinkFor(null); }}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Generate checkout link</DialogTitle>
+                    <DialogDescription>
+                      Create a hosted no-code checkout link for {hostedLinkFor?.name}. Share it with the traveler; no API required.
+                    </DialogDescription>
+                  </DialogHeader>
+                  {!hostedLinkResult ? (
+                    <div className="space-y-4 pt-1">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Plan</Label>
+                        <Select value={hostedLinkPlanId} onValueChange={setHostedLinkPlanId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose a plan" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {plans
+                              .filter((plan) => plan.status === "ACTIVE")
+                              .map((plan) => (
+                                <SelectItem key={plan.id} value={plan.id}>
+                                  {plan.countryName} · {plan.name} · NPR {plan.sellingPriceNpr.toLocaleString()}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">
+                          Earlier subscriber MSISDN (optional)
+                        </Label>
+                        <Input
+                          value={hostedLinkMobile}
+                          onChange={(event) => {
+                            setHostedLinkMobile(event.target.value);
+                            setLookupState(null);
+                          }}
+                          onBlur={() => void validateMobile()}
+                          placeholder="e.g. 9779800000000 — the number used on the subscriber's earlier order, to top-up that same eSIM"
+                        />
+                        {lookupState && lookupState.status === "checking" && (
+                          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Spinner className="size-3" /> Checking for an existing eSIM…
+                          </p>
+                        )}
+                        {lookupState && lookupState.status === "ok" && (
+                          <div className="space-y-1 rounded-md bg-emerald-500/10 px-3 py-2 text-xs">
+                            <p className="font-medium text-emerald-600">
+                              ✓ Top-up available — subscriber found
+                            </p>
+                            {lookupState.subscriber?.countryName && (
+                              <p className="text-muted-foreground">
+                                Existing eSIM: {lookupState.subscriber.countryName} ({lookupState.subscriber.countryCode})
+                                {lookupState.subscriber.currentPlan ? ` · ${lookupState.subscriber.currentPlan}` : ""}
+                              </p>
+                            )}
+                            {lookupState.message && (
+                              <p className="text-amber-600">{lookupState.message}</p>
+                            )}
+                          </div>
+                        )}
+                        {lookupState && lookupState.status === "error" && (
+                          <div className="space-y-1 rounded-md bg-destructive/10 px-3 py-2 text-xs">
+                            <p className="font-medium text-destructive">
+                              {lookupState.message}
+                            </p>
+                            {lookupState.subscriber?.countryName && (
+                              <p className="text-muted-foreground">
+                                Existing plan: {lookupState.subscriber.countryName} ({lookupState.subscriber.countryCode})
+                                {lookupState.subscriber.currentPlan ? ` · ${lookupState.subscriber.currentPlan}` : ""} — selected plan is ({lookupState.planCountryCode ?? "?"})
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" onClick={() => setHostedLinkFor(null)}>Cancel</Button>
+                        <Button
+                          disabled={!hostedLinkPlanId || hostedLinkBusy}
+                          onClick={() => void generateCheckoutLink()}
+                        >
+                          {hostedLinkBusy ? <Spinner className="size-4" /> : <Link2 className="size-4" />}
+                          Generate
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 pt-1">
+                      <p className="text-sm font-medium">Checkout link for {hostedLinkResult.partnerName}</p>
+                      {hostedLinkResult.orderType === "TOPUP" ? (
+                        <p className="rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary">
+                          Top-up link — will attach to eSIM for {hostedLinkResult.topUpMobile}. The traveler only sees 2 steps.
+                        </p>
+                      ) : (
+                        <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+                          New-purchase link — the traveler will complete all checkout steps.
+                          {hostedLinkResult.topUpMobile ? " Note: mobile did not match an existing eSIM, so this is a new purchase." : ""}
+                        </p>
+                      )}
+                      <code className="block break-all rounded-lg bg-muted px-3 py-2 text-xs">
+                        {hostedLinkResult.checkoutUrl}
+                      </code>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(hostedLinkResult.checkoutUrl);
+                              toast.success("Checkout link copied.");
+                            } catch {
+                              toast.error("Clipboard permission denied. Copy it manually.");
+                            }
+                          }}
+                        >
+                          Copy link
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => { setHostedLinkFor(null); setHostedLinkResult(null); }}
+                        >
+                          Done
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </DialogContent>
+              </Dialog>
+              <Dialog open={!!adjustFor} onOpenChange={(open) => { if (!open) setAdjustFor(null); }}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Adjust balance</DialogTitle>
+                    <DialogDescription>
+                      Credit or debit the prepaid account of {adjustFor?.name}.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 pt-1">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Type</Label>
+                      <Select value={adjustType} onValueChange={(value) => setAdjustType(value as "credit" | "debit")}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="credit">Credit (top up)</SelectItem>
+                          <SelectItem value="debit">Debit (withdraw)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Amount (NPR)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        placeholder="1000"
+                        value={adjustAmountNpr}
+                        onChange={(event) => setAdjustAmountNpr(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Reference</Label>
+                      <Input
+                        placeholder="Top-up voucher"
+                        value={adjustReference}
+                        onChange={(event) => setAdjustReference(event.target.value)}
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button variant="outline" onClick={() => setAdjustFor(null)}>Cancel</Button>
+                      <Button disabled={!adjustAmountNpr || adjustBusy} onClick={() => void applyAdjustment()}>
+                        {adjustBusy ? <Spinner className="size-4" /> : <Wallet className="size-4" />}
+                        Apply
+                      </Button>
+                    </div>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </Panel>
           </TabsContent>
         )}

@@ -6,6 +6,7 @@ import {
   ArrowUpFromLine,
   CircleCheck,
   CircleX,
+  Download,
   History,
   RefreshCcw,
   Timer,
@@ -74,6 +75,36 @@ export default function IntegrationLogsClient() {
     return { total: items.length, ok, failed: items.length - ok };
   }, [items]);
 
+  const downloadTxt = () => {
+    const lines = visible.map((log) =>
+      [
+        `[${new Date(log.createdAt).toISOString()}]`,
+        log.method,
+        log.endpoint,
+        `=> ${log.status}`,
+        log.durationMs != null ? `(${log.durationMs}ms)` : "( - ms)",
+        log.errorMessage ?? log.errorCode ?? "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    const body = [
+      `Visa Compass — Integration log (${new Date().toISOString()})`,
+      `Rows: ${visible.length} · Succeeded: ${visible.filter((l) => OK(l.status)).length} · Failed: ${visible.filter((l) => !OK(l.status)).length}`,
+      "=".repeat(78),
+      "",
+      ...lines,
+    ].join("\n");
+    const url = URL.createObjectURL(new Blob([body], { type: "text/plain;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `integration-logs-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <>
       {error && (
@@ -129,6 +160,10 @@ export default function IntegrationLogsClient() {
                 title="Click to cycle through operations"
               />
             </div>
+            <Button variant="outline" size="sm" onClick={downloadTxt} disabled={!visible.length}>
+              <Download className="size-4" />
+              Download .txt
+            </Button>
             <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={refreshing}>
               {refreshing ? <Spinner /> : <RefreshCcw className="size-4" />}
               Refresh

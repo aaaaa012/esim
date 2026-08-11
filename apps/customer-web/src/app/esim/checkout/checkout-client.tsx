@@ -4,7 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal } from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal, AlertTriangle } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import DatePicker from "./date-picker";
 import {
@@ -27,6 +27,14 @@ type Order = {
   traveler?: Partial<Traveler>;
   documents?: { type: string; status: string }[];
   payment?: { reference: string; status: string };
+  passportVerification?: {
+    status: string;
+    matchedFields?: string[];
+    confidence?: number;
+    checkedAt?: string;
+    method?: string;
+    detail?: string;
+  };
 };
 type Payment = { reference: string; redirectUrl: string; expiresAt: string };
 type DocumentAuthorization = {
@@ -223,6 +231,7 @@ export default function CheckoutClient({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
+  const [verifyingPassport, setVerifyingPassport] = useState(false);
   useEffect(() => {
     if (!isTopUpIntent) return;
     setCompatible(true);
@@ -339,6 +348,29 @@ export default function CheckoutClient({
   };
   const update = (key: keyof Traveler, value: string) =>
     { setTraveler((v) => ({ ...v, [key]: value })); setFieldErrors((current) => ({ ...current, [key]: undefined })); };
+  const verifyPassport = async (): Promise<Order | null> => {
+    if (!order || verifyingPassport) return order;
+    setVerifyingPassport(true);
+    setError("");
+    try {
+      const updated = await api<Order>(`/customer/orders/${order.id}/verify-passport`, { method: "POST", body: "{}" });
+      setOrder(updated);
+      return updated;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "We could not verify your passport");
+      return null;
+    } finally {
+      setVerifyingPassport(false);
+    }
+  };
+  const passportGatePassed = (target: Order | null) =>
+    !target || isTopUp || target.passportVerification?.status === "VERIFIED" || target.passportVerification?.status === "SKIPPED";
+  useEffect(() => {
+    if (step !== 4 || isTopUp) return;
+    if (!order || order.passportVerification) return;
+    if (!order.documents?.some((document) => document.type === "PASSPORT")) return;
+    void verifyPassport();
+  }, [step, order?.id, isTopUp]);
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
     setError("");
@@ -502,12 +534,26 @@ export default function CheckoutClient({
           { method: "POST", body: "{}" },
         );
       }
+      setOrder(await api<Order>(`/customer/orders/${order.id}`));
       setStep(4);
     });
   const initiate = (orderArg?: Order) =>
     run(async () => {
-      const target = orderArg ?? order;
+      let target = orderArg ?? order;
       if (target) {
+        let verification = target.passportVerification;
+        if (!isTopUp && (verification?.status === "FAILED" || verification?.status === "PARTIAL")) {
+          throw new Error("We couldn't verify your passport against your traveller details. Review your details and re-check your passport before paying.");
+        }
+        if (!isTopUp && !passportGatePassed(target)) {
+          const updated = await verifyPassport();
+          if (!updated) return;
+          target = updated;
+          verification = updated.passportVerification;
+        }
+        if (!isTopUp && verification?.status !== "VERIFIED" && verification?.status !== "SKIPPED") {
+          throw new Error("Verify your passport before continuing to payment.");
+        }
         const value = await api<Payment>(`/customer/orders/${target.id}/payment`, {
           method: "POST",
           body: JSON.stringify({ provider }),
@@ -851,6 +897,13 @@ export default function CheckoutClient({
                   </div>
                 ) : (
                   <>
+                    {order && !isTopUp && (
+                      <PassportCheck
+                        result={order.passportVerification}
+                        busy={verifyingPassport}
+                        onRecheck={() => void verifyPassport()}
+                      />
+                    )}
                     {order &&
                       ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
                         order.status,
@@ -877,12 +930,12 @@ export default function CheckoutClient({
                           <small>
                             Reference: {payment.reference.slice(0, 14)}…
                           </small>
-                          <Action busy={busy} onClick={complete}>
+                          <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>
                             Simulate verified payment
                           </Action>
                         </div>
                       ) : (
-                        <Action busy={busy} onClick={complete}>
+                        <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>
                           Confirm my payment
                         </Action>
                       )
@@ -891,7 +944,7 @@ export default function CheckoutClient({
                         Continue to payment
                       </Action>
                     ) : (
-                      <Action busy={busy} onClick={() => void initiate()}>
+                      <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={() => void initiate()}>
                         Continue to Khalti
                       </Action>
                     )}
@@ -961,13 +1014,15 @@ function Action({
   busy,
   onClick,
   children,
+  disabled,
 }: {
   busy: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
-    <button className="button wide" disabled={busy} onClick={onClick}>
+    <button className="button wide" disabled={busy || disabled} onClick={onClick}>
       {busy ? (
         <LoaderCircle className="spin" size={18} />
       ) : (
@@ -977,6 +1032,115 @@ function Action({
         </>
       )}
     </button>
+  );
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  passportNumber: "Passport number",
+  surname: "Surname",
+  givenNames: "Given name(s)",
+  dateOfBirth: "Date of birth",
+  passportExpiryDate: "Passport expiry",
+};
+
+function PassportCheck({
+  result,
+  busy,
+  onRecheck,
+}: {
+  result: Order["passportVerification"];
+  busy: boolean;
+  onRecheck: () => void;
+}) {
+  const status = result?.status;
+  if (status === "VERIFIED") {
+    return (
+      <div className="passport-check verified">
+        <CheckCircle2 size={20} />
+        <span>
+          <b>Passport verified</b>
+          <small>
+            We matched your passport against your traveller details before
+            payment.
+          </small>
+        </span>
+      </div>
+    );
+  }
+  if (status === "SKIPPED") {
+    return (
+      <div className="passport-check skipped">
+        <ShieldCheck size={20} />
+        <span>
+          <b>Passport check skipped</b>
+          <small>Document verification is disabled in this environment.</small>
+        </span>
+      </div>
+    );
+  }
+  if (busy) {
+    return (
+      <div className="passport-check checking">
+        <LoaderCircle className="spin" size={20} />
+        <span>
+          <b>Verifying your passport</b>
+          <small>
+            Reading the document and comparing it with your traveller details…
+          </small>
+        </span>
+      </div>
+    );
+  }
+  if (status === "PARTIAL") {
+    return (
+      <div className="passport-check warning">
+        <AlertTriangle size={20} />
+        <span>
+          <b>Passport number matched</b>
+          <small>
+            We found your passport number but couldn&apos;t confirm the name or
+            dates. Try a clearer photo, then re-check.
+          </small>
+        </span>
+        <button className="button secondary" onClick={onRecheck}>
+          Re-check
+        </button>
+      </div>
+    );
+  }
+  if (status === "FAILED") {
+    return (
+      <div className="passport-check failed">
+        <AlertTriangle size={20} />
+        <span>
+          <b>Passport verification failed</b>
+          <small>
+            Your passport number didn&apos;t match your traveller details.
+            Review your details, then re-check before paying.
+          </small>
+        </span>
+        <button className="button secondary" onClick={onRecheck}>
+          Re-check
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="passport-check">
+      <ShieldCheck size={20} />
+      <span>
+        <b>Verify your passport</b>
+        <small>
+          We read your passport and compare it with your traveller details
+          before payment.
+        </small>
+      </span>
+      {!busy && (
+        <button className="button secondary" onClick={onRecheck}>
+          Run check
+        </button>
+      )}
+    </div>
   );
 }
 function Nav({

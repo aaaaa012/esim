@@ -62,6 +62,8 @@ export class GuestOrdersController {
 
   @Post(':id/documents/:documentId/confirm') confirmDocument(@Param('id') id: string, @Param('documentId') documentId: string, @Body('token') token: string) { this.assert(id, token); return this.orders.confirmDocument(id, documentId, null); }
 
+  @Post(':id/verify-passport') verifyPassport(@Param('id') id: string, @Body() body: { token: string }) { this.assert(id, body.token); return this.orders.verifyPassport(id, null); }
+
   @Post(':id/payment') payment(@Param('id') id: string, @Body() body: { token: string; provider: unknown }) { this.assert(id, body.token); const input = initiatePaymentSchema.parse({ provider: body.provider }); return this.payments.initiate(id, null, input.provider); }
 
   @Post(':id/payment/verify') verify(@Param('id') id: string, @Body() body: { token: string; reference: string }) { this.assert(id, body.token); return this.payments.verify(id, null, body.reference); }

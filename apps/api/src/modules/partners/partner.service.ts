@@ -10,6 +10,7 @@ import {
   CustomerSource,
   DocumentStatus,
   DocumentType,
+  OrderChannel,
   OrderStatus,
   PaymentProvider,
   PartnerLedgerEntryType,
@@ -18,7 +19,7 @@ import {
   PartnerStatus,
   Prisma,
 } from "@prisma/client";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   DocumentType as SharedDocumentType,
   type TravelerInput,
@@ -30,6 +31,7 @@ import { ConnectivityService } from "../integration/connectivity.service.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
 import { OrdersService } from "../orders/orders.service.js";
+import { PassportVerificationService } from "../orders/passport-verification.service.js";
 
 /** Opaque, deterministic composite cursor for (createdAt, id) keyset pagination. */
 function encodeCursor(createdAt: Date | undefined, id: string | undefined): string | null {
@@ -120,6 +122,7 @@ export class PartnerService {
     private readonly notifications: NotificationService,
     private readonly partnerWebhooks: PartnerWebhookProcessor,
     private readonly applicationOrders: OrdersService,
+    private readonly passportVerifier: PassportVerificationService,
   ) {}
 
   async capabilities(partnerId: string) {
@@ -325,6 +328,7 @@ export class PartnerService {
         data: {
           id: orderId,
           orderNumber: `VC-${new Date().getUTCFullYear()}-${orderId.slice(0, 8).toUpperCase()}`,
+          channel: OrderChannel.PARTNER_API,
           customerId: partnerCustomer.customerId,
           partnerId,
           partnerCustomerId: partnerCustomer.id,
@@ -499,6 +503,7 @@ export class PartnerService {
         data: {
           id,
           orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`,
+          channel: OrderChannel.PARTNER_API,
           customerId: partnerCustomer.customerId,
           partnerId,
           partnerCustomerId: partnerCustomer.id,
@@ -824,68 +829,420 @@ export class PartnerService {
     throw this.hostedPaymentDeprecated();
   }
 
+  /**
+   * Portal / no-code path: creates a DRAFT order (prepaid PARTNER_ACCOUNT
+   * settlement) plus a single-use, expiring hosted checkout session for a
+   * low-capacity partner that cannot integrate the REST API. The partner
+   * shares `checkoutUrl`; the traveller completes traveller details,
+   * documents and passport verification on the Visa Compass-hosted,
+   * partner-branded page.
+   */
+  async createHostedCheckoutSession(
+    partnerId: string,
+    input: {
+      planId: string;
+      externalOrderId: string;
+      externalCustomerId: string;
+      topUpMobile?: string | undefined;
+    },
+  ) {
+    const partner = await this.partner(partnerId);
+    const plan = await this.prisma.plan.findFirst({
+      where: { id: input.planId, status: "ACTIVE", country: { active: true } },
+      include: { country: true },
+    });
+    if (!plan)
+      throw new BadRequestException({
+        code: "PLAN_UNAVAILABLE",
+        message: "Plan is unavailable",
+      });
+    const amountPaisa = Math.round(Number(plan.sellingPrice) * 100);
+    const topUp = input.topUpMobile
+      ? await this.applicationOrders.resolveSubscriber(input.topUpMobile)
+      : null;
+    const correctCountry =
+      topUp !== null &&
+      topUp.planCountryCode.toUpperCase() === plan.country.isoCode.toUpperCase();
+    // A top-up is only valid when we can bind to a real eSIM. If the subscriber
+    // resolved by mobile but has no persisted inventory (e.g. an older order
+    // without a customerEsim row) we fall back to a clean new purchase rather
+    // than charging a "top-up" that would silently provision a fresh profile.
+    const isTopUp = correctCountry && Boolean(topUp?.inventory);
+    const token = randomBytes(24).toString("base64url");
+    const sessionId = randomUUID();
+    const id = randomUUID();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await this.prisma.$transaction(async (tx) => {
+      const duplicate = await tx.order.findFirst({
+        where: {
+          partnerId,
+          externalOrderId: input.externalOrderId,
+        },
+      });
+      if (duplicate)
+        throw new ConflictException("External order ID already exists");
+      const partnerCustomer = await this.ensurePartnerCustomer(
+        tx,
+        partner.code,
+        partnerId,
+        input.externalCustomerId,
+      );
+await tx.order.create({
+        data: {
+          id,
+          orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`,
+          channel: OrderChannel.PARTNER_HOSTED,
+          customerId: partnerCustomer.customerId,
+          partnerId,
+          partnerCustomerId: partnerCustomer.id,
+          externalOrderId: input.externalOrderId,
+          partnerSettlementMethod: PartnerSettlementMethod.PARTNER_ACCOUNT,
+          partnerMetadata: Prisma.JsonNull,
+          planId: plan.id,
+          status: OrderStatus.DRAFT,
+          orderType: isTopUp ? "TOPUP" : "INITIAL_PURCHASE",
+          subtotal: amountPaisa / 100,
+          totalAmount: amountPaisa / 100,
+          pricingSnapshot: {
+            pricingSource: "PUBLIC_CATALOGUE",
+            planId: plan.id,
+            name: plan.name,
+            countryCode: plan.country.isoCode,
+            dataAllowance: plan.dataAllowance,
+            validityDays: plan.validityDays,
+            amountPaisa,
+            currency: "NPR",
+            capturedAt: new Date().toISOString(),
+            ...(isTopUp && input.topUpMobile ? { topUpMobile: input.topUpMobile } : {}),
+            ...(isTopUp && topUp?.inventory ? { targetEsimId: topUp.inventory.id } : {}),
+            ...(isTopUp && topUp?.traveler?.email ? { topUpEmail: topUp.traveler.email } : {}),
+          },
+          compatibilityAcceptedAt: new Date(),
+          events: { create: { fromStatus: null, toStatus: OrderStatus.DRAFT } },
+        },
+      });
+      await tx.partnerHostedCheckoutSession.create({
+        data: {
+          id: sessionId,
+          partnerId,
+          orderId: id,
+          tokenHash: createHash("sha256").update(token).digest("hex"),
+          redirectUrl: "",
+          expiresAt,
+        },
+      });
+    });
+    const checkoutUrl = `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/partner-checkout/${token}`;
+    return {
+      sessionId,
+      token,
+      checkoutUrl,
+      orderId: id,
+      externalOrderId: input.externalOrderId,
+      expiresAt,
+      orderType: isTopUp ? "TOPUP" : "INITIAL_PURCHASE",
+      topUp: isTopUp
+        ? {
+            mobile: input.topUpMobile,
+            ...(topUp?.traveler ? { subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}` } : {}),
+            status: "BOUND",
+          }
+        : undefined,
+    };
+  }
+
   async hostedCheckout(token: string) {
     const session = await this.hostedCheckoutSession(token);
     const order = await this.prisma.order.findUnique({
       where: { id: session.orderId },
       include: {
         plan: { include: { country: true } },
-        traveler: true,
+        traveler: { select: { id: true } },
         documents: {
-          select: { id: true, type: true, status: true, fileName: true },
+          select: {
+            id: true,
+            type: true,
+            status: true,
+            fileName: true,
+            passportVerificationStatus: true,
+          },
         },
-        partner: { select: { name: true } },
+        partner: { select: { name: true, slug: true, brand: true } },
       },
     });
     if (!order) throw new NotFoundException("Hosted checkout not found");
     return {
       sessionId: session.id,
       expiresAt: session.expiresAt,
-      partnerName: order.partner?.name,
+      partner: {
+        name: order.partner?.name,
+        slug: order.partner?.slug,
+        brand: order.partner?.brand,
+      },
       order: {
         id: order.id,
         orderNumber: order.orderNumber,
+        orderType: order.orderType,
         status: order.status,
         amountPaisa: Math.round(Number(order.totalAmount) * 100),
+        amountNpr: Math.round(Number(order.totalAmount) * 100) / 100,
         currency: order.currency,
         plan: {
           id: order.plan.id,
           name: order.plan.name,
           country: order.plan.country.name,
+          countryCode: order.plan.country.isoCode,
           dataAllowance: order.plan.dataAllowance,
           validityDays: order.plan.validityDays,
         },
         travelerComplete: Boolean(order.traveler),
         documents: order.documents,
-        requiredDocuments: [DocumentType.PASSPORT, DocumentType.TICKET],
+        requiredDocuments:
+          order.orderType === "TOPUP"
+            ? []
+            : this.requiredDocuments(order.plan.country.isoCode),
       },
     };
   }
 
+  async hostedCheckoutDocuments(token: string) {
+    const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    const documents = await this.prisma.travelerDocument.findMany({
+      where: { orderId: order.id },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        fileName: true,
+        passportVerificationStatus: true,
+      },
+    });
+    return { documents };
+  }
+
   async setHostedTraveler(token: string, traveler: TravelerInput) {
-    void token; void traveler;
-    throw this.hostedPaymentDeprecated();
+    const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    await this.prisma.traveler.upsert({
+      where: { orderId: order.id },
+      update: this.travelerData(traveler),
+      create: { orderId: order.id, ...this.travelerData(traveler) },
+    });
+    await this.bump(order.id, order.version);
+    return this.hostedCheckout(token);
   }
 
   async addHostedDocument(
     token: string,
     input: { type: DocumentType; fileName: string },
   ) {
-    void token; void input;
-    throw this.hostedPaymentDeprecated();
+    const order = await this.sessionOrder(token, [
+      OrderStatus.DRAFT,
+      OrderStatus.AWAITING_CUSTOMER,
+    ]);
+    const signed = this.storage.createDocumentUpload(
+      order.id,
+      input.type as unknown as SharedDocumentType,
+    );
+    const document = await this.prisma.travelerDocument.upsert({
+      where: { orderId_type: { orderId: order.id, type: input.type } },
+      update: {
+        fileName: input.fileName,
+        privateAssetId: signed.assetId,
+        status: DocumentStatus.PENDING,
+        reviewedAt: null,
+        reviewedById: null,
+      },
+      create: {
+        orderId: order.id,
+        type: input.type,
+        fileName: input.fileName,
+        privateAssetId: signed.assetId,
+      },
+    });
+    await this.bump(order.id, order.version);
+    return {
+      id: document.id,
+      type: document.type,
+      status: document.status,
+      upload: signed.upload,
+    };
   }
 
   async confirmHostedDocument(token: string, documentId: string) {
-    void token; void documentId;
-    throw this.hostedPaymentDeprecated();
+    const order = await this.sessionOrder(token);
+    const document = await this.prisma.travelerDocument.findFirst({
+      where: { id: documentId, orderId: order.id },
+    });
+    if (!document) throw new NotFoundException("Document not found");
+    await this.storage.verifyDocument(document.privateAssetId);
+    return {
+      id: document.id,
+      type: document.type,
+      status: document.status,
+      uploadVerified: true,
+    };
+  }
+
+  /**
+   * Runs the server-side passport OCR check for a hosted checkout order and
+   * persists the verdict onto the passport document (same gate the customer
+   * checkout uses). Operates only on this order and writes only the passport
+   * verification columns, so it never loads/decrypts unrelated orders or
+   * triggers a full order re-save.
+   */
+  async verifyHostedPassport(token: string) {
+    const order = await this.sessionOrder(token);
+    const passport = order.documents.find(
+      (document) => document.type === DocumentType.PASSPORT,
+    );
+    if (!passport)
+      throw new BadRequestException({
+        code: "PASSPORT_REQUIRED",
+        message: "Upload a passport before verification",
+      });
+    const traveler = this.decryptTraveler(order.traveler);
+    if (!traveler)
+      throw new BadRequestException({
+        code: "TRAVELER_REQUIRED",
+        message: "Traveller details are required before verification",
+      });
+    const result = await this.passportVerifier.verify({
+      id: order.id,
+      purchaseType: "INITIAL_PURCHASE",
+      traveler,
+      documents: [
+        {
+          id: passport.id,
+          type: DocumentType.PASSPORT,
+          fileName: passport.fileName,
+          privateAssetId: passport.privateAssetId,
+          status: passport.status,
+          uploadVerified: true,
+        },
+      ],
+    } as never);
+    await this.prisma.travelerDocument.update({
+      where: { id: passport.id },
+      data: {
+        passportVerificationStatus: result.status,
+        passportVerificationMethod: result.method,
+        passportMatchedFields: result.matchedFields as Prisma.InputJsonValue,
+        passportConfidence: result.confidence ?? null,
+        passportVerifiedAt: new Date(result.checkedAt),
+      },
+    });
+    return result;
   }
 
   async completeHostedCheckout(
     token: string,
-    consent: { ipAddress: string; userAgent: string },
+    context: { ipAddress: string; userAgent: string },
   ) {
-    void token; void consent;
-    throw this.hostedPaymentDeprecated();
+    const session = await this.hostedCheckoutSession(token);
+    const order = await this.prisma.order.findUnique({
+      where: { id: session.orderId },
+      include: {
+        plan: { include: { country: true } },
+        traveler: true,
+        documents: true,
+      },
+    });
+    if (!order) throw new NotFoundException("Hosted checkout not found");
+    if (order.status !== OrderStatus.DRAFT)
+      throw new BadRequestException("Hosted checkout is already completed");
+    const required = this.requiredDocuments(order.plan.country.isoCode);
+    if (!order.traveler && order.orderType !== "TOPUP")
+      throw new BadRequestException("Traveller details are required");
+    if (order.orderType !== "TOPUP") {
+      for (const type of required) {
+        const document = order.documents.find((item) => item.type === type);
+        if (!document)
+          throw new BadRequestException({
+            code: "DOCUMENT_REQUIRED",
+            message: `Required document missing: ${type}`,
+          });
+        await this.storage.verifyDocument(document.privateAssetId);
+      }
+      const passport = order.documents.find(
+        (item) => item.type === DocumentType.PASSPORT,
+      )!;
+      const verification = passport.passportVerificationStatus;
+      if (verification !== "VERIFIED" && verification !== "SKIPPED")
+        throw new BadRequestException({
+          code: "PASSPORT_VERIFICATION_REQUIRED",
+          message: "Passport verification is required before completion",
+        });
+    }
+    const amountPaisa = Math.round(Number(order.totalAmount) * 100);
+    await this.prisma.$transaction(async (tx) => {
+      await this.debitAccount(
+        tx,
+        order.partnerId!,
+        order.id,
+        amountPaisa,
+        order.externalOrderId!,
+      );
+      const updated = await tx.order.updateMany({
+        where: { id: order.id, version: order.version },
+        data: { status: OrderStatus.APPROVED, version: { increment: 1 } },
+      });
+      if (updated.count !== 1)
+        throw new ConflictException("Order was changed; reload and retry");
+      await tx.orderEvent.create({
+        data: {
+          orderId: order.id,
+          fromStatus: OrderStatus.DRAFT,
+          toStatus: OrderStatus.APPROVED,
+          reason: "Hosted checkout completed",
+        },
+      });
+      await tx.customerConsent.createMany({
+        data: ["COMPATIBILITY", "TERMS", "PRIVACY"].map((type) => ({
+          customerId: order.customerId,
+          type,
+          version: "1.0",
+          ipAddress: context.ipAddress,
+          userAgent: context.userAgent.slice(0, 500),
+          acceptedAt: new Date(),
+        })),
+      });
+      await tx.partnerHostedCheckoutSession.update({
+        where: { id: session.id },
+        data: { consumedAt: new Date() },
+      });
+    });
+    const handoff = await Promise.allSettled([
+      this.applicationOrders.refreshFromPersistence(order.id),
+      this.partnerWebhooks.enqueuePending(),
+    ]);
+    for (const result of handoff)
+      if (result.status === "rejected")
+        this.logger.error(
+          result.reason instanceof Error
+            ? result.reason.message
+            : "Hosted checkout post-commit handoff failed",
+        );
+    try {
+      await this.applicationOrders.approveToProvisioning(
+        order.id,
+        "Hosted checkout completed",
+      );
+    } catch (error) {
+      this.logger.error(
+        `Hosted checkout provision handoff failed for ${order.id}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
+    const provisioned = await this.prisma.order.findUnique({
+      where: { id: order.id },
+      select: { status: true },
+    });
+    return {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      status: provisioned?.status ?? OrderStatus.APPROVED,
+    };
   }
 
   async cancel(partnerId: string, orderId: string, reason: string) {
@@ -1127,6 +1484,25 @@ export class PartnerService {
     return session;
   }
 
+  private async sessionOrder(token: string, statuses?: OrderStatus[]) {
+    const session = await this.hostedCheckoutSession(token);
+    const order = await this.prisma.order.findUnique({
+      where: { id: session.orderId },
+      include: {
+        plan: { include: { country: true } },
+        traveler: true,
+        documents: true,
+        partner: { select: { name: true, slug: true, brand: true } },
+      },
+    });
+    if (!order) throw new NotFoundException("Hosted checkout not found");
+    if (statuses && !statuses.includes(order.status))
+      throw new BadRequestException(
+        "Order cannot be changed in its current state",
+      );
+    return order;
+  }
+
   private async mutableOrder(
     partnerId: string,
     id: string,
@@ -1275,6 +1651,49 @@ export class PartnerService {
       passportNumberHash: this.crypto.blindIndex(traveler.passportNumber),
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),
       pointOfSaleCode: traveler.pointOfSaleCode ?? null,
+    };
+  }
+
+  private decryptTraveler(
+    traveler: {
+      title: string;
+      firstName: string;
+      middleName: string | null;
+      surname: string;
+      dateOfBirthEncrypted: string;
+      nationality: string;
+      city: string;
+      countryOfResidence: string;
+      employerOrBusinessName: string | null;
+      email: string;
+      mobile: string;
+      passportNumberEncrypted: string;
+      passportExpiryEncrypted: string;
+      pointOfSaleCode: string | null;
+    } | null,
+  ): TravelerInput | undefined {
+    if (!traveler) return undefined;
+    return {
+      title: traveler.title as TravelerInput["title"],
+      firstName: traveler.firstName,
+      ...(traveler.middleName ? { middleName: traveler.middleName } : {}),
+      surname: traveler.surname,
+      dateOfBirth: this.crypto.decrypt(traveler.dateOfBirthEncrypted),
+      nationality: traveler.nationality,
+      city: traveler.city,
+      countryOfResidence: traveler.countryOfResidence,
+      ...(traveler.employerOrBusinessName
+        ? { employerOrBusinessName: traveler.employerOrBusinessName }
+        : {}),
+      email: traveler.email,
+      mobile: traveler.mobile,
+      passportNumber: this.crypto.decrypt(traveler.passportNumberEncrypted),
+      passportExpiryDate: this.crypto.decrypt(
+        traveler.passportExpiryEncrypted,
+      ),
+      ...(traveler.pointOfSaleCode
+        ? { pointOfSaleCode: traveler.pointOfSaleCode }
+        : {}),
     };
   }
 

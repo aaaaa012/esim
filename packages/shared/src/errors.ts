@@ -36,6 +36,8 @@ export const ApiErrorCode = {
   DOCUMENTS_REQUIRED: 'DOCUMENTS_REQUIRED',
   DOCUMENT_NOT_FOUND: 'DOCUMENT_NOT_FOUND',
   DOCUMENT_STORAGE_UNAVAILABLE: 'DOCUMENT_STORAGE_UNAVAILABLE',
+  PASSPORT_VERIFICATION_REQUIRED: 'PASSPORT_VERIFICATION_REQUIRED',
+  PASSPORT_VERIFICATION_FAILED: 'PASSPORT_VERIFICATION_FAILED',
 
   // Payments
   PAYMENT_PROVIDER_ERROR: 'PAYMENT_PROVIDER_ERROR',
@@ -91,6 +93,10 @@ export const apiErrorMessage = (
       return 'Passport and travel ticket are required before payment.';
     case ApiErrorCode.DOCUMENT_STORAGE_UNAVAILABLE:
       return 'Secure document upload is temporarily unavailable. Please try again.';
+    case ApiErrorCode.PASSPORT_VERIFICATION_REQUIRED:
+      return 'We need to verify your passport against your traveller details before payment.';
+    case ApiErrorCode.PASSPORT_VERIFICATION_FAILED:
+      return 'We could not verify your passport. Make sure the details match your passport exactly, then try again.';
     case ApiErrorCode.PAYMENT_PROVIDER_ERROR:
       return 'The payment provider is temporarily unavailable. Please try again or use another method.';
     case ApiErrorCode.PAYMENT_NOT_CONFIRMED:

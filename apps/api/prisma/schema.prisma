@@ -41,6 +41,11 @@ enum OrderType {
   INITIAL_PURCHASE
   TOPUP
 }
+enum OrderChannel {
+  CUSTOMER_WEB
+  PARTNER_API
+  PARTNER_HOSTED
+}
 enum OrderStatus {
   DRAFT
   PAYMENT_PENDING
@@ -87,6 +92,7 @@ enum InventoryStatus {
   ACTIVATED
   EXPIRED
   TERMINATED
+  QUARANTINED
 }
 enum BatchStatus {
   PENDING
@@ -137,6 +143,10 @@ enum PartnerPriceListStatus {
 enum PartnerSettlementMethod {
   PARTNER_ACCOUNT
   HOSTED_PAYMENT
+}
+enum PartnerIntegrationType {
+  API
+  CHECKOUT_LINK
 }
 enum PartnerQuoteStatus {
   ACTIVE
@@ -279,6 +289,7 @@ model Order {
   planId String @db.Uuid
   plan Plan @relation(fields: [planId], references: [id])
   orderType OrderType @default(INITIAL_PURCHASE)
+  channel OrderChannel @default(CUSTOMER_WEB)
   status OrderStatus @default(DRAFT)
   currency String @default("NPR")
   subtotal Decimal @db.Decimal(12,2)
@@ -345,6 +356,11 @@ model TravelerDocument {
   status DocumentStatus @default(PENDING)
   reviewedById String? @db.Uuid
   reviewedAt DateTime?
+  passportVerificationStatus String?
+  passportVerificationMethod String?
+  passportMatchedFields Json?
+  passportConfidence Float?
+  passportVerifiedAt DateTime?
   createdAt DateTime @default(now())
   @@unique([orderId, type])
   @@index([status])
@@ -439,7 +455,10 @@ model Partner {
   id String @id @default(uuid()) @db.Uuid
   code String @unique
   name String
+  slug String? @unique
+  brand Json?
   status PartnerStatus @default(PENDING)
+  integrationType PartnerIntegrationType @default(API)
   allowedSettlementMethods Json
   rateLimitPerMinute Int @default(120)
   redirectAllowlist Json
