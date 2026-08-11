@@ -1,4 +1,5 @@
-import EsimDashboard from '../esim-dashboard';
-import '../esims.css';
-import './details.css';
-export default async function Page({params}:{params:Promise<{id:string}>}){return <EsimDashboard selectedId={(await params).id}/>}
+import { redirect } from 'next/navigation';
+
+export default function Page() {
+  redirect('/account/esims');
+}

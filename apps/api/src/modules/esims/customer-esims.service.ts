@@ -1,11 +1,14 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { OrderStatus } from '@prisma/client';
+import QRCode from 'qrcode';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
+import { CryptoService } from '../../infrastructure/crypto.service.js';
 import { ConnectivityService } from '../integration/connectivity.service.js';
 
 @Injectable()
 export class CustomerEsimsService {
   private readonly refreshedAt = new Map<string, number>();
-  constructor(private readonly prisma: PrismaService, private readonly connectivity: ConnectivityService) {}
+  constructor(private readonly prisma: PrismaService, private readonly connectivity: ConnectivityService, private readonly crypto: CryptoService) {}
 
   async list(ownerId: string) {
     if (!this.prisma.enabled) return [];
@@ -47,6 +50,29 @@ export class CustomerEsimsService {
     }
     this.refreshedAt.set(`${customer.id}:${id}`, Date.now());
     return { usedMb: usage.usedMb, totalMb: usage.totalMb, remainingMb: Math.max(0, usage.totalMb - usage.usedMb), lastCheckedAt: checkedAt.toISOString() };
+  }
+
+  async activationQr(ownerId: string, id: string) {
+    if (!this.prisma.enabled) throw new BadRequestException('Activation QR is unavailable right now');
+    const customer = await this.customer(ownerId);
+    if (!customer) throw new NotFoundException('eSIM not found');
+    const row = await this.prisma.esimInventory.findFirst({
+      where: { id, customerEsims: { some: { customerId: customer.id } } },
+      select: {
+        customerEsims: {
+          where: { customerId: customer.id, order: { status: { in: [OrderStatus.QR_READY, OrderStatus.COMPLETED] } } },
+          orderBy: { assignedAt: 'asc' },
+          take: 1,
+          select: { qrPayloadEncrypted: true },
+        },
+      },
+    });
+    if (!row) throw new NotFoundException('eSIM not found');
+    const encrypted = row.customerEsims[0]?.qrPayloadEncrypted;
+    if (!encrypted) throw new BadRequestException('Your activation QR is not ready yet');
+    const qrPayload = this.crypto.decrypt(encrypted);
+    const bytes = await QRCode.toBuffer(qrPayload, { width: 720, margin: 3, errorCorrectionLevel: 'M' });
+    return { filename: 'visa-compass-esim-activation.png', contentType: 'image/png', bytes };
   }
 
   private async customer(ownerId: string) {
