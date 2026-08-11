@@ -58,3 +58,16 @@ Active plan balances continue to reconcile per provider subscription. Operations
 profiles expose used, total, and remaining MB per order and provide an on-demand refresh;
 stacked subscriptions are matched by provider subscription id rather than receiving an
 aggregate balance.
+
+Subscriber lifecycle mutations use a separate durable `TransatelLifecycleOperation`.
+The operations API requires a caller-generated idempotency key and persists `SUBMITTING`
+before calling Transatel. Provider acceptance moves the local order and inventory to
+`SUSPEND_PENDING` or `TERMINATION_PENDING`; the system does not claim completion from the
+HTTP response alone. Signed `CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED` and
+`CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED` events confirm the final state and move
+the durable operation to `CONFIRMED`. Every accepted or failed attempt is written to the
+audit log. Termination is restricted to Super Admin because it is irreversible.
+
+Apply migration `20260812000100_transatel_lifecycle_operations` before enabling lifecycle
+actions. The Operations Portal exposes the consolidated view at `/transatel`; operators
+may suspend, while only Super Admins see and may invoke termination.

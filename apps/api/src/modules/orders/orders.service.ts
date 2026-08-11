@@ -77,7 +77,7 @@ export class OrdersService implements OnModuleInit {
         createdAt: order.createdAt.toISOString(),
         totalAmountNpr: Number(order.totalAmount),
         traveler: order.traveler ? { firstName: order.traveler.firstName, surname: order.traveler.surname, mobile: order.traveler.mobile, email: order.traveler.email } : undefined,
-        ...(order.customerEsim ? { esim: { iccid: order.customerEsim.inventory.iccid, status: order.customerEsim.inventory.status, ...(order.customerEsim.inventory.activatedAt ? { activatedAt: order.customerEsim.inventory.activatedAt.toISOString() } : {}), ...(order.customerEsim.inventory.expiresAt ? { expiresAt: order.customerEsim.inventory.expiresAt.toISOString() } : {}), usage: (() => { const latest = [...order.customerEsim.subscriptions].sort((a, b) => (b.usageLastCheckedAt?.getTime() ?? 0) - (a.usageLastCheckedAt?.getTime() ?? 0))[0]; if (!latest || latest.usageLastCheckedAt === null) return undefined; return { usedMb: latest.usedMb, totalMb: latest.totalMb, remainingMb: Math.max(0, latest.totalMb - latest.usedMb), lastCheckedAt: latest.usageLastCheckedAt.toISOString() }; })() } } : {}),
+        ...(order.customerEsim ? { esim: { iccid: order.customerEsim.inventory.iccid, status: order.customerEsim.inventory.status, providerStatus: order.providerStatus ?? order.customerEsim.inventory.providerStatus, ...(order.customerEsim.inventory.activatedAt ? { activatedAt: order.customerEsim.inventory.activatedAt.toISOString() } : {}), ...(order.customerEsim.inventory.expiresAt ? { expiresAt: order.customerEsim.inventory.expiresAt.toISOString() } : {}), usage: (() => { const latest = [...order.customerEsim.subscriptions].sort((a, b) => (b.usageLastCheckedAt?.getTime() ?? 0) - (a.usageLastCheckedAt?.getTime() ?? 0))[0]; if (!latest || latest.usageLastCheckedAt === null) return undefined; return { usedMb: latest.usedMb, totalMb: latest.totalMb, remainingMb: Math.max(0, latest.totalMb - latest.usedMb), lastCheckedAt: latest.usageLastCheckedAt.toISOString() }; })() } } : {}),
       })),
     };
   }
@@ -375,6 +375,12 @@ export class OrdersService implements OnModuleInit {
     if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), ...(event.subscriptionId ? { providerSubscriptionId: event.subscriptionId } : {}), verificationStatus: event.status === 'ACTIVATED' ? 'VERIFIED' : 'PENDING', ...(event.status === 'ACTIVATED' ? { verifiedAt: new Date().toISOString() } : {}), providerLastSeenAt: new Date().toISOString() };
     if (event.subscriptionId) order.providerSubscriptionId = event.subscriptionId;
     if (event.status) order.providerStatus = event.status;
+    if (this.prisma.enabled && (event.status === 'SUSPENDED' || event.status === 'TERMINATED')) {
+      await this.prisma.transatelLifecycleOperation.updateMany({
+        where: { orderId: order.id, action: event.status === 'SUSPENDED' ? 'SUSPEND' : 'TERMINATE', state: 'ACCEPTED' },
+        data: { state: 'CONFIRMED' },
+      });
+    }
     await this.persistence.save(order);
     return { accepted: true, eventType: event.eventType };
   }

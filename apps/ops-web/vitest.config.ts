@@ -1,13 +1,12 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import path from "node:path";
 
 export default defineConfig({
   esbuild: { jsx: "automatic" },
-  resolve: {
-    alias: { "@": path.resolve(process.cwd(), "src") },
-  },
+  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   test: {
     environment: "jsdom",
+    clearMocks: true,
     globals: true,
     include: ["src/**/*.test.{ts,tsx}"],
   },

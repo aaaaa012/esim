@@ -42,7 +42,7 @@
     "@types/node": "^22.18.1",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
-    "jsdom": "^25.0.1",
+    "jsdom": "^26.1.0",
     "vitest": "^3.2.7"
   }
 }

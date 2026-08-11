@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ApiErrorCode } from '@visa-compass/shared';
 import { ApiException } from '../../common/api-error.js';
-import type { ConnectivityProvider, ProvisionRequest, ProvisionResult, EsimDetailsResult, EligibilityResult, CatalogSyncResult, CatalogExportRow, CatalogExportResult, ProviderWebhookResult, ProviderWebhookEvent, UsageBreakdown } from './connectivity-provider.js';
+import type { ConnectivityProvider, ProvisionRequest, ProvisionResult, EsimDetailsResult, EligibilityResult, CatalogSyncResult, CatalogExportRow, CatalogExportResult, ProviderWebhookResult, ProviderWebhookEvent, UsageBreakdown, LifecycleResult } from './connectivity-provider.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 import { classifyProviderHttpFailure } from './provider-failure.js';
 
@@ -114,7 +114,7 @@ interface WebhooksResponse { webhooks: WebhookResponse[]; }
 
 interface ApiError { error?: string; error_description?: string; message?: string; }
 
-type Domain = 'authentication' | 'ocs/subscriptions' | 'ocs/inventory' | 'ocs/catalog' | 'sim-management/sims' | 'webhooks';
+type Domain = 'authentication' | 'ocs/subscriptions' | 'ocs/inventory' | 'ocs/catalog' | 'sim-management/sims' | 'connectivity-management/subscribers' | 'webhooks';
 
 @Injectable()
 export class TransatelProvider implements ConnectivityProvider {
@@ -501,6 +501,26 @@ export class TransatelProvider implements ConnectivityProvider {
     };
   }
 
+  private async lifecycle(reference: string, action: 'suspend' | 'terminate', transactionReference: string): Promise<LifecycleResult> {
+    const subscriber = await this.resolveSubscriber(reference);
+    const simSerial = subscriber.iccid ?? '';
+    if (!simSerial) throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'The eSIM lifecycle action could not be submitted.', status: 404, details: `No ICCID found for ${reference}` });
+    const url = `${this.baseUrl('connectivity-management/subscribers')}/api/subscribers/sim-serial/${encodeURIComponent(simSerial)}/${action}`;
+    const response = await this.authorizedFetch(url, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'Idempotency-Key': transactionReference },
+      body: JSON.stringify({ mvnoRef: this.env('TRANSATEL_MVNO_REF'), transactionReference }),
+      operation: `subscriber-${action}`,
+    });
+    if (!response.ok) throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: `The eSIM ${action} request was rejected by Transatel.`, status: response.status >= 500 ? 503 : 409, details: await this.errorText(response) });
+    const raw = await response.text();
+    const data = raw ? JSON.parse(raw) as { transactionId?: string; status?: string } : {};
+    return { accepted: true, ...(data.transactionId ? { transactionId: data.transactionId } : {}), status: data.status ?? 'PENDING' };
+  }
+
+  suspend(subscriptionId: string, transactionReference: string) { return this.lifecycle(subscriptionId, 'suspend', transactionReference); }
+  terminate(subscriptionId: string, transactionReference: string) { return this.lifecycle(subscriptionId, 'terminate', transactionReference); }
+
   async syncCatalog(): Promise<CatalogSyncResult> {
     if (!this.prisma.enabled) throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Catalog synchronization is unavailable right now.', status: 503, details: 'Catalog sync requires database persistence' });
     const cos = process.env.TRANSATEL_COS || 'WW_COS_UBG_MKP_EUR';
@@ -666,7 +686,7 @@ export class TransatelProvider implements ConnectivityProvider {
     const mvnoRef = this.env('TRANSATEL_MVNO_REF');
     const email = process.env.TRANSATEL_WEBHOOK_CONTACT_EMAIL ?? 'it-operations@visacompass.local';
     const secret = process.env.TRANSATEL_WEBHOOK_SECRET ?? '';
-    const events = (process.env.TRANSATEL_WEBHOOK_EVENTS ?? 'OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/EXPIRED,OCS/PRODUCT/TERMINATED')
+    const events = (process.env.TRANSATEL_WEBHOOK_EVENTS ?? 'OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/EXPIRED,OCS/PRODUCT/TERMINATED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED')
       .split(',').map((item) => item.trim()).filter(Boolean);
 
     const base = this.baseUrl('webhooks');
@@ -746,7 +766,7 @@ export class TransatelProvider implements ConnectivityProvider {
    * Normalizes an inbound Transatel OCS event to its canonical fields using the
    * exact field locations defined by the OCS events OpenAPI spec (v1.10):
    *   header.eventType
-   *   body.iccid (required, [0-9]{19,20})
+   *   body.iccid for OCS events or body.simSerial for connectivity-management events
    *   body.msisdn (required, [0-9]{6,15})
    *   body.externalReference (our transaction/order reference, echoed back)
    *   body.productSubscription.subscriptionId
@@ -760,7 +780,8 @@ export class TransatelProvider implements ConnectivityProvider {
     const body = envelope.body ?? {};
 
     const eventType = typeof header.eventType === 'string' ? header.eventType : undefined;
-    const iccid = typeof body.iccid === 'string' ? body.iccid : undefined;
+    const connectivityEvent = eventType?.startsWith('CONNECTIVITY-MANAGEMENT/SUBSCRIBER/');
+    const iccid = typeof body.iccid === 'string' ? body.iccid : connectivityEvent && typeof body.simSerial === 'string' ? body.simSerial : undefined;
     const msisdn = typeof body.msisdn === 'string' ? body.msisdn : undefined;
     const externalReference = typeof body.externalReference === 'string' ? body.externalReference : undefined;
 
@@ -783,6 +804,7 @@ export class TransatelProvider implements ConnectivityProvider {
   private mapEventType(eventType: string): ProviderWebhookEvent['status'] {
     const normalized = eventType.toUpperCase();
     if (normalized.endsWith('ACTIVATED')) return 'ACTIVATED';
+    if (normalized.endsWith('SUSPENDED')) return 'SUSPENDED';
     if (normalized.endsWith('PRELOADED')) return 'PRELOADED';
     if (normalized.endsWith('EXPIRED')) return 'EXPIRED';
     if (normalized.endsWith('TERMINATED')) return 'TERMINATED';

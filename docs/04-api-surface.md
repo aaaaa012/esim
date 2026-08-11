@@ -88,6 +88,9 @@ All handlers call `requireRole(OPERATIONS, SUPER_ADMIN)` in addition to
 | POST | `/operations/orders/:id/payment/refund` | Initiate refund. Body `{ reason }` |
 | GET | `/operations/topup/lookup?mobile=` | Top-up subscriber lookup by mobile |
 | POST | `/operations/payments/expire-stale` | Expire stale pending payments; returns `{ expired }` |
+| GET | `/operations/transatel` | Consolidated provider health, subscriber balances, unassigned inventory, failures, and lifecycle history |
+| POST | `/operations/transatel/orders/:id/suspend` | Idempotent audited suspension. Body `{ reason, idempotencyKey }`; Operations or Super Admin |
+| POST | `/operations/transatel/orders/:id/terminate` | Irreversible idempotent termination. Body `{ reason, idempotencyKey }`; Super Admin only |
 
 ## Guest orders (no auth; HMAC token)
 

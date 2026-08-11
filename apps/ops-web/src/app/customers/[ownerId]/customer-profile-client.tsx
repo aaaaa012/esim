@@ -10,12 +10,14 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { LifecycleActions } from "../../transatel/lifecycle-actions";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = { "content-type": "application/json" };
 type Esim = {
   iccid: string;
   status: string;
+  providerStatus?: string | null;
   activatedAt?: string;
   expiresAt?: string;
   usage?: { usedMb: number; totalMb: number; remainingMb: number; lastCheckedAt: string };
@@ -53,6 +55,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [canTerminate, setCanTerminate] = useState(false);
   const load = useCallback(() => {
     setError("");
     return authFetch(`${API}/operations/customers/${ownerId}`, { headers })
@@ -68,6 +71,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   }, [authFetch, ownerId]);
   useEffect(() => {
     void load();
+    void authFetch(`${API}/auth/me`, { headers }).then((response) => response.json()).then((value) => setCanTerminate(value.data?.accountType === "SUPER_ADMIN"));
   }, [load]);
   const refreshUsage = async (orderId: string) => {
     setBusy(orderId);
@@ -226,23 +230,12 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                         NPR {order.totalAmountNpr.toLocaleString()}
                       </TableCell>
                       <TableCell>
-                        {order.esim?.usage ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={busy === order.id}
-                            onClick={() => refreshUsage(order.id)}
-                          >
-                            {busy === order.id ? (
-                              <Spinner />
-                            ) : (
-                              <RefreshCcw className="size-3.5" />
-                            )}
-                            Refresh usage
-                          </Button>
-                        ) : (
-                          "—"
-                        )}
+                        <div className="space-y-2">
+                          {order.esim?.usage ? (
+                            <Button variant="outline" size="sm" disabled={busy === order.id} onClick={() => refreshUsage(order.id)}>{busy === order.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Refresh usage</Button>
+                          ) : null}
+                          {order.esim ? <LifecycleActions orderId={order.id} iccid={order.esim.iccid} providerStatus={order.esim.providerStatus ?? order.esim.status} canTerminate={canTerminate} onCompleted={() => void load()} /> : "—"}
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
