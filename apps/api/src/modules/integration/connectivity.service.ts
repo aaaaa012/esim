@@ -28,9 +28,12 @@ export class ConnectivityService implements OnModuleInit {
 
   descriptor() { const provider = this.selected(); return { provider: provider.name, capabilities: provider.capabilities() }; }
   health() { return this.selected().health(); }
+  transatelHealth() { return this.transatel.health(); }
   provision(request: ProvisionRequest) { return this.selected().provision(request); }
   getUsage(subscriptionId: string) { return this.selected().getUsage(subscriptionId); }
   getEsimDetails(subscriptionId: string) { return this.selected().getEsimDetails(subscriptionId); }
+  suspend(subscriptionId: string, transactionReference: string) { return this.transatel.suspend(subscriptionId, transactionReference); }
+  terminate(subscriptionId: string, transactionReference: string) { return this.transatel.terminate(subscriptionId, transactionReference); }
   syncCatalog() { return this.transatel.syncCatalog(); }
   catalogReport(cos?: string) { return this.transatel.catalogReport(cos); }
   checkEligibility(planId: string, msisdn: string) { return this.transatel.checkEligibility(planId, msisdn); }

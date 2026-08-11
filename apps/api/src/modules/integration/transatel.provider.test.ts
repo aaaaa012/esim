@@ -333,6 +333,18 @@ describe('TransatelProvider', () => {
     });
   });
 
+  it('normalizes a connectivity-management suspension using body.simSerial', async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({ assignedOrderId: 'order-1' });
+    const provider = new TransatelProvider(prisma);
+    const result = await provider.handleWebhook({
+      header: { eventId: 'evt-suspended', eventType: 'CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED' },
+      body: { simSerial: '8988247076000000319', transactionId: 'tx-suspend' },
+    });
+    expect(result.handled).toBe(true);
+    expect(result.event).toMatchObject({ orderId: 'order-1', iccid: '8988247076000000319', status: 'SUSPENDED' });
+  });
+
   it('synchronizes catalog products into per-country plans', async () => {
     const tx = {
       country: { upsert: vi.fn().mockResolvedValue({ id: 'country-1' }) },
@@ -465,7 +477,7 @@ describe('TransatelProvider', () => {
       status: 'active',
       targetUrl: 'https://api.visacompass.example/webhooks/connectivity/transatel',
       secret: 'webhook-secret',
-      events: ['OCS/PRODUCT/PRELOADED', 'OCS/PRODUCT/ACTIVATED', 'OCS/PRODUCT/EXPIRED', 'OCS/PRODUCT/TERMINATED'],
+      events: ['OCS/PRODUCT/PRELOADED', 'OCS/PRODUCT/ACTIVATED', 'OCS/PRODUCT/EXPIRED', 'OCS/PRODUCT/TERMINATED', 'CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED', 'CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED'],
     });
   });
 
@@ -502,5 +514,28 @@ describe('TransatelProvider', () => {
     expect((await provider.health()).ok).toBe(true);
     delete process.env.TRANSATEL_MVNO_REF;
     expect((await provider.health()).ok).toBe(false);
+  });
+
+  it('submits an idempotent subscriber suspension by ICCID', async () => {
+    const provider = new TransatelProvider(prismaStub());
+    route({
+      '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
+      '/connectivity-management/subscribers/api/subscribers/sim-serial/8988247076000000319/suspend': () => jsonResponse({ transactionId: 'tx-suspend', status: 'Pending' }, 201),
+    });
+    expect(await provider.suspend('8988247076000000319', 'ops:suspend:key-1')).toEqual({ accepted: true, transactionId: 'tx-suspend', status: 'Pending' });
+    const call = fetchMock.mock.calls.find((entry) => String(entry[0]).endsWith('/suspend'));
+    expect(call?.[1]).toMatchObject({ method: 'POST' });
+    expect(call?.[1].headers?.['Idempotency-Key']).toBe('ops:suspend:key-1');
+    expect(JSON.parse(String(call?.[1].body))).toMatchObject({ mvnoRef: 'visacompass-test', transactionReference: 'ops:suspend:key-1' });
+  });
+
+  it('submits an irreversible subscriber termination by ICCID', async () => {
+    const provider = new TransatelProvider(prismaStub());
+    route({
+      '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
+      '/connectivity-management/subscribers/api/subscribers/sim-serial/8988247076000000319/terminate': () => jsonResponse({ transactionId: 'tx-terminate', status: 'Pending' }, 201),
+    });
+    expect(await provider.terminate('8988247076000000319', 'ops:terminate:key-1')).toEqual({ accepted: true, transactionId: 'tx-terminate', status: 'Pending' });
+    expect(fetchMock.mock.calls.some((entry) => String(entry[0]).endsWith('/terminate'))).toBe(true);
   });
 });

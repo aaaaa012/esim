@@ -80,7 +80,7 @@ the reading code.
 | `TRANSATEL_WEBHOOK_TARGET_URL` | — | Registers webhook at startup (`connectivity.service.ts:11-16`) |
 | `TRANSATEL_WEBHOOK_CONTACT_EMAIL` | `it-operations@visacompass.local` | Webhook registration (`transatel.provider.ts:481`) |
 | `TRANSATEL_WEBHOOK_SECRET` | — | Webhook signature verification (`webhooks.controller.ts:76`, `transatel.provider.ts:482`) |
-| `TRANSATEL_WEBHOOK_EVENTS` | `OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/EXPIRED,OCS/PRODUCT/TERMINATED` | Registered events (`transatel.provider.ts:483-484`) |
+| `TRANSATEL_WEBHOOK_EVENTS` | OCS lifecycle plus `CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED` and `.../TERMINATED` | Registered product and subscriber lifecycle events |
 | `TRANSATEL_REQUEST_TIMEOUT_MS` | `15000` | Outbound request timeout (`transatel.provider.ts:151-154`) |
 
 ## Private document storage

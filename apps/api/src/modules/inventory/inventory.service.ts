@@ -271,7 +271,7 @@ export class InventoryService implements OnModuleInit {
     return viaEsim?.inventory ?? null;
   }
 
-  async applyLifecycle(orderId: string, event: { provider: string; status?: 'PRELOADED' | 'ACTIVATED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER'; subscriptionId?: string; iccid?: string; activatedAt?: string; expiresAt?: string }) {
+  async applyLifecycle(orderId: string, event: { provider: string; status?: 'PRELOADED' | 'ACTIVATED' | 'SUSPENDED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER'; subscriptionId?: string; iccid?: string; activatedAt?: string; expiresAt?: string }) {
     if (!this.prisma.enabled) return;
     const resolved = await this.inventoryForOrder(orderId);
     if (!resolved) throw new NotFoundException('No inventory is associated with this order');
@@ -290,6 +290,7 @@ export class InventoryService implements OnModuleInit {
         where: { id: inventory.id },
         data: {
           ...(inventoryStatus ? { status: inventoryStatus } : {}),
+          ...(event.status ? { providerStatus: event.status } : {}),
           ...(event.subscriptionId ? { providerSubscriptionId: event.subscriptionId } : {}),
           ...(event.activatedAt ? { activatedAt: new Date(event.activatedAt) } : {}),
           ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
@@ -302,28 +303,29 @@ export class InventoryService implements OnModuleInit {
       await tx.subscription.upsert({
         where: { providerSubscriptionId },
         update: {
-          status: subscriptionStatus,
+          ...(subscriptionStatus ? { status: subscriptionStatus } : {}),
           providerLastSeenAt: new Date(),
           ...(event.status === 'ACTIVATED' ? { assignmentVerificationStatus: 'VERIFIED' as const, assignmentVerifiedAt: new Date() } : {}),
           ...(event.activatedAt ? { activatedAt: new Date(event.activatedAt) } : {}),
           ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
         },
-        create: { customerEsimId: customerEsim.id, provider: event.provider, providerSubscriptionId, status: subscriptionStatus, providerLastSeenAt: new Date(), ...(event.status === 'ACTIVATED' ? { assignmentVerificationStatus: 'VERIFIED', assignmentVerifiedAt: new Date() } : {}), ...(event.activatedAt ? { activatedAt: new Date(event.activatedAt) } : {}), ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}) },
+        create: { customerEsimId: customerEsim.id, provider: event.provider, providerSubscriptionId, status: subscriptionStatus ?? 'PENDING', providerLastSeenAt: new Date(), ...(event.status === 'ACTIVATED' ? { assignmentVerificationStatus: 'VERIFIED', assignmentVerifiedAt: new Date() } : {}), ...(event.activatedAt ? { activatedAt: new Date(event.activatedAt) } : {}), ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}) },
       });
     });
   }
 
-  private mapInventoryStatus(status?: 'PRELOADED' | 'ACTIVATED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER') {
+  private mapInventoryStatus(status?: 'PRELOADED' | 'ACTIVATED' | 'SUSPENDED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER') {
     if (status === 'ACTIVATED') return InventoryStatus.ACTIVATED;
     if (status === 'EXPIRED') return InventoryStatus.EXPIRED;
     if (status === 'TERMINATED') return InventoryStatus.TERMINATED;
     return null;
   }
 
-  private mapSubscriptionStatus(status?: 'PRELOADED' | 'ACTIVATED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER') {
+  private mapSubscriptionStatus(status?: 'PRELOADED' | 'ACTIVATED' | 'SUSPENDED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER') {
     if (status === 'ACTIVATED') return 'ACTIVE';
     if (status === 'EXPIRED') return 'EXPIRED';
     if (status === 'TERMINATED' || status === 'CANCELED') return 'TERMINATED';
+    if (status === 'SUSPENDED') return null;
     return 'PENDING';
   }
 

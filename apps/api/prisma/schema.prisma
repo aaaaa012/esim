@@ -119,6 +119,18 @@ enum ProvisioningOperationState {
   MANUAL_REVIEW
   CANCELLED
 }
+enum TransatelLifecycleAction {
+  SUSPEND
+  TERMINATE
+}
+enum TransatelLifecycleState {
+  CREATED
+  SUBMITTING
+  ACCEPTED
+  CONFIRMED
+  RECONCILE_REQUIRED
+  FAILED
+}
 enum SubscriptionStatus {
   PENDING
   ACTIVE
@@ -197,6 +209,7 @@ model User {
   customer Customer?
   reviews OrderReview[]
   auditLogs AuditLog[]
+  transatelLifecycleOperations TransatelLifecycleOperation[]
   staffInvitationsSent StaffInvitation[] @relation("StaffInvitationInviter")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -313,6 +326,7 @@ model Order {
   events OrderEvent[]
   provisioningAttempts ProvisioningAttempt[]
   provisioningOperation ProvisioningOperation?
+  transatelLifecycleOperations TransatelLifecycleOperation[]
   notifications Notification[]
   partnerLedgerEntries PartnerLedgerEntry[]
   partnerHostedSessions PartnerHostedCheckoutSession[]
@@ -751,6 +765,27 @@ model ProvisioningOperation {
   version Int @default(0)
   @@index([state, nextReconcileAt])
   @@index([providerSubscriptionId])
+}
+model TransatelLifecycleOperation {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  order Order @relation(fields: [orderId], references: [id])
+  action TransatelLifecycleAction
+  state TransatelLifecycleState @default(CREATED)
+  idempotencyKey String @unique
+  reason String
+  performedById String @db.Uuid
+  performedBy User @relation(fields: [performedById], references: [id])
+  providerTransactionId String?
+  requestSnapshot Json
+  responseSnapshot Json?
+  errorMessage String?
+  submittedAt DateTime?
+  acceptedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([orderId, createdAt])
+  @@index([state, createdAt])
 }
 model WebhookEvent {
   id String @id @default(uuid()) @db.Uuid

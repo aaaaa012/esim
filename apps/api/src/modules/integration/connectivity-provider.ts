@@ -4,6 +4,7 @@ export type EsimDetailsResult = { subscriptionId: string; status: string; smDpAd
 export type EligibilityResult = { allowed: boolean; errorKey?: string; errorMessage?: string };
 export type ConnectivityCapabilities = { catalogSync: boolean; provisioning: boolean; usage: boolean; esimDetails: boolean; topUp: boolean; callbacks: boolean };
 export type UsageBreakdown = { usedMb: number; totalMb: number; subscriptions?: { providerSubscriptionId: string; status: string; usedMb: number; totalMb: number; priority?: number }[] };
+export type LifecycleResult = { accepted: boolean; transactionId?: string; status: string };
 
 /**
  * Normalized provider lifecycle event emitted by the connectivity provider.
@@ -16,7 +17,7 @@ export type ProviderWebhookEvent = {
   iccid?: string;
   subscriptionId?: string;
   externalReference?: string;
-  status?: 'PRELOADED' | 'ACTIVATED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER';
+  status?: 'PRELOADED' | 'ACTIVATED' | 'SUSPENDED' | 'EXPIRED' | 'TERMINATED' | 'CANCELED' | 'OTHER';
   activatedAt?: string;
   expiresAt?: string;
   qrPayload?: string;
@@ -53,6 +54,8 @@ export interface ConnectivityProvider {
   provision(request: ProvisionRequest): Promise<ProvisionResult>;
   getUsage(subscriptionId: string): Promise<UsageBreakdown>;
   getEsimDetails(subscriptionId: string): Promise<EsimDetailsResult>;
+  suspend?(subscriptionId: string, transactionReference: string): Promise<LifecycleResult>;
+  terminate?(subscriptionId: string, transactionReference: string): Promise<LifecycleResult>;
   syncCatalog?(): Promise<CatalogSyncResult>;
   checkEligibility?(planId: string, msisdn: string): Promise<EligibilityResult>;
   handleWebhook?(payload: unknown): Promise<ProviderWebhookResult>;
