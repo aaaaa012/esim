@@ -87,6 +87,7 @@ enum InventoryStatus {
   ACTIVATED
   EXPIRED
   TERMINATED
+  QUARANTINED
 }
 enum BatchStatus {
   PENDING
@@ -105,6 +106,18 @@ enum ProvisioningStatus {
   SUCCEEDED
   RETRYING
   FAILED
+}
+enum ProvisioningOperationState {
+  CREATED
+  SUBMITTING
+  ACCEPTED
+  WAITING_FOR_QR
+  QR_READY
+  ACTIVATED
+  RECONCILE_REQUIRED
+  REJECTED
+  MANUAL_REVIEW
+  CANCELLED
 }
 enum SubscriptionStatus {
   PENDING
@@ -299,6 +312,7 @@ model Order {
   reviews OrderReview[]
   events OrderEvent[]
   provisioningAttempts ProvisioningAttempt[]
+  provisioningOperation ProvisioningOperation?
   notifications Notification[]
   partnerLedgerEntries PartnerLedgerEntry[]
   partnerHostedSessions PartnerHostedCheckoutSession[]
@@ -399,6 +413,8 @@ model EsimInventory {
   smDpAddress String?
   providerSubscriptionId String?
   providerStatus String?
+  lastProviderCheckedAt DateTime?
+  providerCheckError String?
   activatedAt DateTime?
   expiresAt DateTime?
   customerEsims CustomerEsim[]
@@ -709,6 +725,33 @@ model ProvisioningAttempt {
   createdAt DateTime @default(now())
   completedAt DateTime?
 }
+model ProvisioningOperation {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @unique @db.Uuid
+  order Order @relation(fields: [orderId], references: [id])
+  provider String @default("TRANSATEL")
+  state ProvisioningOperationState @default(CREATED)
+  idempotencyKey String @unique
+  iccid String
+  providerProductId String
+  providerOrderId String?
+  providerSubscriptionId String?
+  requestSnapshot Json
+  responseSnapshot Json?
+  attemptCount Int @default(0)
+  lastErrorCategory String?
+  lastErrorMessage String?
+  submittedAt DateTime?
+  acceptedAt DateTime?
+  nextReconcileAt DateTime?
+  reconcileDeadlineAt DateTime?
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  version Int @default(0)
+  @@index([state, nextReconcileAt])
+  @@index([providerSubscriptionId])
+}
 model WebhookEvent {
   id String @id @default(uuid()) @db.Uuid
   source String
@@ -716,6 +759,10 @@ model WebhookEvent {
   payload Json
   signatureValid Boolean
   processedAt DateTime?
+  processingStartedAt DateTime?
+  attemptCount Int @default(0)
+  nextAttemptAt DateTime?
+  deadLetteredAt DateTime?
   errorMessage String?
   createdAt DateTime @default(now())
   @@unique([source, eventId])

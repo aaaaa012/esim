@@ -19,6 +19,7 @@ FROM CODE` rather than guessed.
 | [07-order-lifecycle-flows.md](./07-order-lifecycle-flows.md) | Purchase, document, payment, provisioning, refund, guest and partner flows |
 | [08-payments.md](./08-payments.md) | Payment gateway adapters: simulator, Khalti |
 | [09-connectivity-transatel.md](./09-connectivity-transatel.md) | Transatel connectivity adapter: provisioning, usage, catalog, eligibility, webhooks |
+| [ADR-005-transatel-resilient-provisioning.md](./ADR-005-transatel-resilient-provisioning.md) | Durable Transatel provisioning saga, idempotency, reconciliation, and webhook inbox |
 | [10-inventory.md](./10-inventory.md) | eSIM inventory lifecycle, batches, reservation, import |
 | [11-notifications.md](./11-notifications.md) | Notification templates, channels, QR PDF, delivery |
 | [12-background-jobs.md](./12-background-jobs.md) | BullMQ queues, workers, processors, reconciliation |

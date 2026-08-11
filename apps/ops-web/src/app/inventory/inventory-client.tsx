@@ -55,10 +55,22 @@ type Overview = {
     assigned: number;
     activated: number;
     pending: number;
+    quarantined?: number;
   };
   lowStockThreshold: number;
   lowStock: boolean;
   batches: Batch[];
+};
+type InventoryProfile = {
+  id: string;
+  iccid: string;
+  msisdn?: string | null;
+  status: string;
+  providerStatus?: string | null;
+  lastProviderCheckedAt?: string | null;
+  providerCheckError?: string | null;
+  batchReference?: string | null;
+  order?: { orderNumber: string } | null;
 };
 type ImportResult = {
   imported: number;
@@ -124,6 +136,8 @@ export default function InventoryClient() {
   const [error, setError] = useState("");
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [decision, setDecision] = useState("");
+  const [profiles, setProfiles] = useState<InventoryProfile[]>([]);
+  const [reconciling, setReconciling] = useState("");
 
   const [profileFile, setProfileFile] = useState<File | null>(null);
   const [profileSource, setProfileSource] = useState("");
@@ -136,13 +150,32 @@ export default function InventoryClient() {
   const [planDecision, setPlanDecision] = useState("");
 
   const load = () => {
-    void authFetch(`${API}/operations/inventory`, { headers: {} })
-      .then(async (r) => {
-        const v = await r.json();
-        if (!r.ok) throw new Error(v.error?.message);
-        setData(v.data);
+    void Promise.all([
+      authFetch(`${API}/operations/inventory`, { headers: {} }),
+      authFetch(`${API}/operations/inventory/profiles?limit=100`, { headers: {} }),
+    ])
+      .then(async ([overviewResponse, profilesResponse]) => {
+        const [overviewValue, profilesValue] = await Promise.all([overviewResponse.json(), profilesResponse.json()]);
+        if (!overviewResponse.ok) throw new Error(overviewValue.error?.message);
+        if (!profilesResponse.ok) throw new Error(profilesValue.error?.message);
+        setData(overviewValue.data);
+        setProfiles(profilesValue.data.items);
       })
       .catch((e) => setError(e.message));
+  };
+  const reconcileProfile = async (profile: InventoryProfile) => {
+    setReconciling(profile.id);
+    try {
+      const response = await authFetch(`${API}/operations/inventory/profiles/${profile.id}/reconcile`, { method: "POST", headers: {} });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error?.message ?? "Provider reconciliation failed");
+      toast.success(`${profile.iccid} checked against Transatel`);
+      load();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Provider reconciliation failed");
+    } finally {
+      setReconciling("");
+    }
   };
   useEffect(() => {
     void authFetch(`${API}/auth/me`, { headers: {} })
@@ -363,6 +396,13 @@ export default function InventoryClient() {
             <UploadCloud className="size-4" />
             Bulk upload
           </TabsTrigger>
+          <TabsTrigger value="live-stock" className="gap-1.5">
+            <RefreshCcw className="size-4" />
+            Live stock
+            {(data.counts.quarantined ?? 0) > 0 && (
+              <span className="ml-1 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">{data.counts.quarantined}</span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="approvals" className="gap-1.5">
             <ShieldCheck className="size-4" />
             Pending approvals
@@ -377,6 +417,26 @@ export default function InventoryClient() {
             Batch history
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="live-stock" className="mt-6">
+          <Panel title="Transatel inventory reconciliation" description="Live provider status for the latest 100 inventory profiles. Unassigned profiles with unexpected provider state are quarantined automatically." noPadding>
+            {!profiles.length ? <EmptyState title="No inventory profiles" /> : (
+              <Table>
+                <TableHeader><TableRow><TableHead>ICCID</TableHead><TableHead>Local</TableHead><TableHead>Transatel</TableHead><TableHead>Last checked</TableHead><TableHead>Error</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                <TableBody>{profiles.map((profile) => (
+                  <TableRow key={profile.id}>
+                    <TableCell><code className="text-xs">{profile.iccid}</code><p className="text-xs text-muted-foreground">{profile.batchReference ?? "—"}</p></TableCell>
+                    <TableCell><StatusBadge label={profile.status} {...(profile.status === "QUARANTINED" ? { tone: "warning" as const } : {})} /></TableCell>
+                    <TableCell><StatusBadge label={profile.providerStatus ?? "NOT CHECKED"} /></TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{profile.lastProviderCheckedAt ? new Date(profile.lastProviderCheckedAt).toLocaleString() : "Never"}</TableCell>
+                    <TableCell className="max-w-64 truncate text-xs text-destructive">{profile.providerCheckError ?? "—"}</TableCell>
+                    <TableCell className="text-right"><Button size="sm" variant="outline" disabled={reconciling === profile.id} onClick={() => void reconcileProfile(profile)}>{reconciling === profile.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Check live</Button></TableCell>
+                  </TableRow>
+                ))}</TableBody>
+              </Table>
+            )}
+          </Panel>
+        </TabsContent>
 
         <TabsContent value="upload" className="mt-4 space-y-6">
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">

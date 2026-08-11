@@ -22,6 +22,7 @@ import { CryptoService } from "./infrastructure/crypto.service.js";
 import {
   OperationsIntegrationEventsController,
   OperationsIntegrationLogsController,
+  OperationsProvisioningOperationsController,
   WebhooksController,
 } from "./modules/webhooks/webhooks.controller.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
@@ -78,6 +79,7 @@ OperationsController,
     WebhooksController,
     OperationsIntegrationEventsController,
     OperationsIntegrationLogsController,
+    OperationsProvisioningOperationsController,
     PartnersController,
     PartnerAdminController,
     PartnerCheckoutController,

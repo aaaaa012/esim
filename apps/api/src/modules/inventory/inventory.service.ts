@@ -341,8 +341,46 @@ export class InventoryService implements OnModuleInit {
     const customerEsim = await this.prisma.customerEsim.findUnique({ where: { orderId }, select: { id: true } });
     if (!customerEsim) throw new NotFoundException('No customer eSIM record exists for this order');
     const usage = await this.connectivity.getUsage(inventory.iccid);
-    await this.prisma.subscription.updateMany({ where: { customerEsimId: customerEsim.id }, data: { usedMb: usage.usedMb, totalMb: usage.totalMb, usageLastCheckedAt: new Date() } });
-    return { orderId, ...usage, lastCheckedAt: new Date().toISOString() };
+    const checkedAt = new Date();
+    if (usage.subscriptions?.length) {
+      const balances = new Map(usage.subscriptions.map((item) => [item.providerSubscriptionId, item]));
+      const subscriptions = await this.prisma.subscription.findMany({ where: { customerEsimId: customerEsim.id }, select: { id: true, providerSubscriptionId: true } });
+      await Promise.all(subscriptions.map((subscription) => {
+        const balance = balances.get(subscription.providerSubscriptionId);
+        return balance ? this.prisma.subscription.update({ where: { id: subscription.id }, data: { usedMb: balance.usedMb, totalMb: balance.totalMb, usageLastCheckedAt: checkedAt, providerLastSeenAt: checkedAt } }) : Promise.resolve();
+      }));
+    } else {
+      await this.prisma.subscription.updateMany({ where: { customerEsimId: customerEsim.id }, data: { usedMb: usage.usedMb, totalMb: usage.totalMb, usageLastCheckedAt: checkedAt } });
+    }
+    return { orderId, ...usage, remainingMb: Math.max(0, usage.totalMb - usage.usedMb), lastCheckedAt: checkedAt.toISOString() };
+  }
+
+  async reconcileProviderProfile(id: string) {
+    if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
+    const profile = await this.prisma.esimInventory.findUnique({ where: { id } });
+    if (!profile) throw new NotFoundException('Inventory profile not found');
+    try {
+      const details = await this.connectivity.getEsimDetails(profile.iccid);
+      const observed = details.status.toLowerCase();
+      const safeUnassigned = observed === 'available' || observed === 'allocated';
+      const unexpectedUse = profile.assignedOrderId === null && !safeUnassigned;
+      const updated = await this.prisma.esimInventory.update({
+        where: { id },
+        data: {
+          providerStatus: details.status,
+          lastProviderCheckedAt: new Date(),
+          providerCheckError: null,
+          ...(details.smDpAddress ? { smDpAddress: details.smDpAddress } : {}),
+          ...(unexpectedUse ? { status: InventoryStatus.QUARANTINED } : {}),
+          version: { increment: 1 },
+        },
+      });
+      return { id, iccid: updated.iccid, localStatus: updated.status, providerStatus: details.status, inSync: !unexpectedUse, checkedAt: updated.lastProviderCheckedAt?.toISOString() };
+    } catch (error) {
+      const message = error instanceof Error ? error.message.slice(0, 2000) : 'unknown error';
+      await this.prisma.esimInventory.update({ where: { id }, data: { lastProviderCheckedAt: new Date(), providerCheckError: message, version: { increment: 1 } } });
+      throw error;
+    }
   }
 
   async overview() {
@@ -350,7 +388,7 @@ export class InventoryService implements OnModuleInit {
     const [groups, batches] = await Promise.all([this.prisma.esimInventory.groupBy({ by: ['status'], _count: { _all: true } }), this.prisma.inventoryBatch.findMany({ orderBy: { createdAt: 'desc' }, take: 20 })]);
     const count = (status: InventoryStatus) => groups.find((item) => item.status === status)?._count._all ?? 0;
     const available = count(InventoryStatus.AVAILABLE);
-    return { counts: { available, reserved: count(InventoryStatus.RESERVED), assigned: count(InventoryStatus.ASSIGNED), activated: count(InventoryStatus.ACTIVATED), pending: count(InventoryStatus.IMPORTED), expired: count(InventoryStatus.EXPIRED), terminated: count(InventoryStatus.TERMINATED) }, lowStockThreshold: 10, lowStock: available <= 10, batches: batches.map((batch) => ({ id: batch.id, batchReference: batch.batchReference, totalProfiles: batch.totalProfiles, importedCount: batch.importedCount, failedCount: batch.failedCount, status: batch.status, rejectionReason: batch.rejectionReason, createdAt: batch.createdAt.toISOString() })) };
+    return { counts: { available, reserved: count(InventoryStatus.RESERVED), assigned: count(InventoryStatus.ASSIGNED), activated: count(InventoryStatus.ACTIVATED), pending: count(InventoryStatus.IMPORTED), expired: count(InventoryStatus.EXPIRED), terminated: count(InventoryStatus.TERMINATED), quarantined: count(InventoryStatus.QUARANTINED) }, lowStockThreshold: 10, lowStock: available <= 10, batches: batches.map((batch) => ({ id: batch.id, batchReference: batch.batchReference, totalProfiles: batch.totalProfiles, importedCount: batch.importedCount, failedCount: batch.failedCount, status: batch.status, rejectionReason: batch.rejectionReason, createdAt: batch.createdAt.toISOString() })) };
   }
 
   /**
@@ -394,6 +432,8 @@ export class InventoryService implements OnModuleInit {
         smDpAddress: profile.smDpAddress,
         providerSubscriptionId: profile.providerSubscriptionId,
         providerStatus: profile.providerStatus,
+        lastProviderCheckedAt: profile.lastProviderCheckedAt?.toISOString() ?? null,
+        providerCheckError: profile.providerCheckError,
         activatedAt: profile.activatedAt?.toISOString() ?? null,
         expiresAt: profile.expiresAt?.toISOString() ?? null,
         batchReference: profile.batch?.batchReference ?? null,

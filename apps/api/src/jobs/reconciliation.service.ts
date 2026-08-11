@@ -7,6 +7,7 @@ import { QueueService } from './queue.service.js';
 import { QUEUES } from './queues.js';
 import { OrdersService } from '../modules/orders/orders.service.js';
 import { PaymentsService } from '../modules/payments/payments.service.js';
+import { InventoryService } from '../modules/inventory/inventory.service.js';
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -30,13 +31,15 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: NotificationService,
     private readonly orders: OrdersService,
     private readonly payments: PaymentsService,
+    private readonly inventory: InventoryService,
     private readonly metrics?: MetricsService,
   ) {}
 
   onModuleInit() {
-    this.queues.registerWorker(QUEUES.reconciliation, (job) =>
-      this.reconcile(String((job.data as { id: string }).id)),
-    );
+    this.queues.registerWorker(QUEUES.reconciliation, (job) => {
+      const data = job.data as { id: string; kind?: string };
+      return data.kind === 'inventory-profile' ? this.inventory.reconcileProviderProfile(String(data.id)) : this.reconcile(String(data.id));
+    });
     const minutes = Number(process.env.RECONCILIATION_INTERVAL_MINUTES ?? 15);
     const intervalMs = Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 15 * 60_000;
     this.timer = setInterval(() => void this.run().catch(() => undefined), intervalMs);
@@ -61,12 +64,14 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async run() {
+    await this.reconcileProvisioningOperations();
     await this.orders.reconcileStaleActivationOrders();
     await this.orders.recoverStuckProvisioningOrders();
     await this.payments.reconcilePendingPayments();
     if (!this.prisma.enabled) return;
     if (!this.repairedReusableInventory) { await this.repairReusableEsims(); this.repairedReusableInventory = true; }
     await this.sweepLifecycle();
+    await this.queueInventoryReconciliation();
     const subscriptions = await this.prisma.subscription.findMany({
       where: { status: 'ACTIVE' },
       select: {
@@ -95,6 +100,51 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       if (!this.queues.enabled) await this.reconcile(subscription.id);
     }
     if (queued) this.logger.log(`Queued ${queued} subscription usage reconciliation job(s)`);
+  }
+
+  private async queueInventoryReconciliation() {
+    const batchSize = Math.min(100, Math.max(1, Number(process.env.TRANSATEL_INVENTORY_RECONCILE_BATCH_SIZE ?? 25)));
+    const staleHours = Math.max(1, Number(process.env.TRANSATEL_INVENTORY_RECONCILE_HOURS ?? 24));
+    const staleBefore = new Date(Date.now() - staleHours * 60 * 60_000);
+    const profiles = await this.prisma.esimInventory.findMany({
+      where: { assignedOrderId: null, status: { in: ['IMPORTED', 'AVAILABLE', 'QUARANTINED'] }, OR: [{ lastProviderCheckedAt: null }, { lastProviderCheckedAt: { lte: staleBefore } }] },
+      select: { id: true },
+      orderBy: [{ lastProviderCheckedAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }],
+      take: batchSize,
+    });
+    for (const profile of profiles) {
+      await this.queues.add(QUEUES.reconciliation, 'reconcile-inventory-profile', { id: profile.id, kind: 'inventory-profile' }, `inventory-reconcile-${profile.id}-${new Date().toISOString().slice(0, 13)}`);
+      if (!this.queues.enabled) await this.inventory.reconcileProviderProfile(profile.id).catch(() => undefined);
+    }
+  }
+
+  private async reconcileProvisioningOperations() {
+    if (!this.prisma.enabled) return;
+    const now = new Date();
+    const operations = await this.prisma.provisioningOperation.findMany({
+      where: { state: { in: ['SUBMITTING', 'ACCEPTED', 'WAITING_FOR_QR', 'RECONCILE_REQUIRED'] }, OR: [{ nextReconcileAt: null }, { nextReconcileAt: { lte: now } }] },
+      include: { order: { select: { id: true, providerSubscriptionId: true } } },
+      take: 200,
+    });
+    for (const operation of operations) {
+      if (operation.reconcileDeadlineAt && operation.reconcileDeadlineAt <= now) {
+        await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'MANUAL_REVIEW', nextReconcileAt: null, lastErrorCategory: 'RECONCILIATION_DEADLINE', lastErrorMessage: 'Automatic reconciliation deadline elapsed', version: { increment: 1 } } });
+        await this.orders.markProvisioningManualReview(operation.orderId, 'Transatel submission requires manual reconciliation; inventory remains quarantined');
+        continue;
+      }
+      try {
+        const details = await this.connectivity.getEsimDetails(operation.iccid);
+        const qrPayload = 'qrPayload' in details ? details.qrPayload : undefined;
+        if (qrPayload && operation.order.providerSubscriptionId) {
+          await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: operation.orderId }, `provision-${operation.orderId}`);
+        }
+        const nextState = operation.order.providerSubscriptionId ? (qrPayload ? 'QR_READY' : 'WAITING_FOR_QR') : 'RECONCILE_REQUIRED';
+        await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: nextState, nextReconcileAt: new Date(Date.now() + 5 * 60_000), lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
+      } catch (error) {
+        await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { nextReconcileAt: new Date(Date.now() + 5 * 60_000), lastErrorCategory: 'TRANSIENT_PROVIDER', lastErrorMessage: error instanceof Error ? error.message.slice(0, 2000) : 'unknown error', version: { increment: 1 } } });
+        this.metrics?.recordFailure('reconciliation', 'provisioning-operation');
+      }
+    }
   }
 
   private async sweepLifecycle() {

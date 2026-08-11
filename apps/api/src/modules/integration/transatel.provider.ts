@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ApiErrorCode } from '@visa-compass/shared';
 import { ApiException } from '../../common/api-error.js';
 import type { ConnectivityProvider, ProvisionRequest, ProvisionResult, EsimDetailsResult, EligibilityResult, CatalogSyncResult, CatalogExportRow, CatalogExportResult, ProviderWebhookResult, ProviderWebhookEvent, UsageBreakdown } from './connectivity-provider.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
+import { classifyProviderHttpFailure } from './provider-failure.js';
 
 /*
  * Raw Transatel OpenAPI DTOs. These types describe the external API contract and
@@ -121,6 +123,10 @@ export class TransatelProvider implements ConnectivityProvider {
 
   private accessToken: string | null = null;
   private tokenExpiry = 0;
+  private tokenRefresh: Promise<string> | undefined;
+  private consecutiveFailures = 0;
+  private circuitOpenedAt = 0;
+  private lastSuccessAt = 0;
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -129,11 +135,33 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   async health() {
+    const configured = Boolean(process.env.TRANSATEL_BASE_URL && process.env.TRANSATEL_CLIENT_ID && process.env.TRANSATEL_CLIENT_SECRET && process.env.TRANSATEL_MVNO_REF);
+    let authenticated = false;
+    if (configured && !this.circuitOpen()) {
+      try { await this.getAccessToken(); authenticated = true; } catch { authenticated = false; }
+    }
     return {
-      ok: Boolean(process.env.TRANSATEL_BASE_URL && process.env.TRANSATEL_CLIENT_ID && process.env.TRANSATEL_CLIENT_SECRET && process.env.TRANSATEL_MVNO_REF),
+      ok: configured && authenticated && !this.circuitOpen(),
       baseUrl: process.env.TRANSATEL_BASE_URL ?? null,
-      configured: Boolean(process.env.TRANSATEL_BASE_URL && process.env.TRANSATEL_CLIENT_ID && process.env.TRANSATEL_CLIENT_SECRET && process.env.TRANSATEL_MVNO_REF),
+      configured,
+      authenticated,
+      circuit: this.circuitOpen() ? 'OPEN' : 'CLOSED',
+      lastSuccessAt: this.lastSuccessAt ? new Date(this.lastSuccessAt).toISOString() : null,
     };
+  }
+
+  private circuitOpen() {
+    if (!this.circuitOpenedAt) return false;
+    const cooldown = Number(process.env.TRANSATEL_CIRCUIT_RESET_MS ?? 30_000);
+    if (Date.now() - this.circuitOpenedAt >= cooldown) { this.circuitOpenedAt = 0; this.consecutiveFailures = 0; return false; }
+    return true;
+  }
+
+  private providerSucceeded() { this.consecutiveFailures = 0; this.circuitOpenedAt = 0; this.lastSuccessAt = Date.now(); }
+  private providerFailed() {
+    this.consecutiveFailures += 1;
+    const threshold = Number(process.env.TRANSATEL_CIRCUIT_FAILURE_THRESHOLD ?? 5);
+    if (this.consecutiveFailures >= (Number.isFinite(threshold) && threshold > 0 ? threshold : 5)) this.circuitOpenedAt = Date.now();
   }
 
   private env(key: string): string {
@@ -159,6 +187,14 @@ export class TransatelProvider implements ConnectivityProvider {
     if (!clientId || !clientSecret) throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_CONFIGURATION, message: 'Connectivity service is not fully configured.', status: 503, details: 'Transatel API credentials are not fully configured' });
 
     if (!force && this.accessToken && Date.now() < this.tokenExpiry - 30_000) return this.accessToken;
+    if (!force && this.tokenRefresh) return this.tokenRefresh;
+
+    const refresh = this.fetchAccessToken(clientId, clientSecret);
+    this.tokenRefresh = refresh;
+    try { return await refresh; } finally { if (this.tokenRefresh === refresh) this.tokenRefresh = undefined; }
+  }
+
+  private async fetchAccessToken(clientId: string, clientSecret: string): Promise<string> {
 
     const tokenUrl = `${this.baseUrl('authentication')}/api/token`;
     const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -173,6 +209,7 @@ export class TransatelProvider implements ConnectivityProvider {
       });
       if (!response.ok) {
         const detail = await this.errorText(response);
+        if (response.status === 429 || response.status >= 500) this.providerFailed();
         await this.record({ operation: 'token', method: 'POST', endpoint: '/authentication/api/token', status: response.status, durationMs: Date.now() - startedAt, errorCode: 'CONNECTIVITY_UNAVAILABLE', errorMessage: detail.slice(0, 2000) });
         throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Our connectivity service is temporarily unavailable. Please try again shortly.', status: 503, details: `Transatel token exchange failed with status ${response.status}: ${detail}` });
       }
@@ -181,15 +218,18 @@ export class TransatelProvider implements ConnectivityProvider {
       await this.record({ operation: 'token', method: 'POST', endpoint: '/authentication/api/token', status: 200, durationMs: Date.now() - startedAt });
       this.accessToken = data.access_token;
       this.tokenExpiry = Date.now() + data.expires_in * 1000;
+      this.providerSucceeded();
       return this.accessToken;
     } catch (error) {
       if (error instanceof ApiException) throw error;
+      this.providerFailed();
       this.logger.error('Transatel token request error', error);
       throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Our connectivity service is temporarily unavailable. Please try again shortly.', status: 503, details: `Transatel token request failed: ${error instanceof Error ? error.message : 'unknown error'}` });
     }
   }
 
   private async authorizedFetch(url: string, init: { method: string; headers?: Record<string, string>; body?: string; retryOnAuth?: boolean; operation?: string } = { method: 'GET' }): Promise<Response> {
+    if (this.circuitOpen()) throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Our connectivity service is temporarily unavailable. Please try again shortly.', status: 503, details: 'Transatel circuit breaker is open' });
     const { retryOnAuth = true, operation = 'unknown', ...request } = init;
     const startedAt = Date.now();
     const execute = async () => {
@@ -200,7 +240,8 @@ export class TransatelProvider implements ConnectivityProvider {
         signal: AbortSignal.timeout(this.timeoutMs()),
       });
     };
-    let response = await execute();
+    let response: Response;
+    try { response = await execute(); } catch (error) { this.providerFailed(); throw error; }
     if (response.status === 401 && retryOnAuth) {
       this.accessToken = null;
       this.tokenExpiry = 0;
@@ -210,8 +251,10 @@ export class TransatelProvider implements ConnectivityProvider {
     let path: string;
     try { const parsed = new URL(url); path = `${parsed.pathname}${parsed.search}`; } catch { path = url; }
     if (response.ok) {
+      this.providerSucceeded();
       await this.record({ operation, method: request.method, endpoint: path, status: response.status, durationMs });
     } else {
+      if (response.status === 429 || response.status >= 500) this.providerFailed();
       let errorMessage: string | undefined;
       try { errorMessage = (await response.clone().text()).slice(0, 2000); } catch { /* body already consumed */ }
       await this.record({ operation, method: request.method, endpoint: path, status: response.status, durationMs, errorCode: `HTTP_${response.status}`, ...(errorMessage ? { errorMessage } : {}) });
@@ -297,6 +340,56 @@ export class TransatelProvider implements ConnectivityProvider {
     if (!profile) throw new ApiException({ code: ApiErrorCode.INVENTORY_UNAVAILABLE, message: 'No eSIM is available right now. Please try again shortly.', status: 409, details: `No allocated eSIM profile found for EID: ${request.eid}` });
 
     const bindMsisdn = profile.msisdn ?? profile.iccid;
+    const idempotencyKey = `transatel:preload:${request.orderId}`;
+    const operationPayload = { orderId: request.orderId, planId: request.planId, iccid: profile.iccid, msisdn: bindMsisdn, providerProductId: plan.providerPlanId };
+    if (this.prisma.enabled) {
+      await this.prisma.provisioningOperation.upsert({
+        where: { orderId: request.orderId },
+        update: {},
+        create: { orderId: request.orderId, idempotencyKey, iccid: profile.iccid, providerProductId: plan.providerPlanId, requestSnapshot: operationPayload },
+      });
+    }
+
+    // A previous worker may have successfully submitted the preload and then
+    // crashed before the QR became available. Never submit the command again:
+    // resume the asynchronous read side using the durable provider reference.
+    const accepted = await this.prisma.order.findUnique({
+      where: { id: request.orderId },
+      select: { providerSubscriptionId: true, providerStatus: true },
+    });
+    if (accepted?.providerSubscriptionId) {
+      try {
+        const details = await this.getEsimDetails(profile.iccid);
+        if (details.qrPayload) {
+          if (this.prisma.enabled) await this.prisma.provisioningOperation.update({ where: { orderId: request.orderId }, data: { state: 'QR_READY', completedAt: new Date(), nextReconcileAt: null, version: { increment: 1 } } });
+          return { providerSubscriptionId: accepted.providerSubscriptionId, status: 'COMPLETED', qrPayload: details.qrPayload, ...(details.smDpAddress ? { smDpAddress: details.smDpAddress } : {}) };
+        }
+      } catch (error) {
+        this.logger.warn(`Accepted preload ${accepted.providerSubscriptionId} is still waiting for activation details: ${error instanceof Error ? error.message : 'unknown error'}`);
+      }
+      if (this.prisma.enabled) await this.prisma.provisioningOperation.update({ where: { orderId: request.orderId }, data: { state: 'WAITING_FOR_QR', nextReconcileAt: new Date(Date.now() + 60_000), version: { increment: 1 } } });
+      return { providerSubscriptionId: accepted.providerSubscriptionId, status: 'DELAYED' };
+    }
+    if (accepted?.providerStatus === 'SUBMITTING') {
+      throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Your eSIM activation is being reconciled. Please check back shortly.', status: 503, details: `Transatel preload outcome is unknown for order ${request.orderId}; refusing to submit a duplicate command` });
+    }
+
+    // Obtain authentication before claiming the mutation: token failures are
+    // known to occur before the provider command is sent and remain retryable.
+    await this.getAccessToken();
+    if (this.prisma.enabled) {
+      const claimed = await this.prisma.order.updateMany({
+        where: { id: request.orderId, providerSubscriptionId: null, providerStatus: null },
+        data: { providerStatus: 'SUBMITTING' },
+      });
+      if (claimed.count !== 1) {
+        throw new ApiException({ code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE, message: 'Your eSIM activation is already being processed. Please check back shortly.', status: 503, details: `Could not exclusively claim Transatel submission for order ${request.orderId}` });
+      }
+      await this.prisma.provisioningOperation.update({
+        where: { orderId: request.orderId },
+        data: { state: 'SUBMITTING', submittedAt: new Date(), attemptCount: { increment: 1 }, lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } },
+      });
+    }
 
     const orderUrl = `${this.baseUrl('ocs/subscriptions')}/api/orders/products`;
     const payload = {
@@ -310,21 +403,50 @@ export class TransatelProvider implements ConnectivityProvider {
     };
 
     this.logger.log(`Submitting OCS preload for ICCID ${profile.iccid}, product ${plan.providerPlanId}, order ${request.orderId}`);
-    const response = await this.authorizedFetch(orderUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), operation: 'provision' });
+    let response: Response;
+    try {
+      response = await this.authorizedFetch(orderUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(payload), operation: 'provision' });
+    } catch (error) {
+      if (this.prisma.enabled) await this.prisma.provisioningOperation.update({ where: { orderId: request.orderId }, data: { state: 'RECONCILE_REQUIRED', lastErrorCategory: 'AMBIGUOUS_OUTCOME', lastErrorMessage: error instanceof Error ? error.message.slice(0, 2000) : 'unknown error', nextReconcileAt: new Date(Date.now() + 60_000), reconcileDeadlineAt: new Date(Date.now() + 24 * 60 * 60_000), version: { increment: 1 } } });
+      throw error;
+    }
     if (!response.ok) {
       const detail = await this.errorText(response);
+      const failure = classifyProviderHttpFailure(response.status, response.headers.get('retry-after'));
       this.logger.error(`OCS product preload failed. Status: ${response.status}, Error: ${detail}`);
-      throw new ApiException({ code: ApiErrorCode.PROVISIONING_FAILED, message: 'We could not activate your eSIM right now. Our team is reviewing it and will contact you.', status: 502, details: `OCS product activation failed: ${detail}` });
+      if (this.prisma.enabled) await this.prisma.provisioningOperation.update({ where: { orderId: request.orderId }, data: { state: failure.retryable ? 'RECONCILE_REQUIRED' : 'REJECTED', lastErrorCategory: failure.category, lastErrorMessage: detail.slice(0, 2000), nextReconcileAt: failure.retryable ? new Date(Date.now() + (failure.retryAfterMs ?? 60_000)) : null, version: { increment: 1 } } });
+      if (!failure.retryable && this.prisma.enabled) await this.prisma.order.update({ where: { id: request.orderId }, data: { providerStatus: 'REJECTED' } });
+      throw new ApiException({ code: ApiErrorCode.PROVISIONING_FAILED, message: 'We could not activate your eSIM right now. Our team is reviewing it and will contact you.', status: 502, details: `${failure.category}: OCS product activation failed: ${detail}` });
     }
 
     const data = (await response.json()) as OrderProductResponse;
     const providerSubscriptionId = data.subscriptionId ?? data.id;
     if (!providerSubscriptionId) throw new ApiException({ code: ApiErrorCode.PROVISIONING_FAILED, message: 'We could not activate your eSIM right now. Our team is reviewing it and will contact you.', status: 502, details: 'OCS order response did not include a subscription id' });
 
-    const details = await this.getEsimDetails(profile.iccid);
-    if (details.qrPayload) {
-      return { providerSubscriptionId, status: 'COMPLETED', qrPayload: details.qrPayload, ...(details.smDpAddress ? { smDpAddress: details.smDpAddress } : {}) };
+    // Provider acceptance is the commit point. Persist it before any secondary
+    // QR/details call so a crash or timeout cannot cause a duplicate preload or
+    // make remotely-bound inventory look reusable.
+    if (this.prisma.enabled) {
+      await this.prisma.$transaction([
+        this.prisma.order.update({ where: { id: request.orderId }, data: { providerSubscriptionId, providerStatus: 'PRELOADED' } }),
+        this.prisma.esimInventory.update({ where: { id: profile.id }, data: { providerSubscriptionId, providerStatus: 'PRELOADED', version: { increment: 1 } } }),
+        this.prisma.provisioningOperation.update({ where: { orderId: request.orderId }, data: { state: 'ACCEPTED', providerOrderId: data.id, providerSubscriptionId, responseSnapshot: data as unknown as Prisma.InputJsonValue, acceptedAt: new Date(), nextReconcileAt: new Date(Date.now() + 60_000), reconcileDeadlineAt: new Date(Date.now() + 24 * 60 * 60_000), version: { increment: 1 } } }),
+      ]);
     }
+
+    try {
+      const details = await this.getEsimDetails(profile.iccid);
+      if (details.qrPayload) {
+        if (this.prisma.enabled) await this.prisma.provisioningOperation.update({ where: { orderId: request.orderId }, data: { state: 'QR_READY', completedAt: new Date(), nextReconcileAt: null, version: { increment: 1 } } });
+        return { providerSubscriptionId, status: 'COMPLETED', qrPayload: details.qrPayload, ...(details.smDpAddress ? { smDpAddress: details.smDpAddress } : {}) };
+      }
+    } catch (error) {
+      // The preload has already succeeded. Details availability is an
+      // asynchronous concern handled by webhooks/reconciliation, not a reason
+      // to replay the mutating command.
+      this.logger.warn(`Preload ${providerSubscriptionId} accepted but activation details are not ready: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+    if (this.prisma.enabled) await this.prisma.provisioningOperation.update({ where: { orderId: request.orderId }, data: { state: 'WAITING_FOR_QR', nextReconcileAt: new Date(Date.now() + 60_000), version: { increment: 1 } } });
     return { providerSubscriptionId, status: 'DELAYED' };
   }
 

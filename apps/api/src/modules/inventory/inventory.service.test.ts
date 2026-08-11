@@ -115,3 +115,34 @@ describe('InventoryService.release', () => {
     expect(prisma.esimInventory.updateMany).not.toHaveBeenCalled();
   });
 });
+
+describe('InventoryService.reconcileProviderProfile', () => {
+  function reconciliationPrisma() {
+    const update = vi.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'inv-1', iccid: '8988247076000000319', status: data.status ?? 'AVAILABLE', lastProviderCheckedAt: data.lastProviderCheckedAt }));
+    return {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'inv-1', iccid: '8988247076000000319', status: 'AVAILABLE', assignedOrderId: null }),
+        update,
+      },
+    } as unknown as PrismaService;
+  }
+
+  it('keeps an unassigned profile available when Transatel reports a safe stock state', async () => {
+    const prisma = reconciliationPrisma();
+    const connectivity = { getEsimDetails: vi.fn().mockResolvedValue({ subscriptionId: '8988247076000000319', status: 'available' }) } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+    const result = await inventory.reconcileProviderProfile('inv-1');
+    expect(result).toMatchObject({ localStatus: 'AVAILABLE', providerStatus: 'available', inSync: true });
+    expect(prisma.esimInventory.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.not.objectContaining({ status: 'QUARANTINED' }) }));
+  });
+
+  it('quarantines unassigned inventory that Transatel reports as already downloaded', async () => {
+    const prisma = reconciliationPrisma();
+    const connectivity = { getEsimDetails: vi.fn().mockResolvedValue({ subscriptionId: '8988247076000000319', status: 'downloaded' }) } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+    const result = await inventory.reconcileProviderProfile('inv-1');
+    expect(result).toMatchObject({ localStatus: 'QUARANTINED', providerStatus: 'downloaded', inSync: false });
+    expect(prisma.esimInventory.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'QUARANTINED' }) }));
+  });
+});

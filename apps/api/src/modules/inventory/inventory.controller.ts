@@ -47,4 +47,9 @@ export class InventoryController {
     requireRole(req, [UserRole.SUPER_ADMIN]);
     return this.inventory.rejectBatch(id, req.user!.id, body.reason);
   }
+  @Post('profiles/:id/reconcile')
+  reconcileProfile(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.inventory.reconcileProviderProfile(id);
+  }
 }

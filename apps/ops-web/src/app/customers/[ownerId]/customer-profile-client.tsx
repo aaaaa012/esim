@@ -18,7 +18,7 @@ type Esim = {
   status: string;
   activatedAt?: string;
   expiresAt?: string;
-  usage?: { usedMb: number; totalMb: number; lastCheckedAt: string };
+  usage?: { usedMb: number; totalMb: number; remainingMb: number; lastCheckedAt: string };
 };
 type Order = {
   id: string;
@@ -207,6 +207,9 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                                 </div>
                                 <p className="text-xs text-muted-foreground">
                                   {used?.toLocaleString() ?? 0} / {total?.toLocaleString() ?? "?"} MB
+                                </p>
+                                <p className="text-xs font-medium text-foreground">
+                                  {usage.remainingMb.toLocaleString()} MB remaining
                                 </p>
                               </div>
                             ) : (

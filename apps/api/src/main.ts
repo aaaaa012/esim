@@ -52,7 +52,7 @@ async function bootstrap() {
 }
 
 async function bootOnce() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true, rawBody: true });
   app.use(helmet({ referrerPolicy: { policy: 'no-referrer' } }));
   app.enableCors({ origin: [process.env.CUSTOMER_WEB_URL ?? 'http://localhost:3000', process.env.OPS_WEB_URL ?? 'http://localhost:3001'], credentials: true });
   app.set('trust proxy', trustProxySetting());

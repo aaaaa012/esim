@@ -45,6 +45,7 @@ function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unkn
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
     save: vi.fn().mockResolvedValue(undefined),
+    provisioningAttempt: vi.fn().mockResolvedValue(undefined),
   } as unknown as OrdersPersistenceService;
   return new OrdersService(
     connectivity as unknown as ConnectivityService,
@@ -58,6 +59,35 @@ function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unkn
     {} as unknown as QrPdfService,
   );
 }
+
+describe('OrdersService asynchronous provisioning', () => {
+  it('keeps an accepted delayed preload in PROVISIONING without retrying or releasing inventory', async () => {
+    const order = readyOrder({
+      id: 'p-1',
+      status: OrderStatus.PROVISIONING,
+      traveler: { title: 'MS', firstName: 'Jane', surname: 'Doe', dateOfBirth: '1990-01-01', nationality: 'NP', email: 'jane@example.com', mobile: '9779800000000', city: 'Kathmandu', countryOfResidence: 'NP', passportNumber: 'P1234567', passportExpiryDate: '2030-01-01' },
+    });
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    delete order.providerStatus;
+    const connectivity = {
+      provision: vi.fn().mockResolvedValue({ providerSubscriptionId: 'sub-accepted', status: 'DELAYED' }),
+      descriptor: vi.fn().mockReturnValue({ provider: 'TRANSATEL', capabilities: {} }),
+    } as unknown as ConnectivityService;
+    const inventory = {
+      profileForOrder: vi.fn().mockResolvedValue({ id: 'inv-1', eid: 'eid-1', iccid: '8988247076000000319' }),
+      release: vi.fn(),
+    } as unknown as InventoryService;
+    const orders = ordersService([order], connectivity, inventory);
+    await orders.refreshFromPersistence();
+
+    await orders.processProvisioning('p-1', 1, false);
+
+    expect(orders.get('p-1')).toMatchObject({ status: OrderStatus.PROVISIONING, providerSubscriptionId: 'sub-accepted', providerStatus: 'PRELOADED' });
+    expect(inventory.release).not.toHaveBeenCalled();
+    expect(connectivity.provision).toHaveBeenCalledOnce();
+  });
+});
 
 describe('OrdersService.reconcileStaleActivationOrders', () => {
   it('recovers a stale QR_READY order when the provider now reports activation details', async () => {

@@ -17,12 +17,17 @@ function prismaStub(overrides: Record<string, unknown> = {}) {
   return {
     enabled: true,
     plan: { findUnique: vi.fn() },
-    esimInventory: { findFirst: vi.fn(), findUnique: vi.fn() },
+    esimInventory: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn().mockResolvedValue({}) },
     subscription: { findUnique: vi.fn() },
     customerEsim: { findUnique: vi.fn() },
-    order: { findUnique: vi.fn() },
+    order: { findUnique: vi.fn(), update: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     integrationLog: { create: vi.fn() },
-    $transaction: vi.fn(),
+    provisioningOperation: {
+      upsert: vi.fn().mockResolvedValue({ state: 'CREATED' }),
+      update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
+    $transaction: vi.fn(async (operations: Promise<unknown>[]) => Promise.all(operations)),
     ...overrides,
   } as unknown as PrismaService;
 }
@@ -77,6 +82,18 @@ describe('TransatelProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('coalesces concurrent token refreshes into one provider request', async () => {
+    const provider = new TransatelProvider(prismaStub());
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fetchMock.mockImplementation(async () => { await gate; return jsonResponse({ access_token: 'token-1', expires_in: 3600 }); });
+    const first = provider['getAccessToken']();
+    const second = provider['getAccessToken']();
+    release();
+    expect(await Promise.all([first, second])).toEqual(['token-1', 'token-1']);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('rejects authentication when credentials are missing', async () => {
     delete process.env.TRANSATEL_CLIENT_SECRET;
     const provider = new TransatelProvider(prismaStub());
@@ -102,6 +119,7 @@ describe('TransatelProvider', () => {
     expect(orderCall).toBeDefined();
     const payload = JSON.parse(String(orderCall![1].body));
     expect(payload).toMatchObject({ bind: { msisdn: '8988247076000000319' }, source: 'api', orderType: 'preload', mvnoRef: 'visacompass-test', product: { productId: 'TRVL-5GB-15D' }, payment: { provider: 'customer' }, transactionReference: 'order-1' });
+    expect(orderCall![1].headers?.['Idempotency-Key']).toBe('transatel:preload:order-1');
     expect(prisma.esimInventory.findFirst).toHaveBeenCalledWith({ where: { OR: [{ assignedOrderId: 'order-1' }, { eid: '890490320000000000000000000001' }] } });
   });
 
@@ -133,6 +151,41 @@ describe('TransatelProvider', () => {
     });
     const result = await provider.provision({ orderId: 'order-1', planId: 'plan-1', eid: '890490320000000000000000000001', traveler });
     expect(result).toEqual({ providerSubscriptionId: 'sub-123', status: 'DELAYED' });
+    expect(prisma.order.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'order-1' },
+      data: { providerSubscriptionId: 'sub-123', providerStatus: 'PRELOADED' },
+    }));
+    expect(prisma.esimInventory.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ providerSubscriptionId: 'sub-123', providerStatus: 'PRELOADED' }),
+    }));
+  });
+
+  it('resumes an accepted preload without submitting a duplicate command', async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi.fn().mockResolvedValue({ id: 'plan-1', providerPlanId: 'TRVL-5GB-15D' });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({ id: 'inv-1', iccid: '8988247076000000319', eid: '890490320000000000000000000001' });
+    prisma.order.findUnique = vi.fn().mockResolvedValue({ providerSubscriptionId: 'sub-existing' });
+    const provider = new TransatelProvider(prisma);
+    route({
+      '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
+      '/sim-management/sims/api/esims/sim-serial/8988247076000000319': () => jsonResponse({ simSerial: '8988247076000000319', status: 'allocated' }),
+    });
+    const result = await provider.provision({ orderId: 'order-1', planId: 'plan-1', eid: '890490320000000000000000000001', traveler });
+    expect(result).toEqual({ providerSubscriptionId: 'sub-existing', status: 'DELAYED' });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/api/orders/products'))).toBe(false);
+  });
+
+  it('does not replay a preload whose outcome is ambiguous', async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi.fn().mockResolvedValue({ id: 'plan-1', providerPlanId: 'TRVL-5GB-15D' });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({ id: 'inv-1', iccid: '8988247076000000319', eid: '890490320000000000000000000001' });
+    prisma.order.findUnique = vi.fn().mockResolvedValue({ providerSubscriptionId: null, providerStatus: 'SUBMITTING' });
+    const provider = new TransatelProvider(prisma);
+
+    const error = await provider.provision({ orderId: 'order-1', planId: 'plan-1', eid: '890490320000000000000000000001', traveler }).catch((value: unknown) => value);
+
+    expect((error as { code?: string }).code).toBe('CONNECTIVITY_UNAVAILABLE');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('normalizes KB balances into used and total MB', async () => {
@@ -445,6 +498,7 @@ describe('TransatelProvider', () => {
 
   it('reports health based on the configured credentials', async () => {
     const provider = new TransatelProvider(prismaStub());
+    route({ '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }) });
     expect((await provider.health()).ok).toBe(true);
     delete process.env.TRANSATEL_MVNO_REF;
     expect((await provider.health()).ok).toBe(false);

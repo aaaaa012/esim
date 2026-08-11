@@ -11,18 +11,9 @@ export class ConnectivityService implements OnModuleInit {
   private selected() { return process.env.CONNECTIVITY_PROVIDER === 'transatel' ? this.transatel : this.auriga; }
 
   async onModuleInit() {
-    if (process.env.TRANSATEL_WEBHOOK_TARGET_URL) {
-      try {
-        const result = await this.transatel.ensureWebhook();
-        this.logger.log(
-          `Transatel webhook ${result.registered ? 'registered' : 'verified'}: ${result.targetUrl} (${result.events.length} event type(s))`,
-        );
-      } catch (error) {
-        this.logger.warn(
-          `Transatel webhook registration failed at startup: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
-      }
-    }
+    // Transatel deprecated self-service webhook registration in February 2026.
+    // Registration remains an explicit operations action for legacy tenants;
+    // application startup must not depend on that control-plane endpoint.
     if (process.env.TRANSATEL_CATALOG_SYNC_ON_STARTUP === 'true') {
       try {
         const result = await this.transatel.syncCatalog();
