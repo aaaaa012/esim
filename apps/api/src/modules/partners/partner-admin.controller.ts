@@ -82,6 +82,11 @@ export class PartnerAdminController {
     return this.partners.list();
   }
 
+  @Get(":id")
+  detail(@Param("id") id: string) {
+    return this.partners.detail(id);
+  }
+
   @Post()
   create(@Body() body: unknown, @Req() request: AuthenticatedRequest) {
     return this.partners.create(partnerSchema.parse(body), request.user!.id);
@@ -191,13 +196,34 @@ export class PartnerAdminController {
     return this.partners.createWebhook(id, input, request.user!.id);
   }
 
+  @Patch(":id/webhooks/:webhookId")
+  updateWebhook(
+    @Param("id") id: string,
+    @Param("webhookId") webhookId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const input = z.object({ active: z.boolean() }).parse(body);
+    return this.partners.updateWebhook(
+      id,
+      webhookId,
+      input.active,
+      request.user!.id,
+    );
+  }
+
   @Get(":id/webhook-deliveries")
   deliveries(@Param("id") id: string) {
     return this.partners.deliveries(id);
   }
 
   @Post(":id/webhook-deliveries/:deliveryId/replay")
-  async replay(@Param("deliveryId") deliveryId: string) {
+  async replay(
+    @Param("id") id: string,
+    @Param("deliveryId") deliveryId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    await this.partners.assertReplayOwnership(id, deliveryId, request.user!.id);
     return this.partnerWebhooks.replay(deliveryId);
   }
 
@@ -212,7 +238,17 @@ export class PartnerAdminController {
     @Body() body: unknown,
     @Req() request: AuthenticatedRequest,
   ) {
-    const input = z.object({ status: z.enum(PartnerRefundStatus) }).parse(body);
-    return this.partners.decideRefund(id, input.status, request.user!.id);
+    const input = z
+      .object({
+        status: z.enum(PartnerRefundStatus),
+        reason: z.string().trim().min(4).max(500),
+      })
+      .parse(body);
+    return this.partners.decideRefund(
+      id,
+      input.status,
+      input.reason,
+      request.user!.id,
+    );
   }
 }

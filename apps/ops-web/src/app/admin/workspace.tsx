@@ -1000,46 +1000,14 @@ export default function AdminWorkspace() {
                   </Button>
                 </div>
               </div>
-              {issuedPartnerKey && (
-                <section className="m-6 space-y-3 rounded-lg border border-dashed p-4" role="status">
-                  <div>
-                    <p className="text-sm font-medium">New key for {issuedPartnerKey.partnerName}</p>
-                    <p className="text-xs text-muted-foreground">
-                      This secret is shown once. Store it securely, test it, then dismiss this message.
-                    </p>
-                  </div>
-                  <code className="block break-all rounded-lg bg-muted px-3 py-2 text-xs">
-                    {issuedPartnerKey.apiKey}
-                  </code>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(issuedPartnerKey.apiKey);
-                          toast.success("The displayed API key was copied.");
-                        } catch {
-                          toast.error("Clipboard permission was denied. Select and copy the displayed key manually.");
-                        }
-                      }}
-                    >
-                      Copy key
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setIssuedPartnerKey(null)}>
-                      Dismiss
-                    </Button>
-                  </div>
-                </section>
-              )}
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Partner</TableHead>
                     <TableHead>Settlement account</TableHead>
-                    <TableHead>Activity</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Credentials</TableHead>
+                    <TableHead>Activity</TableHead>
+                    <TableHead className="text-right">Workspace</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1058,55 +1026,18 @@ export default function AdminWorkspace() {
                         <p className="text-xs text-muted-foreground">Prepaid available balance</p>
                       </TableCell>
                       <TableCell>
+                        <StatusBadge label={partner.status} />
+                      </TableCell>
+                      <TableCell>
                         <p>{partner._count.orders} orders</p>
-                        <Button asChild variant="link" size="sm" className="h-auto p-0 text-xs">
+                        <p className="text-xs text-muted-foreground">
+                          {partner.credentials.filter((key) => key.status === "ACTIVE").length} active credential(s)
+                        </p>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button asChild variant="outline" size="sm">
                           <Link href={`/admin/partners/${partner.id}`}>Open workspace</Link>
                         </Button>
-                      </TableCell>
-                      <TableCell>
-                        <Select
-                          disabled={busy === partner.id}
-                          value={partner.status}
-                          onValueChange={(value) => void changePartnerStatus(partner, value as Partner["status"])}
-                        >
-                          <SelectTrigger className="w-32">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="PENDING">PENDING</SelectItem>
-                            <SelectItem value="ACTIVE">ACTIVE</SelectItem>
-                            <SelectItem value="SUSPENDED">SUSPENDED</SelectItem>
-                            <SelectItem value="DISABLED">DISABLED</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col items-start gap-1.5">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy === `key-${partner.id}`}
-                            onClick={() => void issuePartnerKey(partner)}
-                          >
-                            {busy === `key-${partner.id}` ? <Spinner /> : <KeyRound className="size-4" />}
-                            Issue key
-                          </Button>
-                          <span className="text-xs text-muted-foreground">
-                            {partner.credentials.filter((creditKey) => creditKey.status === "ACTIVE").length} active
-                          </span>
-                          {partner.credentials
-                            .filter((key) => key.status === "ACTIVE")
-                            .map((key) => (
-                              <button
-                                key={key.id}
-                                className="text-xs text-destructive underline-offset-2 hover:underline disabled:opacity-50"
-                                disabled={busy === `revoke-${key.id}`}
-                                onClick={() => void revokePartnerKey(partner, key.id)}
-                              >
-                                Revoke {key.keyPrefix}
-                              </button>
-                            ))}
-                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

@@ -34,8 +34,8 @@ export class PartnerAdminService {
     private readonly crypto: CryptoService,
   ) {}
 
-  list() {
-    return this.prisma.partner.findMany({
+  async list() {
+    const partners = await this.prisma.partner.findMany({
       include: {
         account: true,
         credentials: { orderBy: { createdAt: "desc" } },
@@ -44,6 +44,39 @@ export class PartnerAdminService {
       },
       orderBy: { createdAt: "desc" },
     });
+    return partners.map((partner) => this.sanitizePartner(partner));
+  }
+
+  async detail(id: string) {
+    const partner = await this.prisma.partner.findUnique({
+      where: { id },
+      include: {
+        account: true,
+        credentials: { orderBy: { createdAt: "desc" } },
+        webhooks: {
+          select: {
+            id: true,
+            url: true,
+            eventTypes: true,
+            active: true,
+            createdAt: true,
+            updatedAt: true,
+            _count: { select: { deliveries: true } },
+          },
+          orderBy: { createdAt: "desc" },
+        },
+        _count: {
+          select: {
+            orders: true,
+            customers: true,
+            refundRequests: true,
+            credentials: true,
+          },
+        },
+      },
+    });
+    if (!partner) throw new NotFoundException("Partner not found");
+    return this.sanitizePartner(partner);
   }
 
   async create(
@@ -448,6 +481,39 @@ export class PartnerAdminService {
     });
   }
 
+  async updateWebhook(
+    partnerId: string,
+    webhookId: string,
+    active: boolean,
+    actorClerkId: string,
+  ) {
+    const endpoint = await this.prisma.partnerWebhookEndpoint.findFirst({
+      where: { id: webhookId, partnerId },
+    });
+    if (!endpoint) throw new NotFoundException("Partner webhook not found");
+    const updated = await this.prisma.partnerWebhookEndpoint.update({
+      where: { id: webhookId },
+      data: { active },
+      select: {
+        id: true,
+        url: true,
+        eventTypes: true,
+        active: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    await this.audit(
+      this.prisma,
+      actorClerkId,
+      "PartnerWebhookEndpoint",
+      webhookId,
+      active ? "ENABLED" : "DISABLED",
+      { partnerId, previousActive: endpoint.active, active },
+    );
+    return updated;
+  }
+
   deliveries(partnerId: string) {
     return this.prisma.partnerWebhookDelivery.findMany({
       where: { event: { partnerId } },
@@ -455,6 +521,26 @@ export class PartnerAdminService {
       orderBy: { createdAt: "desc" },
       take: 500,
     });
+  }
+
+  async assertReplayOwnership(
+    partnerId: string,
+    deliveryId: string,
+    actorClerkId: string,
+  ) {
+    const delivery = await this.prisma.partnerWebhookDelivery.findFirst({
+      where: { id: deliveryId, event: { partnerId } },
+      select: { id: true, status: true },
+    });
+    if (!delivery) throw new NotFoundException("Partner webhook delivery not found");
+    await this.audit(
+      this.prisma,
+      actorClerkId,
+      "PartnerWebhookDelivery",
+      deliveryId,
+      "REPLAY_REQUESTED",
+      { partnerId, previousStatus: delivery.status },
+    );
   }
 
   refunds(partnerId?: string) {
@@ -468,6 +554,7 @@ export class PartnerAdminService {
   async decideRefund(
     id: string,
     status: PartnerRefundStatus,
+    reason: string,
     actorClerkId: string,
   ) {
     if (
@@ -548,7 +635,7 @@ export class PartnerAdminService {
         "PartnerRefundRequest",
         id,
         "DECIDED",
-        { status },
+        { status, reason },
       );
       return updated;
     });
@@ -559,6 +646,21 @@ export class PartnerAdminService {
       if (!partner) throw new NotFoundException("Partner not found");
       return partner;
     });
+  }
+
+  private sanitizePartner<T extends { credentials?: Array<Record<string, unknown>> }>(
+    partner: T,
+  ) {
+    return {
+      ...partner,
+      ...(partner.credentials
+        ? {
+            credentials: partner.credentials.map(
+              ({ secretHash: _secretHash, ...credential }) => credential,
+            ),
+          }
+        : {}),
+    };
   }
 
   private actor(clerkId: string) {
