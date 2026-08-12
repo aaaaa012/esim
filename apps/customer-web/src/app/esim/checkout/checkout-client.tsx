@@ -477,6 +477,11 @@ export default function CheckoutClient({
         method: "PATCH",
         body: JSON.stringify(body),
       });
+      setOrder((o) =>
+        o && ["FAILED", "PARTIAL"].includes(o.passportVerification?.status ?? "")
+          ? (({ passportVerification: _drop, ...rest }) => rest)(o)
+          : o,
+      );
       setStep(3);
     });
   const saveDocuments = () =>
@@ -902,6 +907,7 @@ export default function CheckoutClient({
                         result={order.passportVerification}
                         busy={verifyingPassport}
                         onRecheck={() => void verifyPassport()}
+                        onEdit={() => setStep(2)}
                       />
                     )}
                     {order &&
@@ -1047,10 +1053,12 @@ function PassportCheck({
   result,
   busy,
   onRecheck,
+  onEdit,
 }: {
   result: Order["passportVerification"];
   busy: boolean;
   onRecheck: () => void;
+  onEdit?: () => void;
 }) {
   const status = result?.status;
   if (status === "VERIFIED") {
@@ -1099,9 +1107,15 @@ function PassportCheck({
           <b>Passport number matched</b>
           <small>
             We found your passport number but couldn&apos;t confirm the name or
-            dates. Try a clearer photo, then re-check.
+            dates. Check your traveller details or try a clearer photo, then
+            re-check.
           </small>
         </span>
+        {onEdit && (
+          <button className="button secondary" onClick={onEdit}>
+            Edit traveller details
+          </button>
+        )}
         <button className="button secondary" onClick={onRecheck}>
           Re-check
         </button>
@@ -1115,10 +1129,15 @@ function PassportCheck({
         <span>
           <b>Passport verification failed</b>
           <small>
-            Your passport number didn&apos;t match your traveller details.
+            Your passport didn&apos;t match the traveller details you entered.
             Review your details, then re-check before paying.
           </small>
         </span>
+        {onEdit && (
+          <button className="button secondary" onClick={onEdit}>
+            Edit traveller details
+          </button>
+        )}
         <button className="button secondary" onClick={onRecheck}>
           Re-check
         </button>

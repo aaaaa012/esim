@@ -1,52 +1,63 @@
 :root {
-  --primary: #3b5bdb;
-  --primary-hover: #2f4cc0;
-  --primary-soft: #eef1fd;
-  --primary-ring: rgba(59, 91, 219, 0.35);
+  --primary: #4f46e5;
+  --primary-strong: #4338ca;
+  --primary-hover: #4338ca;
+  --primary-soft: #eef2ff;
+  --primary-ring: rgba(79, 70, 229, 0.3);
   --on-primary: #ffffff;
 
   --accent: #06b6d4;
   --accent-strong: #0e7490;
   --accent-soft: #ecfeff;
+  --violet: #8b5cf6;
+  --violet-soft: #f5f3ff;
 
-  --bg: #f8fafc;
+  --gradient-brand: linear-gradient(135deg, #4338ca 0%, #4f46e5 45%, #06b6d4 100%);
+  --gradient-brand-strong: linear-gradient(135deg, #312e81 0%, #4f46e5 55%, #0891b2 100%);
+  --gradient-text: linear-gradient(120deg, #312e81 0%, #4f46e5 50%, #0e7490 100%);
+
+  --bg: #f5f7fc;
   --surface: #ffffff;
-  --surface-2: #f1f5f9;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
+  --surface-2: #eef2f8;
+  --border: #e5e9f3;
+  --border-strong: #ccd5e6;
 
-  --text: #0f172a;
-  --text-2: #475569;
-  --text-3: #64748b;
+  --text: #0b1220;
+  --text-2: #41506e;
+  --text-3: #6b7894;
 
-  --success: #059669;
-  --success-strong: #047857;
-  --success-soft: #ecfdf5;
+  --success: #10a37f;
+  --success-strong: #0d8a6b;
+  --success-soft: #ecfdf6;
   --info: #1d4ed8;
   --info-soft: #eff6ff;
   --warning: #b45309;
-  --warning-soft: #fffbeb;
-  --danger: #b91c1c;
+  --warning-soft: #fff8e6;
+  --danger: #dc2626;
   --danger-soft: #fef2f2;
 
-  --navy-panel: #0b1c33;
+  --navy-panel: #0a1430;
+  --navy-panel-2: #101d3f;
   --navy-panel-text: #ffffff;
-  --navy-panel-sub: #b7c6dd;
+  --navy-panel-sub: #b9c7e3;
 
-  --shadow-xs: 0 1px 2px rgba(11, 28, 51, 0.05);
-  --shadow-sm: 0 1px 2px rgba(11, 28, 51, 0.06), 0 2px 10px rgba(11, 28, 51, 0.05);
-  --shadow-md: 0 12px 32px -8px rgba(11, 28, 51, 0.16);
-  --shadow-lg: 0 28px 60px -16px rgba(11, 28, 51, 0.25);
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05), 0 4px 16px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 14px 38px -10px rgba(15, 23, 42, 0.18);
+  --shadow-lg: 0 32px 74px -20px rgba(15, 23, 42, 0.3);
+  --shadow-glow: 0 12px 34px -10px var(--primary-ring);
 
-  --radius-sm: 8px;
-  --radius: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 22px;
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 26px;
+  --radius-full: 999px;
 
-  --hero-bg: radial-gradient(circle at 80% 12%, rgba(34, 211, 238, 0.18), transparent 34%),
-    radial-gradient(circle at 12% 88%, rgba(59, 91, 219, 0.1), transparent 42%),
-    linear-gradient(180deg, #ffffff 0%, #f4f8ff 100%);
-  --screen-bg: linear-gradient(168deg, #ecfeff 0%, #ffffff 78%);
+  --hero-bg: radial-gradient(circle at 84% 12%, rgba(6, 182, 212, 0.16), transparent 36%),
+    radial-gradient(circle at 8% 92%, rgba(139, 92, 246, 0.16), transparent 44%),
+    radial-gradient(circle at 45% 30%, rgba(79, 70, 229, 0.1), transparent 52%),
+    linear-gradient(180deg, #ffffff 0%, #f1f4fc 100%);
+  --screen-bg: linear-gradient(170deg, #e0f2fe 0%, #eef2ff 52%, #ffffff 100%);
 
   color-scheme: light;
 }
@@ -61,13 +72,36 @@ html {
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(139, 92, 246, 0.05), transparent 34%),
+    radial-gradient(circle at 0% 100%, rgba(6, 182, 212, 0.05), transparent 36%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-inter), Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-size: 16px;
-  line-height: 1.5;
+  line-height: 1.55;
+  letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+.brand,
+.navlinks,
+.nav-menu a,
+.nav-menu .nav-menu-item,
+.button,
+.eyebrow,
+.step-number,
+.status-chip,
+.badge,
+.summary-label {
+  font-family: var(--font-display), Inter, ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.02em;
 }
 
 a {
@@ -107,13 +141,15 @@ button {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
   border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02), 0 10px 30px -18px rgba(15, 23, 42, 0.12);
 }
 
 .header-inner {
-  height: 72px;
+  height: 76px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -123,9 +159,9 @@ button {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   font-weight: 800;
-  font-size: 17px;
+  font-size: 17.5px;
   letter-spacing: -0.02em;
   color: var(--text);
 }
@@ -133,12 +169,12 @@ button {
 .mark {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
   color: #ffffff;
-  background: linear-gradient(140deg, #1e3a8a, var(--accent));
-  box-shadow: var(--shadow-sm);
+  background: var(--gradient-brand);
+  box-shadow: var(--shadow-glow);
 }
 
 .navlinks {
@@ -241,20 +277,23 @@ button {
   gap: 9px;
   border: 0;
   border-radius: var(--radius);
-  padding: 13px 22px;
+  padding: 14px 24px;
   font-size: 15px;
   font-weight: 700;
   line-height: 1;
   cursor: pointer;
-  background: var(--primary);
+  background: var(--gradient-brand);
+  background-size: 130% 130%;
   color: var(--on-primary);
-  box-shadow: 0 8px 20px -6px var(--primary-ring);
-  transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  box-shadow: 0 10px 24px -8px var(--primary-ring);
+  transition: background-position 0.25s ease, transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
   white-space: nowrap;
 }
 
 .button:hover {
-  background: var(--primary-hover);
+  background-position: 100% 50%;
+  filter: saturate(1.08);
+  box-shadow: 0 14px 30px -8px var(--primary-ring);
 }
 
 .button:active {
@@ -270,12 +309,13 @@ button {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  box-shadow: none;
+  box-shadow: 0 4px 14px -8px rgba(15, 23, 42, 0.1);
 }
 
 .button.secondary:hover {
   background: var(--surface-2);
   border-color: var(--text-3);
+  box-shadow: 0 8px 20px -10px rgba(15, 23, 42, 0.16);
 }
 
 .button.ghost {
@@ -301,26 +341,33 @@ button {
   display: inline-flex;
   gap: 8px;
   align-items: center;
-  padding: 7px 12px;
+  padding: 7px 13px;
   border-radius: var(--radius-full, 999px);
-  background: var(--accent-soft);
+  background: linear-gradient(135deg, var(--accent-soft), var(--primary-soft));
   color: var(--accent-strong);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
 /* ---------- Cards ---------- */
 
 .card {
   position: relative;
-  padding: 26px;
+  padding: 28px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  transition: box-shadow 0.22s ease, transform 0.22s ease, border-color 0.22s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  box-shadow: var(--shadow-md);
 }
 
 /* ---------- Status ---------- */
@@ -410,7 +457,7 @@ button {
 .form-grid select,
 .replacement-control input {
   width: 100%;
-  height: 46px;
+  height: 48px;
   padding: 0 14px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -541,7 +588,7 @@ button {
 .account-head {
   display: flex;
   justify-content: space-between;
-  align-items: end;
+  align-items: flex-end;
   gap: 24px;
   margin-bottom: 36px;
 }
@@ -572,11 +619,11 @@ button {
 /* ---------- Footer ---------- */
 
 .footer {
-  padding: 38px 0;
+  padding: 42px 0;
   border-top: 1px solid var(--border);
   color: var(--text-3);
   font-size: 13px;
-  background: var(--surface);
+  background: linear-gradient(180deg, var(--surface), var(--bg));
 }
 
 .footer .shell {

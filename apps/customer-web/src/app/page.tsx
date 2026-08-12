@@ -19,7 +19,7 @@ export default function Home() {
             <h1>
               Land connected.
               <br />
-              Travel freely.
+              Travel <em>freely.</em>
             </h1>
             <p>
               Get secure travel data before you fly. No airport queues, no physical SIM swaps—just scan your Visa
@@ -34,21 +34,54 @@ export default function Home() {
               </Link>
             </div>
           </div>
-          <div className="phone">
-            <div className="screen">
-              <div className="screen-head">
-                <b>My eSIM</b>
-                <span className="signal">READY</span>
+          <div className="phone-stage">
+            <div className="phone">
+              <div className="screen">
+                <div className="screen-head">
+                  <div className="app-ident">
+                    <Wifi size={15} />
+                    <b>My eSIM</b>
+                  </div>
+                  <span className="signal">
+                    <i />READY
+                  </span>
+                </div>
+                <div className="plan-chip">
+                  <span className="flag">🇦🇪</span>
+                  <span className="pc-txt">
+                    <small>Active plan</small>
+                    <b>UAE Essential · 5 GB</b>
+                  </span>
+                  <span className="pc-meta">
+                    <b>15 days</b>
+                    <small>valid</small>
+                  </span>
+                </div>
+                <div className="qr" />
+                <div className="qr-caption">Scan to install your eSIM</div>
+                <button className="install-pill" disabled>
+                  <QrCode size={15} />
+                  Install now
+                </button>
               </div>
-              <div className="qr" />
-              <div className="stat">
-                <b>UAE Essential · 5 GB</b>
-                <small>Valid for 15 days from first use</small>
-              </div>
-              <div className="stat">
-                <b>Ready to install</b>
-                <small>Scan once from your device settings</small>
-              </div>
+            </div>
+            <div className="float-chip float-a">
+              <span className="fc-ic">
+                <Zap size={15} />
+              </span>
+              <span className="fc-txt">
+                <em>Instant</em>
+                <small>QR in minutes</small>
+              </span>
+            </div>
+            <div className="float-chip float-b">
+              <span className="fc-ic">
+                <ShieldCheck size={15} />
+              </span>
+              <span className="fc-txt">
+                <em>NPR pricing</em>
+                <small>No hidden fees</small>
+              </span>
             </div>
           </div>
         </div>

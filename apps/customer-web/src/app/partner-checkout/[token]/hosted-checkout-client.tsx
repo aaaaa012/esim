@@ -502,9 +502,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       ) : verification === null ? (
                         <PassportCheck status={undefined} busy={verifying} onRecheck={() => void verifyPassport()} />
                       ) : (
-                        <PassportCheck status={verification.status} busy={false} onRecheck={() => void verifyPassport()} />
-                      )
-                    )}
+                        <PassportCheck status={verification.status} busy={false} onRecheck={() => void verifyPassport()} onEdit={() => setStep(2)} />
+                      ))}
                     {isTopUp && (
                       <p className="form-note">
                         This is a data top-up for your existing eSIM. No traveller details or new documents are required.
@@ -555,7 +554,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           onClick={(event) => {
             if (verifyingDoc === "in-progress") return;
             if (event.target !== event.currentTarget) return;
-            if (verifyingDoc === "failed") setStep(3);
+            if (verifyingDoc === "failed") setStep(2);
             setVerifyingDoc(null);
           }}
         >
@@ -582,21 +581,38 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               <>
                 <AlertTriangle className="verify-modal-icon" size={38} />
                 <b id="verify-modal-title">We could not verify your passport</b>
-                <p>Review the documents you uploaded and try again, or use a clearer photo of your passport.</p>
+                <p>Your passport doesn&apos;t match the traveller details you entered. Review your details first, or try a clearer photo of your passport.</p>
               </>
             )}
             {verifyingDoc !== "in-progress" && (
               <div className="form-actions">
-                <button
-                  className="button primary"
-                  autoFocus
-                  onClick={() => {
-                    if (verifyingDoc === "failed") setStep(3);
-                    setVerifyingDoc(null);
-                  }}
-                >
-                  {verifyingDoc === "done" ? "Continue" : "Back to documents"}
-                </button>
+                {verifyingDoc === "failed" ? (
+                  <>
+                    <button
+                      className="button secondary"
+                      autoFocus
+                      onClick={() => {
+                        setStep(2);
+                        setVerifyingDoc(null);
+                      }}
+                    >
+                      Edit traveller details
+                    </button>
+                    <button
+                      className="button primary"
+                      onClick={() => {
+                        setStep(3);
+                        setVerifyingDoc(null);
+                      }}
+                    >
+                      Back to documents
+                    </button>
+                  </>
+                ) : (
+                  <button className="button primary" autoFocus onClick={() => setVerifyingDoc(null)}>
+                    Continue
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -632,7 +648,7 @@ function Nav({ back, busy, next, backHidden }: { back: () => void; busy: boolean
     </div>
   );
 }
-function PassportCheck({ status, busy, onRecheck }: { status: string | undefined; busy: boolean; onRecheck: () => void }) {
+function PassportCheck({ status, busy, onRecheck, onEdit }: { status: string | undefined; busy: boolean; onRecheck: () => void; onEdit?: () => void }) {
   if (status === "VERIFIED")
     return (
       <div className="passport-check verified"><CheckCircle2 size={20} /><span><b>Passport verified</b><small>Your passport matches your traveller details.</small></span></div>
@@ -647,11 +663,11 @@ function PassportCheck({ status, busy, onRecheck }: { status: string | undefined
     );
   if (status === "PARTIAL")
     return (
-      <div className="passport-check warning"><AlertTriangle size={20} /><span><b>Partial match</b><small>Your passport number matched, but not all details. Re-check with a clearer photo.</small></span><button className="button secondary" onClick={onRecheck}>Re-check</button></div>
+      <div className="passport-check warning"><AlertTriangle size={20} /><span><b>Partial match</b><small>Your passport number matched, but not all details. Check your traveller details or re-check with a clearer photo.</small></span>{onEdit && <button className="button secondary" onClick={onEdit}>Edit traveller details</button>}<button className="button secondary" onClick={onRecheck}>Re-check</button></div>
     );
   if (status === "FAILED")
     return (
-      <div className="passport-check failed"><AlertTriangle size={20} /><span><b>Passport doesn&apos;t match</b><small>We couldn&apos;t verify your details from the uploaded passport. Review your documents and re-check.</small></span><button className="button secondary" onClick={onRecheck}>Re-check</button></div>
+      <div className="passport-check failed"><AlertTriangle size={20} /><span><b>Passport doesn&apos;t match</b><small>We couldn&apos;t verify your details from the uploaded passport. Review your traveller details, then re-check.</small></span>{onEdit && <button className="button secondary" onClick={onEdit}>Edit traveller details</button>}<button className="button secondary" onClick={onRecheck}>Re-check</button></div>
     );
   return (
     <div className="passport-check"><ShieldCheck size={20} /><span><b>Passport check</b><small>We read your passport and compare it with your traveller details before completion.</small></span>
