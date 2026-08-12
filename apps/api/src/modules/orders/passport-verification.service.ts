@@ -96,6 +96,9 @@ export class PassportVerificationService implements OnModuleDestroy {
     if (!order.traveler) {
       return { status: 'NOT_READY', matchedFields: [], checkedAt: new Date().toISOString(), method: 'ocr-error', detail: 'Traveller details are required before verification' };
     }
+    if (process.env.PASSPORT_VERIFY_OVERRIDE === 'SKIP') {
+      return { status: 'SKIPPED', matchedFields: [], checkedAt: new Date().toISOString(), method: 'simulator', detail: 'Passport verification bypassed by ops override' };
+    }
     if (!this.storage.isConfigured()) {
       return { status: 'SKIPPED', matchedFields: [], checkedAt: new Date().toISOString(), method: 'simulator', detail: 'Document storage is not configured (local simulator)' };
     }

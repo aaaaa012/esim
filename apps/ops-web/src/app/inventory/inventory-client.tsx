@@ -312,7 +312,7 @@ export default function InventoryClient() {
       .then(async (r) => {
         const v = await r.json();
         if (!r.ok) throw new Error(v.error?.message);
-        setDraftPlans((v.data?.plans ?? []).filter((p: Plan) => p.status === "DRAFT"));
+        setDraftPlans((Array.isArray(v.data) ? v.data : v.data?.plans ?? []).filter((p: Plan) => p.status === "DRAFT"));
       })
       .catch((e) => toast.error(e.message));
   };

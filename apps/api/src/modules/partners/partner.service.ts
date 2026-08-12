@@ -17,6 +17,7 @@ import {
   PartnerQuoteStatus,
   PartnerSettlementMethod,
   PartnerStatus,
+  PartnerIntegrationType,
   Prisma,
 } from "@prisma/client";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -847,6 +848,11 @@ export class PartnerService {
     },
   ) {
     const partner = await this.partner(partnerId);
+    if (partner.integrationType !== PartnerIntegrationType.CHECKOUT_LINK)
+      throw new BadRequestException({
+        code: "INTEGRATION_TYPE_FORBIDDEN",
+        message: "This partner is not approved for hosted checkout links",
+      });
     const plan = await this.prisma.plan.findFirst({
       where: { id: input.planId, status: "ACTIVE", country: { active: true } },
       include: { country: true },
@@ -868,6 +874,11 @@ export class PartnerService {
     // without a customerEsim row) we fall back to a clean new purchase rather
     // than charging a "top-up" that would silently provision a fresh profile.
     const isTopUp = correctCountry && Boolean(topUp?.inventory);
+    // When a top-up was requested but could not be bound, surface the reason to
+    // the client so it can ask the operator to proceed as a new purchase rather
+    // than silently downgrading without any signal.
+    const topUpUnavailable =
+      Boolean(input.topUpMobile) && !isTopUp && topUp !== null;
     const token = randomBytes(24).toString("base64url");
     const sessionId = randomUUID();
     const id = randomUUID();
@@ -947,7 +958,13 @@ await tx.order.create({
             ...(topUp?.traveler ? { subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}` } : {}),
             status: "BOUND",
           }
-        : undefined,
+        : topUpUnavailable
+          ? {
+              mobile: input.topUpMobile,
+              ...(topUp?.traveler ? { subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}` } : {}),
+              status: "UNAVAILABLE",
+            }
+          : undefined,
     };
   }
 

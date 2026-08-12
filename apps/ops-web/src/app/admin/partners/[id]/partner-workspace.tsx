@@ -37,7 +37,7 @@ export default function PartnerWorkspace({ id }: { id: string }) {
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkPlanId, setLinkPlanId] = useState('');
   const [linkMobile, setLinkMobile] = useState('');
-  const [linkResult, setLinkResult] = useState<{ checkoutUrl: string; orderType?: string; topUpMobile?: string } | null>(null);
+  const [linkResult, setLinkResult] = useState<{ checkoutUrl: string; orderType?: string; topUpMobile?: string; topUpStatus?: "BOUND" | "UNAVAILABLE" } | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
   const [lookupState, setLookupState] = useState<{
     status: "idle" | "checking" | "ok" | "error";
@@ -87,6 +87,7 @@ export default function PartnerWorkspace({ id }: { id: string }) {
         checkoutUrl: v.data.checkoutUrl,
         ...(v.data.orderType ? { orderType: v.data.orderType } : {}),
         ...(v.data.topUp?.mobile ? { topUpMobile: v.data.topUp.mobile } : {}),
+        ...(v.data.topUp?.status === "UNAVAILABLE" ? { topUpStatus: "UNAVAILABLE" } : v.data.topUp?.status === "BOUND" ? { topUpStatus: "BOUND" } : {}),
       });
       toast.success('Checkout link generated');
     } catch (error) {
@@ -232,6 +233,12 @@ export default function PartnerWorkspace({ id }: { id: string }) {
               <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
                 New-purchase link — the traveler will complete all checkout steps.
                 {linkResult.topUpMobile ? ' Note: mobile did not match an existing eSIM, so this is a new purchase.' : ''}
+              </p>
+            )}
+            {linkResult.topUpStatus === 'UNAVAILABLE' && (
+              <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700">
+                {linkResult.topUpMobile} matched a subscriber but no active eSIM could be bound — this link will be
+                processed as a new purchase, not a top-up. Proceed only if that is intended.
               </p>
             )}
             <code className="block break-all rounded-lg bg-muted px-3 py-2 text-xs">

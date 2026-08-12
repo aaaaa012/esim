@@ -92,7 +92,7 @@ type IntegrationLog = {
   operation: string;
   method: string;
   endpoint: string;
-  status: string;
+  status: number;
   durationMs?: number;
   errorCode?: string;
   errorMessage?: string;
@@ -160,6 +160,7 @@ export default function AdminWorkspace() {
     checkoutUrl: string;
     orderType?: string;
     topUpMobile?: string;
+    topUpStatus?: "BOUND" | "UNAVAILABLE";
   } | null>(null);
   const [hostedLinkBusy, setHostedLinkBusy] = useState(false);
   const [lookupState, setLookupState] = useState<{
@@ -475,7 +476,7 @@ export default function AdminWorkspace() {
     }
     setHostedLinkBusy(true);
     try {
-      const result = await request<{ checkoutUrl: string; orderType?: string; topUp?: { mobile?: string } }>(
+      const result = await request<{ checkoutUrl: string; orderType?: string; topUp?: { mobile?: string; status?: string } }>(
         `/admin/partners/${hostedLinkFor.id}/hosted-checkout-sessions`,
         {
           method: "POST",
@@ -492,6 +493,7 @@ export default function AdminWorkspace() {
         checkoutUrl: result.checkoutUrl,
         ...(result.orderType ? { orderType: result.orderType } : {}),
         ...(result.topUp?.mobile ? { topUpMobile: result.topUp.mobile } : {}),
+        ...(result.topUp?.status === "UNAVAILABLE" ? { topUpStatus: "UNAVAILABLE" } : result.topUp?.status === "BOUND" ? { topUpStatus: "BOUND" } : {}),
       });
       toast.success("Checkout link generated");
     } catch (error) {
@@ -956,7 +958,7 @@ export default function AdminWorkspace() {
                           </code>
                         </TableCell>
                         <TableCell>
-                          <StatusBadge label={log.status} tone={log.status === "SUCCESS" ? "success" : "warning"} />
+                          <StatusBadge label={String(log.status)} tone={log.status >= 200 && log.status < 400 ? "success" : "warning"} />
                         </TableCell>
                         <TableCell className="tabular-nums">
                           {log.durationMs != null ? `${log.durationMs}ms` : "—"}
@@ -1428,6 +1430,12 @@ export default function AdminWorkspace() {
                           {hostedLinkResult.topUpMobile ? " Note: mobile did not match an existing eSIM, so this is a new purchase." : ""}
                         </p>
                       )}
+                      {hostedLinkResult.topUpStatus === "UNAVAILABLE" && (
+                        <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700">
+                          {hostedLinkResult.topUpMobile} matched a subscriber but no active eSIM could be bound — this
+                          link will be processed as a new purchase, not a top-up. Proceed only if that is intended.
+                        </p>
+                      )}
                       <code className="block break-all rounded-lg bg-muted px-3 py-2 text-xs">
                         {hostedLinkResult.checkoutUrl}
                       </code>
@@ -1540,8 +1548,7 @@ function ConfigPanel({
   const [topupResult, setTopupResult] = useState<null | {
     found: boolean;
     subscriber?: {
-      firstName: string;
-      surname: string;
+      identity?: { firstName?: string; surname?: string };
       currentPlan?: { name: string };
       expiresAt?: string;
     };
@@ -1654,8 +1661,7 @@ function ConfigPanel({
                   request<{
                     found: boolean;
                     subscriber?: {
-                      firstName: string;
-                      surname: string;
+                      identity?: { firstName?: string; surname?: string };
                       currentPlan?: { name: string };
                       expiresAt?: string;
                     };
@@ -1676,7 +1682,7 @@ function ConfigPanel({
               (topupResult.found && topupResult.subscriber ? (
                 <p className="mt-3 flex items-center gap-2 text-sm text-success-foreground">
                   <CheckCircle2 className="size-4" />
-                  Found {topupResult.subscriber.firstName} {topupResult.subscriber.surname} —{" "}
+                  Found {topupResult.subscriber.identity?.firstName} {topupResult.subscriber.identity?.surname} —{" "}
                   {topupResult.subscriber.currentPlan?.name ?? "active subscriber"}
                   {topupResult.subscriber.expiresAt
                     ? ` · valid until ${new Date(topupResult.subscriber.expiresAt).toLocaleDateString()}`

@@ -22,10 +22,16 @@ export const ApiErrorCode = {
   ACCOUNT_DISABLED: 'ACCOUNT_DISABLED',
   ACCOUNT_TYPE_FORBIDDEN: 'ACCOUNT_TYPE_FORBIDDEN',
   MFA_REQUIRED: 'MFA_REQUIRED',
+  INTEGRATION_TYPE_FORBIDDEN: 'INTEGRATION_TYPE_FORBIDDEN',
 
   // Catalog & plans
   PLAN_NOT_AVAILABLE: 'PLAN_NOT_AVAILABLE',
   COVERAGE_UNAVAILABLE: 'COVERAGE_UNAVAILABLE',
+  PLAN_UNAVAILABLE: 'PLAN_UNAVAILABLE',
+  DOCUMENT_REQUIRED: 'DOCUMENT_REQUIRED',
+  PASSPORT_REQUIRED: 'PASSPORT_REQUIRED',
+  INSUFFICIENT_PARTNER_BALANCE: 'INSUFFICIENT_PARTNER_BALANCE',
+  TOPUP_UNAVAILABLE: 'TOPUP_UNAVAILABLE',
 
   // Orders
   ORDER_INVALID_STATE: 'ORDER_INVALID_STATE',
@@ -75,10 +81,14 @@ export const apiErrorMessage = (
       return 'Your account is currently disabled. Contact support for help.';
     case ApiErrorCode.ACCOUNT_TYPE_FORBIDDEN:
       return 'You do not have permission to perform this action.';
+    case ApiErrorCode.INTEGRATION_TYPE_FORBIDDEN:
+      return 'This partner is not approved for hosted checkout links.';
     case ApiErrorCode.MFA_REQUIRED:
       return 'Additional verification is required to continue.';
     case ApiErrorCode.PLAN_NOT_AVAILABLE:
       return 'This plan is no longer available. Please choose another plan.';
+    case ApiErrorCode.PLAN_UNAVAILABLE:
+      return 'This plan is unavailable right now. Please choose another plan.';
     case ApiErrorCode.COVERAGE_UNAVAILABLE:
       return 'Coverage is unavailable for this destination right now. Please contact support.';
     case ApiErrorCode.ORDER_NOT_FOUND:
@@ -91,6 +101,10 @@ export const apiErrorMessage = (
       return 'Traveller details are required before payment.';
     case ApiErrorCode.DOCUMENTS_REQUIRED:
       return 'Passport and travel ticket are required before payment.';
+    case ApiErrorCode.DOCUMENT_REQUIRED:
+      return 'This document is required before payment.';
+    case ApiErrorCode.PASSPORT_REQUIRED:
+      return 'A passport is required before payment.';
     case ApiErrorCode.DOCUMENT_STORAGE_UNAVAILABLE:
       return 'Secure document upload is temporarily unavailable. Please try again.';
     case ApiErrorCode.PASSPORT_VERIFICATION_REQUIRED:
@@ -115,6 +129,10 @@ export const apiErrorMessage = (
       return 'We could not activate your eSIM right now. Our team is reviewing it and will contact you.';
     case ApiErrorCode.INVENTORY_UNAVAILABLE:
       return 'No eSIM is available right now. Please try again shortly.';
+    case ApiErrorCode.INSUFFICIENT_PARTNER_BALANCE:
+      return 'The partner account balance is insufficient. Please top up the partner account.';
+    case ApiErrorCode.TOPUP_UNAVAILABLE:
+      return 'No active eSIM was found for that number. It will be processed as a new purchase.';
     case ApiErrorCode.USAGE_UNAVAILABLE:
       return 'Usage details are not available yet. Please check back shortly.';
     default:
