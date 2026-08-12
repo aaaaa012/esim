@@ -94,6 +94,21 @@ the reading code.
 When any of these three is missing, document upload returns
 `mode: 'local-simulator'` (`cloudinary-storage.service.ts:17-19`).
 
+### Passport OCR verification (Tesseract)
+
+Server-side passport check before payment (`passport-verification.service.ts`).
+Uses Tesseract.js; the `eng` traineddata (~15 MB) is fetched from jsDelivr on
+first use and cached unless `TESSERACT_LANG_PATH` points at pre-bundled data.
+
+| Variable | Used by |
+| --- | --- |
+| `TESSERACT_LANG` | Language code (default `eng`) (`passport-verification.service.ts:84`) |
+| `TESSERACT_LANG_PATH` | Folder containing pre-downloaded `.traineddata` (`passport-verification.service.ts:135`) |
+| `TESSERACT_CACHE_PATH` | Cache dir for downloaded language data (`passport-verification.service.ts:135`) |
+
+When Cloudinary is not configured the check is skipped (`SKIPPED`) rather than
+blocking payment, matching the local-simulator flow.
+
 ## Notifications
 
 | Variable | Used by |

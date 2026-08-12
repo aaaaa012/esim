@@ -6,6 +6,7 @@ import {
 import {
   OrderStatus,
   PartnerCredentialStatus,
+  PartnerIntegrationType,
   PartnerLedgerEntryType,
   PartnerPriceListStatus,
   PartnerRefundStatus,
@@ -19,6 +20,7 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 
 export const PARTNER_SCOPES = [
   "catalog:read",
+  "checkout:write",
   "orders:read",
   "orders:write",
   "documents:write",
@@ -88,6 +90,7 @@ export class PartnerAdminService {
       redirectAllowlist?: string[] | undefined;
       balancePaisa?: number | undefined;
       creditLimitPaisa?: number | undefined;
+      integrationType?: PartnerIntegrationType | undefined;
     },
     actorClerkId: string,
   ) {
@@ -104,6 +107,7 @@ export class PartnerAdminService {
           code,
           name: input.name.trim(),
           status: PartnerStatus.PENDING,
+          integrationType: input.integrationType ?? PartnerIntegrationType.API,
           allowedSettlementMethods: settlementMethods,
           rateLimitPerMinute: input.rateLimitPerMinute ?? 120,
           redirectAllowlist,
@@ -132,6 +136,7 @@ export class PartnerAdminService {
       settlementMethods?: PartnerSettlementMethod[] | undefined;
       rateLimitPerMinute?: number | undefined;
       redirectAllowlist?: string[] | undefined;
+      integrationType?: PartnerIntegrationType | undefined;
     },
     actorClerkId: string,
   ) {
@@ -145,6 +150,7 @@ export class PartnerAdminService {
         data: {
           ...(input.name ? { name: input.name.trim() } : {}),
           ...(input.status ? { status: input.status } : {}),
+          ...(input.integrationType ? { integrationType: input.integrationType } : {}),
           allowedSettlementMethods: [PartnerSettlementMethod.PARTNER_ACCOUNT],
           ...(input.rateLimitPerMinute !== undefined
             ? { rateLimitPerMinute: input.rateLimitPerMinute }
@@ -413,10 +419,11 @@ export class PartnerAdminService {
     const createdAt = from || to ? { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } : undefined;
     const [account, orders, ledger] = await Promise.all([
       this.prisma.partnerAccount.findUnique({ where: { partnerId } }),
-      this.prisma.order.findMany({ where: { partnerId, ...(createdAt ? { createdAt } : {}) }, select: { status: true, totalAmount: true } }),
+      this.prisma.order.findMany({ where: { partnerId, ...(createdAt ? { createdAt } : {}) }, select: { status: true, totalAmount: true, channel: true } }),
       this.prisma.partnerLedgerEntry.findMany({ where: { partnerId, ...(createdAt ? { createdAt } : {}) }, select: { type: true, amountPaisa: true } }),
     ]);
     const byStatus = orders.reduce<Record<string, number>>((result, order) => ({ ...result, [order.status]: (result[order.status] ?? 0) + 1 }), {});
+    const byChannel = orders.reduce<Record<string, number>>((result, order) => ({ ...result, [order.channel]: (result[order.channel] ?? 0) + 1 }), {});
     const totalOrderValuePaisa = orders.reduce((sum, order) => sum + Math.round(Number(order.totalAmount) * 100), 0);
     const sum = (types: PartnerLedgerEntryType[]) => ledger.filter((entry) => types.includes(entry.type)).reduce((total, entry) => total + entry.amountPaisa, 0);
     return {
@@ -424,6 +431,7 @@ export class PartnerAdminService {
       currentBalancePaisa: account?.balancePaisa ?? 0,
       ordersCreated: orders.length,
       ordersByStatus: byStatus,
+      ordersByChannel: byChannel,
       fulfilledOrders: (byStatus.QR_READY ?? 0) + (byStatus.COMPLETED ?? 0),
       failedOrders: byStatus.PROVISIONING_FAILED ?? 0,
       totalOrderValuePaisa,

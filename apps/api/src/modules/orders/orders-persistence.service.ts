@@ -6,14 +6,15 @@ import { randomUUID } from 'node:crypto';
 import { CryptoService } from '../../infrastructure/crypto.service.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 import type { DemoOrder } from './orders.service.js';
+import type { PassportVerificationResult } from './passport-verification.service.js';
 
 @Injectable()
 export class OrdersPersistenceService {
   constructor(private readonly prisma: PrismaService, private readonly crypto: CryptoService) {}
 
-  async load(): Promise<DemoOrder[]> {
+  async load(orderId?: string): Promise<DemoOrder[]> {
     if (!this.prisma.enabled) return [];
-    const rows = await this.prisma.order.findMany({ include: { customer: { include: { user: true } }, partner: { select: { id: true, code: true, name: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: { include: { inventory: true, subscriptions: true } }, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
+    const rows = await this.prisma.order.findMany({ where: orderId ? { id: orderId } : {}, include: { customer: { include: { user: true } }, partner: { select: { id: true, code: true, name: true } }, plan: { include: { country: true } }, traveler: true, customerEsim: { include: { inventory: true, subscriptions: true } }, documents: true, payments: { orderBy: { createdAt: 'desc' }, take: 1 }, events: { orderBy: { createdAt: 'asc' } } } });
     return rows.map((row) => {
       const traveler: TravelerInput | undefined = row.traveler ? {
         title: row.traveler.title as TravelerInput['title'], firstName: row.traveler.firstName, surname: row.traveler.surname,
@@ -32,6 +33,7 @@ export class OrdersPersistenceService {
         totalAmountNpr: Number(row.totalAmount), pricingSnapshot: row.pricingSnapshot as object, compatibilityAcceptedAt: row.compatibilityAcceptedAt.toISOString(),
         ...(traveler ? { traveler } : {}),
         documents: row.documents.map((doc) => ({ id: doc.id, type: doc.type as DocumentType, fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as DocumentStatus })),
+        ...(() => { const passport = row.documents.find((doc) => doc.type === 'PASSPORT'); if (!passport?.passportVerificationStatus) return {}; const verification: PassportVerificationResult = { status: passport.passportVerificationStatus as PassportVerificationResult['status'], matchedFields: (passport.passportMatchedFields as PassportVerificationResult['matchedFields'] | null) ?? [], ...(passport.passportConfidence != null ? { confidence: passport.passportConfidence } : {}), checkedAt: passport.passportVerifiedAt?.toISOString() ?? new Date().toISOString(), method: (passport.passportVerificationMethod as PassportVerificationResult['method'] | null) ?? 'tesseract-ocr' }; return { passportVerification: verification }; })(),
         ...(payment ? { payment: { provider: payment.provider as PaymentProvider, reference: payment.paymentReference, status: payment.status as PaymentStatus, ...(payment.providerCorrelationId ? { correlationId: payment.providerCorrelationId } : {}), ...(payment.expiresAt ? { expiresAt: payment.expiresAt.toISOString() } : {}), ...(payment.returnUrl ? { returnUrl: payment.returnUrl } : {}), ...(payment.redirectUrl ? { redirectUrl: payment.redirectUrl } : {}), ...(payment.providerTransactionId ? { providerTransactionId: payment.providerTransactionId } : {}) } } : {}),
         timeline: row.events.map((event) => ({ from: event.fromStatus as OrderStatus | null, to: event.toStatus as OrderStatus, at: event.createdAt.toISOString(), ...(event.reason ? { reason: event.reason } : {}) })),
         ...(row.customerEsim ? { qrPayload: this.crypto.decrypt(row.customerEsim.qrPayloadEncrypted) } : {}),
@@ -76,7 +78,18 @@ export class OrdersPersistenceService {
       }
       if (order.traveler) await tx.traveler.upsert({ where: { orderId: order.id }, update: this.travelerData(order.traveler), create: { orderId: order.id, ...this.travelerData(order.traveler) } });
       await tx.travelerDocument.deleteMany({ where: { orderId: order.id, id: { notIn: order.documents.map((document) => document.id) } } });
-      for (const doc of order.documents) await tx.travelerDocument.upsert({ where: { id: doc.id }, update: { fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as never }, create: { id: doc.id, orderId: order.id, type: doc.type as never, fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as never } });
+      for (const doc of order.documents) {
+        const isPassport = doc.type === DocumentType.PASSPORT;
+        const verification = order.passportVerification;
+        const passportFields = isPassport ? {
+          passportVerificationStatus: verification?.status ?? null,
+          passportVerificationMethod: verification?.method ?? null,
+          passportMatchedFields: (verification?.matchedFields ?? []) as Prisma.InputJsonValue,
+          passportConfidence: verification?.confidence ?? null,
+          passportVerifiedAt: verification?.checkedAt ? new Date(verification.checkedAt) : null,
+        } : {};
+        await tx.travelerDocument.upsert({ where: { id: doc.id }, update: { ...passportFields, fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as never }, create: { id: doc.id, orderId: order.id, type: doc.type as never, ...passportFields, fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as never } });
+      }
       if (order.payment) await tx.payment.upsert({ where: { paymentReference: order.payment.reference }, update: { status: order.payment.status as DbPaymentStatus, providerCorrelationId: order.payment.correlationId ?? null, providerTransactionId: order.payment.providerTransactionId ?? null, expiresAt: order.payment.expiresAt ? new Date(order.payment.expiresAt) : null, returnUrl: order.payment.returnUrl ?? null, redirectUrl: order.payment.redirectUrl ?? null, paidAt: order.payment.status === PaymentStatus.COMPLETED ? new Date() : null }, create: { orderId: order.id, provider: order.payment.provider as never, paymentReference: order.payment.reference, providerCorrelationId: order.payment.correlationId ?? null, providerTransactionId: order.payment.providerTransactionId ?? null, expiresAt: order.payment.expiresAt ? new Date(order.payment.expiresAt) : null, returnUrl: order.payment.returnUrl ?? null, redirectUrl: order.payment.redirectUrl ?? null, amount: order.totalAmountNpr, status: order.payment.status as DbPaymentStatus } });
       await tx.orderEvent.deleteMany({ where: { orderId: order.id } });
       if (order.timeline.length) await tx.orderEvent.createMany({ data: order.timeline.map((event) => ({ orderId: order.id, fromStatus: event.from as DbOrderStatus | null, toStatus: event.to as DbOrderStatus, createdAt: new Date(event.at), reason: event.reason ?? null })) });

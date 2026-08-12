@@ -13,6 +13,7 @@ import {
   OperationsController,
 } from "./modules/orders/orders.controller.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
+import { PassportVerificationService } from "./modules/orders/passport-verification.service.js";
 import { GuestOrdersController } from "./modules/orders/guest-orders.controller.js";
 import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
@@ -58,6 +59,8 @@ import { CustomerEsimsController } from "./modules/esims/customer-esims.controll
 import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
 import { TransatelOperationsController } from "./modules/integration/transatel-operations.controller.js";
 import { TransatelOperationsService } from "./modules/integration/transatel-operations.service.js";
+import { PartnerShowcaseAdminController, PartnerShowcasePublicController } from "./modules/showcase/partner-showcase.controller.js";
+import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
 
 @Module({
   imports: [
@@ -88,12 +91,15 @@ OperationsController,
     NotificationController,
     CustomerEsimsController,
     TransatelOperationsController,
+    PartnerShowcaseAdminController,
+    PartnerShowcasePublicController,
   ],
   providers: [
     AccountGuard,
     CatalogService,
     OrdersService,
     OrdersPersistenceService,
+    PassportVerificationService,
     InventoryService,
     AdminService,
     PaymentsService,
@@ -121,6 +127,7 @@ OperationsController,
     QrPdfService,
     CustomerEsimsService,
     TransatelOperationsService,
+    PartnerShowcaseService,
   ],
 })
 export class AppModule {}

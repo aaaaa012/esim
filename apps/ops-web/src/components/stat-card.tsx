@@ -11,12 +11,12 @@ type StatCardProps = {
   className?: string;
 };
 
-const toneStyles: Record<string, string> = {
-  default: "bg-accent text-accent-foreground",
-  success: "bg-success-soft text-success-foreground",
-  warning: "bg-warning-soft text-warning-foreground",
-  danger: "bg-destructive/10 text-destructive",
-  info: "bg-primary/10 text-primary",
+const toneClass: Record<string, string> = {
+  default: "ops-tone",
+  success: "ops-tone-success",
+  warning: "ops-tone-warning",
+  danger: "ops-tone-danger",
+  info: "ops-tone-info",
 };
 
 export function StatCard({
@@ -30,30 +30,25 @@ export function StatCard({
   return (
     <div
       className={cn(
-        "flex flex-col justify-between gap-4 rounded-xl border bg-card p-5 shadow-card",
+        "ops-card ops-tone hoverable flex flex-col overflow-hidden",
+        toneClass[tone],
         className,
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <span className="text-sm font-medium text-muted-foreground">
-          {label}
-        </span>
-        {icon && (
-          <span
-            className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-lg",
-              toneStyles[tone],
-            )}
-          >
-            {icon}
+      <span className="ops-tone-bar" />
+      <div className="flex flex-1 flex-col justify-between gap-4 p-5">
+        <div className="flex items-start justify-between gap-3">
+          <span className="text-sm font-medium text-muted-foreground">
+            {label}
           </span>
-        )}
-      </div>
-      <div>
-        <div className="text-3xl font-semibold tracking-tight tabular-nums">
-          {value}
+          {icon && <span className="ops-stat-icon">{icon}</span>}
         </div>
-        {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+        <div>
+          <div className="ops-stat-value text-3xl font-semibold tracking-tight tabular-nums">
+            {value}
+          </div>
+          {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+        </div>
       </div>
     </div>
   );

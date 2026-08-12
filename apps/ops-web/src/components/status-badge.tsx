@@ -34,6 +34,16 @@ const toneMap: Record<string, "success" | "warning" | "danger" | "info" | "destr
   red: "danger",
   danger: "danger",
   draft: "info",
+  quarantined: "destructive",
+};
+
+const dotMap: Record<StatusTone, string> = {
+  success: "bg-emerald-500",
+  warning: "bg-amber-500",
+  danger: "bg-red-500",
+  destructive: "bg-red-500",
+  info: "bg-sky-500",
+  default: "bg-muted-foreground/60",
 };
 
 function toneFor(label: string, tone?: StatusTone): StatusTone {
@@ -57,8 +67,9 @@ export function StatusBadge({ label, tone, className, children }: StatusBadgePro
                 ? "info"
                 : "secondary"
       }
-      className={cn("capitalize", className)}
+      className={cn("gap-1.5 pl-2 capitalize", className)}
     >
+      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotMap[resolved])} />
       {children}
       {text.replaceAll("_", " ")}
     </Badge>

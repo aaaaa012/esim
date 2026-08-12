@@ -29,16 +29,14 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
       </div>
     );
   return (
-    <div className="min-h-screen bg-muted/30 lg:flex">
+    <div className="ops-shell lg:flex">
       <OpsSidebar />
       <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-0">
-        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-card px-4 sm:px-6">
-          <div className="flex items-center">
-            <span className="text-sm font-semibold tracking-tight sm:hidden">
-              Visa Compass
-            </span>
-            <span className="hidden text-sm font-semibold tracking-tight sm:block">
-              Visa Compass Operations
+        <header className="ops-header">
+          <div className="ops-header-title">
+            <span className="sm:hidden">Visa Compass</span>
+            <span className="hidden sm:inline">
+              Visa Compass <b>Operations</b>
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -65,8 +63,8 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </header>
-        <main className={cn("flex-1 px-4 py-6 sm:px-6 lg:px-8")}>
-          <div className="mx-auto w-full max-w-7xl">{children}</div>
+        <main className={cn("ops-content flex-1")}>
+          <div className="mx-auto w-full">{children}</div>
         </main>
       </div>
     </div>

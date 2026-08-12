@@ -6,6 +6,15 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   private readonly logger = new Logger(PrismaService.name);
   readonly enabled = process.env.PERSISTENCE_MODE === 'prisma' && Boolean(process.env.DATABASE_URL);
 
+  constructor() {
+    super({
+      transactionOptions: {
+        maxWait: 10000,
+        timeout: 30000,
+      },
+    });
+  }
+
   async onModuleInit() {
     if (!this.enabled) {
       this.logger.log('Prisma persistence disabled; using the local in-memory workflow store');

@@ -6,14 +6,16 @@ import {
   Bell,
   Boxes,
   ClipboardCheck,
+  Compass,
   Gauge,
+  Handshake,
   History,
   PackageSearch,
   PlugZap,
   RadioTower,
+  Server,
   Settings,
   Users,
-  Compass,
 } from "lucide-react";
 import { useAuthenticatedFetch } from "./authenticated-api-provider";
 import { cn } from "@/lib/utils";
@@ -23,15 +25,18 @@ type NavItem = {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 };
-const baseItems: NavItem[] = [
+const overviewItems: NavItem[] = [
   { href: "/", label: "Dashboard", icon: Gauge },
   { href: "/work-queue", label: "Work Queue", icon: ClipboardCheck },
   { href: "/orders", label: "Orders", icon: PackageSearch },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/inventory", label: "Inventory", icon: Boxes },
   { href: "/transatel", label: "Transatel", icon: RadioTower },
+];
+const systemItems: NavItem[] = [
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/integration-events", label: "Integration Events", icon: PlugZap },
+  { href: "/integration-logs", label: "Integration Logs", icon: Server },
   { href: "/audit", label: "Audit Log", icon: History },
 ];
 type Profile = {
@@ -45,73 +50,59 @@ function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
   return (
     <Link
       href={item.href}
-      className={cn(
-        "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-        active
-          ? "bg-primary/10 text-primary"
-          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-      )}
+      className={cn("ops-sidebar-link", active && "active")}
     >
-      <Icon className="size-4 shrink-0" />
+      <Icon className="size-4" />
       {item.label}
     </Link>
   );
 }
 
+function isActive(path: string, href: string) {
+  return href === "/" ? path === "/" : path.startsWith(href);
+}
+
 export default function OpsSidebar() {
-  const path = usePathname(),
-    authFetch = useAuthenticatedFetch();
+  const authFetch = useAuthenticatedFetch();
   const [profile, setProfile] = useState<Profile | null>(null);
   useEffect(() => {
     void authFetch(`${API}/auth/me`)
       .then((response) => response.json())
       .then((value) => setProfile(value.data ?? null));
   }, [authFetch]);
+  const isAdmin = profile?.effectiveCapabilities.includes("admin:portal") ?? false;
   const adminItem: NavItem = { href: "/admin", label: "Administration", icon: Settings };
-  const items = profile?.effectiveCapabilities.includes("admin:portal")
-    ? [...baseItems, adminItem]
-    : baseItems;
+  const showcaseItem: NavItem = { href: "/admin/partners-showcase", label: "Partner Showcase", icon: Handshake };
+  const path = usePathname();
+  const items = isAdmin ? [...overviewItems, ...systemItems, adminItem, showcaseItem] : [...overviewItems, ...systemItems];
   return (
-    <aside className="sticky top-0 flex w-full flex-col border-b border-sidebar-border bg-sidebar lg:h-screen lg:w-64 lg:border-b-0 lg:border-r">
-      <div className="border-b border-sidebar-border px-5 py-5">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Compass className="size-4" />
-          </span>
-          <div className="leading-tight">
-            <p className="font-semibold tracking-tight">Visa Compass</p>
-            <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-              Operations
-            </p>
-          </div>
+    <aside className="ops-sidebar">
+      <div className="ops-sidebar-brand">
+        <span className="mark">
+          <Compass className="size-4" />
+        </span>
+        <div className="word">
+          <b>Visa Compass</b>
+          <span>Operations</span>
         </div>
       </div>
-      <nav className="flex-1 space-y-1 overflow-x-auto overflow-y-auto p-3 lg:overflow-x-visible lg:overflow-y-auto">
-        <p className="px-3 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Menu
-        </p>
+
+      <nav className="ops-sidebar-nav">
         {items.map((item) => (
           <SidebarLink
             key={item.href}
             item={item}
-            active={
-              item.href === "/"
-                ? path === "/"
-                : path.startsWith(item.href)
-            }
+            active={isActive(path, item.href)}
           />
         ))}
       </nav>
-      <div className="border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-3 rounded-lg bg-secondary px-3 py-2.5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
-            {profile?.email.slice(0, 1).toUpperCase() ?? "…"}
-          </span>
-          <div className="min-w-0 leading-tight">
-            <p className="truncate text-xs font-medium">{profile?.email ?? "Loading…"}</p>
-            <p className="text-[11px] text-muted-foreground">
-              {profile?.accountType.replace("_", " ") ?? "Authenticating"}
-            </p>
+
+      <div className="ops-sidebar-foot">
+        <div className="ops-sidebar-user">
+          <span className="avatar">{profile?.email.slice(0, 1).toUpperCase() ?? "…"}</span>
+          <div className="meta">
+            <b>{profile?.email ?? "Loading…"}</b>
+            <span>{profile?.accountType.replace("_", " ") ?? "Authenticating"}</span>
           </div>
         </div>
       </div>

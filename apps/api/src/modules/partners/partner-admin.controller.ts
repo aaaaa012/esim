@@ -13,6 +13,7 @@ import {
 import {
   OrderStatus,
   PartnerPriceListStatus,
+  PartnerIntegrationType,
   PartnerLedgerEntryType,
   PartnerRefundStatus,
   PartnerSettlementMethod,
@@ -30,6 +31,7 @@ import {
   PARTNER_SCOPES,
   PartnerAdminService,
 } from "./partner-admin.service.js";
+import { PartnerService } from "./partner.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
 
 const partnerSchema = z.object({
@@ -40,6 +42,7 @@ const partnerSchema = z.object({
   redirectAllowlist: z.array(z.string().url()).max(20).optional(),
   balancePaisa: z.number().int().min(0).optional(),
   creditLimitPaisa: z.literal(0).optional(),
+  integrationType: z.enum(PartnerIntegrationType).optional(),
 });
 const updateSchema = partnerSchema
   .omit({ code: true, balancePaisa: true, creditLimitPaisa: true })
@@ -74,6 +77,7 @@ const priceListSchema = z.object({
 export class PartnerAdminController {
   constructor(
     private readonly partners: PartnerAdminService,
+    private readonly partnerService: PartnerService,
     private readonly partnerWebhooks: PartnerWebhookProcessor,
   ) {}
 
@@ -99,6 +103,23 @@ export class PartnerAdminController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.partners.update(id, updateSchema.parse(body), request.user!.id);
+  }
+
+  @Post(":id/hosted-checkout-sessions")
+  async hostedCheckoutSession(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const input = z
+      .object({
+        planId: z.string().uuid(),
+        externalOrderId: z.string().trim().min(1).max(120),
+        externalCustomerId: z.string().trim().min(1).max(120),
+        topUpMobile: z.string().trim().min(1).max(20).optional(),
+      })
+      .parse(body);
+    return this.partnerService.createHostedCheckoutSession(id, input);
   }
 
   @Post(":id/credentials")

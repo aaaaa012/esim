@@ -3,11 +3,13 @@ import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Boxes,
   CheckCircle2,
   ClipboardList,
   Clock,
   FileUp,
   Globe2,
+  Link2,
   PackageCheck,
   PackageOpen,
   RefreshCcw,
@@ -22,10 +24,12 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/empty-state";
 import { FileUploader } from "@/components/file-uploader";
 import { Spinner } from "@/components/spinner";
+import { PaginationBar } from "@/components/pagination-bar";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -54,6 +58,8 @@ type Overview = {
     reserved: number;
     assigned: number;
     activated: number;
+    expired: number;
+    terminated: number;
     pending: number;
     quarantined?: number;
   };
@@ -88,6 +94,31 @@ type Plan = {
   sellingPriceNpr: number;
   status: "DRAFT" | "ACTIVE" | "DISABLED" | "ARCHIVED";
 };
+type Profile = {
+  id: string;
+  iccid: string;
+  eid: string;
+  msisdn?: string | null;
+  status: string;
+  smDpAddress?: string | null;
+  providerSubscriptionId?: string | null;
+  providerStatus?: string | null;
+  activatedAt?: string | null;
+  expiresAt?: string | null;
+  batchReference?: string | null;
+  batchStatus?: string | null;
+  order?: {
+    orderNumber: string;
+    orderStatus: string;
+    customerEmail: string;
+    customerCode: string;
+    planName: string;
+    planCountry: string;
+    planCountryCode: string;
+    dataAllowance: string;
+  } | null;
+};
+const PROFILE_STATUSES = ["AVAILABLE", "IMPORTED", "RESERVED", "ASSIGNED", "ACTIVATED", "EXPIRED", "TERMINATED", "QUARANTINED"];
 const fileToTabularContent = async (file: File): Promise<string> => {
   if (/\.xlsx?$/i.test(file.name)) {
     const buffer = await file.arrayBuffer();
@@ -136,7 +167,7 @@ export default function InventoryClient() {
   const [error, setError] = useState("");
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [decision, setDecision] = useState("");
-  const [profiles, setProfiles] = useState<InventoryProfile[]>([]);
+  const [reconciliationProfiles, setReconciliationProfiles] = useState<InventoryProfile[]>([]);
   const [reconciling, setReconciling] = useState("");
 
   const [profileFile, setProfileFile] = useState<File | null>(null);
@@ -149,6 +180,35 @@ export default function InventoryClient() {
   const [draftPlans, setDraftPlans] = useState<Plan[]>([]);
   const [planDecision, setPlanDecision] = useState("");
 
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [profilesTotal, setProfilesTotal] = useState(0);
+  const [profilesPage, setProfilesPage] = useState(1);
+  const [profilesStatus, setProfilesStatus] = useState("ALL");
+  const [profilesLoading, setProfilesLoading] = useState(false);
+  const PAGE_SIZE = 50;
+
+  const loadProfiles = () => {
+    setProfilesLoading(true);
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE),
+      offset: String((profilesPage - 1) * PAGE_SIZE),
+    });
+    if (profilesStatus !== "ALL") params.set("status", profilesStatus);
+    authFetch(`${API}/operations/inventory/profiles?${params}`, { headers: {} })
+      .then(async (r) => {
+        const v = await r.json();
+        if (!r.ok) throw new Error(v.error?.message);
+        setProfiles(v.data?.items ?? []);
+        setProfilesTotal(v.data?.total ?? 0);
+      })
+      .catch((e) => toast.error(e.message))
+      .finally(() => setProfilesLoading(false));
+  };
+  useEffect(() => {
+    if (data) loadProfiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profilesPage, profilesStatus, data]);
+
   const load = () => {
     void Promise.all([
       authFetch(`${API}/operations/inventory`, { headers: {} }),
@@ -159,7 +219,7 @@ export default function InventoryClient() {
         if (!overviewResponse.ok) throw new Error(overviewValue.error?.message);
         if (!profilesResponse.ok) throw new Error(profilesValue.error?.message);
         setData(overviewValue.data);
-        setProfiles(profilesValue.data.items);
+        setReconciliationProfiles(profilesValue.data.items);
       })
       .catch((e) => setError(e.message));
   };
@@ -284,7 +344,7 @@ export default function InventoryClient() {
       .then(async (r) => {
         const v = await r.json();
         if (!r.ok) throw new Error(v.error?.message);
-        setDraftPlans((v.data?.plans ?? []).filter((p: Plan) => p.status === "DRAFT"));
+        setDraftPlans((Array.isArray(v.data) ? v.data : v.data?.plans ?? []).filter((p: Plan) => p.status === "DRAFT"));
       })
       .catch((e) => toast.error(e.message));
   };
@@ -351,6 +411,12 @@ export default function InventoryClient() {
       icon: <CheckCircle2 className="size-4" />,
       tone: "default" as const,
     },
+    {
+      label: "Quarantined",
+      value: data.counts.quarantined ?? 0,
+      icon: <AlertTriangle className="size-4" />,
+      tone: data.counts.quarantined ? ("danger" as const) : ("default" as const),
+    },
   ];
   const pendingBatches = data.batches.filter((batch) => batch.status === "PENDING");
 
@@ -416,14 +482,18 @@ export default function InventoryClient() {
             <ClipboardList className="size-4" />
             Batch history
           </TabsTrigger>
+          <TabsTrigger value="profiles" className="gap-1.5">
+            <Boxes className="size-4" />
+            eSIM Profiles
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="live-stock" className="mt-6">
           <Panel title="Transatel inventory reconciliation" description="Live provider status for the latest 100 inventory profiles. Unassigned profiles with unexpected provider state are quarantined automatically." noPadding>
-            {!profiles.length ? <EmptyState title="No inventory profiles" /> : (
+            {!reconciliationProfiles.length ? <EmptyState title="No inventory profiles" /> : (
               <Table>
                 <TableHeader><TableRow><TableHead>ICCID</TableHead><TableHead>Local</TableHead><TableHead>Transatel</TableHead><TableHead>Last checked</TableHead><TableHead>Error</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
-                <TableBody>{profiles.map((profile) => (
+                <TableBody>{reconciliationProfiles.map((profile) => (
                   <TableRow key={profile.id}>
                     <TableCell><code className="text-xs">{profile.iccid}</code><p className="text-xs text-muted-foreground">{profile.batchReference ?? "—"}</p></TableCell>
                     <TableCell><StatusBadge label={profile.status} {...(profile.status === "QUARANTINED" ? { tone: "warning" as const } : {})} /></TableCell>
@@ -708,6 +778,103 @@ export default function InventoryClient() {
                 </TableBody>
               </Table>
             )}
+          </Panel>
+        </TabsContent>
+        <TabsContent value="profiles" className="mt-4">
+          <Panel className="p-0">
+            <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="font-semibold">eSIM profiles</h3>
+                <p className="text-sm text-muted-foreground">
+                  {profilesTotal.toLocaleString()} pins · filter by status to see assignment / availability
+                </p>
+              </div>
+              <div className="w-full sm:w-56">
+                <Select value={profilesStatus} onValueChange={(v) => { setProfilesPage(1); setProfilesStatus(v); }}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All statuses</SelectItem>
+                    {PROFILE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {profilesLoading ? (
+              <div className="flex items-center justify-center gap-2 p-10 text-muted-foreground">
+                <Spinner /> Loading profiles…
+              </div>
+            ) : profiles.length === 0 ? (
+              <EmptyState
+                            icon={<Boxes className="size-6" />}
+                            title="No profiles"
+                            description="No eSIM profiles match the selected filters."
+                          />
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ICCID / Assignment</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>eID</TableHead>
+                      <TableHead>Orders</TableHead>
+                      <TableHead>Batch</TableHead>
+                      <TableHead className="text-right">SM-DP</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {profiles.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell>
+                          <div className="font-mono text-xs">{p.iccid}</div>
+                          {p.msisdn && <div className="text-xs text-muted-foreground">{p.msisdn}</div>}
+                          {p.order ? (
+                            <div className="flex items-center gap-1 text-xs text-emerald-600">
+                              <Link2 className="size-3" />
+                              Assigned to {p.order.customerCode}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">Unassigned</div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {p.status === "ACTIVATED" ? (
+                            <Badge className="bg-emerald-500/15 text-emerald-600"><CheckCircle2 className="size-3" /> ACTIVE</Badge>
+                          ) : p.status === "AVAILABLE" ? (
+                            <Badge className="bg-sky-500/15 text-sky-600">{p.status}</Badge>
+                          ) : (
+                            <StatusBadge label={p.status} />
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{p.eid}</TableCell>
+                        <TableCell>
+                          {p.order ? (
+                            <span className="text-xs font-medium">{p.order.orderNumber}</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-xs">{p.batchReference ?? "—"}</span>
+                          {p.batchReference && <div className="text-[11px] text-muted-foreground">{p.batchStatus}</div>}
+                        </TableCell>
+                        <TableCell className="text-right text-xs">{p.smDpAddress ?? "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            <div className="border-t p-4">
+              <PaginationBar
+                total={profilesTotal}
+                page={profilesPage}
+                pageSize={PAGE_SIZE}
+                onPageChange={setProfilesPage}
+              />
+            </div>
           </Panel>
         </TabsContent>
       </Tabs>

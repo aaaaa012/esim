@@ -296,10 +296,78 @@ Submits a formal refund request to the operations review queue.
 
 ---
 
-## 4. Deprecated Legacy Routes
+## 4. No-Code (Hosted) Checkout for Low-Capacity Partners
+
+Not every reseller can integrate the REST API. For partners without an
+engineering team, Visa Compass hosts the checkout for them:
+the partner calls **one endpoint** to create a session, then shares a
+partner-branded link with the traveller over WhatsApp/email. No API
+integration is required on the customer-facing side.
+
+### 4.1. Create a hosted checkout session (portal / partner call)
+
+* **`POST /api/v1/partners/hosted-checkout-sessions`**
+* **Scope:** `orders:write` | **Header:** `Idempotency-Key`
+
+Request:
+```json
+{
+  "planId": "248d4a2b-8c12-4dfa-9c22-58652a92d372",
+  "externalOrderId": "agency-order-3001",
+  "externalCustomerId": "cust-flow-3001"
+}
+```
+Response:
+```json
+{
+  "data": {
+    "sessionId": "7cfa0b6f-...",
+    "token": "A9x…32-char-base64url…",
+    "checkoutUrl": "https://shop.visacompass.com/partner-checkout/A9x…",
+    "orderId": "fe40a630-8154-47ab-866d-52a0e4e94241",
+    "externalOrderId": "agency-order-3001",
+    "expiresAt": "2026-08-08T22:00:00.000Z"
+  }
+}
+```
+
+* Creates a **DRAFT** order settled against the partner's prepaid
+  `PARTNER_ACCOUNT` balance and a single-use, 24-hour checkout session.
+* The partner shares `checkoutUrl`. The traveller is identified relationally as a
+  `PartnerCustomer(partnerId, externalCustomerId)`; no traveller account/login
+  is required.
+
+### 4.2. Hosted checkout page (public, token-gated)
+
+The customer-facing page is served by Visa Compass at `checkoutUrl`, branded
+with the partner's name/logo:
+
+| Method | Path (`/api/v1/partner-checkout/:token`) | Purpose |
+| --- | --- | --- |
+| `GET` | `/:token` | Loads plan, amount, required docs + partner branding |
+| `POST` | `/:token/traveler` | Saves traveller details (`travelerSchema`) |
+| `POST` | `/:token/documents` | Requests a private Cloudinary upload for a document |
+| `POST` | `/:token/documents/:documentId/confirm` | Confirms the document was uploaded/verified |
+| `POST` | `/:token/verify-passport` | Runs the server-side passport OCR check |
+| `POST` | `/:token/complete` | Completes the order (requires verified passport) |
+
+On `complete`, the server verifies the uploaded documents, requires a passport
+verification of `VERIFIED` (or `SKIPPED` in the local simulator), atomically
+debits the partner's prepaid balance, transitions the order to `APPROVED` /
+`PROVISIONING`, and consumes the session. The result flows through the same
+provisioning and webhook pipeline as an API-placed order.
+
+> The passport must be verified before `complete`; a mismatch returns
+> `PASSPORT_VERIFICATION_REQUIRED` so mismatched travellers cannot slip
+> through auto-approved partner orders.
+
+## 5. Deprecated Legacy Routes
 
 The following v1 routes are marked `@deprecated` with `Deprecation: true` headers and will be retired:
 * `POST /api/v1/partners/quotes` $\rightarrow$ Use `POST /orders` (Complete Order).
 * `POST /api/v1/partners/orders/:id/traveler` $\rightarrow$ Include `traveler` payload in `POST /orders`.
 * `POST /api/v1/partners/orders/:id/documents` $\rightarrow$ Use `POST /document-upload-sessions`.
-* Hosted-payment mutations are disabled and return HTTP `410` with `HOSTED_PAYMENT_DEPRECATED`. Historical hosted-checkout records remain readable.
+* `POST /api/v1/partners/orders/:id/hosted-checkout-session` and `/payment-session`
+  $\rightarrow$ Use `POST /hosted-checkout-sessions` (no-code hosted checkout, section 4).
+* Legacy hosted-payment settlements are retired; partners settle via prepaid
+  `PARTNER_ACCOUNT` balance.

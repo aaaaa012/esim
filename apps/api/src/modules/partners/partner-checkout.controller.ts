@@ -8,9 +8,14 @@ import {
   Post,
 } from "@nestjs/common";
 import { DocumentType } from "@prisma/client";
-import { documentRequestSchema, travelerSchema } from "@visa-compass/shared";
+import { travelerSchema } from "@visa-compass/shared";
 import { z } from "zod";
 import { PartnerService } from "./partner.service.js";
+
+const hostedDocumentSchema = z.object({
+  type: z.enum(DocumentType),
+  fileName: z.string().trim().min(1).max(180),
+});
 
 @Controller("partner-checkout")
 export class PartnerCheckoutController {
@@ -21,6 +26,11 @@ export class PartnerCheckoutController {
     return this.partners.hostedCheckout(token);
   }
 
+  @Get(":token/documents")
+  documents(@Param("token") token: string) {
+    return this.partners.hostedCheckoutDocuments(token);
+  }
+
   @Post(":token/traveler")
   traveler(@Param("token") token: string, @Body() body: unknown) {
     return this.partners.setHostedTraveler(token, travelerSchema.parse(body));
@@ -28,7 +38,7 @@ export class PartnerCheckoutController {
 
   @Post(":token/documents")
   document(@Param("token") token: string, @Body() body: unknown) {
-    const input = documentRequestSchema.parse(body);
+    const input = hostedDocumentSchema.parse(body);
     return this.partners.addHostedDocument(token, {
       type: input.type as DocumentType,
       fileName: input.fileName,
@@ -55,5 +65,10 @@ export class PartnerCheckoutController {
       ipAddress,
       userAgent: userAgent ?? "unknown",
     });
+  }
+
+  @Post(":token/verify-passport")
+  verifyPassport(@Param("token") token: string) {
+    return this.partners.verifyHostedPassport(token);
   }
 }

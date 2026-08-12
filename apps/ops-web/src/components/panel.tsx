@@ -24,9 +24,9 @@ export function Panel({
   children,
 }: PanelProps) {
   return (
-    <Card className={cn("gap-0 overflow-hidden", className)}>
+    <Card className={cn("ops-card gap-0 overflow-hidden border-0", className)}>
       {(title || actions || action) && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
+        <div className="ops-panel-head flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
           <div className="space-y-0.5">
             {title && (
               <h2 className="text-base font-semibold tracking-tight">

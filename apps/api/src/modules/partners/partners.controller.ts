@@ -90,6 +90,18 @@ export const completeCreateSchema = z.object({
   metadata: z.record(z.string(), z.string().max(500)).optional(),
 });
 const createSchema = z.union([completeCreateSchema, legacyCreateSchema]);
+export const hostedCheckoutSessionSchema = z.object({
+  planId: z.string().uuid(),
+  externalOrderId: z.string().trim().min(1).max(120),
+  externalCustomerId: z.string().trim().min(1).max(120),
+  topUpMobile: z
+    .string()
+    .trim()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Mobile number of an existing subscriber to attach a top-up to"),
+});
 const listSchema = z.object({
   cursor: z.string().uuid().optional(),
   status: z.enum(OrderStatus).optional(),
@@ -278,6 +290,24 @@ export class PartnersController {
   @PartnerScopes("orders:read")
   ledger(@Query() query: unknown, @Req() request: PartnerRequest) {
     return this.partners.ledger(request.partner!.id, ledgerSchema.parse(query));
+  }
+
+  @Post("hosted-checkout-sessions")
+  @PartnerScopes("checkout:write")
+  @PartnerMutation()
+  @ApiOperation({
+    summary: "Create a hosted (no-code) checkout session",
+    description:
+      "For partners that cannot integrate the full REST API. Creates a DRAFT order",
+  })
+  hostedCheckoutSession(
+    @Body() body: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.createHostedCheckoutSession(
+      request.partner!.id,
+      hostedCheckoutSessionSchema.parse(body),
+    );
   }
 
   @Get("orders")

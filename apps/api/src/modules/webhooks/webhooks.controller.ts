@@ -19,12 +19,12 @@ export class WebhooksController {
 
   @Post('clerk')
   @HttpCode(202)
-  async clerk(@Body() body: unknown, @Headers() headers: Record<string, string>) {
+  async clerk(@Body() body: unknown, @Headers() headers: Record<string, string>, @Req() request: { rawBody?: Buffer }) {
     if (!process.env.CLERK_WEBHOOK_SECRET) {
       if (process.env.NODE_ENV === 'production') throw new BadRequestException('Clerk webhook is not configured');
       return { accepted: true, simulated: true };
     }
-    const event = new Webhook(process.env.CLERK_WEBHOOK_SECRET).verify(JSON.stringify(body), {
+    const event = new Webhook(process.env.CLERK_WEBHOOK_SECRET).verify(this.rawPayload(body, request.rawBody), {
       'svix-id': headers['svix-id'] ?? '',
       'svix-timestamp': headers['svix-timestamp'] ?? '',
       'svix-signature': headers['svix-signature'] ?? '',
@@ -35,11 +35,11 @@ export class WebhooksController {
 
   @Post('payments/:provider')
   @HttpCode(202)
-  async payment(@Param('provider') provider: string, @Body() body: { eventId?: string }, @Headers('x-visa-signature') signature?: string) {
+  async payment(@Param('provider') provider: string, @Body() body: { eventId?: string }, @Req() request: { rawBody?: Buffer }, @Headers('x-visa-signature') signature?: string) {
     const eventId = body.eventId;
     if (!eventId) throw new BadRequestException('eventId is required');
     if (typeof eventId !== 'string' || eventId.length < 8 || eventId.length > 256) throw new BadRequestException('eventId is invalid');
-    this.verifyPaymentSignature(JSON.stringify(body), signature);
+    this.verifyPaymentSignature(this.rawPayload(body, request.rawBody), signature);
     if (this.accepted.has(`${provider}:${eventId}`) || await this.webhookExists(provider, eventId)) return { accepted: true, duplicate: true };
     this.remember(`${provider}:${eventId}`);
     await this.persistWebhook(provider, eventId, body, true);
@@ -86,6 +86,12 @@ export class WebhooksController {
 
   private async webhookExists(source: string, eventId: string) { if (!this.prisma.enabled) return false; return Boolean(await this.prisma.webhookEvent.findUnique({ where: { source_eventId: { source, eventId } }, select: { id: true } })); }
   private async webhookState(source: string, eventId: string) { if (!this.prisma.enabled) return null; return this.prisma.webhookEvent.findUnique({ where: { source_eventId: { source, eventId } }, select: { processedAt: true, deadLetteredAt: true } }); }
+
+  private rawPayload(body: unknown, rawBody?: Buffer): string {
+    if (rawBody) return rawBody.toString('utf8');
+    if (process.env.NODE_ENV === 'production') throw new BadRequestException('Webhook raw body is unavailable');
+    return JSON.stringify(body);
+  }
 
   private verifyPaymentSignature(payload: string, signature?: string) {
     if (!signature) throw new BadRequestException('Payment webhook signature is required');
