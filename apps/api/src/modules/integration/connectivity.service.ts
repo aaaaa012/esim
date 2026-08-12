@@ -8,7 +8,11 @@ export class ConnectivityService implements OnModuleInit {
   private readonly logger = new Logger(ConnectivityService.name);
   constructor(private readonly auriga: AurigaMockProvider, private readonly transatel: TransatelProvider) {}
 
-  private selected() { return process.env.CONNECTIVITY_PROVIDER === 'transatel' ? this.transatel : this.auriga; }
+  private selected() {
+    // A mock provider is never selected implicitly: a paid production order
+    // must not receive a fabricated QR code when configuration is missing.
+    return process.env.CONNECTIVITY_PROVIDER === 'auriga-mock' ? this.auriga : this.transatel;
+  }
 
   async onModuleInit() {
     if (process.env.TRANSATEL_WEBHOOK_TARGET_URL) {

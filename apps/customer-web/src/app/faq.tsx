@@ -5,15 +5,15 @@ import { ChevronDown, CircleHelp } from 'lucide-react';
 const ITEMS = [
   {
     q: 'How do I know my phone supports eSIM?',
-    a: 'Use the "Check my device" tool before paying. Compatibility is confirmed before checkout, so you never pay for an eSIM your phone cannot install. Purchases cannot be refunded for incompatible devices, so always check first.',
+    a: 'Use the "Check my device" guide before paying. You confirm compatibility during checkout, but the system does not inspect your device or carrier lock automatically. Purchases cannot be refunded for incompatible devices, so always check first.',
   },
   {
     q: 'How do I receive my eSIM after paying?',
-    a: 'Once your travel documents are reviewed and payment is confirmed, your order is provisioned automatically. Your activation QR is emailed to you as a password-protected PDF, and stays available inside your Visa Compass account under My eSIM.',
+    a: 'After payment is verified, Visa Compass provisions the selected plan with its connectivity provider. Your activation QR is delivered by email as a password-protected PDF. Signed-in customers can also access their eligible eSIM records from My eSIMs.',
   },
   {
     q: 'How do I install the eSIM?',
-    a: 'Open the QR PDF, enter the eSIM number (MSISDN) shown in your email, then scan the QR from your phone\u2019s settings. Detailed step-by-step guides for both iPhone and Android are available on each eSIM in your account.',
+    a: 'Open the QR PDF and use the mobile number requested by the PDF when prompted. Then scan the QR from your phone\u2019s cellular settings. Follow your phone manufacturer\u2019s current eSIM installation guidance if the settings differ.',
   },
   {
     q: 'Which payment methods do you support?',

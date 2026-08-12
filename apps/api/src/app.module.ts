@@ -56,6 +56,8 @@ import { AuthController } from "./modules/identity/auth.controller.js";
 import { AccountGuard } from "./common/auth.guard.js";
 import { CustomerEsimsController } from "./modules/esims/customer-esims.controller.js";
 import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
+import { PartnerShowcaseAdminController, PartnerShowcasePublicController } from "./modules/showcase/partner-showcase.controller.js";
+import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
 
 @Module({
   imports: [
@@ -84,6 +86,8 @@ OperationsController,
     PartnerCheckoutController,
     NotificationController,
     CustomerEsimsController,
+    PartnerShowcaseAdminController,
+    PartnerShowcasePublicController,
   ],
   providers: [
     AccountGuard,
@@ -117,6 +121,7 @@ OperationsController,
     WhatsappChannel,
     QrPdfService,
     CustomerEsimsService,
+    PartnerShowcaseService,
   ],
 })
 export class AppModule {}

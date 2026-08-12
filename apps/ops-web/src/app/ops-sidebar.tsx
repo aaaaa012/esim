@@ -8,6 +8,7 @@ import {
   ClipboardCheck,
   Compass,
   Gauge,
+  Handshake,
   History,
   PackageSearch,
   PlugZap,
@@ -69,8 +70,9 @@ export default function OpsSidebar() {
   }, [authFetch]);
   const isAdmin = profile?.effectiveCapabilities.includes("admin:portal") ?? false;
   const adminItem: NavItem = { href: "/admin", label: "Administration", icon: Settings };
+  const showcaseItem: NavItem = { href: "/admin/partners-showcase", label: "Partner Showcase", icon: Handshake };
   const path = usePathname();
-  const items = isAdmin ? [...overviewItems, ...systemItems, adminItem] : [...overviewItems, ...systemItems];
+  const items = isAdmin ? [...overviewItems, ...systemItems, adminItem, showcaseItem] : [...overviewItems, ...systemItems];
   return (
     <aside className="ops-sidebar">
       <div className="ops-sidebar-brand">

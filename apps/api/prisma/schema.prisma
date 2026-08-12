@@ -774,6 +774,17 @@ model CustomerConsent {
   userAgent String
   acceptedAt DateTime @default(now())
 }
+model PartnerShowcase {
+  id String @id @default(uuid()) @db.Uuid
+  name String
+  logoUrl String?
+  sortOrder Int @default(0)
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([active, sortOrder])
+}
+
 model AuditLog {
   id String @id @default(uuid()) @db.Uuid
   module String

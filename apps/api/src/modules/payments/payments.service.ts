@@ -218,5 +218,9 @@ export class PaymentsService {
   }
   async simulate(orderId: string, ownerId: string | null, reference: string, scenario: 'SUCCESS'|'CANCELLED'|'PENDING'|'WRONG_AMOUNT'|'REFUNDED'|'TIMEOUT' = 'SUCCESS') { if (process.env.NODE_ENV === 'production') throw new BadRequestException('Simulator is disabled'); if (scenario === 'TIMEOUT') throw new BadRequestException('Simulated payment provider timeout'); const order = this.orders.get(orderId, ownerId ?? undefined); const context=this.context(order,reference); this.simulator.apply(reference, scenario, context); const result = await this.simulator.verify(reference,context); if (result.status !== PaymentStatus.COMPLETED || result.orderId !== orderId || result.amountNpr !== order.totalAmountNpr) throw new BadRequestException(`Payment verification failed: ${result.status}`); return await this.orders.confirmPayment(orderId, reference, result.providerTransactionId); }
   private context(order:ReturnType<OrdersService['get']>,reference:string){if(order.payment?.reference!==reference)throw new BadRequestException('Payment reference mismatch');return {orderId:order.id,amountNpr:order.totalAmountNpr,...(order.payment.correlationId?{correlationId:order.payment.correlationId}:{})};}
-  private gateway(provider?: PaymentProvider) { return process.env.PAYMENT_MODE === 'sandbox' || process.env.NODE_ENV === 'production' ? this.khalti : this.simulator; }
+  private gateway(provider?: PaymentProvider) {
+    if (process.env.PAYMENT_MODE === 'simulator') return this.simulator;
+    if (process.env.NODE_ENV === 'production' || ['khalti', 'sandbox'].includes(process.env.PAYMENT_MODE ?? '')) return this.khalti;
+    return this.simulator;
+  }
 }

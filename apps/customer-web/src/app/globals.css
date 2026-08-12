@@ -653,3 +653,13 @@ button {
     gap: 8px;
   }
 }
+
+.skel {
+  background: var(--surface-2);
+  border-radius: 6px;
+  animation: skel-pulse 1.5s ease-in-out infinite;
+}
+@keyframes skel-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.3; }
+}

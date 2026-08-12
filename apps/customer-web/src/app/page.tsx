@@ -4,6 +4,7 @@ import { ArrowRight, CheckCircle2, Globe2, Headset, Plane, QrCode, ShieldCheck, 
 import CatalogPlans from './catalog-plans';
 import TopupLookup from './topup-lookup';
 import Faq from './faq';
+import PartnersShowcase from './partners-showcase';
 import './home.css';
 
 export default function Home() {
@@ -95,7 +96,7 @@ export default function Home() {
               Popular destinations
             </span>
             <h2>One plan. Zero roaming surprises.</h2>
-            <p>Clear NPR pricing, trusted coverage, and a QR code saved securely in your account.</p>
+            <p>Clear NPR pricing, trusted coverage, and a secure digital delivery experience from checkout to activation.</p>
           </div>
           <TopupLookup />
           <Suspense fallback={null}>
@@ -147,7 +148,7 @@ export default function Home() {
             <div className="why-card">
               <span className="why-icon"><Wifi size={22} /></span>
               <h3>Instant digital eSIM</h3>
-              <p>Receive your QR code in minutes after approval. No physical SIM, no airport counter, no plastic to carry.</p>
+              <p>Receive your QR code after payment verification and successful provider provisioning. No physical SIM or airport counter.</p>
             </div>
             <div className="why-card">
               <span className="why-icon"><Timer size={22} /></span>
@@ -191,6 +192,8 @@ export default function Home() {
           <Faq />
         </div>
       </section>
+
+      <PartnersShowcase />
 
       <section className="section" id="support">
         <div className="shell">
