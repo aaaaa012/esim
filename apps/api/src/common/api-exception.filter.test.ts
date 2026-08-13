@@ -71,21 +71,21 @@ describe('ApiExceptionFilter', () => {
 });
 
 describe('RateLimitGuard', () => {
-  it('allows requests within the window and rejects beyond it', () => {
+  it('allows requests within the window and rejects beyond it', async () => {
     vi.stubEnv('AUTH_RATE_LIMIT_PER_MINUTE', '2');
     const guard = new RateLimitGuard();
     const request = { ip: '1.2.3.4', method: 'GET', path: '/api/v1/auth/me', headers: {} };
     const context = { switchToHttp: () => ({ getRequest: () => request, getResponse: () => ({ setHeader() {} }) }) } as never;
-    expect(guard.canActivate(context)).toBe(true);
-    expect(guard.canActivate(context)).toBe(true);
-    expect(() => guard.canActivate(context)).toThrow(HttpException);
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(HttpException);
     vi.unstubAllEnvs();
   });
 
-  it('exempts webhook endpoints', () => {
+  it('exempts webhook endpoints', async () => {
     const guard = new RateLimitGuard();
     const request = { ip: '1.2.3.4', method: 'POST', path: '/api/v1/webhooks/connectivity/transatel', headers: {} };
     const context = { switchToHttp: () => ({ getRequest: () => request, getResponse: () => ({ setHeader() {} }) }) } as never;
-    for (let i = 0; i < 1000; i++) expect(guard.canActivate(context)).toBe(true);
+    for (let i = 0; i < 1000; i++) await expect(guard.canActivate(context)).resolves.toBe(true);
   });
 });

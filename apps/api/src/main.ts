@@ -75,7 +75,7 @@ async function bootOnce() {
   app.setGlobalPrefix('api/v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalFilters(new ApiExceptionFilter());
-  app.useGlobalGuards(new RateLimitGuard());
+  app.useGlobalGuards(app.get(RateLimitGuard));
   app.useGlobalInterceptors(new CorrelationInterceptor(), new LoggingInterceptor(app.get(MetricsService)), new IdempotencyInterceptor(app.get(PrismaService)));
 
   if (process.env.SWAGGER_ENABLED === 'true') {

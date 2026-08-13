@@ -34,13 +34,15 @@ export class OrdersPersistenceService {
         ...(traveler ? { traveler } : {}),
         documents: row.documents.map((doc) => ({ id: doc.id, type: doc.type as DocumentType, fileName: doc.fileName, privateAssetId: doc.privateAssetId, status: doc.status as DocumentStatus })),
         ...(() => { const passport = row.documents.find((doc) => doc.type === 'PASSPORT'); if (!passport?.passportVerificationStatus) return {}; const verification: PassportVerificationResult = { status: passport.passportVerificationStatus as PassportVerificationResult['status'], matchedFields: (passport.passportMatchedFields as PassportVerificationResult['matchedFields'] | null) ?? [], ...(passport.passportConfidence != null ? { confidence: passport.passportConfidence } : {}), checkedAt: passport.passportVerifiedAt?.toISOString() ?? new Date().toISOString(), method: (passport.passportVerificationMethod as PassportVerificationResult['method'] | null) ?? 'tesseract-ocr' }; return { passportVerification: verification }; })(),
-        ...(payment ? { payment: { provider: payment.provider as PaymentProvider, reference: payment.paymentReference, status: payment.status as PaymentStatus, ...(payment.providerCorrelationId ? { correlationId: payment.providerCorrelationId } : {}), ...(payment.expiresAt ? { expiresAt: payment.expiresAt.toISOString() } : {}), ...(payment.returnUrl ? { returnUrl: payment.returnUrl } : {}), ...(payment.redirectUrl ? { redirectUrl: payment.redirectUrl } : {}), ...(payment.providerTransactionId ? { providerTransactionId: payment.providerTransactionId } : {}) } } : {}),
+        ...(payment ? { payment: { provider: payment.provider as PaymentProvider, reference: payment.paymentReference, status: payment.status as PaymentStatus, verificationAttempts: payment.verificationAttempts, ...(payment.providerCorrelationId ? { correlationId: payment.providerCorrelationId } : {}), ...(payment.expiresAt ? { expiresAt: payment.expiresAt.toISOString() } : {}), ...(payment.returnUrl ? { returnUrl: payment.returnUrl } : {}), ...(payment.redirectUrl ? { redirectUrl: payment.redirectUrl } : {}), ...(payment.providerTransactionId ? { providerTransactionId: payment.providerTransactionId } : {}) } } : {}),
         timeline: row.events.map((event) => ({ from: event.fromStatus as OrderStatus | null, to: event.toStatus as OrderStatus, at: event.createdAt.toISOString(), ...(event.reason ? { reason: event.reason } : {}) })),
         ...(row.customerEsim ? { qrPayload: this.crypto.decrypt(row.customerEsim.qrPayloadEncrypted) } : {}),
         ...(row.providerSubscriptionId ? { providerSubscriptionId: row.providerSubscriptionId } : {}),
         ...(row.providerStatus ? { providerStatus: row.providerStatus } : {}),
         ...(row.qrDeliveredAt ? { qrDeliveredAt: row.qrDeliveredAt.toISOString() } : {}),
         ...(row.activatedAt ? { activatedAt: row.activatedAt.toISOString() } : {}),
+        activationRefetchAttempts: row.activationRefetchAttempts,
+        ...(row.lastProvisioningRecoveryAt ? { lastProvisioningRecoveryAt: row.lastProvisioningRecoveryAt.toISOString() } : {}),
         purchaseType: row.orderType as 'INITIAL_PURCHASE' | 'TOPUP',
         ...(row.partner ? { partner: row.partner } : {}),
         ...(row.externalOrderId ? { externalOrderId: row.externalOrderId } : {}),
@@ -64,7 +66,7 @@ export class OrdersPersistenceService {
       await tx.plan.upsert({ where: { id: order.plan.id }, update: { name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' }, create: { id: order.plan.id, countryId: country.id, providerPlanId: `TRANSATEL-${order.plan.countryCode}`, name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, costPrice: Math.round(order.plan.sellingPriceNpr * 0.65), sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' } });
       const existing = await tx.order.findUnique({ where: { id: order.id }, select: { id: true, status: true, partnerId: true, externalOrderId: true } });
       if (existing) {
-        const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, orderType: (order.purchaseType ?? 'INITIAL_PURCHASE') as DbOrderType, providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, qrDeliveredAt: order.qrDeliveredAt ? new Date(order.qrDeliveredAt) : null, activatedAt: order.activatedAt ? new Date(order.activatedAt) : null, version: { increment: 1 } } });
+      const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, orderType: (order.purchaseType ?? 'INITIAL_PURCHASE') as DbOrderType, providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, qrDeliveredAt: order.qrDeliveredAt ? new Date(order.qrDeliveredAt) : null, activatedAt: order.activatedAt ? new Date(order.activatedAt) : null, version: { increment: 1 } } });
         if (updated.count !== 1) throw new ConflictException('Order was changed by another request; reload and retry');
         if (existing.partnerId && existing.status !== order.status) {
           const eventType = this.partnerEventType(order.status);
@@ -107,6 +109,40 @@ export class OrdersPersistenceService {
       throw error;
     }
     order.version += 1;
+  }
+
+  /**
+   * Atomically claims a gateway-confirmed payment.  This is deliberately a
+   * narrow database command rather than a mutation of the process cache: a
+   * callback, browser return, and reconciliation job may execute on separate
+   * API replicas.  Exactly one of them can move PENDING to COMPLETED.
+   */
+  async confirmPaymentAtomically(orderId: string, reference: string, transactionId?: string): Promise<{ claimed: boolean; alreadyCompleted: boolean }> {
+    if (!this.prisma.enabled) return { claimed: true, alreadyCompleted: false };
+    return this.prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.findUnique({
+        where: { paymentReference: reference },
+        select: { orderId: true, status: true, order: { select: { status: true } } },
+      });
+      if (!payment || payment.orderId !== orderId) throw new ConflictException('Payment reference does not belong to this order');
+      if (payment.status === PaymentStatus.COMPLETED) return { claimed: false, alreadyCompleted: true };
+      const paid = await tx.payment.updateMany({
+        where: { paymentReference: reference, orderId, status: PaymentStatus.PENDING as DbPaymentStatus },
+        data: { status: PaymentStatus.COMPLETED as DbPaymentStatus, ...(transactionId ? { providerTransactionId: transactionId } : {}), paidAt: new Date() },
+      });
+      if (paid.count !== 1) {
+        const latest = await tx.payment.findUnique({ where: { paymentReference: reference }, select: { status: true } });
+        return { claimed: false, alreadyCompleted: latest?.status === PaymentStatus.COMPLETED };
+      }
+      const transitioned = await tx.order.updateMany({
+        where: { id: orderId, status: OrderStatus.PAYMENT_PENDING as DbOrderStatus },
+        data: { status: OrderStatus.PAYMENT_CONFIRMED as DbOrderStatus, version: { increment: 1 } },
+      });
+      if (transitioned.count === 1) {
+        await tx.orderEvent.create({ data: { orderId, fromStatus: OrderStatus.PAYMENT_PENDING as DbOrderStatus, toStatus: OrderStatus.PAYMENT_CONFIRMED as DbOrderStatus, reason: 'Gateway payment confirmed' } });
+      }
+      return { claimed: true, alreadyCompleted: false };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 15_000, timeout: 45_000 });
   }
 
   async recordConsent(orderId: string, ownerId: string, type: string, version: string, ipAddress: string, userAgent: string) {

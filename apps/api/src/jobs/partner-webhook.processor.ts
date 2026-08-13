@@ -104,7 +104,7 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
     this.queues.registerWorker(QUEUES.partnerWebhooks, (job) =>
       this.deliver(job as Job<DeliveryJob>),
     );
-    void this.enqueuePending().catch((error: unknown) =>
+    void this.enqueuePendingAsLeader().catch((error: unknown) =>
       this.logger.error(
         error instanceof Error
           ? error.message
@@ -113,7 +113,7 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
     );
     if (this.queues.enabled)
       this.reconciliationTimer = setInterval(() => {
-        void this.enqueuePending().catch((error: unknown) =>
+        void this.enqueuePendingAsLeader().catch((error: unknown) =>
           this.logger.error(error instanceof Error ? error.message : "Webhook reconciliation failed"),
         );
       }, 30_000);
@@ -121,6 +121,12 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy() {
     if (this.reconciliationTimer) clearInterval(this.reconciliationTimer);
+  }
+
+  private async enqueuePendingAsLeader() {
+    const result = await this.queues.withDistributedLock('partner-webhook-reconciliation', 25_000, () => this.enqueuePending());
+    if (!result.acquired) this.logger.debug('Skipped partner webhook reconciliation; another replica holds the lease');
+    return result.value;
   }
 
   async enqueuePending() {

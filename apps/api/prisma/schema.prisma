@@ -368,6 +368,8 @@ model Order {
   providerStatus               String?
   qrDeliveredAt                DateTime?
   activatedAt                  DateTime?
+  activationRefetchAttempts   Int                            @default(0)
+  lastProvisioningRecoveryAt  DateTime?
   traveler                     Traveler?
   documents                    TravelerDocument[]
   payments                     Payment[]
@@ -454,6 +456,8 @@ model Payment {
   expiresAt             DateTime?
   returnUrl             String?
   redirectUrl           String?
+  verificationAttempts  Int             @default(0)
+  lastVerifiedAt        DateTime?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 

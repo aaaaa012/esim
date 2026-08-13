@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { clientIp } from './client-ip.js';
+import { QueueService } from '../jobs/queue.service.js';
 
 type Bucket = { tokens: number; lastRefill: number };
 
@@ -20,7 +21,9 @@ export class RateLimitGuard implements CanActivate {
   private readonly authLimit = Number(process.env.AUTH_RATE_LIMIT_PER_MINUTE ?? 60);
   private readonly windowMs = 60_000;
 
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly queues?: QueueService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<{ ip?: string; socket?: { remoteAddress?: string }; path: string; method: string }>();
     const ip = clientIp(request);
     const path = request.path ?? '';
@@ -44,6 +47,16 @@ export class RateLimitGuard implements CanActivate {
     if (bucket.tokens > capacity) bucket.tokens = capacity;
 
     const response = context.switchToHttp().getResponse<{ setHeader(name: string, value: string | number): void }>();
+    if (this.queues?.enabled) {
+      const shared = await this.queues.consumeRateLimit(key, this.windowMs);
+      response.setHeader('x-ratelimit-limit', capacity);
+      response.setHeader('x-ratelimit-remaining', Math.max(0, capacity - shared.count));
+      if (shared.count > capacity) {
+        response.setHeader('retry-after', shared.retryAfterSeconds);
+        throw new HttpException({ code: 'RATE_LIMITED', message: 'Too many requests. Please wait a moment and try again.' }, HttpStatus.TOO_MANY_REQUESTS);
+      }
+      return true;
+    }
     response.setHeader('x-ratelimit-limit', capacity);
     response.setHeader('x-ratelimit-remaining', Math.floor(bucket.tokens));
 
