@@ -1,13 +1,31 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Bell, Globe2, Menu, X } from 'lucide-react';
 import { SignInButton, SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
+import ThemeToggle from './theme-toggle';
 
 export default function CustomerHeader() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [path]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    document.body.classList.add('menu-open');
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      document.body.classList.remove('menu-open');
+    };
+  }, [open]);
 
   const navLink = (href: string, label: string) => (
     <Link href={href} className={path === href || path.startsWith(href) ? 'nav-active' : ''} onClick={() => setOpen(false)}>
@@ -29,6 +47,7 @@ export default function CustomerHeader() {
           {navLink('/#how', 'How it works')}
           {navLink('/compatibility', 'Compatibility')}
           <span className="nav-user">
+            <ThemeToggle />
             <SignedOut>
               <SignInButton mode="modal">
                 <button className="button secondary">Sign in</button>
@@ -48,17 +67,18 @@ export default function CustomerHeader() {
             </SignedIn>
           </span>
         </nav>
-        <button className="nav-toggle" onClick={() => setOpen((value) => !value)} aria-label="Toggle menu" aria-expanded={open}>
+        <button className="nav-toggle" onClick={() => setOpen((value) => !value)} aria-label={open ? 'Close navigation menu' : 'Open navigation menu'} aria-expanded={open} aria-controls="customer-navigation-menu">
           {open ? <X size={20} /> : <Menu size={20} />}
         </button>
       </div>
       {open && (
-        <div className="nav-menu">
+        <div className="nav-menu" id="customer-navigation-menu">
           <div className="shell nav-menu-inner">
             {navLink('/#plans', 'Destinations')}
             {navLink('/#how', 'How it works')}
             {navLink('/compatibility', 'Compatibility')}
             <div className="nav-menu-divider" />
+            <ThemeToggle />
             <SignedOut>
               <SignInButton mode="modal">
                 <button className="nav-menu-item">Sign in</button>
@@ -68,6 +88,10 @@ export default function CustomerHeader() {
               {navLink('/account/esims', 'My eSIMs')}
               {navLink('/account/orders', 'Orders')}
               {navLink('/account/notifications', 'Notifications')}
+              <div className="nav-menu-account">
+                <span>Account</span>
+                <UserButton />
+              </div>
             </SignedIn>
           </div>
         </div>

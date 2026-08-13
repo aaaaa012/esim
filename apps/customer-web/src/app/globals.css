@@ -52,6 +52,43 @@
   color-scheme: light;
 }
 
+[data-theme='dark'] {
+  --primary: #8ea2ff;
+  --primary-hover: #aab8ff;
+  --primary-soft: #202a4d;
+  --primary-ring: rgba(142, 162, 255, 0.4);
+  --accent: #22d3ee;
+  --accent-strong: #67e8f9;
+  --accent-soft: #123641;
+  --bg: #080d18;
+  --surface: #101827;
+  --surface-2: #172235;
+  --border: #263449;
+  --border-strong: #3a4a62;
+  --text: #eef3fb;
+  --text-2: #bec9d9;
+  --text-3: #8e9bb0;
+  --success: #34d399;
+  --success-strong: #6ee7b7;
+  --success-soft: #12392f;
+  --info: #93c5fd;
+  --info-soft: #172e4d;
+  --warning: #fbbf24;
+  --warning-soft: #3b2e13;
+  --danger: #fda4af;
+  --danger-soft: #431d26;
+  --navy-panel: #111a2b;
+  --navy-panel-text: #f8fafc;
+  --navy-panel-sub: #aebbd0;
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, .24);
+  --shadow-sm: 0 8px 22px -14px rgba(0, 0, 0, .75);
+  --shadow-md: 0 18px 42px -20px rgba(0, 0, 0, .85);
+  --shadow-lg: 0 32px 68px -26px rgba(0, 0, 0, .9);
+  --hero-bg: radial-gradient(circle at 80% 12%, rgba(34, 211, 238, .12), transparent 34%), radial-gradient(circle at 12% 88%, rgba(99, 102, 241, .16), transparent 42%), linear-gradient(180deg, #0c1423 0%, #080d18 100%);
+  --screen-bg: linear-gradient(168deg, #102233 0%, #101827 78%);
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -69,7 +106,10 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  transition: background-color .2s ease, color .2s ease;
 }
+
+body.menu-open { overflow: hidden; }
 
 a {
   text-decoration: none;
@@ -85,6 +125,25 @@ svg {
 button {
   font-family: inherit;
 }
+
+.customer-theme-toggle {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
+}
+.customer-theme-toggle:hover { border-color: var(--border-strong); color: var(--primary); transform: translateY(-1px); }
+.customer-theme-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+[data-theme='dark'] .qr-stage { background: #ffffff; }
+[data-theme='dark'] .site-header { background: color-mix(in srgb, var(--bg) 88%, transparent); }
 
 ::selection {
   background: var(--primary);
@@ -111,6 +170,7 @@ button {
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 65%, transparent);
 }
 
 .header-inner {
@@ -182,12 +242,22 @@ button {
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
 }
+
+.nav-toggle:hover { background: var(--surface-2); border-color: var(--border-strong); color: var(--primary); }
 
 .nav-menu {
   display: none;
   border-top: 1px solid var(--border);
   background: var(--surface);
+  box-shadow: var(--shadow-md);
+  animation: nav-menu-in .16s ease-out;
+}
+
+@keyframes nav-menu-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .nav-menu .nav-menu-inner {
@@ -213,6 +283,20 @@ button {
   background: var(--primary-soft);
 }
 
+.nav-menu a:hover,
+.nav-menu .nav-menu-item:hover { color: var(--primary); background: var(--primary-soft); }
+
+.nav-menu-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 8px 12px;
+  color: var(--text-2);
+  font-size: 15px;
+  font-weight: 600;
+}
+
 .nav-menu .nav-menu-divider {
   height: 1px;
   background: var(--border);
@@ -230,6 +314,18 @@ button {
 
   .nav-menu {
     display: block;
+    max-height: calc(100vh - 72px);
+    overflow-y: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
   }
 }
 
@@ -542,7 +638,7 @@ button {
 .account-head {
   display: flex;
   justify-content: space-between;
-  align-items: end;
+  align-items: flex-end;
   gap: 24px;
   margin-bottom: 36px;
 }
