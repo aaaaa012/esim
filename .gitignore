@@ -10,3 +10,4 @@ coverage
 *.log
 *.tsbuildinfo
 apps/api/prisma/dev.db
+.clerk/

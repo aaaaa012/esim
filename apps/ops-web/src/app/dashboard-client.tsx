@@ -123,6 +123,11 @@ export default function DashboardClient() {
     },
   ];
 
+  const customerLabel = (order: Order) => {
+    if (order.traveler) return `${order.traveler.firstName} ${order.traveler.surname}`;
+    return order.ownerId.includes('-') ? `Guest · ${order.ownerId.slice(0, 8)}` : order.ownerId;
+  };
+
   return (
     <>
       <PageHeader
@@ -229,11 +234,7 @@ export default function DashboardClient() {
                         {order.orderNumber}
                       </Link>
                     </TableCell>
-                    <TableCell>
-                      {order.traveler
-                        ? `${order.traveler.firstName} ${order.traveler.surname}`
-                        : order.ownerId}
-                    </TableCell>
+                    <TableCell className="max-w-52 truncate" title={order.ownerId}>{customerLabel(order)}</TableCell>
                     <TableCell>
                       <span className="font-medium">
                         {order.plan.countryCode}
