@@ -9,17 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/spinner";
 import { cn } from "@/lib/utils";
+import { isShellFreePath } from "@/lib/shell-routes";
 
 export default function OpsShell({ children }: { children: React.ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
   const { signOut } = useClerk();
   const pathname = usePathname();
-  if (
-    pathname.startsWith("/sign-in") ||
-    pathname.startsWith("/sign-up") ||
-    pathname.startsWith("/staff-onboarding")
-  )
-    return children;
+  if (isShellFreePath(pathname)) return children;
   if (!isLoaded || !isSignedIn)
     return (
       <div className="flex min-h-screen items-center justify-center">

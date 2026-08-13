@@ -7,11 +7,13 @@ const isPublic = createRouteMatcher([
   "/unauthorized",
   "/super-admin(.*)",
 ]);
+const isTerminal = createRouteMatcher(["/access-error", "/unauthorized"]);
 const isSecurity = createRouteMatcher(["/security(.*)"]);
 const isChangePassword = createRouteMatcher(["/change-password(.*)"]);
 const isAdmin = createRouteMatcher(["/admin(.*)"]);
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 export default clerkMiddleware(async (auth, request) => {
+  if (isTerminal(request)) return;
   if (isPublic(request)) return;
   const session = await auth();
   if (!session?.userId) {
@@ -20,13 +22,13 @@ export default clerkMiddleware(async (auth, request) => {
     return NextResponse.redirect(signInUrl);
   }
   const token = await session.getToken();
-  if (!token) return NextResponse.redirect(new URL("/unauthorized", request.url));
+  if (!token) return NextResponse.redirect(new URL("/access-error", request.url));
   try {
     const response = await fetch(`${API}/auth/me`, {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store",
     });
-    if (!response.ok) return NextResponse.redirect(new URL("/unauthorized", request.url));
+    if (!response.ok) return NextResponse.redirect(new URL("/access-error", request.url));
     const envelope = (await response.json()) as {
       data: {
         accountType: string;
@@ -36,12 +38,12 @@ export default clerkMiddleware(async (auth, request) => {
       };
     };
     if (!["OPERATIONS", "SUPER_ADMIN"].includes(envelope.data.accountType))
-      return NextResponse.redirect(new URL("/unauthorized", request.url));
+      return NextResponse.redirect(new URL("/access-error", request.url));
     if (
       isAdmin(request) &&
       envelope.data.accountType !== "SUPER_ADMIN"
     )
-      return NextResponse.redirect(new URL("/unauthorized", request.url));
+      return NextResponse.redirect(new URL("/access-error", request.url));
     if (
       envelope.data.mustChangePassword &&
       !isChangePassword(request)
@@ -54,7 +56,7 @@ export default clerkMiddleware(async (auth, request) => {
     )
       return NextResponse.redirect(new URL("/security", request.url));
   } catch {
-    return NextResponse.redirect(new URL("/unauthorized", request.url));
+    return NextResponse.redirect(new URL("/access-error", request.url));
   }
 });
 export const config = {

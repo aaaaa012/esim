@@ -3,6 +3,7 @@ import { useAuth } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext } from "react";
 import { Spinner } from "@/components/spinner";
+import { isShellFreePath } from "@/lib/shell-routes";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type AuthFetch = typeof window.fetch;
 const Context = createContext<AuthFetch | null>(null);
@@ -43,12 +44,7 @@ export default function AuthenticatedApiProvider({
         <Spinner /> Securing operator session…
       </div>
     );
-  if (
-    !isSignedIn &&
-    !pathname.startsWith("/sign-in") &&
-    !pathname.startsWith("/sign-up") &&
-    !pathname.startsWith("/staff-onboarding")
-  )
+  if (!isSignedIn && !isShellFreePath(pathname))
     return (
       <div className="flex min-h-screen items-center justify-center px-4 text-sm text-muted-foreground">
         Your session has ended. Sign in again to continue.
