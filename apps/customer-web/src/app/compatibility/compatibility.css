@@ -1,6 +1,6 @@
 .compatibility-page {
   padding: 84px 0 110px;
-  background: var(--hero-bg);
+  background: radial-gradient(circle at 84% 10%, rgba(196, 109, 26, .08), transparent 28%), var(--hero-bg);
 }
 
 .compatibility-shell {
@@ -31,6 +31,26 @@
   letter-spacing: -0.02em;
 }
 
+.compatibility-page .card {
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+
+.compatibility-page .card::before {
+  content: "Before you purchase";
+  display: inline-flex;
+  margin-bottom: 16px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--route-soft);
+  color: var(--route);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
 .compatibility-page .card p {
   color: var(--text-2);
   line-height: 1.65;
@@ -48,4 +68,9 @@
   color: var(--warning);
   font-size: 14px;
   font-weight: 600;
+}
+
+@media (max-width: 700px) {
+  .compatibility-page { padding: 48px 0 72px; }
+  .compatibility-intro { font-size: 16px; }
 }
