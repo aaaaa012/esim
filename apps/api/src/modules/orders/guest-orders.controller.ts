@@ -2,14 +2,17 @@ import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createOrderSchema, documentRequestSchema, initiatePaymentSchema, travelerSchema } from '@visa-compass/shared';
 import { GuestLookupRateLimitGuard } from '../../common/guest-lookup.rate-limit.guard.js';
+import { PassportVerificationRateLimitGuard } from '../../common/passport-verification.rate-limit.guard.js';
 import { clientIp } from '../../common/client-ip.js';
 import { PaymentsService } from '../payments/payments.service.js';
 import { OrdersService } from './orders.service.js';
 
+const guestTokenTtlMs = 24 * 60 * 60_000;
 const tokenFor = (orderId: string) => {
   const secret = process.env.GUEST_ORDER_SECRET;
   if (!secret && process.env.NODE_ENV === 'production') throw new Error('GUEST_ORDER_SECRET is required in production');
-  return createHmac('sha256', secret ?? 'local-guest-checkout-secret').update(orderId).digest('hex');
+  const payload = Buffer.from(JSON.stringify({ orderId, expiresAt: Date.now() + guestTokenTtlMs })).toString('base64url');
+  return `${payload}.${createHmac('sha256', secret ?? 'local-guest-checkout-secret').update(payload).digest('base64url')}`;
 };
 const lookupTokenFor = (mobile: string) => {
   const secret = process.env.GUEST_ORDER_SECRET ?? 'local-guest-checkout-secret';
@@ -62,7 +65,9 @@ export class GuestOrdersController {
 
   @Post(':id/documents/:documentId/confirm') confirmDocument(@Param('id') id: string, @Param('documentId') documentId: string, @Body('token') token: string) { this.assert(id, token); return this.orders.confirmDocument(id, documentId, null); }
 
-  @Post(':id/verify-passport') verifyPassport(@Param('id') id: string, @Body() body: { token: string }) { this.assert(id, body.token); return this.orders.verifyPassport(id, null); }
+  @Post(':id/verify-passport')
+  @UseGuards(PassportVerificationRateLimitGuard)
+  verifyPassport(@Param('id') id: string, @Body() body: { token: string }) { this.assert(id, body.token); return this.orders.verifyPassport(id, null); }
 
   @Post(':id/payment') payment(@Param('id') id: string, @Body() body: { token: string; provider: unknown }) { this.assert(id, body.token); const input = initiatePaymentSchema.parse({ provider: body.provider }); return this.payments.initiate(id, null, input.provider); }
 
@@ -81,8 +86,14 @@ export class GuestOrdersController {
   private assert(id: string, token: string) {
     if (!this.orders.get(id)) throw new NotFoundException('Order not found');
     if (!token) throw new ForbiddenException('Guest token is required');
-    const expected = Buffer.from(tokenFor(id));
-    const actual = Buffer.from(token);
+    const [payload, signature] = token.split('.');
+    if (!payload || !signature) throw new ForbiddenException('Invalid or expired guest token');
+    const expected = Buffer.from(createHmac('sha256', process.env.GUEST_ORDER_SECRET ?? 'local-guest-checkout-secret').update(payload).digest('base64url'));
+    const actual = Buffer.from(signature);
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new ForbiddenException('Invalid or expired guest token');
+    let claims: { orderId?: string; expiresAt?: number };
+    try { claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as { orderId?: string; expiresAt?: number }; }
+    catch { throw new ForbiddenException('Invalid or expired guest token'); }
+    if (claims.orderId !== id || !claims.expiresAt || claims.expiresAt <= Date.now()) throw new ForbiddenException('Invalid or expired guest token');
   }
 }

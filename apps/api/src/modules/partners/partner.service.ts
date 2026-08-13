@@ -22,12 +22,14 @@ import {
 } from "@prisma/client";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
+  documentTypeLabel,
   DocumentType as SharedDocumentType,
   type TravelerInput,
 } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { CloudinaryStorageService } from "../../infrastructure/cloudinary-storage.service.js";
+import { ApiException } from "../../common/api-error.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
@@ -126,17 +128,31 @@ export class PartnerService {
     private readonly passportVerifier: PassportVerificationService,
   ) {}
 
+  private async verifyUploadedDocument(assetId: string) {
+    try {
+      return await this.storage.verifyDocument(assetId);
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw new ApiException({
+          code: "PARTNER_DOCUMENT_INVALID",
+          message: error.message,
+          status: 400,
+        });
+      }
+      throw error;
+    }
+  }
+
   async capabilities(partnerId: string) {
     await this.partner(partnerId);
     return {
       apiVersion: "v1",
       currency: "NPR",
-      settlementMethods: [PartnerSettlementMethod.PARTNER_ACCOUNT],
+      settlementMethods: ["PARTNER_ACCOUNT"],
       payments: [],
       notifications: ["EMAIL", "WHATSAPP"],
       connectivity: {
-        ...this.connectivity.descriptor(),
-        health: await this.connectivity.health(),
+        available: (await this.connectivity.health()).ok,
       },
       idempotencyRequiredForMutations: true,
       outboundWebhooks: true,
@@ -227,10 +243,7 @@ export class PartnerService {
     const partner = await this.partner(partnerId);
     const settlement = input.settlement ?? { method: "PARTNER_ACCOUNT" as const };
     if (settlement.method === "HOSTED_PAYMENT")
-      throw new GoneException({
-        code: "HOSTED_PAYMENT_DEPRECATED",
-        message: "Hosted payment is no longer available; partners collect customer payment directly and use their prepaid Visa Compass balance",
-      });
+      throw this.hostedPaymentDeprecated();
     const settlementMethod = PartnerSettlementMethod.PARTNER_ACCOUNT;
     const plan = await this.prisma.plan.findFirst({
       where: { id: input.planId, status: "ACTIVE", country: { active: true } },
@@ -247,7 +260,7 @@ export class PartnerService {
     if (missing.length)
       throw new BadRequestException({
         code: "DOCUMENT_REQUIRED",
-        message: `Required documents missing: ${missing.join(", ")}`,
+        message: `Missing required documents: ${missing.map(documentTypeLabel).join(", ")}`,
       });
     const uploadIds = input.documents.map((item) => item.uploadId);
     const intents = await this.prisma.partnerDocumentUploadIntent.findMany({
@@ -276,7 +289,7 @@ export class PartnerService {
           code: "UPLOAD_NOT_VERIFIED",
           message: "Document upload type does not match",
         });
-      const verified = await this.storage.verifyDocument(intent.privateAssetId);
+      const verified = await this.verifyUploadedDocument(intent.privateAssetId);
       if (
         !verified.simulated &&
         (verified.bytes !== intent.declaredSizeBytes ||
@@ -294,7 +307,7 @@ export class PartnerService {
         where: { partnerId, externalOrderId: input.externalOrderId },
       });
       if (duplicate)
-        throw new ConflictException("External order ID already exists");
+        throw new ApiException({ code: "EXTERNAL_ORDER_ID_EXISTS", message: "External order ID already exists", status: 409 });
       const consumable = await tx.partnerDocumentUploadIntent.updateMany({
         where: {
           id: { in: uploadIds },
@@ -306,7 +319,7 @@ export class PartnerService {
         data: { consumedAt: new Date(), consumedOrderId: orderId },
       });
       if (consumable.count !== uploadIds.length)
-        throw new ConflictException("Document upload was already consumed");
+        throw new ApiException({ code: "UPLOAD_ALREADY_CONSUMED", message: "Document upload was already consumed", status: 409 });
       const partnerCustomer = await this.ensurePartnerCustomer(
         tx,
         partner.code,
@@ -409,7 +422,7 @@ export class PartnerService {
     void partnerId; void planId; void settlementMethod;
     throw new GoneException({
       code: "PARTNER_QUOTES_DEPRECATED",
-      message: "Partner quotes and channel-specific prices are disabled; submit a complete order using the active plan selling price",
+      message: "Quotes are no longer available. Place a complete order instead (POST /partners/orders).",
     });
     /* Retained below for historical schema compatibility; no new quotes are created.
     const partner = await this.partner(partnerId);
@@ -461,7 +474,7 @@ export class PartnerService {
     void partnerId; void input;
     throw new GoneException({
       code: "LEGACY_PARTNER_ORDER_DEPRECATED",
-      message: "Quote-based partner orders are disabled; submit a complete order using planId",
+      message: "Quote-based orders are no longer available. Place a complete order instead (POST /partners/orders).",
     });
     /* Retained below for historical schema compatibility; no new quote orders are created.
     const result = await this.prisma.$transaction(async (tx) => {
@@ -481,7 +494,7 @@ export class PartnerService {
         where: { partnerId, externalOrderId: input.externalOrderId },
       });
       if (duplicate)
-        throw new ConflictException("External order ID already exists");
+        throw new ApiException({ code: "EXTERNAL_ORDER_ID_EXISTS", message: "External order ID already exists", status: 409 });
       const partnerCustomer = await this.ensurePartnerCustomer(
         tx,
         quote.partner.code,
@@ -695,7 +708,7 @@ export class PartnerService {
       where: { id, partnerId },
       include: PARTNER_ORDER_INCLUDE,
     });
-    if (!order) throw new NotFoundException("Order not found");
+    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
     return this.normalizeOrder(order);
   }
 
@@ -704,7 +717,7 @@ export class PartnerService {
       where: { partnerId, externalOrderId },
       select: { id: true },
     });
-    if (!order) throw new NotFoundException("Order not found");
+    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
     return this.order(partnerId, order.id);
   }
 
@@ -715,11 +728,11 @@ export class PartnerService {
         customerEsim: { include: { inventory: true, subscriptions: { take: 1 } } },
       },
     });
-    if (!order) throw new NotFoundException("Order not found");
+    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
     if (order.status !== OrderStatus.QR_READY && order.status !== OrderStatus.COMPLETED)
-      throw new ConflictException("Activation details are available when the order is QR_READY or COMPLETED");
+      throw new ApiException({ code: "PARTNER_ORDER_NOT_READY", message: "Activation details are available once the eSIM is ready to use", status: 409 });
     if (!order.customerEsim)
-      throw new NotFoundException("Activation details are not available");
+      throw new ApiException({ code: "PARTNER_ACTIVATION_UNAVAILABLE", message: "Activation details are not available yet", status: 404 });
     const subscription = order.customerEsim.subscriptions[0];
     return {
       orderId: order.id,
@@ -815,8 +828,8 @@ export class PartnerService {
     const document = await this.prisma.travelerDocument.findFirst({
       where: { id: documentId, orderId, order: { partnerId } },
     });
-    if (!document) throw new NotFoundException("Document not found");
-    await this.storage.verifyDocument(document.privateAssetId);
+    if (!document) throw new ApiException({ code: "PARTNER_DOCUMENT_NOT_FOUND", message: "Document not found", status: 404 });
+    await this.verifyUploadedDocument(document.privateAssetId);
     return {
       id: document.id,
       type: document.type,
@@ -891,7 +904,7 @@ export class PartnerService {
         },
       });
       if (duplicate)
-        throw new ConflictException("External order ID already exists");
+        throw new ApiException({ code: "EXTERNAL_ORDER_ID_EXISTS", message: "External order ID already exists", status: 409 });
       const partnerCustomer = await this.ensurePartnerCustomer(
         tx,
         partner.code,
@@ -987,7 +1000,7 @@ await tx.order.create({
         partner: { select: { name: true, slug: true, brand: true } },
       },
     });
-    if (!order) throw new NotFoundException("Hosted checkout not found");
+    if (!order) throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
     return {
       sessionId: session.id,
       expiresAt: session.expiresAt,
@@ -1090,8 +1103,8 @@ await tx.order.create({
     const document = await this.prisma.travelerDocument.findFirst({
       where: { id: documentId, orderId: order.id },
     });
-    if (!document) throw new NotFoundException("Document not found");
-    await this.storage.verifyDocument(document.privateAssetId);
+    if (!document) throw new ApiException({ code: "PARTNER_DOCUMENT_NOT_FOUND", message: "Document not found", status: 404 });
+    await this.verifyUploadedDocument(document.privateAssetId);
     return {
       id: document.id,
       type: document.type,
@@ -1164,21 +1177,21 @@ await tx.order.create({
         documents: true,
       },
     });
-    if (!order) throw new NotFoundException("Hosted checkout not found");
+    if (!order) throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
     if (order.status !== OrderStatus.DRAFT)
-      throw new BadRequestException("Hosted checkout is already completed");
+      throw new ApiException({ code: "HOSTED_CHECKOUT_COMPLETED", message: "Hosted checkout is already completed", status: 400 });
     const required = this.requiredDocuments(order.plan.country.isoCode);
     if (!order.traveler && order.orderType !== "TOPUP")
-      throw new BadRequestException("Traveller details are required");
+      throw new ApiException({ code: "PARTNER_TRAVELER_REQUIRED", message: "Traveller details are required", status: 400 });
     if (order.orderType !== "TOPUP") {
       for (const type of required) {
         const document = order.documents.find((item) => item.type === type);
         if (!document)
           throw new BadRequestException({
             code: "DOCUMENT_REQUIRED",
-            message: `Required document missing: ${type}`,
+            message: `Missing required document: ${documentTypeLabel(type)}`,
           });
-        await this.storage.verifyDocument(document.privateAssetId);
+        await this.verifyUploadedDocument(document.privateAssetId);
       }
       const passport = order.documents.find(
         (item) => item.type === DocumentType.PASSPORT,
@@ -1204,7 +1217,7 @@ await tx.order.create({
         data: { status: OrderStatus.APPROVED, version: { increment: 1 } },
       });
       if (updated.count !== 1)
-        throw new ConflictException("Order was changed; reload and retry");
+        throw new ApiException({ code: "ORDER_CONFLICT", message: "Order was changed; reload and retry", status: 409 });
       await tx.orderEvent.create({
         data: {
           orderId: order.id,
@@ -1268,7 +1281,6 @@ await tx.order.create({
       OrderStatus.PAYMENT_PENDING,
       OrderStatus.AWAITING_CUSTOMER,
       OrderStatus.REVIEW_PENDING,
-      OrderStatus.APPROVED,
     ]);
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.order.updateMany({
@@ -1276,9 +1288,7 @@ await tx.order.create({
         data: { status: OrderStatus.CANCELLED, version: { increment: 1 } },
       });
       if (updated.count !== 1)
-        throw new ConflictException(
-          "Order was changed by another request; reload and retry",
-        );
+        throw new ApiException({ code: "ORDER_CONFLICT", message: "Order was changed by another request; reload and retry", status: 409 });
       await tx.orderEvent.create({
         data: {
           orderId,
@@ -1329,7 +1339,6 @@ await tx.order.create({
     const order = await this.mutableOrder(partnerId, orderId, [
       OrderStatus.PAYMENT_CONFIRMED,
       OrderStatus.REVIEW_PENDING,
-      OrderStatus.APPROVED,
       OrderStatus.PROVISIONING_FAILED,
       OrderStatus.COMPLETED,
     ]);
@@ -1391,9 +1400,9 @@ await tx.order.create({
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, partnerId },
     });
-    if (!order) throw new NotFoundException("Order not found");
+    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
     if (order.status !== OrderStatus.COMPLETED)
-      throw new BadRequestException("Usage is available after provisioning");
+      throw new ApiException({ code: "PARTNER_USAGE_UNAVAILABLE", message: "Usage details are available once the eSIM is active", status: 400 });
     return this.connectivity.getUsage(orderId);
   }
 
@@ -1409,9 +1418,9 @@ await tx.order.create({
       where: { id: orderId, partnerId },
       include: { traveler: true },
     });
-    if (!order) throw new NotFoundException("Order not found");
+    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
     if (!order.traveler)
-      throw new BadRequestException("Traveler contact details are required");
+      throw new ApiException({ code: "PARTNER_TRAVELER_REQUIRED", message: "Traveller contact details are required", status: 400 });
     return this.notifications.enqueue({
       orderId,
       channel: input.channel,
@@ -1431,11 +1440,9 @@ await tx.order.create({
       externalOrderId: order.externalOrderId,
       status: order.status,
       settlementMethod: order.partnerSettlementMethod,
-      paymentProvider: order.partnerPaymentProvider,
       metadata: order.partnerMetadata,
       currency: order.currency,
       totalAmountPaisa: Math.round(Number(order.totalAmount) * 100),
-      pricingSnapshot: order.pricingSnapshot,
       plan: {
         id: order.plan.id,
         countryCode: order.plan.country.isoCode,
@@ -1449,12 +1456,6 @@ await tx.order.create({
         type: document.type,
         status: document.status,
       })),
-      payment: order.payments[0]
-        ? {
-            provider: order.payments[0].provider,
-            status: order.payments[0].status,
-          }
-        : null,
       refund: order.partnerRefundRequests[0] ?? null,
       timeline: order.events.map((event) => ({
         from: event.fromStatus,
@@ -1463,17 +1464,12 @@ await tx.order.create({
         at: event.createdAt,
       })),
       fulfillmentStatus: this.fulfillmentStatus(order.status),
-      nextAction: order.status === OrderStatus.APPROVED || order.status === OrderStatus.PROVISIONING
-        ? { type: "WAIT_FOR_PROVISIONING" }
-        : null,
-      retryAfterSeconds: order.status === OrderStatus.APPROVED || order.status === OrderStatus.PROVISIONING ? 5 : null,
       links: {
         order: `/api/v1/partners/orders/${order.id}`,
         events: `/api/v1/partners/orders/${order.id}/events`,
         esim: `/api/v1/partners/orders/${order.id}/esim`,
       },
       esimDetailsAvailable: order.status === OrderStatus.QR_READY || order.status === OrderStatus.COMPLETED,
-      version: order.version,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
     };
@@ -1486,18 +1482,18 @@ await tx.order.create({
       (partner.status !== PartnerStatus.ACTIVE &&
         partner.status !== PartnerStatus.SUSPENDED)
     )
-      throw new NotFoundException("Partner not found");
+      throw new ApiException({ code: "PARTNER_NOT_FOUND", message: "Partner not found", status: 404 });
     return partner;
   }
 
   private async hostedCheckoutSession(token: string) {
     if (!/^[A-Za-z0-9_-]{32,100}$/.test(token))
-      throw new NotFoundException("Hosted checkout not found");
+      throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
     const session = await this.prisma.partnerHostedCheckoutSession.findUnique({
       where: { tokenHash: createHash("sha256").update(token).digest("hex") },
     });
     if (!session || session.consumedAt || session.expiresAt <= new Date())
-      throw new NotFoundException("Hosted checkout not found");
+      throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
     return session;
   }
 
@@ -1512,11 +1508,9 @@ await tx.order.create({
         partner: { select: { name: true, slug: true, brand: true } },
       },
     });
-    if (!order) throw new NotFoundException("Hosted checkout not found");
+    if (!order) throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
     if (statuses && !statuses.includes(order.status))
-      throw new BadRequestException(
-        "Order cannot be changed in its current state",
-      );
+      throw new ApiException({ code: "PARTNER_ORDER_INVALID_STATE", message: "Order cannot be changed in its current state", status: 400 });
     return order;
   }
 
@@ -1529,11 +1523,9 @@ await tx.order.create({
       where: { id, partnerId },
       include: { partnerQuote: true },
     });
-    if (!order) throw new NotFoundException("Order not found");
+    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
     if (!statuses.includes(order.status))
-      throw new BadRequestException(
-        "Order cannot be changed in its current state",
-      );
+      throw new ApiException({ code: "PARTNER_ORDER_INVALID_STATE", message: "Order cannot be changed in its current state", status: 400 });
     return order;
   }
 
@@ -1543,9 +1535,7 @@ await tx.order.create({
       data: { version: { increment: 1 } },
     });
     if (result.count !== 1)
-      throw new ConflictException(
-        "Order was changed by another request; reload and retry",
-      );
+      throw new ApiException({ code: "ORDER_CONFLICT", message: "Order was changed by another request; reload and retry", status: 409 });
   }
 
   private async ensurePartnerCustomer(
@@ -1590,7 +1580,7 @@ await tx.order.create({
     const available =
       account.balancePaisa + account.creditLimitPaisa - account.reservedPaisa;
     if (available < amountPaisa)
-      throw new BadRequestException("Partner credit is insufficient");
+      throw new ApiException({ code: "INSUFFICIENT_PARTNER_BALANCE", message: "Partner prepaid balance is insufficient", status: 400 });
     const updated = await tx.partnerAccount.updateMany({
       where: { id: account.id, version: account.version },
       data: {
@@ -1599,7 +1589,7 @@ await tx.order.create({
       },
     });
     if (updated.count !== 1)
-      throw new ConflictException("Partner balance changed; retry");
+      throw new ApiException({ code: "PARTNER_BALANCE_CONFLICT", message: "Partner balance changed; retry", status: 409 });
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
@@ -1637,7 +1627,7 @@ await tx.order.create({
       },
     });
     if (updated.count !== 1)
-      throw new ConflictException("Partner balance changed; retry");
+      throw new ApiException({ code: "PARTNER_BALANCE_CONFLICT", message: "Partner balance changed; retry", status: 409 });
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
@@ -1775,7 +1765,7 @@ await tx.order.create({
       },
     });
     if (updated.count !== 1)
-      throw new ConflictException("Partner balance changed; retry");
+      throw new ApiException({ code: "PARTNER_BALANCE_CONFLICT", message: "Partner balance changed; retry", status: 409 });
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
@@ -1812,7 +1802,7 @@ await tx.order.create({
       data: { balancePaisa: balanceAfterPaisa, version: { increment: 1 } },
     });
     if (updated.count !== 1)
-      throw new ConflictException("Partner balance changed; retry");
+      throw new ApiException({ code: "PARTNER_BALANCE_CONFLICT", message: "Partner balance changed; retry", status: 409 });
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
@@ -1873,7 +1863,7 @@ await tx.order.create({
   private hostedPaymentDeprecated() {
     return new GoneException({
       code: "HOSTED_PAYMENT_DEPRECATED",
-      message: "Hosted payment is disabled; partners collect customer payment directly and use their prepaid Visa Compass balance",
+      message: "Hosted payments are no longer available. Include settlement.method = \"PARTNER_ACCOUNT\" when creating an order.",
     });
   }
 }

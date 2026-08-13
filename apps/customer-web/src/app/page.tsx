@@ -34,6 +34,11 @@ export default function Home() {
                 How it works
               </Link>
             </div>
+            <div className="hero-proof" aria-label="Why travellers choose Visa Compass">
+              <span><CheckCircle2 size={16} /> Keep your number</span>
+              <span><CheckCircle2 size={16} /> Install before you fly</span>
+              <span><CheckCircle2 size={16} /> Support when you need it</span>
+            </div>
           </div>
           <div className="phone-stage">
             <div className="phone">

@@ -22,8 +22,9 @@ type Timeline = { from: OrderStatus | null; to: OrderStatus; at: string; reason?
 export type DemoOrder = {
   id: string; ownerId: string | null; orderNumber: string; status: OrderStatus; version: number; plan: CatalogPlan; totalAmountNpr: number;
   pricingSnapshot: object; compatibilityAcceptedAt: string; traveler?: TravelerInput; documents: { id: string; type: DocumentType; fileName: string; privateAssetId: string; status: DocumentStatus; uploadVerified?: boolean }[];
-  payment?: { provider: PaymentProvider; reference: string; status: PaymentStatus; correlationId?: string; expiresAt?: string; returnUrl?: string; redirectUrl?: string; providerTransactionId?: string }; timeline: Timeline[]; qrPayload?: string; createdAt: string;
+  payment?: { provider: PaymentProvider; reference: string; status: PaymentStatus; correlationId?: string; expiresAt?: string; returnUrl?: string; redirectUrl?: string; providerTransactionId?: string; verificationAttempts?: number }; timeline: Timeline[]; qrPayload?: string; createdAt: string;
   providerSubscriptionId?: string; providerStatus?: string; qrDeliveredAt?: string; activatedAt?: string; usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
+  activationRefetchAttempts?: number; lastProvisioningRecoveryAt?: string;
   purchaseType?: 'INITIAL_PURCHASE' | 'TOPUP';
   topUpMobile?: string;
   passportVerification?: PassportVerificationResult;
@@ -36,12 +37,11 @@ export type DemoOrder = {
 export class OrdersService implements OnModuleInit {
   private readonly orders = new Map<string, DemoOrder>();
   private readonly logger = new Logger(OrdersService.name);
-  private readonly activationRefetchAttempts = new Map<string, number>();
   private readonly confirmLocks = new Map<string, Promise<unknown>>();
   private readonly maxActivationRefetches = (() => { const parsed = Number(process.env.ACTIVATION_REFETCH_ATTEMPTS); return Number.isFinite(parsed) && parsed > 0 ? parsed : 3; })();
   constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService, private readonly qrPdf: QrPdfService, private readonly passportVerifier: PassportVerificationService, private readonly metrics?: MetricsService) {}
   async refreshFromPersistence(orderId?: string) { for (const order of await this.persistence.load()) if (!orderId || order.id === orderId) this.orders.set(order.id, order); }
-  async refreshOne(orderId: string) { if (this.orders.has(orderId)) return; for (const order of await this.persistence.load(orderId)) if (order.id === orderId) this.orders.set(order.id, order); }
+  async refreshOne(orderId: string, force = false) { if (!force && this.orders.has(orderId)) return; for (const order of await this.persistence.load(orderId)) if (order.id === orderId) this.orders.set(order.id, order); }
   async onModuleInit() {
     for (const order of await this.persistence.load()) this.orders.set(order.id, order);
     this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`);
@@ -172,7 +172,33 @@ export class OrdersService implements OnModuleInit {
   }
   async beginPayment(id: string, ownerId: string | null, provider: PaymentProvider, initiation: { reference: string; correlationId?: string; expiresAt?: string; returnUrl: string; redirectUrl?: string }) { const order = this.get(id, ownerId ?? undefined); if (order.purchaseType !== 'TOPUP') { const required = order.documents.filter((d) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type)); if (!order.traveler || required.length !== 2) throw new BadRequestException('Traveler, passport, and ticket are required'); await Promise.all(required.map((document) => this.storage.verifyDocument(document.privateAssetId))); required.forEach((document) => { document.uploadVerified = true; }); const verification = order.passportVerification; if (!verification || !['VERIFIED', 'SKIPPED'].includes(verification.status)) throw new ApiException({ code: 'PASSPORT_VERIFICATION_REQUIRED', message: 'Passport verification is required before payment' }); } if (order.status !== OrderStatus.PAYMENT_PENDING) this.transition(order, OrderStatus.PAYMENT_PENDING); order.payment = { provider, reference: initiation.reference, status: PaymentStatus.PENDING, ...(initiation.correlationId ? { correlationId: initiation.correlationId } : {}), ...(initiation.expiresAt ? { expiresAt: initiation.expiresAt } : {}), returnUrl: initiation.returnUrl, ...(initiation.redirectUrl ? { redirectUrl: initiation.redirectUrl } : {}) }; await this.persistence.save(order); return this.redact(order); }
   async confirmPayment(id: string, reference: string, transactionId?: string) {
+    if (this.prisma.enabled) return this.confirmPaymentPersisted(id, reference, transactionId);
     return this.runExclusive(id, () => this.confirmPaymentUnlocked(id, reference, transactionId));
+  }
+
+  private async confirmPaymentPersisted(id: string, reference: string, transactionId?: string) {
+    await this.persistence.confirmPaymentAtomically(id, reference, transactionId);
+    await this.refreshOne(id, true);
+    const order = this.get(id);
+    if (order.payment?.reference !== reference) throw new BadRequestException('Payment reference mismatch');
+    // Another replica may already have handed this order to provisioning. The
+    // canonical database state determines the response and prevents duplicate
+    // provisioning commands.
+    if (order.status === OrderStatus.PAYMENT_CONFIRMED) {
+      const approved = structuredClone(order) as DemoOrder;
+      this.markAutoApproved(approved);
+      try {
+        await this.persistence.save(approved);
+        this.orders.set(id, approved);
+      } catch (error) {
+        await this.refreshOne(id, true);
+        const current = this.get(id);
+        if (![OrderStatus.PROVISIONING, OrderStatus.QR_READY, OrderStatus.COMPLETED].includes(current.status)) throw error;
+      }
+    }
+    const current = this.get(id);
+    if (current.status === OrderStatus.PROVISIONING) await this.enqueueProvisioning(current, `provision-${current.id}`);
+    return this.redact(current);
   }
 
   /**
@@ -187,12 +213,18 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id);
     if (order.payment?.reference !== reference) throw new BadRequestException('Payment reference mismatch');
     if (order.payment.status === PaymentStatus.COMPLETED) return this.redact(order);
-    order.payment.status = PaymentStatus.COMPLETED;
-    if (transactionId) order.payment.providerTransactionId = transactionId;
-    this.transition(order, OrderStatus.PAYMENT_CONFIRMED);
-    await this.autoApprove(order);
-    await this.persistence.save(order);
-    return this.redact(order);
+    // Persist the paid/provisioning state before attempting best-effort queue
+    // delivery.  In particular, a Redis outage must never make a successful
+    // gateway confirmation disappear from durable storage.
+    const confirmed = structuredClone(order) as DemoOrder;
+    confirmed.payment!.status = PaymentStatus.COMPLETED;
+    if (transactionId) confirmed.payment!.providerTransactionId = transactionId;
+    this.transition(confirmed, OrderStatus.PAYMENT_CONFIRMED);
+    this.markAutoApproved(confirmed);
+    await this.persistence.save(confirmed);
+    this.orders.set(id, confirmed);
+    await this.enqueueProvisioning(confirmed, `provision-${confirmed.id}`);
+    return this.redact(confirmed);
   }
   async resolvePaymentFailure(id: string, ownerId: string | null, reason: string, paymentStatus: PaymentStatus = PaymentStatus.FAILED) {
     const order = this.get(id, ownerId ?? undefined);
@@ -353,7 +385,9 @@ export class OrdersService implements OnModuleInit {
       this.metrics?.recordFailure('provisioning', 'exhausted');
       if (permanentRejection) order.providerStatus = 'REJECTED';
       this.transition(order, OrderStatus.PROVISIONING_FAILED, permanentRejection ? 'Transatel permanently rejected the provisioning request' : 'Provisioning retries exhausted');
-      if (permanentRejection) await this.inventory.release(order.id);
+      // release() itself refuses profiles with a provider subscription, so it
+      // is safe for every terminal failure, not only explicit rejections.
+      await this.inventory.release(order.id);
       await this.persistence.save(order);
       await this.alertProvisioningFailure(order);
     }
@@ -435,15 +469,14 @@ export class OrdersService implements OnModuleInit {
       if (order.status !== OrderStatus.QR_READY || !order.qrDeliveredAt || !order.plan.validityDays) continue;
       const expiry = new Date(new Date(order.qrDeliveredAt).getTime() + order.plan.validityDays * 86_400_000).getTime();
       if (now <= expiry) continue;
-      const attempt = (this.activationRefetchAttempts.get(order.id) ?? 0) + 1;
-      this.activationRefetchAttempts.set(order.id, attempt);
+      const attempt = await this.nextActivationRefetchAttempt(order);
       if (attempt <= this.maxActivationRefetches && capabilities.esimDetails) {
         try {
           const details = await this.connectivity.getEsimDetails(await this.providerRefFor(order));
           const qrPayload = (details as { qrPayload?: string }).qrPayload;
           if (qrPayload) {
             await this.completeProviderActivation(order, { qrPayload, ...(order.providerSubscriptionId ? { subscriptionId: order.providerSubscriptionId } : {}), label: 'activation re-fetch' });
-            this.activationRefetchAttempts.delete(order.id);
+            await this.clearActivationRefetchAttempts(order);
             recovered.push(order.id);
             this.logger.log(`Order ${order.orderNumber} (${order.id}) recovered after activation re-fetch attempt ${attempt}`);
           } else {
@@ -458,14 +491,14 @@ export class OrdersService implements OnModuleInit {
       }
       this.transition(order, OrderStatus.PROVISIONING_FAILED, 'Activation window expired without an ACTIVATED event');
       await this.persistence.save(order);
+      await this.inventory.release(order.id);
       await this.alertProvisioningFailure(order);
       failed.push(order.id);
-      this.activationRefetchAttempts.delete(order.id);
+      await this.clearActivationRefetchAttempts(order);
       this.logger.warn(`Order ${order.orderNumber} (${order.id}) QR_READY activation window expired without ACTIVATED after ${attempt - 1} re-fetch attempt(s); marked PROVISIONING_FAILED`);
     }
     return { recovered, failed };
   }
-  private readonly lastProvisioningRecovery = new Map<string, number>();
   /**
    * Periodic sweep that re-drives orders left in APPROVED/PROVISIONING without
    * a QR payload. Jobs are idempotent (processProvisioning skips orders that
@@ -485,15 +518,15 @@ export class OrdersService implements OnModuleInit {
       const entered = [...order.timeline].reverse().find((event) => event.to === order.status)?.at;
       const enteredAt = entered ? new Date(entered).getTime() : order.createdAt ? new Date(order.createdAt).getTime() : 0;
       if (!enteredAt || now - enteredAt < minAgeMs) continue;
-      const lastRecovery = this.lastProvisioningRecovery.get(order.id) ?? 0;
+      const lastRecovery = order.lastProvisioningRecoveryAt ? new Date(order.lastProvisioningRecoveryAt).getTime() : 0;
       if (now - lastRecovery < minGapMs) continue;
       try {
         await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`);
-        this.lastProvisioningRecovery.set(order.id, now);
+        await this.markProvisioningRecovery(order, now);
         recovered.push(order.id);
         this.logger.log(`Recovery sweep re-queued provisioning for order ${order.orderNumber} (${order.id})`);
       } catch (error) {
-        this.lastProvisioningRecovery.set(order.id, now);
+        await this.markProvisioningRecovery(order, now);
         failed.push(order.id);
         this.metrics?.recordFailure('reconciliation', 'provisioning-recovery');
         this.logger.warn(`Recovery sweep could not re-queue provisioning for order ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`);
@@ -501,6 +534,20 @@ export class OrdersService implements OnModuleInit {
     }
     if (recovered.length) this.logger.log(`Recovery sweep re-queued ${recovered.length} stuck order(s)`);
     return { recovered, failed };
+  }
+  private async nextActivationRefetchAttempt(order: DemoOrder) {
+    if (!this.prisma.enabled) { order.activationRefetchAttempts = (order.activationRefetchAttempts ?? 0) + 1; return order.activationRefetchAttempts; }
+    const updated = await this.prisma.order.update({ where: { id: order.id }, data: { activationRefetchAttempts: { increment: 1 } }, select: { activationRefetchAttempts: true } });
+    order.activationRefetchAttempts = updated.activationRefetchAttempts;
+    return updated.activationRefetchAttempts;
+  }
+  private async clearActivationRefetchAttempts(order: DemoOrder) {
+    order.activationRefetchAttempts = 0;
+    if (this.prisma.enabled) await this.prisma.order.update({ where: { id: order.id }, data: { activationRefetchAttempts: 0 } });
+  }
+  private async markProvisioningRecovery(order: DemoOrder, at: number) {
+    const value = new Date(at).toISOString(); order.lastProvisioningRecoveryAt = value;
+    if (this.prisma.enabled) await this.prisma.order.update({ where: { id: order.id }, data: { lastProvisioningRecoveryAt: new Date(at) } });
   }
   /**
    * Resolves the reference handed to the provider's details endpoint: the ICCID
@@ -559,7 +606,18 @@ export class OrdersService implements OnModuleInit {
     const traveler = row.customerEsims[0]?.order.traveler;
     return { inventory: { id: row.id, eid: row.eid, iccid: row.iccid }, ...(traveler ? { traveler: { firstName: traveler.firstName, surname: traveler.surname, email: traveler.email, mobile: traveler.mobile, city: traveler.city, countryOfResidence: traveler.countryOfResidence } } : {}) };
   }
-  private async autoApprove(order: DemoOrder) { this.transition(order, OrderStatus.APPROVED, 'Auto-approved after payment'); this.transition(order, OrderStatus.PROVISIONING); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); if (!this.queues.enabled) await this.processLocally(order.id); }
+  private markAutoApproved(order: DemoOrder) { this.transition(order, OrderStatus.APPROVED, 'Auto-approved after payment'); this.transition(order, OrderStatus.PROVISIONING); }
+  private async enqueueProvisioning(order: DemoOrder, jobId: string) {
+    try {
+      await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, jobId);
+    } catch (error) {
+      // The durable order state is recovered by boot/reconciliation. Never
+      // propagate this after a payment has been confirmed.
+      this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`);
+      return;
+    }
+    if (!this.queues.enabled) await this.processLocally(order.id);
+  }
   private async approveProvisioning(order: DemoOrder) { this.transition(order, OrderStatus.PROVISIONING, 'Manual retry'); await this.persistence.save(order); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `retry-${order.id}-${Date.now()}`); if (!this.queues.enabled) return this.processLocally(order.id); return this.redact(order); }
   private async processLocally(orderId:string){let failure:unknown;for(let attempt=1;attempt<=3;attempt++){try{return await this.processProvisioning(orderId,attempt,attempt===3)}catch(error){failure=error}}throw failure}
   private transition(order: DemoOrder, to: OrderStatus, reason?: string) { assertTransition(order.status, to); const from = order.status; order.status = to; order.timeline.push({ from, to, at: new Date().toISOString(), ...(reason ? { reason } : {}) }); }

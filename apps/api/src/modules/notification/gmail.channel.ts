@@ -23,7 +23,8 @@ export class GmailChannel {
   }
 
   private buildMime(input: { from: string; to: string; subject: string; text: string; attachment?: GmailAttachment }): string {
-    const headers = [`From: ${input.from}`, `To: ${input.to}`, `Subject: ${input.subject}`, 'MIME-Version: 1.0'];
+    const headerValue = (value: string) => value.replace(/[\r\n]+/g, ' ').trim();
+    const headers = [`From: ${headerValue(input.from)}`, `To: ${headerValue(input.to)}`, `Subject: ${headerValue(input.subject)}`, 'MIME-Version: 1.0'];
     if (!input.attachment) {
       return [...headers, 'Content-Type: text/plain; charset=UTF-8', '', input.text].join('\r\n');
     }

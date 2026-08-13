@@ -43,6 +43,29 @@ type ShowcaseItem = {
   updatedAt: string;
 };
 
+function Logo({ item, className }: { item: ShowcaseItem; className?: string }) {
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [item.logoUrl]);
+  if (!item.logoUrl || broken) {
+    return (
+      <span className="flex size-full items-center justify-center bg-muted">
+        <Handshake className="size-4 text-muted-foreground" />
+      </span>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={item.logoUrl}
+      alt={`${item.name} logo`}
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      className={className}
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
 export default function PartnersShowcaseClient() {
   const authFetch = useAuthenticatedFetch();
   const request = useCallback(
@@ -211,6 +234,9 @@ export default function PartnersShowcaseClient() {
                 value={logoUrl}
                 onChange={(event) => setLogoUrl(event.target.value)}
               />
+              <p className="text-xs text-muted-foreground">
+                Use a direct link to an image file (.png, .jpg, .svg) so it renders correctly.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Sort order (lower first)</Label>
@@ -256,16 +282,7 @@ export default function PartnersShowcaseClient() {
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <span className="flex size-9 items-center justify-center overflow-hidden rounded-lg bg-muted">
-                          {item.logoUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={item.logoUrl}
-                              alt=""
-                              className="size-full object-contain"
-                            />
-                          ) : (
-                            <Handshake className="size-4 text-muted-foreground" />
-                          )}
+                          <Logo item={item} className="size-full object-contain" />
                         </span>
                         <div>
                           <p className="font-medium">{item.name}</p>
@@ -342,6 +359,9 @@ export default function PartnersShowcaseClient() {
                     setEditing({ ...editing, logoUrl: event.target.value })
                   }
                 />
+                <p className="text-xs text-muted-foreground">
+                  Use a direct link to an image file (.png, .jpg, .svg).
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Sort order (lower first)</Label>

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -155,7 +156,7 @@ export class PartnerAdminService {
           ...(input.rateLimitPerMinute !== undefined
             ? { rateLimitPerMinute: input.rateLimitPerMinute }
             : {}),
-          ...(redirectAllowlist ? { redirectAllowlist: [] } : {}),
+          ...(redirectAllowlist ? { redirectAllowlist } : {}),
         },
       });
       await this.audit(tx, actorClerkId, "Partner", id, "UPDATED", {
@@ -206,7 +207,8 @@ export class PartnerAdminService {
       );
       return created;
     });
-    return { ...credential, apiKey: `${prefix}.${secret}` };
+    const { secretHash: _secretHash, ...safeCredential } = credential;
+    return { ...safeCredential, apiKey: `${prefix}.${secret}` };
   }
 
   async revokeCredential(
@@ -336,8 +338,8 @@ export class PartnerAdminService {
         throw new BadRequestException(
           "Adjustment would make the prepaid partner balance negative",
         );
-      const updated = await tx.partnerAccount.update({
-        where: { id: account.id },
+      const updated = await tx.partnerAccount.updateMany({
+        where: { id: account.id, version: account.version },
         data: {
           balancePaisa: balance,
           creditLimitPaisa: 0,
@@ -345,6 +347,7 @@ export class PartnerAdminService {
           version: { increment: 1 },
         },
       });
+      if (updated.count !== 1) throw new ConflictException("Partner account was changed by another request; retry the adjustment");
       const ledger = await tx.partnerLedgerEntry.create({
         data: {
           partnerId,
@@ -602,13 +605,14 @@ export class PartnerAdminService {
         });
         if (debit && account) {
           const balanceAfterPaisa = account.balancePaisa + refund.amountPaisa;
-          await tx.partnerAccount.update({
-            where: { id: account.id },
+          const credited = await tx.partnerAccount.updateMany({
+            where: { id: account.id, version: account.version },
             data: {
               balancePaisa: balanceAfterPaisa,
               version: { increment: 1 },
             },
           });
+          if (credited.count !== 1) throw new ConflictException("Partner account was changed by another request; retry the refund decision");
           await tx.partnerLedgerEntry.create({
             data: {
               partnerId: refund.partnerId,

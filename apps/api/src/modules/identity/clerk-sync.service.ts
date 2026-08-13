@@ -59,9 +59,11 @@ export class ClerkSyncService {
       where: { clerkId: event.data.id },
     });
     if (existing) {
+      if (existing.status === UserStatus.DISABLED)
+        throw new ForbiddenException("Disabled accounts cannot be reactivated by a Clerk webhook");
       await this.prisma.user.update({
         where: { id: existing.id },
-        data: { email, status: UserStatus.ACTIVE },
+        data: { email },
       });
       return { persisted: true, accountType: existing.accountType };
     }
@@ -69,12 +71,13 @@ export class ClerkSyncService {
       where: { email },
     });
     if (userWithSameEmail) {
+      if (userWithSameEmail.status === UserStatus.DISABLED)
+        throw new ForbiddenException("Disabled accounts cannot be rebound to a new Clerk identity");
       await this.prisma.user.update({
         where: { id: userWithSameEmail.id },
         data: {
           clerkId: event.data.id,
           email,
-          status: UserStatus.ACTIVE,
         },
       });
       return {
@@ -90,27 +93,9 @@ export class ClerkSyncService {
       },
       orderBy: { createdAt: "desc" },
     });
-    let accountType = invitation?.accountType ?? UserRoleName.CUSTOMER;
-    let bootstrap = false;
-    const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
-    const tokenConfigured = Boolean(process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim());
-    if (
-      accountType !== UserRoleName.SUPER_ADMIN &&
-      bootstrapEmail &&
-      email === bootstrapEmail &&
-      (process.env.NODE_ENV !== "production" || tokenConfigured)
-    ) {
-      const activeSuperAdmins = await this.prisma.user.count({
-        where: {
-          accountType: UserRoleName.SUPER_ADMIN,
-          status: UserStatus.ACTIVE,
-        },
-      });
-      if (activeSuperAdmins === 0) {
-        accountType = UserRoleName.SUPER_ADMIN;
-        bootstrap = true;
-      }
-    }
+    // Webhook delivery proves only that Clerk created an account. It must not
+    // be treated as proof of possession of the bootstrap secret.
+    const accountType = invitation?.accountType ?? UserRoleName.CUSTOMER;
     await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -132,17 +117,6 @@ export class ClerkSyncService {
             userId: user.id,
             email,
             customerCode: `VC-${user.id.slice(0, 8).toUpperCase()}`,
-          },
-        });
-      if (bootstrap)
-        await tx.auditLog.create({
-          data: {
-            module: "IDENTITY",
-            entity: "User",
-            entityId: user.id,
-            action: "BOOTSTRAP_SUPER_ADMIN",
-            performedById: user.id,
-            newValue: { source: "SIGNUP_AUTO_BOOTSTRAP", email },
           },
         });
       if (invitation) {

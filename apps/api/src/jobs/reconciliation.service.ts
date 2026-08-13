@@ -42,8 +42,8 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     });
     const minutes = Number(process.env.RECONCILIATION_INTERVAL_MINUTES ?? 15);
     const intervalMs = Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 15 * 60_000;
-    this.timer = setInterval(() => void this.run().catch(() => undefined), intervalMs);
-    void this.run().catch(() => undefined);
+    this.timer = setInterval(() => void this.runAsLeader().catch(() => undefined), intervalMs);
+    void this.runAsLeader().catch(() => undefined);
     // Separate, faster sweep for pending payments that are still inside their
     // payment window (PAYMENT_RECONCILE_INTERVAL_SECONDS, default 45s). This is
     // a backstop for browser verification: it confirms Completed payments and
@@ -54,13 +54,25 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     // recovery path.
     const pendingSeconds = Number(process.env.PAYMENT_RECONCILE_INTERVAL_SECONDS ?? 45);
     const pendingMs = Number.isFinite(pendingSeconds) && pendingSeconds > 0 ? pendingSeconds * 1000 : 45_000;
-    this.pendingPaymentTimer = setInterval(() => void this.payments.reconcileRecentPendingPayments().catch(() => undefined), pendingMs);
-    void this.payments.reconcileRecentPendingPayments().catch(() => undefined);
+    this.pendingPaymentTimer = setInterval(() => void this.pendingPaymentsAsLeader().catch(() => undefined), pendingMs);
+    void this.pendingPaymentsAsLeader().catch(() => undefined);
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
     if (this.pendingPaymentTimer) clearInterval(this.pendingPaymentTimer);
+  }
+
+  private async runAsLeader() {
+    const result = await this.queues.withDistributedLock('reconciliation', 10 * 60_000, () => this.run());
+    if (!result.acquired) this.logger.debug('Skipped reconciliation; another replica holds the lease');
+    return result.value;
+  }
+
+  private async pendingPaymentsAsLeader() {
+    const result = await this.queues.withDistributedLock('pending-payment-reconciliation', 60_000, () => this.payments.reconcileRecentPendingPayments());
+    if (!result.acquired) this.logger.debug('Skipped pending-payment reconciliation; another replica holds the lease');
+    return result.value;
   }
 
   private async run() {
@@ -145,6 +157,28 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         this.metrics?.recordFailure('reconciliation', 'provisioning-operation');
       }
     }
+  }
+
+  /** An explicit, audited Ops recovery path for a delayed or dead-lettered
+   * provider submission. It reconciles one order only; it never re-submits a
+   * preload command, so an uncertain provider outcome cannot create a second
+   * subscription. */
+  async reconcileProvisioningOperationNow(operationId: string) {
+    if (!this.prisma.enabled) throw new Error('Provisioning reconciliation requires database persistence');
+    const operation = await this.prisma.provisioningOperation.findUnique({ where: { id: operationId }, include: { order: { select: { id: true, providerSubscriptionId: true, status: true } } } });
+    if (!operation) throw new Error('Provisioning operation not found');
+    if (!['ACCEPTED', 'WAITING_FOR_QR', 'RECONCILE_REQUIRED', 'MANUAL_REVIEW'].includes(operation.state)) throw new Error(`Operation in ${operation.state} cannot be reconciled`);
+    const details = await this.connectivity.getEsimDetails(operation.iccid);
+    const qrPayload = 'qrPayload' in details ? details.qrPayload : undefined;
+    const providerSubscriptionId = operation.order.providerSubscriptionId ?? operation.providerSubscriptionId;
+    if (qrPayload && providerSubscriptionId && details.status.toLowerCase() === 'active') {
+      await this.orders.applyProviderEvent({ eventType: 'OPS_MANUAL_RECONCILIATION', orderId: operation.orderId, iccid: operation.iccid, subscriptionId: providerSubscriptionId, status: 'ACTIVATED', qrPayload });
+      await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'ACTIVATED', completedAt: new Date(), nextReconcileAt: null, lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
+      return { id: operation.id, state: 'ACTIVATED', recovered: true };
+    }
+    const state = providerSubscriptionId ? 'WAITING_FOR_QR' : 'RECONCILE_REQUIRED';
+    await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state, nextReconcileAt: new Date(Date.now() + 5 * 60_000), lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
+    return { id: operation.id, state, recovered: false, providerStatus: details.status };
   }
 
   private async sweepLifecycle() {

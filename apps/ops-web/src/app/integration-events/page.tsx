@@ -4,7 +4,7 @@ export default function IntegrationEvents() {
   return (
     <>
       <PageHeader
-        title="Integration events"
+        title="Events"
         description="Payment and connectivity callbacks, processing results and replay protection."
       />
       <IntegrationEventsClient />

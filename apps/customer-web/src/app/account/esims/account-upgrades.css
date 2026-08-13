@@ -85,6 +85,7 @@
 .esim-hero-card, .usage-summary, .plan-section, .past-plans, .setup-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); }
 .esim-hero-card { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 26px; overflow: hidden; position: relative; }
 .esim-hero-card::after { content: ""; position: absolute; right: -70px; top: -90px; width: 240px; height: 240px; border-radius: 50%; background: var(--primary-soft); opacity: .65; pointer-events: none; }
+.esim-hero-card::before { content: ""; position: absolute; right: 44px; top: 28px; width: 96px; height: 96px; border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent); border-radius: 50%; opacity: .7; pointer-events: none; }
 .esim-identity, .esim-actions { position: relative; z-index: 1; }
 .friendly-status { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .friendly-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }

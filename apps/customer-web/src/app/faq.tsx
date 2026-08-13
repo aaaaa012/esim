@@ -9,11 +9,11 @@ const ITEMS = [
   },
   {
     q: 'How do I receive my eSIM after paying?',
-    a: 'After payment is verified, Visa Compass provisions the selected plan with its connectivity provider. Your activation QR is delivered by email as a password-protected PDF. Signed-in customers can also access their eligible eSIM records from My eSIMs.',
+    a: 'Once your payment is confirmed, we set up your plan and send your activation QR by email as a protected PDF. If you have an account, you can also find your eSIM under My eSIMs.',
   },
   {
     q: 'How do I install the eSIM?',
-    a: 'Open the QR PDF and use the mobile number requested by the PDF when prompted. Then scan the QR from your phone\u2019s cellular settings. Follow your phone manufacturer\u2019s current eSIM installation guidance if the settings differ.',
+    a: 'Open the QR PDF and enter the mobile number it requests when prompted. Then scan the QR from your phone\u2019s mobile or cellular settings. Follow your phone manufacturer\u2019s current eSIM installation guidance if the settings look different.',
   },
   {
     q: 'Which payment methods do you support?',
@@ -21,7 +21,7 @@ const ITEMS = [
   },
   {
     q: 'Can I top up an existing eSIM?',
-    a: 'Yes. If you already have a Visa Compass eSIM, enter your mobile number on the homepage and we\u2019ll find your current plan so you can recharge it with another destination or data plan.',
+    a: 'Yes. If you already have a Visa Compass eSIM, enter your mobile number on the homepage and we\u2019ll find your current plan so you can add another destination or data plan.',
   },
   {
     q: 'What happens if my eSIM runs out of data?',

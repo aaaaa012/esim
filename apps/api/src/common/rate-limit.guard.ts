@@ -1,10 +1,11 @@
 import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { clientIp } from './client-ip.js';
+import { QueueService } from '../jobs/queue.service.js';
 
 type Bucket = { tokens: number; lastRefill: number };
 
 /**
- * In-memory fixed-window rate limiter keyed by IP + route.
+ * In-memory token-bucket limiter keyed by IP + normalized route.
  *
  * Webhook endpoints are exempt (they are signature-verified provider
  * callbacks). Public and auth routes are throttled more aggressively to slow
@@ -20,7 +21,9 @@ export class RateLimitGuard implements CanActivate {
   private readonly authLimit = Number(process.env.AUTH_RATE_LIMIT_PER_MINUTE ?? 60);
   private readonly windowMs = 60_000;
 
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly queues?: QueueService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<{ ip?: string; socket?: { remoteAddress?: string }; path: string; method: string }>();
     const ip = clientIp(request);
     const path = request.path ?? '';
@@ -29,7 +32,9 @@ export class RateLimitGuard implements CanActivate {
 
     const sensitive = path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/public');
     const capacity = sensitive ? this.authLimit : this.limit;
-    const key = `${ip}:${request.method}:${path}`;
+    // UUIDs and numeric ids must not form attacker-controlled fresh buckets.
+    const route = path.replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, ':id').replace(/\/\d+(?=\/|$)/g, '/:id');
+    const key = `${ip}:${request.method}:${route}`;
 
     const now = Date.now();
     let bucket = this.buckets.get(key);
@@ -42,6 +47,16 @@ export class RateLimitGuard implements CanActivate {
     if (bucket.tokens > capacity) bucket.tokens = capacity;
 
     const response = context.switchToHttp().getResponse<{ setHeader(name: string, value: string | number): void }>();
+    if (this.queues?.enabled) {
+      const shared = await this.queues.consumeRateLimit(key, this.windowMs);
+      response.setHeader('x-ratelimit-limit', capacity);
+      response.setHeader('x-ratelimit-remaining', Math.max(0, capacity - shared.count));
+      if (shared.count > capacity) {
+        response.setHeader('retry-after', shared.retryAfterSeconds);
+        throw new HttpException({ code: 'RATE_LIMITED', message: 'Too many requests. Please wait a moment and try again.' }, HttpStatus.TOO_MANY_REQUESTS);
+      }
+      return true;
+    }
     response.setHeader('x-ratelimit-limit', capacity);
     response.setHeader('x-ratelimit-remaining', Math.floor(bucket.tokens));
 

@@ -57,6 +57,7 @@ async function bootOnce() {
     // Webhook signatures are computed over original bytes, not parsed JSON.
     rawBody: true,
   });
+  app.enableShutdownHooks();
   app.use(helmet({ referrerPolicy: { policy: 'no-referrer' } }));
   app.enableCors({ origin: [process.env.CUSTOMER_WEB_URL ?? 'http://localhost:3000', process.env.OPS_WEB_URL ?? 'http://localhost:3001'], credentials: true });
   app.set('trust proxy', trustProxySetting());
@@ -74,7 +75,7 @@ async function bootOnce() {
   app.setGlobalPrefix('api/v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalFilters(new ApiExceptionFilter());
-  app.useGlobalGuards(new RateLimitGuard());
+  app.useGlobalGuards(app.get(RateLimitGuard));
   app.useGlobalInterceptors(new CorrelationInterceptor(), new LoggingInterceptor(app.get(MetricsService)), new IdempotencyInterceptor(app.get(PrismaService)));
 
   if (process.env.SWAGGER_ENABLED === 'true') {

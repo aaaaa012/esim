@@ -161,18 +161,27 @@ Guarded by `PartnerAuthGuard` (`X-Partner-Api-Key`). Partner orders use
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| GET | `/partners/capabilities` | apiVersion, payments, notifications, connectivity descriptor+health, idempotencyRequiredForMutations |
+| GET | `/partners/capabilities` | apiVersion, payments, notifications, connectivity.available, idempotencyRequiredForMutations |
 | GET | `/partners/plans` | Active plans |
 | POST | `/partners/quotes` | Body `{ planId }` → `{ quoteId, planId, amount, currency, expiresAt (15min) }` |
-| POST | `/partners/orders` | Body `{ planId, externalCustomerId, compatibilityAccepted: true }` |
+| POST | `/partners/orders` | Body `{ planId, externalCustomerId, settlement.method: PARTNER_ACCOUNT, compatibilityAccepted: true }` |
+| GET | `/partners/orders/by-external-id/:externalOrderId` | Order status (partner-scoped) |
 | GET | `/partners/orders/:id` | Order status (partner-scoped) |
 | POST | `/partners/orders/:id/traveler` | Set traveler |
 | POST | `/partners/orders/:id/documents` | Add document |
 | POST | `/partners/orders/:id/documents/:documentId/confirm` | Confirm document |
-| POST | `/partners/orders/:id/payments` | Body `{ provider }` |
-| GET | `/partners/orders/:id/connectivity` | Descriptor + health + `detailsAvailable` |
+| POST | `/partners/orders/:id/hosted-checkout-session` | Deprecated (410 `HOSTED_PAYMENT_DEPRECATED`) |
+| POST | `/partners/orders/:id/payment-session` | Deprecated (410 `HOSTED_PAYMENT_DEPRECATED`) |
+| GET | `/partners/orders/:id/esim` | eSIM details when available |
+| POST | `/partners/orders/:id/cancel` | Cancel order |
+| POST | `/partners/orders/:id/refund-requests` | Request refund |
 | GET | `/partners/orders/:id/usage` | Usage (only when COMPLETED) |
+| GET | `/partners/orders/:id/events` | Order event history |
 | POST | `/partners/orders/:id/notifications` | Body `{ channel: EMAIL\|WHATSAPP, template: ORDER_STATUS\|QR_READY\|DOCUMENT_REUPLOAD }` |
+| GET | `/partners/account` | Partner account balance/limits |
+| GET | `/partners/ledger` | Partner ledger |
+| POST | `/partners/hosted-checkout-sessions` | Deprecated (410 `HOSTED_PAYMENT_DEPRECATED`) |
+| POST | `/partners/document-upload-sessions` | Create document upload session |
 
 ## Notifications (auth)
 
