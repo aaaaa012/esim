@@ -174,27 +174,4 @@ export class KhaltiGateway implements PaymentGateway {
     });
   }
 
-  /**
-   * Khalti Refund API (docs.khalti.com/api/refund/):
-   * `POST {scheme}://{host}/api/merchant-transaction/{transaction_id}/refund/`
-   * where `transaction_id` is the lookup response `transaction_id`.
-   * Wallet full refund: empty body; wallet partial refund: `{ amount }` (paisa).
-   * The refund base is `{origin}/api` (no `/v2` suffix).
-   */
-  async refund(reference: string, context: PaymentContext, amountNpr: number): Promise<{ reference: string }> {
-    const fullRefund = Math.round(amountNpr * 100) >= Math.round(context.amountNpr * 100);
-    const response = await this.request(
-      `${this.baseUrl.replace(/\/v2$/, '')}/merchant-transaction/${encodeURIComponent(reference)}/refund/`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Key ${this.secret}`, 'Content-Type': 'application/json' },
-        body: fullRefund ? '{}' : JSON.stringify({ amount: Math.round(amountNpr * 100) }),
-        signal: AbortSignal.timeout(this.timeoutMs()),
-      },
-      'refund',
-    );
-    if (!response.ok) throw this.providerError('refund', response, await this.providerDetail(response));
-    await response.text();
-    return { reference: `refund-${reference}` };
-  }
 }

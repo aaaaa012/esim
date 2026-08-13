@@ -254,24 +254,6 @@ export class OrdersService implements OnModuleInit {
     await this.persistence.save(order);
     return this.redact(order);
   }
-  async requestRefund(id: string, actorId: string, reason: string) {
-    const order = this.get(id);
-    if (!order.payment) throw new BadRequestException('No payment recorded for this order');
-    if (order.payment.status === PaymentStatus.REFUNDED) throw new BadRequestException('Order is already refunded');
-    if (order.payment.status !== PaymentStatus.COMPLETED) throw new BadRequestException('Only paid orders can be refunded');
-    if (order.status === OrderStatus.REFUND_PENDING || order.status === OrderStatus.REFUNDED) throw new BadRequestException('Refund is already in progress');
-    if (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.DRAFT || order.status === OrderStatus.PAYMENT_PENDING || order.status === OrderStatus.PAYMENT_FAILED) throw new BadRequestException(`Order in ${order.status} cannot be refunded`);
-    this.transition(order, OrderStatus.REFUND_PENDING, `${reason} (requested by ${actorId})`);
-    await this.persistence.save(order);
-    return this.redact(order);
-  }
-  async markRefunded(id: string, reference: string) {
-    const order = this.get(id);
-    if (order.payment) order.payment.status = PaymentStatus.REFUNDED;
-    if (order.status !== OrderStatus.REFUNDED) this.transition(order, OrderStatus.REFUNDED, `Refund completed (${reference})`);
-    await this.persistence.save(order);
-    return this.redact(order);
-  }
   async expireStalePayments() {
     const now = Date.now();
     let expired = 0;
@@ -439,7 +421,20 @@ export class OrdersService implements OnModuleInit {
     await this.persistence.save(order);
     return { accepted: true, eventType: event.eventType };
   }
-  retry(id: string) { const order = this.get(id); if (order.status !== OrderStatus.PROVISIONING_FAILED) throw new BadRequestException('Order is not retryable'); return this.approveProvisioning(order); }
+  async retry(id: string) {
+    const order = this.get(id);
+    if (order.status !== OrderStatus.PROVISIONING_FAILED) throw new BadRequestException('Order is not retryable');
+    if (this.prisma.enabled) {
+      const operation = await this.prisma.provisioningOperation.findUnique({ where: { orderId: id }, select: { state: true, providerOrderId: true, providerSubscriptionId: true } });
+      if (operation && (operation.providerOrderId || operation.providerSubscriptionId || !['CREATED', 'REJECTED'].includes(operation.state))) {
+        throw new BadRequestException('The provider may already have accepted this order. Reconcile its live status from Provisioning recovery instead of retrying.');
+      }
+      if (operation?.state === 'REJECTED') {
+        throw new BadRequestException('Transatel rejected this request. Correct the plan, inventory, or provider configuration before creating a replacement order; this order cannot be safely resubmitted.');
+      }
+    }
+    return this.approveProvisioning(order);
+  }
   /**
    * Re-delivers the activation QR email for an order whose customer never
    * received the original notification. When an owner id is provided the

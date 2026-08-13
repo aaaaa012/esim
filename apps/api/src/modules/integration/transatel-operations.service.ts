@@ -75,6 +75,39 @@ export class TransatelOperationsService {
   suspend(input: Omit<LifecycleInput, 'action'>) { return this.lifecycle({ ...input, action: TransatelLifecycleAction.SUSPEND }); }
   terminate(input: Omit<LifecycleInput, 'action'>) { return this.lifecycle({ ...input, action: TransatelLifecycleAction.TERMINATE }); }
 
+  async diagnostics() {
+    const health = await this.connectivity.transatelHealth();
+    if (!this.prisma.enabled) return { health, checks: [], webhook: { configured: false }, checkedAt: new Date().toISOString() };
+    const [logs, webhook, deadLetters] = await Promise.all([
+      this.prisma.integrationLog.findMany({ where: { operation: { in: ['token','catalog','inventory','esim-details','usage','provision','subscriber-suspend','subscriber-terminate'] } }, orderBy: { createdAt: 'desc' }, take: 100 }),
+      this.prisma.webhookEvent.findFirst({ where: { source: 'transatel' }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.webhookEvent.count({ where: { source: 'transatel', deadLetteredAt: { not: null } } }),
+    ]);
+    const operations = ['token','catalog','inventory','esim-details','usage','provision','subscriber-suspend','subscriber-terminate'];
+    return { health, checks: operations.map((operation) => { const row = logs.find((item) => item.operation === operation); return { operation, status: row ? (row.status >= 200 && row.status < 400 ? 'PASS' : 'FAIL') : 'NOT_RUN', httpStatus: row?.status ?? null, durationMs: row?.durationMs ?? null, correlationId: row?.correlationId ?? null, error: row?.errorCode ?? null, checkedAt: row?.createdAt.toISOString() ?? null }; }), webhook: { configured: Boolean(process.env.TRANSATEL_WEBHOOK_TARGET_URL && process.env.TRANSATEL_WEBHOOK_SECRET), targetUrl: process.env.TRANSATEL_WEBHOOK_TARGET_URL ?? null, lastReceivedAt: webhook?.createdAt.toISOString() ?? null, lastProcessedAt: webhook?.processedAt?.toISOString() ?? null, deadLetters }, checkedAt: new Date().toISOString() };
+  }
+
+  async reconcile(orderId: string, actorId?: string) {
+    if (!this.prisma.enabled) throw new ServiceUnavailableException('Database persistence is required');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { inventory: true, customerEsim: { include: { subscriptions: true } }, transatelLifecycleOperations: { orderBy: { createdAt: 'desc' }, take: 1 } } });
+    if (!order?.inventory) throw new NotFoundException('The order does not have an assigned eSIM');
+    const details = await this.connectivity.getEsimDetails(order.inventory.iccid);
+    const observed = details.status.toUpperCase();
+    const latest = order.transatelLifecycleOperations[0];
+    const confirmed = latest && ((latest.action === TransatelLifecycleAction.SUSPEND && observed === 'SUSPENDED') || (latest.action === TransatelLifecycleAction.TERMINATE && observed === 'TERMINATED'));
+    await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({ where: { id: order.id }, data: { providerStatus: observed, version: { increment: 1 } } });
+      await tx.esimInventory.update({ where: { id: order.inventory!.id }, data: { providerStatus: observed, lastProviderCheckedAt: new Date(), providerCheckError: null, ...(observed === 'TERMINATED' ? { status: 'TERMINATED' } : {}), version: { increment: 1 } } });
+      if (order.customerEsim) {
+        const subscriptionStatus = observed === 'SUSPENDED' ? 'SUSPENDED' as const : observed === 'TERMINATED' ? 'TERMINATED' as const : observed === 'ACTIVE' || observed === 'ACTIVATED' ? 'ACTIVE' as const : null;
+        await tx.subscription.updateMany({ where: { customerEsimId: order.customerEsim.id }, data: { ...(subscriptionStatus ? { status: subscriptionStatus } : {}), providerLastSeenAt: new Date() } });
+      }
+      if (latest && confirmed) await tx.transatelLifecycleOperation.update({ where: { id: latest.id }, data: { state: TransatelLifecycleState.CONFIRMED, responseSnapshot: { observedStatus: observed, checkedAt: new Date().toISOString() } } });
+      await tx.auditLog.create({ data: { module: 'TRANSATEL', entity: 'Order', entityId: order.id, action: confirmed ? 'LIFECYCLE_CONFIRMED' : 'PROVIDER_STATUS_RECONCILED', ...(actorId ? { performedById: actorId } : {}), previousValue: { providerStatus: order.providerStatus } as Prisma.InputJsonValue, newValue: { providerStatus: observed, operationId: latest?.id ?? null } as Prisma.InputJsonValue } });
+    });
+    return { orderId, providerStatus: observed, operationState: confirmed ? TransatelLifecycleState.CONFIRMED : latest?.state ?? null, checkedAt: new Date().toISOString() };
+  }
+
   private async lifecycle(input: LifecycleInput) {
     if (!this.prisma.enabled) throw new ServiceUnavailableException('Transatel lifecycle operations require database persistence');
     const reason = input.reason.trim();

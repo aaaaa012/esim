@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { ChevronDown, CircleHelp } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowRight, ChevronDown, CircleHelp, ShieldCheck } from 'lucide-react';
 
 const ITEMS = [
   {
@@ -32,26 +33,31 @@ const ITEMS = [
 export default function Faq() {
   const [open, setOpen] = useState<number | null>(0);
   return (
-    <div className="faq-list">
-      {ITEMS.map((item, index) => {
-        const isOpen = open === index;
-        return (
-          <div key={item.q} className={`faq-item ${isOpen ? 'open' : ''}`}>
-            <button
-              className="faq-question"
-              onClick={() => setOpen(isOpen ? null : index)}
-              aria-expanded={isOpen}
-            >
-              <CircleHelp size={18} />
-              <span>{item.q}</span>
-              <ChevronDown size={18} className="faq-chevron" />
-            </button>
-            <div className="faq-answer">
-              <p>{item.a}</p>
+    <div className="faq-layout">
+      <aside className="faq-aside">
+        <span className="faq-aside-icon"><ShieldCheck size={24} /></span>
+        <h3>Start with compatibility</h3>
+        <p>Check your device before buying so you can install confidently when your eSIM arrives.</p>
+        <Link href="/compatibility">Check my device <ArrowRight size={16} /></Link>
+      </aside>
+      <div className="faq-list">
+        {ITEMS.map((item, index) => {
+          const isOpen = open === index;
+          const answerId = `faq-answer-${index}`;
+          return (
+            <div key={item.q} className={`faq-item ${isOpen ? 'open' : ''}`}>
+              <button className="faq-question" onClick={() => setOpen(isOpen ? null : index)} aria-expanded={isOpen} aria-controls={answerId}>
+                <CircleHelp size={18} />
+                <span>{item.q}</span>
+                <ChevronDown size={18} className="faq-chevron" />
+              </button>
+              <div className="faq-answer" id={answerId} aria-hidden={!isOpen}>
+                <div className="faq-answer-inner"><p>{item.a}</p></div>
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }

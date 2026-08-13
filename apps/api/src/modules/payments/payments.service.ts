@@ -198,24 +198,6 @@ export class PaymentsService {
     }
     return { verified, failed, deferred };
   }
-  async refund(orderId: string, actorId: string, reason: string) {
-    const order = this.orders.get(orderId);
-    await this.orders.requestRefund(orderId, actorId, reason);
-    const context = this.context(order, order.payment!.reference);
-    const gateway = this.gateway(order.payment!.provider);
-    if (!gateway.refund) throw new BadRequestException('Selected provider does not support automated refunds');
-    const result = await gateway.refund(order.payment!.providerTransactionId ?? order.payment!.reference, context, order.totalAmountNpr);
-    // Persist the provider refund outcome on the in-flight order first so the
-    // reference survives any subsequent local-state failure and can be
-    // reconciled by operations.
-    try {
-      return await this.orders.markRefunded(orderId, result.reference);
-    } catch (error) {
-      this.logger.error(`Gateway refund succeeded (ref=${result.reference}) but local order state write failed for ${orderId}: ${error instanceof Error ? error.message : 'unknown'}`);
-      this.metrics?.recordFailure('refund', 'state-write-after-gateway');
-      throw error;
-    }
-  }
   async simulate(orderId: string, ownerId: string | null, reference: string, scenario: 'SUCCESS'|'CANCELLED'|'PENDING'|'WRONG_AMOUNT'|'REFUNDED'|'TIMEOUT' = 'SUCCESS') { if (process.env.NODE_ENV === 'production') throw new BadRequestException('Simulator is disabled'); if (scenario === 'TIMEOUT') throw new BadRequestException('Simulated payment provider timeout'); const order = this.orders.get(orderId, ownerId ?? undefined); const context=this.context(order,reference); this.simulator.apply(reference, scenario, context); const result = await this.simulator.verify(reference,context); if (result.status !== PaymentStatus.COMPLETED || result.orderId !== orderId || result.amountNpr !== order.totalAmountNpr) throw new BadRequestException(`Payment verification failed: ${result.status}`); return await this.orders.confirmPayment(orderId, reference, result.providerTransactionId); }
   private context(order:ReturnType<OrdersService['get']>,reference:string){if(order.payment?.reference!==reference)throw new BadRequestException('Payment reference mismatch');return {orderId:order.id,amountNpr:order.totalAmountNpr,...(order.payment.correlationId?{correlationId:order.payment.correlationId}:{})};}
   private gateway(provider?: PaymentProvider) {

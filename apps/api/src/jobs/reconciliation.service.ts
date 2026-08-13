@@ -8,6 +8,7 @@ import { QUEUES } from './queues.js';
 import { OrdersService } from '../modules/orders/orders.service.js';
 import { PaymentsService } from '../modules/payments/payments.service.js';
 import { InventoryService } from '../modules/inventory/inventory.service.js';
+import { TransatelOperationsService } from '../modules/integration/transatel-operations.service.js';
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -32,6 +33,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly orders: OrdersService,
     private readonly payments: PaymentsService,
     private readonly inventory: InventoryService,
+    private readonly transatelOperations: TransatelOperationsService,
     private readonly metrics?: MetricsService,
   ) {}
 
@@ -77,6 +79,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
 
   private async run() {
     await this.reconcileProvisioningOperations();
+    await this.reconcileLifecycleOperations();
     await this.orders.reconcileStaleActivationOrders();
     await this.orders.recoverStuckProvisioningOrders();
     await this.payments.reconcilePendingPayments();
@@ -114,6 +117,17 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     if (queued) this.logger.log(`Queued ${queued} subscription usage reconciliation job(s)`);
   }
 
+  private async reconcileLifecycleOperations() {
+    if (!this.prisma.enabled) return;
+    const operations = await this.prisma.transatelLifecycleOperation.findMany({ where: { state: { in: ['ACCEPTED', 'RECONCILE_REQUIRED'] } }, select: { orderId: true }, distinct: ['orderId'], take: 100 });
+    for (const operation of operations) {
+      await this.transatelOperations.reconcile(operation.orderId).catch((error) => {
+        this.metrics?.recordFailure('reconciliation', 'transatel-lifecycle');
+        this.logger.warn(`Lifecycle reconciliation failed for ${operation.orderId}: ${error instanceof Error ? error.message : 'unknown error'}`);
+      });
+    }
+  }
+
   private async queueInventoryReconciliation() {
     const batchSize = Math.min(100, Math.max(1, Number(process.env.TRANSATEL_INVENTORY_RECONCILE_BATCH_SIZE ?? 25)));
     const staleHours = Math.max(1, Number(process.env.TRANSATEL_INVENTORY_RECONCILE_HOURS ?? 24));
@@ -147,8 +161,10 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       try {
         const details = await this.connectivity.getEsimDetails(operation.iccid);
         const qrPayload = 'qrPayload' in details ? details.qrPayload : undefined;
-        if (qrPayload && operation.order.providerSubscriptionId) {
-          await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: operation.orderId }, `provision-${operation.orderId}`);
+        if (qrPayload && operation.order.providerSubscriptionId && details.status.toLowerCase() === 'active') {
+          await this.orders.applyProviderEvent({ eventType: 'AUTOMATIC_RECONCILIATION', orderId: operation.orderId, iccid: operation.iccid, subscriptionId: operation.order.providerSubscriptionId, status: 'ACTIVATED', qrPayload });
+          await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'ACTIVATED', completedAt: new Date(), nextReconcileAt: null, lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
+          continue;
         }
         const nextState = operation.order.providerSubscriptionId ? (qrPayload ? 'QR_READY' : 'WAITING_FOR_QR') : 'RECONCILE_REQUIRED';
         await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: nextState, nextReconcileAt: new Date(Date.now() + 5 * 60_000), lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });

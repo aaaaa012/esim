@@ -170,7 +170,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                   return (
                     <TableRow key={order.id}>
                       <TableCell>
-                        <p className="font-medium">{order.orderNumber}</p>
+                        <Link className="font-medium text-primary underline-offset-4 hover:underline" href={`/orders/${order.id}`}>{order.orderNumber}</Link>
                         <p className="text-xs text-muted-foreground">
                           {new Date(order.createdAt).toLocaleDateString()}
                         </p>
@@ -231,10 +231,9 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                       </TableCell>
                       <TableCell>
                         <div className="space-y-2">
-                          {order.esim?.usage ? (
-                            <Button variant="outline" size="sm" disabled={busy === order.id} onClick={() => refreshUsage(order.id)}>{busy === order.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Refresh usage</Button>
-                          ) : null}
+                          {order.esim ? <Button variant="outline" size="sm" disabled={busy === order.id} onClick={() => refreshUsage(order.id)}>{busy === order.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Refresh usage</Button> : null}
                           {order.esim ? <LifecycleActions orderId={order.id} iccid={order.esim.iccid} providerStatus={order.esim.providerStatus ?? order.esim.status} canTerminate={canTerminate} onCompleted={() => void load()} /> : "—"}
+                          <Button asChild variant="outline" size="sm"><Link href={`/orders/${order.id}`}>Open order</Link></Button>
                         </div>
                       </TableCell>
                     </TableRow>

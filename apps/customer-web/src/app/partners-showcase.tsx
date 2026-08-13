@@ -40,6 +40,17 @@ export default function PartnersShowcase() {
 
   if (!partners.length) return null;
 
+  const visiblePartners = partners.filter((partner, index, all) => {
+    const normalized = partner.name.trim().toLowerCase();
+    if (!normalized || normalized.startsWith('test ') || normalized.includes('demo')) return false;
+    return all.findIndex((candidate) => candidate.name.trim().toLowerCase() === normalized) === index;
+  });
+
+  if (!visiblePartners.length) return null;
+
+  const shouldScroll = visiblePartners.length >= 6;
+  const trackPartners = shouldScroll ? [...visiblePartners, ...visiblePartners] : visiblePartners;
+
   return (
     <section className="section" id="partners">
       <div className="shell">
@@ -48,12 +59,12 @@ export default function PartnersShowcase() {
             <Handshake size={14} />
             Our partners
           </span>
-          <h2>Trusted by leading travel providers</h2>
-          <p>We work with the best to keep you connected wherever you land.</p>
+          <h2>Travel partners on Visa Compass</h2>
+          <p>Discover eSIM plans offered through our growing network of verified travel partners.</p>
         </div>
-        <div className="partners-track-wrap">
-          <div className="partners-track">
-            {[...partners, ...partners].map((p, i) => (
+        <div className={`partners-track-wrap${shouldScroll ? '' : ' is-static'}`}>
+          <div className={`partners-track${shouldScroll ? '' : ' is-static'}`}>
+            {trackPartners.map((p, i) => (
               <PartnerCard key={`${p.id}-${i}`} p={p} />
             ))}
           </div>

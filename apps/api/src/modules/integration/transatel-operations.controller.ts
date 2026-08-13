@@ -18,6 +18,18 @@ export class TransatelOperationsController {
     return this.transatel.dashboard();
   }
 
+  @Get('diagnostics')
+  diagnostics(@Req() request: AuthenticatedRequest) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.transatel.diagnostics();
+  }
+
+  @Post('orders/:id/reconcile')
+  reconcile(@Param('id') orderId: string, @Req() request: AuthenticatedRequest) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.transatel.reconcile(orderId, request.user!.localUserId);
+  }
+
   @Post('orders/:id/suspend')
   suspend(@Param('id') orderId: string, @Body() body: LifecycleBody, @Req() request: AuthenticatedRequest) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);

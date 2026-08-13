@@ -39,6 +39,17 @@ describe("NotificationService queue-disabled delivery guard", () => {
     expect(persisted.sentAt).toBeNull();
   });
 
+  it("reports delivery configuration without exposing credentials", () => {
+    vi.stubEnv("NOTIFICATION_MODE", "live");
+    vi.stubEnv("GMAIL_CLIENT_ID", "client");
+    vi.stubEnv("GMAIL_CLIENT_SECRET", "secret");
+    vi.stubEnv("GMAIL_REFRESH_TOKEN", "refresh");
+    vi.stubEnv("GMAIL_SENDER", "sender@example.com");
+    const service = new NotificationService(memoryPrisma(), queueStub(true));
+
+    expect(service.health()).toEqual(expect.objectContaining({ queue: "READY", mode: "LIVE", operational: true, channels: expect.objectContaining({ email: "CONFIGURED" }) }));
+  });
+
   it("throws ServiceUnavailableException in production when delivery cannot be queued", async () => {
     vi.stubEnv("NODE_ENV", "production");
     const service = new NotificationService(memoryPrisma(), queueStub(false));

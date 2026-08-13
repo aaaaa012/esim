@@ -15,6 +15,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
   const { signOut } = useClerk();
   const pathname = usePathname();
+  const customerPortalUrl = process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL;
   if (isShellFreePath(pathname)) return children;
   if (!isLoaded || !isSignedIn)
     return (
@@ -38,13 +39,15 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <Separator orientation="vertical" className="h-5" />
-            <a
-              href={process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL ?? "http://localhost:3000"}
-              className="hidden items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:inline-flex"
-            >
-              Customer Portal
-              <ExternalLink className="size-3.5" />
-            </a>
+            {customerPortalUrl ? (
+              <a href={customerPortalUrl} className="hidden items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:inline-flex">
+                Customer Portal <ExternalLink className="size-3.5" />
+              </a>
+            ) : (
+              <span className="hidden rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 md:inline-flex" title="Set NEXT_PUBLIC_CUSTOMER_WEB_URL during the ops-web build">
+                Customer portal URL missing
+              </span>
+            )}
             <Button
               variant="ghost"
               size="sm"

@@ -479,13 +479,19 @@ export class AdminService {
     return this.connectivity.checkEligibility(planId, msisdn);
   }
 
-  async users() {
-    if (!this.prisma.enabled) return [];
-    const users = await this.prisma.user.findMany({
+  async users(input: { q?: string; accountType?: UserRoleName; status?: UserStatus; limit?: number; offset?: number } = {}) {
+    if (!this.prisma.enabled) return { items: [], total: 0, limit: 50, offset: 0 };
+    const limit = Math.min(200, Math.max(1, input.limit ?? 50));
+    const offset = Math.max(0, input.offset ?? 0);
+    const where = { ...(input.q?.trim() ? { OR: [{ email: { contains: input.q.trim(), mode: "insensitive" as const } }, { clerkId: { contains: input.q.trim(), mode: "insensitive" as const } }, { customer: { is: { customerCode: { contains: input.q.trim(), mode: "insensitive" as const } } } }] } : {}), ...(input.accountType ? { accountType: input.accountType } : {}), ...(input.status ? { status: input.status } : {}) };
+    const [users, total] = await Promise.all([this.prisma.user.findMany({
+      where,
       include: { roles: { include: { role: true } }, customer: true },
       orderBy: { createdAt: "desc" },
-    });
-    return users.map((user) => ({
+      take: limit,
+      skip: offset,
+    }), this.prisma.user.count({ where })]);
+    const items = users.map((user) => ({
       id: user.id,
       clerkId: user.clerkId,
       email: user.email,
@@ -507,6 +513,7 @@ export class AdminService {
       customerCode: user.customer?.customerCode,
       createdAt: user.createdAt,
     }));
+    return { items, total, limit, offset };
   }
 
   async invitations() {
@@ -688,7 +695,7 @@ export class AdminService {
         },
       });
     });
-    return (await this.users()).find((item) => item.id === userId);
+    return (await this.users({ limit: 200 })).items.find((item) => item.id === userId);
   }
   async changeStatus(userId: string, status: UserStatus, actorClerkId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });

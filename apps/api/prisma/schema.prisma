@@ -156,6 +156,21 @@ enum TransatelLifecycleState {
   FAILED
 }
 
+enum ManualRefundStatus {
+  REQUESTED
+  APPROVED
+  COMPLETED
+  REJECTED
+}
+
+enum ManualRefundReason {
+  PROVISIONING_FAILURE
+  INCORRECT_FULFILLMENT
+  DUPLICATE_CHARGE
+  PROVIDER_SERVICE_FAILURE
+  INTERNAL_OPERATIONAL_ERROR
+}
+
 enum SubscriptionStatus {
   PENDING
   ACTIVE
@@ -251,6 +266,8 @@ model User {
   reviews                      OrderReview[]
   auditLogs                    AuditLog[]
   transatelLifecycleOperations TransatelLifecycleOperation[]
+  manualRefundsRequested       ManualRefund[]                @relation("ManualRefundRequester")
+  manualRefundsReviewed        ManualRefund[]                @relation("ManualRefundReviewer")
   staffInvitationsSent         StaffInvitation[]             @relation("StaffInvitationInviter")
   createdAt                    DateTime                      @default(now())
   updatedAt                    DateTime                      @updatedAt
@@ -381,6 +398,7 @@ model Order {
   provisioningAttempts         ProvisioningAttempt[]
   provisioningOperation        ProvisioningOperation?
   transatelLifecycleOperations TransatelLifecycleOperation[]
+  manualRefunds                ManualRefund[]
   notifications                Notification[]
   partnerLedgerEntries         PartnerLedgerEntry[]
   partnerHostedSessions        PartnerHostedCheckoutSession[]
@@ -446,6 +464,7 @@ model Payment {
   id                    String          @id @default(uuid()) @db.Uuid
   orderId               String          @db.Uuid
   order                 Order           @relation(fields: [orderId], references: [id])
+  manualRefunds         ManualRefund[]
   provider              PaymentProvider
   providerTransactionId String?
   providerCorrelationId String?
@@ -899,6 +918,34 @@ model TransatelLifecycleOperation {
 
   @@index([orderId, createdAt])
   @@index([state, createdAt])
+}
+
+model ManualRefund {
+  id                  String             @id @default(uuid()) @db.Uuid
+  orderId             String             @db.Uuid
+  order               Order              @relation(fields: [orderId], references: [id])
+  paymentId           String             @db.Uuid
+  payment             Payment            @relation(fields: [paymentId], references: [id])
+  status              ManualRefundStatus @default(REQUESTED)
+  activeKey           String?            @unique
+  reason              ManualRefundReason
+  explanation         String
+  amount              Decimal            @db.Decimal(12, 2)
+  requestedById       String             @db.Uuid
+  requestedBy         User               @relation("ManualRefundRequester", fields: [requestedById], references: [id])
+  reviewedById        String?            @db.Uuid
+  reviewedBy          User?              @relation("ManualRefundReviewer", fields: [reviewedById], references: [id])
+  reviewNote          String?
+  providerReference   String?            @unique
+  completionNote      String?
+  completedAt         DateTime?
+  rejectedAt          DateTime?
+  approvedAt          DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([status, createdAt])
+  @@index([orderId, createdAt])
 }
 
 model WebhookEvent {

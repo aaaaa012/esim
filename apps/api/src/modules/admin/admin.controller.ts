@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from "@nestjs/common";
@@ -75,8 +76,8 @@ export class AdminController {
   eligibility(@Body() body: { planId: string; msisdn: string }) {
     return this.admin.transatelEligibility(body.planId, body.msisdn);
   }
-  @Get("users") users() {
-    return this.admin.users();
+  @Get("users") users(@Query("q") q?: string, @Query("accountType") accountType?: UserRoleName, @Query("status") status?: UserStatus, @Query("limit") limit?: string, @Query("offset") offset?: string) {
+    return this.admin.users({ ...(q ? { q } : {}), ...(accountType ? { accountType } : {}), ...(status ? { status } : {}), limit: Number(limit) || 50, offset: Number(offset) || 0 });
   }
   @Patch("users/:id/account-type") accountType(
     @Param("id") id: string,

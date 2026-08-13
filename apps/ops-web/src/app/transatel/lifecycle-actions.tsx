@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PauseCircle, Trash2 } from "lucide-react";
+import { PauseCircle, RefreshCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { Button } from "@/components/ui/button";
@@ -43,9 +43,11 @@ export function LifecycleActions({ orderId, iccid, providerStatus, canTerminate,
       setBusy(false);
     }
   };
+  const reconcile = async () => { setBusy(true); try { const response=await authFetch(`${API}/operations/transatel/orders/${orderId}/reconcile`,{method:"POST",headers:{}}); const value=await response.json(); if(!response.ok) throw new Error(value.error?.message??"Live status check failed"); toast.success(`Provider status: ${value.data.providerStatus}`); onCompleted?.(); } catch(cause){toast.error(cause instanceof Error?cause.message:"Live status check failed")} finally{setBusy(false)} };
   return (
     <>
       <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" disabled={busy} onClick={()=>void reconcile()} title="Fetch the current eSIM status directly from Transatel"><RefreshCcw className="size-3.5" /> Check live</Button>
         <Button size="sm" variant="outline" disabled={pending || !suspendable} onClick={() => setAction("suspend")}><PauseCircle className="size-3.5" /> Suspend</Button>
         {canTerminate ? <Button size="sm" variant="destructive" disabled={providerStatus === "TERMINATED" || providerStatus === "TERMINATION_PENDING"} onClick={() => setAction("terminate")}><Trash2 className="size-3.5" /> Terminate</Button> : null}
       </div>

@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowRight, CheckCircle2, Globe2, Headset, Plane, QrCode, ShieldCheck, Smartphone, Timer, Wifi, Zap } from 'lucide-react';
 import CatalogPlans from './catalog-plans';
@@ -119,21 +120,24 @@ export default function Home() {
             </span>
             <h2>Connected in three steps</h2>
           </div>
-          <div className="steps">
-            <div className="step">
-              <span className="step-number">1</span>
-              <h3>Choose your destination</h3>
-              <p>Compare country plans with transparent data, validity, and coverage details.</p>
+          <div className="how-layout">
+            <div className="journey-visual">
+              <Image src="/images/traveller-connected-v1.webp" alt="Nepali traveller checking their phone before a flight" fill sizes="(max-width: 860px) 100vw, 46vw" />
+              <div className="journey-caption"><span><Wifi size={17} /></span><div><b>Ready before takeoff</b><small>Install at home. Connect when you land.</small></div></div>
             </div>
-            <div className="step">
-              <span className="step-number">2</span>
-              <h3>Verify and pay securely</h3>
-              <p>Confirm device compatibility, add travel documents, and pay via Khalti.</p>
-            </div>
-            <div className="step">
-              <span className="step-number">3</span>
-              <h3>Scan your QR code</h3>
-              <p>After review, your eSIM QR stays available in your private Visa Compass account.</p>
+            <div className="steps">
+              <div className="step">
+                <span className="step-number">1</span>
+                <div><h3>Choose your destination</h3><p>Compare plans with transparent data, validity, and coverage.</p></div>
+              </div>
+              <div className="step">
+                <span className="step-number">2</span>
+                <div><h3>Verify and pay securely</h3><p>Confirm compatibility, add your details, and pay via Khalti.</p></div>
+              </div>
+              <div className="step">
+                <span className="step-number">3</span>
+                <div><h3>Scan your QR code</h3><p>Access your private eSIM QR and activate before departure.</p></div>
+              </div>
             </div>
           </div>
         </div>
@@ -203,13 +207,15 @@ export default function Home() {
       <section className="section" id="support">
         <div className="shell">
           <div className="notice">
+            <div className="notice-graphic" aria-hidden="true"><span><Smartphone size={30} /></span><i className="notice-check"><CheckCircle2 size={18} /></i></div>
             <div>
+              <span className="notice-kicker">Before you purchase</span>
               <h2>Not sure your phone supports eSIM?</h2>
-              <p>Check compatibility before payment. Purchases cannot be refunded for incompatible devices.</p>
+              <p>Take our two-minute compatibility check before payment and travel with confidence.</p>
             </div>
             <Link href="/compatibility" className="button secondary">
               <ShieldCheck size={18} />
-              Check my device
+              Check compatibility
             </Link>
           </div>
         </div>

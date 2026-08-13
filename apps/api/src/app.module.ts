@@ -63,6 +63,8 @@ import { TransatelOperationsController } from "./modules/integration/transatel-o
 import { TransatelOperationsService } from "./modules/integration/transatel-operations.service.js";
 import { PartnerShowcaseAdminController, PartnerShowcasePublicController } from "./modules/showcase/partner-showcase.controller.js";
 import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
+import { ManualRefundsController } from "./modules/payments/manual-refunds.controller.js";
+import { ManualRefundsService } from "./modules/payments/manual-refunds.service.js";
 
 @Module({
   imports: [
@@ -95,6 +97,7 @@ OperationsController,
     TransatelOperationsController,
     PartnerShowcaseAdminController,
     PartnerShowcasePublicController,
+    ManualRefundsController,
   ],
   providers: [
     AccountGuard,
@@ -132,6 +135,7 @@ OperationsController,
     CustomerEsimsService,
     TransatelOperationsService,
     PartnerShowcaseService,
+    ManualRefundsService,
   ],
 })
 export class AppModule {}

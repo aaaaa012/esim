@@ -21,6 +21,7 @@ type Notification = {
   sentAt?: string;
   createdAt: string;
 };
+type Health = { queue: string; mode: string; channels: { email: string; whatsapp: string }; operational: boolean };
 
 export default function NotificationsClient() {
   const authFetch = useAuthenticatedFetch();
@@ -28,11 +29,17 @@ export default function NotificationsClient() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [health, setHealth] = useState<Health | null>(null);
   const load = () =>
-    authFetch(`${API}/operations/notifications`, { headers }).then(async (response) => {
-      const value = await response.json();
-      if (!response.ok) throw new Error(value.error?.message);
-      setItems(value.data);
+    Promise.all([
+      authFetch(`${API}/operations/notifications`, { headers }),
+      authFetch(`${API}/operations/notifications/health`, { headers }),
+    ]).then(async ([historyResponse, healthResponse]) => {
+      const [historyValue, healthValue] = await Promise.all([historyResponse.json(), healthResponse.json()]);
+      if (!historyResponse.ok) throw new Error(historyValue.error?.message);
+      if (!healthResponse.ok) throw new Error(healthValue.error?.message);
+      setItems(historyValue.data);
+      setHealth(healthValue.data);
     });
   useEffect(() => {
     void load()
@@ -59,6 +66,7 @@ export default function NotificationsClient() {
 
   return (
     <>
+      {health && <div className={`mb-6 grid gap-3 rounded-xl border p-4 sm:grid-cols-4 ${health.operational ? 'bg-card' : 'border-destructive/30 bg-destructive/5'}`}><div><p className="text-xs text-muted-foreground">Delivery</p><StatusBadge label={health.operational ? 'OPERATIONAL' : 'ACTION REQUIRED'} /></div><div><p className="text-xs text-muted-foreground">Worker queue</p><p className="mt-1 text-sm font-medium">{health.queue}</p></div><div><p className="text-xs text-muted-foreground">Mode</p><p className="mt-1 text-sm font-medium">{health.mode}</p></div><div><p className="text-xs text-muted-foreground">Email channel</p><p className="mt-1 text-sm font-medium">{health.channels.email.replaceAll('_',' ')}</p></div>{!health.operational&&<p className="sm:col-span-4 text-sm text-destructive">Retries cannot deliver until Redis and the live email channel are configured. Failed rows are retained for a controlled retry.</p>}</div>}
       {error && (
         <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {error}

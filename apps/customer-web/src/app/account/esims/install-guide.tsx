@@ -9,6 +9,8 @@ import {
   QrCode,
   Upload,
   CheckCircle2,
+  Download,
+  MonitorSmartphone,
 } from "lucide-react";
 
 type Step = { icon: React.ComponentType<{ size?: number | string; className?: string }>; title: string; body: string };
@@ -27,7 +29,7 @@ const ANDROID_STEPS: Step[] = [
   { icon: Wifi, title: "Confirm & activate", body: "Follow the on-screen prompts to finish. Your eSIM becomes active once you reach the destination." },
 ];
 
-export default function InstallGuide() {
+export default function InstallGuide({ canInstall, onOpenQr }: { canInstall: boolean; onOpenQr?: (() => void) | undefined }) {
   const [tab, setTab] = useState<"ios" | "android">("ios");
   const steps = tab === "ios" ? iOS_STEPS : ANDROID_STEPS;
   return (
@@ -38,8 +40,8 @@ export default function InstallGuide() {
             <Share2 size={14} />
             Install your eSIM
           </span>
-          <h3>Step-by-step setup</h3>
-          <p>Pick your device to follow the exact steps for activating your Visa Compass eSIM.</p>
+          <h3>Install step by step</h3>
+          <p>Choose your phone, then follow the setup path that works for the device you are using now.</p>
         </div>
         <div className="install-tabs">
           <button className={tab === "ios" ? "selected" : ""} onClick={() => setTab("ios")}>
@@ -49,6 +51,11 @@ export default function InstallGuide() {
             <Smartphone size={16} /> Android
           </button>
         </div>
+      </div>
+      <div className="install-paths">
+        <div><MonitorSmartphone size={19} /><span><b>Installing on this phone?</b><small>Open the QR on another screen, or download the protected PDF first.</small></span></div>
+        <div><QrCode size={19} /><span><b>Using another device?</b><small>Open the secure QR here and scan it with the phone you want to connect.</small></span></div>
+        {canInstall && onOpenQr ? <button className="button" onClick={onOpenQr}><QrCode size={16} />Open installation QR</button> : <span className="install-waiting">QR available when preparation finishes</span>}
       </div>
       <ol className="install-steps">
         {steps.map((step, index) => {
@@ -68,7 +75,7 @@ export default function InstallGuide() {
         })}
       </ol>
       <div className="install-note">
-        <QrCode size={16} />
+        <Download size={16} />
         You&apos;ll find the password (MSISDN) in your QR email — enter it when the PDF asks for one.
       </div>
     </section>

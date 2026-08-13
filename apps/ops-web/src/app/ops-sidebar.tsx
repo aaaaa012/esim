@@ -16,6 +16,7 @@ import {
   Server,
   RotateCw,
   Settings,
+  Undo2,
   Users,
 } from "lucide-react";
 import { useAuthenticatedFetch } from "./authenticated-api-provider";
@@ -36,6 +37,7 @@ const overviewItems: NavItem[] = [
   { href: "/provisioning-operations", label: "Provisioning recovery", icon: RotateCw },
 ];
 const systemItems: NavItem[] = [
+  { href: "/manual-refunds", label: "Manual Refunds", icon: Undo2 },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/integration-events", label: "Events", icon: PlugZap },
   { href: "/integration-logs", label: "Provider Logs", icon: Server },

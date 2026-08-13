@@ -36,6 +36,7 @@ export const opsHeaders = {};
 const QUEUE_STATUSES = ['REVIEW_PENDING', 'AWAITING_CUSTOMER', 'PROVISIONING_FAILED'];
 const PAGE_SIZE = 25;
 const QUEUE_PAGE_SIZE = 200;
+const ORDER_STATUSES = ['DRAFT','PAYMENT_PENDING','PAYMENT_CONFIRMED','REVIEW_PENDING','AWAITING_CUSTOMER','APPROVED','PROVISIONING','QR_READY','COMPLETED','PAYMENT_FAILED','CANCELLED','PROVISIONING_FAILED','REFUND_PENDING','REFUNDED'];
 
 export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolean }) {
   const authFetch = useAuthenticatedFetch();
@@ -133,7 +134,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
   return (
     <div className="space-y-4">
       {!queueOnly && (
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <SearchInput
             placeholder="Order, external ID, traveller or partner…"
             value={query}
@@ -154,7 +155,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
           </Select>
           <Select value={status} onValueChange={(value) => { setStatus(value); setPage(1); }}>
             <SelectTrigger className="w-full sm:w-44"><SelectValue placeholder="Status" /></SelectTrigger>
-            <SelectContent><SelectItem value="ALL">All statuses</SelectItem>{['APPROVED','PROVISIONING','QR_READY','COMPLETED','PROVISIONING_FAILED','REFUND_PENDING','REFUNDED','CANCELLED'].map((value) => <SelectItem key={value} value={value}>{value.replaceAll('_', ' ')}</SelectItem>)}</SelectContent>
+            <SelectContent><SelectItem value="ALL">All statuses</SelectItem>{ORDER_STATUSES.map((value) => <SelectItem key={value} value={value}>{value.replaceAll('_', ' ')}</SelectItem>)}</SelectContent>
           </Select>
           <Input aria-label="From date" type="date" value={from} onChange={(event) => { setFrom(event.target.value); setPage(1); }} className="w-full sm:w-40" />
           <Input aria-label="To date" type="date" value={to} onChange={(event) => { setTo(event.target.value); setPage(1); }} className="w-full sm:w-40" />
@@ -196,13 +197,13 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
               {visible.map((order) => (
                 <TableRow key={order.id}>
                   <TableCell>
-                    <p className="font-medium">{order.orderNumber}</p>
+                    <Link className="font-medium text-primary underline-offset-4 hover:underline" href={`/orders/${order.id}`}>{order.orderNumber}</Link>
                     <p className="text-xs text-muted-foreground">
                       {new Date(order.createdAt).toLocaleDateString()}
                       {order.topUpMobile ? ` · ${order.topUpMobile}` : ''}
                     </p>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="sticky right-24 bg-card">
                     <span className="inline-block rounded bg-muted px-1.5 py-0.5 text-[11px] uppercase tracking-wide">
                       {(order.channel ?? (order.partner ? (order.externalOrderId?.startsWith('vc-portal-') ? 'PARTNER_HOSTED' : 'PARTNER_API') : 'CUSTOMER_WEB')).replaceAll('_', ' ')}
                     </span>
@@ -229,10 +230,10 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
                   <TableCell>
                     <StatusBadge label={order.status} />
                   </TableCell>
-                  <TableCell className="text-right">
-                    <Button asChild variant="ghost" size="sm">
+                  <TableCell className="sticky right-0 bg-card text-right">
+                    <Button asChild variant="outline" size="sm">
                       <Link href={`/orders/${order.id}`}>
-                        Review <ArrowRight className="size-3.5" />
+                        Open <ArrowRight className="size-3.5" />
                       </Link>
                     </Button>
                   </TableCell>

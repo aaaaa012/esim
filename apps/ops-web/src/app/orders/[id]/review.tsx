@@ -22,6 +22,7 @@ import { InfoRow } from "@/components/info-row";
 import { Panel } from "@/components/panel";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { ManualRefundCard } from "./manual-refund-card";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Detail = OpsOrder & {
@@ -39,7 +40,7 @@ type Detail = OpsOrder & {
     passportExpiryDate: string;
   };
   documents: { id: string; type: string; fileName: string; status: string }[];
-  payment?: { provider: string; status: string };
+  payment?: { provider: string; status: string; reference?: string; providerTransactionId?: string };
   timeline: { to: string; at: string; reason?: string }[];
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   topUpMobile?: string;
@@ -53,7 +54,7 @@ export default function OrderReview({ id }: { id: string }) {
   const [error, setError] = useState("");
   const [reason, setReason] = useState("Please upload a clearer, complete copy");
   const [confirmAction, setConfirmAction] = useState<{
-    kind: "refund" | "cancel";
+    kind: "cancel";
     reason: string;
   } | null>(null);
   const [previewDocument, setPreviewDocument] = useState<{
@@ -175,7 +176,7 @@ export default function OrderReview({ id }: { id: string }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {confirmAction?.kind === "refund" ? "Refund order" : "Cancel order"}
+              Cancel order
             </DialogTitle>
             <DialogDescription>
               This transition is appended to the immutable timeline and cannot
@@ -206,20 +207,15 @@ export default function OrderReview({ id }: { id: string }) {
               Keep order
             </Button>
             <Button
-              variant={confirmAction?.kind === "cancel" ? "destructive" : "default"}
+              variant="destructive"
               disabled={Boolean(busy) || !confirmAction?.reason.trim()}
               onClick={() => {
-                if (confirmAction?.kind === "refund")
-                  action("payment/refund", { reason: confirmAction.reason.trim() });
-                else if (confirmAction?.kind === "cancel")
-                  action("cancel", { reason: confirmAction.reason.trim() });
+                if (confirmAction?.kind === "cancel") action("cancel", { reason: confirmAction.reason.trim() });
                 setConfirmAction(null);
               }}
             >
               {busy ? <Spinner /> : null}
-              {confirmAction?.kind === "refund"
-                ? "Confirm refund"
-                : "Confirm cancellation"}
+              Confirm cancellation
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -253,6 +249,21 @@ export default function OrderReview({ id }: { id: string }) {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
+          {order.purchaseType === "TOPUP" && (
+            <Panel title={<span className="flex items-center gap-2"><ShieldCheck className="size-4 text-primary" />Top-up verification</span>}>
+              <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
+                Khalti payment is captured only after its lookup reports <strong className="text-foreground">COMPLETED</strong>. The provider then adds this plan to the existing eSIM; assignment becomes verified only after Transatel confirms the subscription on that ICCID.
+              </div>
+              <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                <InfoRow label="Target mobile" value={order.topUpMobile ?? order.assignment?.msisdn ?? "Unavailable"}/>
+                <InfoRow label="Payment capture" value={order.payment?.status === "COMPLETED" ? "Confirmed by Khalti" : order.payment?.status ?? "Not started"}/>
+                <InfoRow label="Khalti reference" value={order.payment?.providerTransactionId ?? order.payment?.reference ?? "Pending"}/>
+                <InfoRow label="Provider verification" value={order.assignment?.verificationStatus ?? "Pending provisioning"}/>
+                <InfoRow label="Existing ICCID" value={order.assignment?.iccid ?? "Resolved during provisioning"}/>
+                <InfoRow label="Provider subscription" value={order.assignment?.providerSubscriptionId ?? "Awaiting Transatel"}/>
+              </dl>
+            </Panel>
+          )}
           <Panel
             title={
               <span className="flex items-center gap-2">
@@ -398,20 +409,7 @@ export default function OrderReview({ id }: { id: string }) {
                 </Button>
               </>
             ) : order.status === "PROVISIONING_FAILED" ? (
-              <Button
-                className="w-full"
-                variant="success"
-                size="lg"
-                disabled={Boolean(busy)}
-                onClick={() => action("retry")}
-              >
-                {busy === "retry" ? (
-                  <Spinner className="text-success-foreground" />
-                ) : (
-                  <RefreshCcw className="size-4" />
-                )}
-                Retry provisioning
-              </Button>
+              <div className="space-y-2"><Button className="w-full" variant="outline" size="lg" asChild><Link href="/provisioning-operations"><RefreshCcw className="size-4" />Check provider recovery</Link></Button><Button className="w-full" variant="success" size="lg" disabled={Boolean(busy)} onClick={() => action("retry")}>{busy === "retry" ? <Spinner className="text-success-foreground" /> : <RefreshCcw className="size-4" />}Retry known-safe failure</Button><p className="text-xs text-muted-foreground">Reconcile first when Transatel may have accepted the request. The API blocks unsafe duplicate submissions.</p></div>
             ) : ["QR_READY", "COMPLETED"].includes(order.status) ? (
               <Button
                 className="w-full"
@@ -429,23 +427,7 @@ export default function OrderReview({ id }: { id: string }) {
                 No review action available in this state.
               </div>
             )}
-            {order.payment?.status === "COMPLETED" &&
-              !["REFUND_PENDING", "REFUNDED"].includes(order.status) && (
-                <Button
-                  className="w-full"
-                  variant="outline"
-                  disabled={Boolean(busy)}
-                  onClick={() =>
-                    setConfirmAction({
-                      kind: "refund",
-                      reason: "Customer requested cancellation",
-                    })
-                  }
-                >
-                  <RefreshCcw className="size-4" />
-                  Refund order
-                </Button>
-              )}
+            <ManualRefundCard orderId={order.id} paid={order.payment?.status === "COMPLETED" && order.status !== "REFUNDED"} />
             {["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(order.status) && (
               <Button
                 className="w-full text-destructive hover:bg-destructive/10"

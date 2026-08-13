@@ -140,6 +140,9 @@ export default function AdminWorkspace() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [userQuery, setUserQuery] = useState("");
+  const [userTypeFilter, setUserTypeFilter] = useState("ALL");
+  const [userStatusFilter, setUserStatusFilter] = useState("ALL");
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteType, setInviteType] = useState<"OPERATIONS" | "SUPER_ADMIN">("OPERATIONS");
@@ -192,14 +195,14 @@ export default function AdminWorkspace() {
     Promise.all([
       request<Plan[]>("/admin/plans"),
       request<Integration[]>("/admin/integrations"),
-      request<User[]>("/admin/users"),
+      request<{items:User[]}>("/admin/users?limit=200"),
       request<Invitation[]>("/admin/staff-invitations"),
       request<Partner[]>("/admin/partners"),
     ])
       .then(([p, i, u, invitationsValue, partnerValues]) => {
         setPlans(p);
         setIntegrations(i);
-        setUsers(u);
+        setUsers(u.items);
         setInvitations(invitationsValue);
         setPartners(partnerValues);
       })
@@ -207,6 +210,10 @@ export default function AdminWorkspace() {
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    const timer=setTimeout(()=>{const params=new URLSearchParams({limit:"200"});if(userQuery.trim())params.set("q",userQuery.trim());if(userTypeFilter!=="ALL")params.set("accountType",userTypeFilter);if(userStatusFilter!=="ALL")params.set("status",userStatusFilter);void authFetch(`${API}/admin/users?${params}`,{headers}).then(r=>r.json()).then(v=>setUsers(v.data?.items??[])).catch(()=>undefined)},300);
+    return()=>clearTimeout(timer);
+  },[authFetch,userQuery,userTypeFilter,userStatusFilter]);
   const savePlan = async (plan: Plan) => {
     setBusy(plan.id);
     try {
@@ -987,6 +994,11 @@ export default function AdminWorkspace() {
               }
               noPadding
             >
+              <div className="flex flex-wrap gap-2 border-b p-4">
+                <Input className="w-full sm:w-72" placeholder="Search email, ID or customer code…" value={userQuery} onChange={(event)=>setUserQuery(event.target.value)} />
+                <Select value={userTypeFilter} onValueChange={setUserTypeFilter}><SelectTrigger className="w-44"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="ALL">All account types</SelectItem><SelectItem value="CUSTOMER">CUSTOMER</SelectItem><SelectItem value="OPERATIONS">OPERATIONS</SelectItem><SelectItem value="SUPER_ADMIN">SUPER ADMIN</SelectItem></SelectContent></Select>
+                <Select value={userStatusFilter} onValueChange={setUserStatusFilter}><SelectTrigger className="w-40"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="ALL">All statuses</SelectItem><SelectItem value="ACTIVE">ACTIVE</SelectItem><SelectItem value="DISABLED">DISABLED</SelectItem></SelectContent></Select>
+              </div>
               <div className="flex flex-col gap-3 border-b p-6 sm:flex-row sm:items-end">
                 <div className="grid w-full gap-3 sm:grid-cols-[1fr_auto_auto]">
                   <div className="space-y-1.5">

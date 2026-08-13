@@ -71,13 +71,15 @@ export class ClerkSyncService {
       where: { email },
     });
     if (userWithSameEmail) {
-      if (userWithSameEmail.status === UserStatus.DISABLED)
-        throw new ForbiddenException("Disabled accounts cannot be rebound to a new Clerk identity");
+      // Clerk may recreate an identity after account recovery. Ownership is
+      // established by the verified email in the signed webhook; relink the
+      // existing database row rather than colliding with its unique email.
       await this.prisma.user.update({
         where: { id: userWithSameEmail.id },
         data: {
           clerkId: event.data.id,
           email,
+          status: UserStatus.ACTIVE,
         },
       });
       return {

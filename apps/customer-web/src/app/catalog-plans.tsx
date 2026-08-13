@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { AlertTriangle, CheckCircle2, MapPin } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Globe2, MapPin } from "lucide-react";
 import CountryPicker, { flagEmoji } from "./country-picker";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -39,6 +39,7 @@ export default function CatalogPlans() {
   const [topUpMobile, setTopUpMobile] = useState("");
   const [topUpCountry, setTopUpCountry] = useState("");
   const [topUpToken, setTopUpToken] = useState("");
+  const [showAllDestinations, setShowAllDestinations] = useState(false);
 
   useEffect(() => {
     try {
@@ -104,22 +105,80 @@ export default function CatalogPlans() {
   const grouped = new Map<string, Plan[]>();
   for (const plan of plans ?? []) grouped.set(plan.countryCode, [...(grouped.get(plan.countryCode) ?? []), plan]);
   const countryList = countries.length
-    ? countries
+    ? countries.filter((country) => grouped.has(country.code))
     : [...grouped.entries()].map(([code, items]) => ({ code, name: items[0]?.countryName ?? code }));
   const visible = selected ? (grouped.get(selected) ?? []) : [];
   const coverageMessage = selected ? coverage[selected] : undefined;
+  const popularCountries = new Set((plans ?? []).filter((plan) => plan.popular).map((plan) => plan.countryCode));
+  const supported = [...countryList].sort((a, b) => Number(popularCountries.has(b.code)) - Number(popularCountries.has(a.code)) || a.name.localeCompare(b.name));
+  const popular = supported.filter((country) => popularCountries.has(country.code)).slice(0, 8);
+
+  const selectDestination = (code: string) => {
+    setSelected(code);
+    setShowAllDestinations(false);
+    requestAnimationFrame(() => {
+      document.getElementById("plan-picker")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
 
   return (
     <>
-      <div className="destination-picker">
-        <CountryPicker countries={countryList} value={selected} onChange={setSelected} disabled={!plans} />
-        {topUpMobile && selected && (
-          <small className="topup-context">
-            Recharging {selected ? countryList.find((country) => country.code === selected)?.name ?? selected : ""} for
-            {` ${topUpMobile}`}.
-          </small>
-        )}
-      </div>
+      <section className="supported-destinations" aria-labelledby="supported-destinations-title">
+        <div className="supported-heading">
+          <div>
+            <span className="destination-eyebrow"><Globe2 size={14} /> Global coverage</span>
+            <h3 id="supported-destinations-title">Where are you travelling?</h3>
+            <p>Search all supported countries or jump to a popular destination.</p>
+          </div>
+          {plans ? <span className="destination-count">{supported.length} destinations</span> : null}
+        </div>
+        <div className="destination-picker" id="plan-picker">
+          <CountryPicker countries={countryList} value={selected} onChange={selectDestination} disabled={!plans} />
+          {plans ? <small className="picker-help">Type a country name to quickly find your plan.</small> : null}
+          {topUpMobile && selected && (
+            <small className="topup-context">
+              Recharging {selected ? countryList.find((country) => country.code === selected)?.name ?? selected : ""} for
+              {` ${topUpMobile}`}.
+            </small>
+          )}
+        </div>
+
+        {!plans && !error ? (
+          <div className="destination-grid popular-grid loading" aria-label="Loading popular destinations"><span /><span /><span /></div>
+        ) : popular.length ? (
+          <div className="popular-destinations">
+            <p className="destination-subtitle">Popular destinations</p>
+            <div className="destination-grid popular-grid">
+              {popular.map((country) => (
+                <button key={country.code} type="button" className={selected === country.code ? "selected" : ""} aria-pressed={selected === country.code} onClick={() => selectDestination(country.code)}>
+                  <span className="destination-flag">{flagEmoji(country.code)}</span>
+                  <span className="destination-label"><b>{country.name}</b><small>View plans</small></span>
+                  <span className="destination-arrow" aria-hidden="true">→</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {plans && supported.length ? (
+          <div className="all-destinations">
+            <button type="button" className="all-destinations-toggle" aria-expanded={showAllDestinations} aria-controls="all-destinations-grid" onClick={() => setShowAllDestinations((current) => !current)}>
+              <span>{showAllDestinations ? "Hide destination directory" : `Browse all ${supported.length} destinations`}</span>
+              <ChevronDown size={17} className={showAllDestinations ? "is-open" : ""} />
+            </button>
+            {showAllDestinations ? (
+              <div className="destination-grid directory-grid" id="all-destinations-grid">
+                {supported.map((country) => (
+                  <button key={country.code} type="button" className={selected === country.code ? "selected" : ""} aria-pressed={selected === country.code} onClick={() => selectDestination(country.code)}>
+                    <span className="destination-flag">{flagEmoji(country.code)}</span>
+                    <b>{country.name}</b>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : !error && plans ? <p className="catalog-empty">No supported destinations are currently available.</p> : null}
+      </section>
       {error ? <div className="catalog-error">{error}</div> : null}
       {coverageMessage ? (
         <div className={`coverage-note ${coverageMessage === "Coverage available" ? "ok" : "warn"}`}>

@@ -42,7 +42,7 @@ function readyOrder(overrides: Partial<DemoOrder> = {}): DemoOrder {
   } as unknown as DemoOrder;
 }
 
-function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unknown = { release: vi.fn().mockResolvedValue(undefined) }) {
+function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unknown = { release: vi.fn().mockResolvedValue(undefined) }, prisma: unknown = { enabled: false }) {
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
     save: vi.fn().mockResolvedValue(undefined),
@@ -56,11 +56,22 @@ function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unkn
     {} as unknown as QueueService,
     {} as unknown as NotificationService,
     {} as unknown as CatalogService,
-    { enabled: false } as unknown as PrismaService,
+    prisma as unknown as PrismaService,
     {} as unknown as QrPdfService,
     {} as unknown as PassportVerificationService,
   );
 }
+
+describe('OrdersService provisioning retry safety', () => {
+  it('blocks a retry when Transatel may already have accepted the order', async () => {
+    const order = readyOrder({ id: 'failed-1', status: OrderStatus.PROVISIONING_FAILED });
+    const prisma = { enabled: true, provisioningOperation: { findUnique: vi.fn().mockResolvedValue({ state: 'WAITING_FOR_QR', providerOrderId: 'provider-order-1', providerSubscriptionId: 'sub-1' }) } };
+    const orders = ordersService([order], {}, undefined, prisma);
+    await orders.refreshFromPersistence();
+
+    await expect(orders.retry(order.id)).rejects.toThrow('Reconcile its live status');
+  });
+});
 
 describe('OrdersService asynchronous provisioning', () => {
   it('keeps an accepted delayed preload in PROVISIONING without retrying or releasing inventory', async () => {

@@ -11,6 +11,9 @@ import { z } from "zod";
  */
 const baseSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "staging", "production"]).default("development"),
+  API_PUBLIC_URL: z.string().url().optional(),
+  CUSTOMER_WEB_URL: z.string().url().optional(),
+  OPS_WEB_URL: z.string().url().optional(),
   PORT: z.coerce.number().int().positive().optional(),
   DATABASE_URL: z.string().min(1).optional(),
   PERSISTENCE_MODE: z.enum(["prisma", "memory"]).optional(),
@@ -44,6 +47,9 @@ const baseSchema = z.object({
 });
 
 const productionSchema = baseSchema.extend({
+  API_PUBLIC_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
+  CUSTOMER_WEB_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
+  OPS_WEB_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
   DATABASE_URL: z.string().min(1),
   PERSISTENCE_MODE: z.literal("prisma"),
   REDIS_URL: z.string().min(1),
