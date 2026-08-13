@@ -28,22 +28,31 @@ export class WebhooksController {
       'svix-id': headers['svix-id'] ?? '',
       'svix-timestamp': headers['svix-timestamp'] ?? '',
       'svix-signature': headers['svix-signature'] ?? '',
-    }) as { type: string; data: { id: string } };
+    }) as { type: string; data: { id?: string } };
+    // Clerk delivers organization/session events to the same endpoint. They
+    // are validly signed but not identity synchronization work.
+    if (!event.type.startsWith('user.')) return { accepted: true, eventType: event.type, ignored: true };
     const result = await this.clerkSync.sync(event as never);
     return { accepted: true, eventType: event.type, userId: event.data.id, ...result };
   }
 
   @Post('payments/:provider')
   @HttpCode(202)
-  async payment(@Param('provider') provider: string, @Body() body: { eventId?: string }, @Req() request: { rawBody?: Buffer }, @Headers('x-visa-signature') signature?: string) {
+  async payment(@Param('provider') provider: string, @Body() body: { eventId?: string; orderId?: string; reference?: string; pidx?: string }, @Req() request: { rawBody?: Buffer }, @Headers('x-visa-signature') signature?: string) {
     const eventId = body.eventId;
     if (!eventId) throw new BadRequestException('eventId is required');
     if (typeof eventId !== 'string' || eventId.length < 8 || eventId.length > 256) throw new BadRequestException('eventId is invalid');
     this.verifyPaymentSignature(this.rawPayload(body, request.rawBody), signature);
     if (this.accepted.has(`${provider}:${eventId}`) || await this.webhookExists(provider, eventId)) return { accepted: true, duplicate: true };
     this.remember(`${provider}:${eventId}`);
-    await this.persistWebhook(provider, eventId, body, true);
-    await this.queues.add(QUEUES.payments, 'payment-callback', { provider, eventId, payload: body }, `${provider}-${eventId}`);
+    const reference = body.reference ?? body.pidx;
+    let orderId = body.orderId;
+    if (!orderId && reference && this.prisma.enabled) {
+      orderId = (await this.prisma.payment.findUnique({ where: { paymentReference: reference }, select: { orderId: true } }))?.orderId;
+    }
+    const payload = { ...body, ...(reference ? { reference } : {}), ...(orderId ? { orderId } : {}) };
+    await this.persistWebhook(provider, eventId, payload, true);
+    await this.queues.add(QUEUES.payments, 'payment-callback', { provider, eventId, payload }, `${provider}-${eventId}`);
     return { accepted: true, queued: true };
   }
 

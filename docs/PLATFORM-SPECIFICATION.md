@@ -416,17 +416,17 @@ Documented in detail in `docs/PARTNER-API-v1.md`. Summary:
 
 | Method/Path | Body | Notes |
 | --- | --- | --- |
-| `GET /partners/capabilities` | — | apiVersion, payments, notifications, connectivity descriptor + health, idempotency flag |
+| `GET /partners/capabilities` | — | apiVersion, payments, notifications, connectivity.available, idempotency flag |
 | `GET /partners/plans` | — | catalog |
-| `POST /partners/quotes` | `{ planId }` | `{ quoteId, planId, amount, currency:'NPR', expiresAt (+15min) }` |
-| `POST /partners/orders` | `{ planId, externalCustomerId, compatibilityAccepted:true }` | owner id = `partner:<id>:<externalCustomerId>` |
+| `POST /partners/quotes` | `{ planId }` | `{ quoteId, planId, amount, currency:'NPR', expiresAt (+15min) }` (deprecated) |
+| `POST /partners/orders` | complete order body (recommended) or legacy quote body | owner id = `partner:<id>:<externalCustomerId>` |
 | `GET /partners/orders/:id` | — | order for the partner's owner prefix (404 otherwise) |
 | `POST /partners/orders/:id/traveler` | `travelerSchema` | |
 | `POST /partners/orders/:id/documents` | `documentRequestSchema` | |
 | `POST /partners/orders/:id/documents/:documentId/confirm` | — | |
-| `POST /partners/orders/:id/payments` | `{ provider }` | |
-| `GET /partners/orders/:id/connectivity` | — | status + provider descriptor + health |
+| `POST /partners/orders/:id/hosted-checkout-session` | — | deprecated (410 `HOSTED_PAYMENT_DEPRECATED`) |
 | `GET /partners/orders/:id/usage` | — | only after `COMPLETED` |
+| `GET /partners/orders/:id/events` | — | order event history |
 | `POST /partners/orders/:id/notifications` | `{ channel, template }` | re-sends a template to the traveler |
 
 ### 5.8 Webhooks (unauthenticated, signature-verified)

@@ -168,7 +168,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
         </div>
       )}
       <Panel
-        title="Orders"
+        title={queueOnly ? 'Orders needing attention' : 'Order list'}
         description={queueOnly ? 'Orders requiring attention' : undefined}
         noPadding
       >

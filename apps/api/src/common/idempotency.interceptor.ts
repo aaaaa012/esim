@@ -1,7 +1,10 @@
-import { BadRequestException, CallHandler, ConflictException, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { BadRequestException, CallHandler, ExecutionContext, HttpException, Injectable, NestInterceptor } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { from, of, switchMap, tap, type Observable } from 'rxjs';
+import { catchError, from, of, switchMap, tap, type Observable } from 'rxjs';
 import { PrismaService } from '../infrastructure/prisma.service.js';
+
+const IDEMPOTENCY_CONFLICT = (message: string) =>
+  new HttpException({ code: 'IDEMPOTENCY_CONFLICT', message }, 409);
 
 type IdempotencyRequest = {
   method: string;
@@ -34,8 +37,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return next.handle();
     }
     const key = request.headers['x-idempotency-key'];
-    if (!key) return next.handle();
-    if (key.length < 8 || key.length > 200) throw new BadRequestException('Invalid idempotency key');
+    if (!key) {
+      if (request.partner) throw new HttpException({ code: 'IDEMPOTENCY_KEY_REQUIRED', message: 'Idempotency-Key is required for partner mutations' }, 400);
+      return next.handle();
+    }
+    if (key.length < 8 || key.length > 200) throw new HttpException({ code: 'INVALID_IDEMPOTENCY_KEY', message: 'Invalid idempotency key' }, 400);
 
     const principalId = request.partner?.id ?? request.user?.id ?? 'anonymous';
     const source = `idempotency:${principalId}:${request.method}:${request.path}`;
@@ -49,7 +55,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
         if (!claim.owned) {
           if (claim.requestHash !== requestHash) {
             return from(Promise.resolve()).pipe(switchMap(() => {
-              throw new ConflictException('Idempotency key was already used with a different request');
+              throw IDEMPOTENCY_CONFLICT('Idempotency key was already used with a different request');
             }));
           }
           return of(claim.response);
@@ -63,6 +69,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
               })
               .catch(() => void 0);
           }),
+          catchError((error) => from(this.prisma.webhookEvent.deleteMany({ where: { source, eventId: key } })).pipe(switchMap(() => { throw error; }))),
         );
       }),
     );
@@ -95,7 +102,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      throw new ConflictException('Idempotent request is still being processed; retry shortly');
+      throw IDEMPOTENCY_CONFLICT('Idempotent request is still being processed; retry shortly');
     }
   }
 }

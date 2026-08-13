@@ -5,6 +5,29 @@ import { Handshake } from 'lucide-react';
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
 type Partner = { id: string; name: string; logoUrl?: string | null };
 
+function PartnerCard({ p }: { p: Partner }) {
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [p.logoUrl]);
+  return (
+    <div className="partner-card">
+      {p.logoUrl && !broken ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={p.logoUrl}
+          alt={`${p.name} logo`}
+          className="partner-logo"
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setBroken(true)}
+        />
+      ) : (
+        <span className="partner-initial">{p.name.charAt(0)}</span>
+      )}
+      <span className="partner-name">{p.name}</span>
+    </div>
+  );
+}
+
 export default function PartnersShowcase() {
   const [partners, setPartners] = useState<Partner[]>([]);
 
@@ -31,15 +54,7 @@ export default function PartnersShowcase() {
         <div className="partners-track-wrap">
           <div className="partners-track">
             {[...partners, ...partners].map((p, i) => (
-              <div key={`${p.id}-${i}`} className="partner-card">
-                {p.logoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={p.logoUrl} alt={`${p.name} logo`} className="partner-logo" loading="lazy" referrerPolicy="no-referrer" />
-                ) : (
-                  <span className="partner-initial">{p.name.charAt(0)}</span>
-                )}
-                <span className="partner-name">{p.name}</span>
-              </div>
+              <PartnerCard key={`${p.id}-${i}`} p={p} />
             ))}
           </div>
         </div>

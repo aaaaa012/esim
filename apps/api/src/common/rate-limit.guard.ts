@@ -4,7 +4,7 @@ import { clientIp } from './client-ip.js';
 type Bucket = { tokens: number; lastRefill: number };
 
 /**
- * In-memory fixed-window rate limiter keyed by IP + route.
+ * In-memory token-bucket limiter keyed by IP + normalized route.
  *
  * Webhook endpoints are exempt (they are signature-verified provider
  * callbacks). Public and auth routes are throttled more aggressively to slow
@@ -29,7 +29,9 @@ export class RateLimitGuard implements CanActivate {
 
     const sensitive = path.startsWith('/api/v1/auth') || path.startsWith('/api/v1/public');
     const capacity = sensitive ? this.authLimit : this.limit;
-    const key = `${ip}:${request.method}:${path}`;
+    // UUIDs and numeric ids must not form attacker-controlled fresh buckets.
+    const route = path.replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, ':id').replace(/\/\d+(?=\/|$)/g, '/:id');
+    const key = `${ip}:${request.method}:${route}`;
 
     const now = Date.now();
     let bucket = this.buckets.get(key);

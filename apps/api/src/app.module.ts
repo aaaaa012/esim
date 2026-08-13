@@ -55,6 +55,7 @@ import { IntegrationProcessor } from "./jobs/integration.processor.js";
 import { ReconciliationService } from "./jobs/reconciliation.service.js";
 import { AuthController } from "./modules/identity/auth.controller.js";
 import { AccountGuard } from "./common/auth.guard.js";
+import { PassportVerificationRateLimitGuard } from "./common/passport-verification.rate-limit.guard.js";
 import { CustomerEsimsController } from "./modules/esims/customer-esims.controller.js";
 import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
 import { TransatelOperationsController } from "./modules/integration/transatel-operations.controller.js";
@@ -96,6 +97,7 @@ OperationsController,
   ],
   providers: [
     AccountGuard,
+    PassportVerificationRateLimitGuard,
     CatalogService,
     OrdersService,
     OrdersPersistenceService,

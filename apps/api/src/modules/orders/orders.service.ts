@@ -187,12 +187,18 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id);
     if (order.payment?.reference !== reference) throw new BadRequestException('Payment reference mismatch');
     if (order.payment.status === PaymentStatus.COMPLETED) return this.redact(order);
-    order.payment.status = PaymentStatus.COMPLETED;
-    if (transactionId) order.payment.providerTransactionId = transactionId;
-    this.transition(order, OrderStatus.PAYMENT_CONFIRMED);
-    await this.autoApprove(order);
-    await this.persistence.save(order);
-    return this.redact(order);
+    // Persist the paid/provisioning state before attempting best-effort queue
+    // delivery.  In particular, a Redis outage must never make a successful
+    // gateway confirmation disappear from durable storage.
+    const confirmed = structuredClone(order) as DemoOrder;
+    confirmed.payment!.status = PaymentStatus.COMPLETED;
+    if (transactionId) confirmed.payment!.providerTransactionId = transactionId;
+    this.transition(confirmed, OrderStatus.PAYMENT_CONFIRMED);
+    this.markAutoApproved(confirmed);
+    await this.persistence.save(confirmed);
+    this.orders.set(id, confirmed);
+    await this.enqueueProvisioning(confirmed, `provision-${confirmed.id}`);
+    return this.redact(confirmed);
   }
   async resolvePaymentFailure(id: string, ownerId: string | null, reason: string, paymentStatus: PaymentStatus = PaymentStatus.FAILED) {
     const order = this.get(id, ownerId ?? undefined);
@@ -353,7 +359,9 @@ export class OrdersService implements OnModuleInit {
       this.metrics?.recordFailure('provisioning', 'exhausted');
       if (permanentRejection) order.providerStatus = 'REJECTED';
       this.transition(order, OrderStatus.PROVISIONING_FAILED, permanentRejection ? 'Transatel permanently rejected the provisioning request' : 'Provisioning retries exhausted');
-      if (permanentRejection) await this.inventory.release(order.id);
+      // release() itself refuses profiles with a provider subscription, so it
+      // is safe for every terminal failure, not only explicit rejections.
+      await this.inventory.release(order.id);
       await this.persistence.save(order);
       await this.alertProvisioningFailure(order);
     }
@@ -458,6 +466,7 @@ export class OrdersService implements OnModuleInit {
       }
       this.transition(order, OrderStatus.PROVISIONING_FAILED, 'Activation window expired without an ACTIVATED event');
       await this.persistence.save(order);
+      await this.inventory.release(order.id);
       await this.alertProvisioningFailure(order);
       failed.push(order.id);
       this.activationRefetchAttempts.delete(order.id);
@@ -559,7 +568,18 @@ export class OrdersService implements OnModuleInit {
     const traveler = row.customerEsims[0]?.order.traveler;
     return { inventory: { id: row.id, eid: row.eid, iccid: row.iccid }, ...(traveler ? { traveler: { firstName: traveler.firstName, surname: traveler.surname, email: traveler.email, mobile: traveler.mobile, city: traveler.city, countryOfResidence: traveler.countryOfResidence } } : {}) };
   }
-  private async autoApprove(order: DemoOrder) { this.transition(order, OrderStatus.APPROVED, 'Auto-approved after payment'); this.transition(order, OrderStatus.PROVISIONING); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); if (!this.queues.enabled) await this.processLocally(order.id); }
+  private markAutoApproved(order: DemoOrder) { this.transition(order, OrderStatus.APPROVED, 'Auto-approved after payment'); this.transition(order, OrderStatus.PROVISIONING); }
+  private async enqueueProvisioning(order: DemoOrder, jobId: string) {
+    try {
+      await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, jobId);
+    } catch (error) {
+      // The durable order state is recovered by boot/reconciliation. Never
+      // propagate this after a payment has been confirmed.
+      this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`);
+      return;
+    }
+    if (!this.queues.enabled) await this.processLocally(order.id);
+  }
   private async approveProvisioning(order: DemoOrder) { this.transition(order, OrderStatus.PROVISIONING, 'Manual retry'); await this.persistence.save(order); await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `retry-${order.id}-${Date.now()}`); if (!this.queues.enabled) return this.processLocally(order.id); return this.redact(order); }
   private async processLocally(orderId:string){let failure:unknown;for(let attempt=1;attempt<=3;attempt++){try{return await this.processProvisioning(orderId,attempt,attempt===3)}catch(error){failure=error}}throw failure}
   private transition(order: DemoOrder, to: OrderStatus, reason?: string) { assertTransition(order.status, to); const from = order.status; order.status = to; order.timeline.push({ from, to, at: new Date().toISOString(), ...(reason ? { reason } : {}) }); }

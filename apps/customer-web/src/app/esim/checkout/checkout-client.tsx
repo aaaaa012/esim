@@ -864,8 +864,8 @@ export default function CheckoutClient({
                     <span>{order.orderNumber}</span>
                     <p>
                       Your activation QR was emailed to you as a password-protected
-                      PDF. Open it on your phone and enter the eSIM number
-                      (MSISDN) shown in your email to reveal the QR.
+                      PDF. Open it on your phone and enter the mobile number shown
+                      in your email to reveal the QR.
                     </p>
                     <Link className="button" href="/account/esims">
                       View my eSIMs

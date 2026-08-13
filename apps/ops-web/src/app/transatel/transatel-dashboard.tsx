@@ -66,7 +66,7 @@ export default function TransatelDashboard() {
   ] : [];
   return (
     <>
-      <PageHeader title="Transatel operations" description="Provider health, subscriber lifecycle, live inventory reconciliation, balances, and failure queues." badge={data ? <StatusBadge label={data.health.ok ? "CONNECTED" : "ATTENTION"} tone={data.health.ok ? "success" : "warning"} /> : undefined} actions={<Button variant="outline" onClick={() => void load()}><RefreshCcw className="size-4" /> Refresh</Button>} />
+      <PageHeader title="Connectivity operations" description="Network health, subscriber lifecycle, live inventory reconciliation, balances, and failure queues." badge={data ? <StatusBadge label={data.health.ok ? "CONNECTED" : "ATTENTION"} tone={data.health.ok ? "success" : "warning"} /> : undefined} actions={<Button variant="outline" onClick={() => void load()}><RefreshCcw className="size-4" /> Refresh</Button>} />
       {error ? <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</div> : null}
       {!data && !error ? <div className="flex h-48 items-center justify-center"><Spinner /></div> : null}
       {data ? <>

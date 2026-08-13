@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createOrderSchema, documentRequestSchema, initiatePaymentSchema, travelerSchema } from '@visa-compass/shared';
 import { GuestLookupRateLimitGuard } from '../../common/guest-lookup.rate-limit.guard.js';
+import { PassportVerificationRateLimitGuard } from '../../common/passport-verification.rate-limit.guard.js';
 import { clientIp } from '../../common/client-ip.js';
 import { PaymentsService } from '../payments/payments.service.js';
 import { OrdersService } from './orders.service.js';
@@ -62,7 +63,9 @@ export class GuestOrdersController {
 
   @Post(':id/documents/:documentId/confirm') confirmDocument(@Param('id') id: string, @Param('documentId') documentId: string, @Body('token') token: string) { this.assert(id, token); return this.orders.confirmDocument(id, documentId, null); }
 
-  @Post(':id/verify-passport') verifyPassport(@Param('id') id: string, @Body() body: { token: string }) { this.assert(id, body.token); return this.orders.verifyPassport(id, null); }
+  @Post(':id/verify-passport')
+  @UseGuards(PassportVerificationRateLimitGuard)
+  verifyPassport(@Param('id') id: string, @Body() body: { token: string }) { this.assert(id, body.token); return this.orders.verifyPassport(id, null); }
 
   @Post(':id/payment') payment(@Param('id') id: string, @Body() body: { token: string; provider: unknown }) { this.assert(id, body.token); const input = initiatePaymentSchema.parse({ provider: body.provider }); return this.payments.initiate(id, null, input.provider); }
 

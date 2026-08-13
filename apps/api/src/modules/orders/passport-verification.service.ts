@@ -81,7 +81,9 @@ export class PassportVerificationService implements OnModuleDestroy {
   private readonly logger = new Logger(PassportVerificationService.name);
   private worker: Worker | null = null;
   private workerPromise: Promise<Worker> | null = null;
+  private recognizing = false;
   private readonly language = process.env.TESSERACT_LANG ?? 'eng';
+  private readonly timeoutMs = Number(process.env.PASSPORT_OCR_TIMEOUT_MS ?? 30_000);
 
   constructor(private readonly storage: CloudinaryStorageService) {}
 
@@ -124,9 +126,29 @@ export class PassportVerificationService implements OnModuleDestroy {
   }
 
   private async recognize(image: Buffer) {
-    const worker = await this.workerFor();
-    const { data } = await worker.recognize(image);
-    return { text: data.text ?? '', confidence: typeof data.confidence === 'number' ? data.confidence : undefined };
+    // A shared worker is CPU-heavy. Reject excess work instead of allowing an
+    // unbounded FIFO backlog to monopolize the API process.
+    if (this.recognizing) throw new ServiceUnavailableException('Passport verification is busy; try again shortly');
+    this.recognizing = true;
+    try {
+      const worker = await this.workerFor();
+      let timeout: NodeJS.Timeout | undefined;
+      const result = await Promise.race([
+        worker.recognize(image),
+        new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('Passport OCR timed out')), this.timeoutMs); }),
+      ]).finally(() => { if (timeout) clearTimeout(timeout); });
+      const { data } = result;
+      return { text: data.text ?? '', confidence: typeof data.confidence === 'number' ? data.confidence : undefined };
+    } catch (error) {
+      // A timed-out worker may remain wedged; discard it before accepting a
+      // subsequent request rather than serializing all later requests behind it.
+      if (this.worker) await this.worker.terminate().catch(() => undefined);
+      this.worker = null;
+      this.workerPromise = null;
+      throw error;
+    } finally {
+      this.recognizing = false;
+    }
   }
 
   private workerFor(): Promise<Worker> {

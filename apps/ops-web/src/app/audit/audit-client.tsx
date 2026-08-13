@@ -90,7 +90,7 @@ export default function AuditClient() {
   return (
     <>
       <PageHeader
-        title="Audit log"
+        title="Activity log"
         description="Immutable operational events ordered newest first."
         actions={
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">

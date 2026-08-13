@@ -201,8 +201,11 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
           "vc-webhook-signature": `v1=${signature}`,
         },
         body,
+        redirect: 'manual',
         signal: AbortSignal.timeout(10_000),
       });
+      if (response.status >= 300 && response.status < 400)
+        throw new Error('Partner endpoint redirects are not allowed');
       if (!response.ok)
         throw new Error(`Partner endpoint returned HTTP ${response.status}`);
       await this.prisma.partnerWebhookDelivery.update({

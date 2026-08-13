@@ -4,7 +4,6 @@ import {
   HttpException,
   Injectable,
   SetMetadata,
-  UnauthorizedException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { PartnerCredentialStatus, PartnerStatus } from "@prisma/client";
@@ -28,6 +27,9 @@ export type PartnerRequest = {
   correlationId?: string;
 };
 
+const PARTNER_UNAUTHORIZED = (message: string) =>
+  new HttpException({ code: "PARTNER_UNAUTHORIZED", message }, 401);
+
 @Injectable()
 export class PartnerAuthGuard implements CanActivate {
   constructor(
@@ -37,7 +39,7 @@ export class PartnerAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext) {
     if (!this.prisma.enabled)
-      throw new UnauthorizedException("Partner persistence is required");
+      throw PARTNER_UNAUTHORIZED("Authentication is temporarily unavailable. Please try again shortly.");
     const request = context.switchToHttp().getRequest<PartnerRequest>();
     const response = context
       .switchToHttp()
@@ -49,7 +51,7 @@ export class PartnerAuthGuard implements CanActivate {
       !secret ||
       !/^vc_partner_[A-Za-z0-9_-]{8,32}$/.test(keyPrefix)
     )
-      throw new UnauthorizedException("Valid partner API key required");
+      throw PARTNER_UNAUTHORIZED("Your API key is invalid.");
     const credential = await this.prisma.partnerCredential.findUnique({
       where: { keyPrefix },
       include: { partner: true },
@@ -61,7 +63,7 @@ export class PartnerAuthGuard implements CanActivate {
         credential.partner.status !== PartnerStatus.SUSPENDED) ||
       (credential.expiresAt && credential.expiresAt <= new Date())
     )
-      throw new UnauthorizedException("Valid partner API key required");
+      throw PARTNER_UNAUTHORIZED("Your API key is invalid or has expired.");
     const supplied = Buffer.from(
       createHash("sha256").update(secret).digest("hex"),
     );
@@ -70,7 +72,7 @@ export class PartnerAuthGuard implements CanActivate {
       supplied.length !== expected.length ||
       !timingSafeEqual(supplied, expected)
     )
-      throw new UnauthorizedException("Valid partner API key required");
+      throw PARTNER_UNAUTHORIZED("Your API key is invalid.");
     const scopes = Array.isArray(credential.scopes)
       ? credential.scopes.filter(
           (scope): scope is string => typeof scope === "string",
@@ -85,7 +87,7 @@ export class PartnerAuthGuard implements CanActivate {
       throw new HttpException(
         {
           code: "PARTNER_SCOPE_FORBIDDEN",
-          message: "Partner scope is not permitted",
+          message: "Your API key is not allowed to use this endpoint. Contact support to request access.",
         },
         403,
       );
@@ -96,13 +98,14 @@ export class PartnerAuthGuard implements CanActivate {
       throw new HttpException(
         {
           code: "PARTNER_SUSPENDED",
-          message: "Partner is suspended; new mutations are not permitted",
+          message: "Your partner account is suspended. Contact support for help.",
         },
         403,
       );
     const remaining = await this.consumeRateLimit(
       credential.partnerId,
       credential.partner.rateLimitPerMinute,
+      response,
     );
     response.setHeader(
       "x-ratelimit-limit",
@@ -116,20 +119,22 @@ export class PartnerAuthGuard implements CanActivate {
       scopes,
       status: credential.partner.status,
     };
-    await this.prisma.partnerCredential.update({
-      where: { id: credential.id },
-      data: { lastUsedAt: new Date() },
-    });
+    // Credential usage is captured by structured access logs; avoid a write
+    // amplification point on every authenticated API request.
     return true;
   }
 
   private bearer(value?: string) {
     if (!value?.startsWith("Bearer "))
-      throw new UnauthorizedException("Valid partner API key required");
+      throw PARTNER_UNAUTHORIZED("Your API key is invalid.");
     return value.slice(7).trim();
   }
 
-  private async consumeRateLimit(partnerId: string, limit: number) {
+  private async consumeRateLimit(
+    partnerId: string,
+    limit: number,
+    response: { setHeader(name: string, value: string): void },
+  ) {
     const now = new Date();
     const windowStart = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
     const bucket = await this.prisma.partnerRateBucket.upsert({
@@ -137,14 +142,21 @@ export class PartnerAuthGuard implements CanActivate {
       update: { count: { increment: 1 } },
       create: { partnerId, windowStart, count: 1 },
     });
-    if (bucket.count > limit)
+    if (bucket.count > limit) {
+      response.setHeader(
+        "Retry-After",
+        String(
+          Math.max(1, Math.ceil((new Date(windowStart.getTime() + 60_000).getTime() - now.getTime()) / 1000)),
+        ),
+      );
       throw new HttpException(
         {
           code: "PARTNER_RATE_LIMITED",
-          message: "Partner rate limit exceeded",
+          message: "Too many requests. Please wait and try again.",
         },
         429,
       );
+    }
     return Math.max(0, limit - bucket.count);
   }
 }

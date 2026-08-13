@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { PrismaService } from '../infrastructure/prisma.service.js';
 
@@ -37,7 +37,7 @@ export class HealthController {
       }
     }
     const ready = database !== 'down' && redis !== 'down';
-    return {
+    const result = {
       status: ready ? 'ready' : 'degraded',
       checks: {
         api: 'up',
@@ -47,5 +47,7 @@ export class HealthController {
         ...(redisLatencyMs !== undefined ? { redisLatencyMs } : {}),
       },
     };
+    if (!ready) throw new ServiceUnavailableException(result);
+    return result;
   }
 }

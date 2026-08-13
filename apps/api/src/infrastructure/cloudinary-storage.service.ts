@@ -77,7 +77,24 @@ export class CloudinaryStorageService {
     const url = cloudinary.url(assetId, { type: 'authenticated', resource_type: 'image', format: 'jpg', page: 1, sign_url: true, secure: true, expires_at: Math.floor(Date.now() / 1000) + 300 });
     const response = await fetch(url);
     if (!response.ok) throw new BadRequestException('Document content is unavailable');
-    const bytes = Buffer.from(await response.arrayBuffer());
+    const maxBytes = Number(process.env.PASSPORT_OCR_MAX_IMAGE_BYTES ?? 5 * 1024 * 1024);
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new BadRequestException('Passport image is too large to verify');
+    if (!response.body) throw new BadRequestException('Document could not be read as an image');
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new BadRequestException('Passport image is too large to verify');
+      }
+      chunks.push(value);
+    }
+    const bytes = Buffer.concat(chunks);
     if (!bytes.length) throw new BadRequestException('Document could not be read as an image');
     return { bytes, contentType: 'image/jpeg' };
   }

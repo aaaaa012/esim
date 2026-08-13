@@ -182,7 +182,7 @@ export class PartnersController {
     },
   })
   quote() {
-    throw new GoneException({ code: "QUOTES_DEPRECATED", message: "Quote creation is deprecated; place a complete order directly" });
+    throw new GoneException({ code: "QUOTES_DEPRECATED", message: "Quotes are no longer available. Place a complete order instead (POST /partners/orders)." });
   }
 
   @Post("document-upload-sessions")
@@ -392,7 +392,7 @@ export class PartnersController {
   @PartnerMutation()
   @LegacyPartnerRoute()
   hosted() {
-    throw new GoneException({ code: "HOSTED_PAYMENT_DEPRECATED", message: "Hosted payments are deprecated; prepaid PARTNER_ACCOUNT is required" });
+    throw new GoneException({ code: "HOSTED_PAYMENT_DEPRECATED", message: "Hosted payments are no longer available. Include settlement.method = \"PARTNER_ACCOUNT\" when creating an order." });
   }
 
   @Post("orders/:id/payment-session")
@@ -400,7 +400,7 @@ export class PartnersController {
   @PartnerMutation()
   @LegacyPartnerRoute()
   payment() {
-    throw new GoneException({ code: "HOSTED_PAYMENT_DEPRECATED", message: "Hosted payments are deprecated; prepaid PARTNER_ACCOUNT is required" });
+    throw new GoneException({ code: "HOSTED_PAYMENT_DEPRECATED", message: "Hosted payments are no longer available. Include settlement.method = \"PARTNER_ACCOUNT\" when creating an order." });
   }
 
   @Post("orders/:id/cancel")

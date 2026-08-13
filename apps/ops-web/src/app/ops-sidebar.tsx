@@ -27,17 +27,17 @@ type NavItem = {
 };
 const overviewItems: NavItem[] = [
   { href: "/", label: "Dashboard", icon: Gauge },
-  { href: "/work-queue", label: "Work Queue", icon: ClipboardCheck },
+  { href: "/work-queue", label: "Review Queue", icon: ClipboardCheck },
   { href: "/orders", label: "Orders", icon: PackageSearch },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/inventory", label: "Inventory", icon: Boxes },
-  { href: "/transatel", label: "Transatel", icon: RadioTower },
+  { href: "/transatel", label: "Connectivity", icon: RadioTower },
 ];
 const systemItems: NavItem[] = [
   { href: "/notifications", label: "Notifications", icon: Bell },
-  { href: "/integration-events", label: "Integration Events", icon: PlugZap },
-  { href: "/integration-logs", label: "Integration Logs", icon: Server },
-  { href: "/audit", label: "Audit Log", icon: History },
+  { href: "/integration-events", label: "Events", icon: PlugZap },
+  { href: "/integration-logs", label: "Provider Logs", icon: Server },
+  { href: "/audit", label: "Activity Log", icon: History },
 ];
 type Profile = {
   email: string;

@@ -40,6 +40,7 @@ const baseSchema = z.object({
   CLERK_PUBLISHABLE_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),
   CLERK_WEBHOOK_SECRET: z.string().optional(),
+  ORDER_WORKFLOW_MODE: z.enum(["single-instance"]).optional(),
 });
 
 const productionSchema = baseSchema.extend({
@@ -72,6 +73,11 @@ const productionSchema = baseSchema.extend({
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
+  TRUST_PROXY: z.string().min(1),
+  // Order state and per-order locks are not yet distributed. Refuse an
+  // accidental multi-replica production rollout rather than risking payment
+  // races and cross-pod order divergence.
+  ORDER_WORKFLOW_MODE: z.literal("single-instance"),
 });
 
 export function validateEnv(config: Record<string, unknown>): Record<string, unknown> {

@@ -4,7 +4,7 @@ export default function Queue() {
   return (
     <>
       <PageHeader
-        title="Work queue"
+        title="Review queue"
         description="Orders grouped by what they need from your team."
       />
       <QueueClient />

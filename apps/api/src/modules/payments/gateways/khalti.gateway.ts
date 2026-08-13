@@ -157,7 +157,10 @@ export class KhaltiGateway implements PaymentGateway {
       return {
         reference,
         status: statuses[data.status.toLowerCase()] ?? PaymentStatus.FAILED,
-        amountNpr: typeof data.total_amount === 'number' ? data.total_amount / 100 : context.amountNpr,
+        // A completed lookup without an amount is not verifiable. Never
+        // substitute our expected amount: that turns a missing provider field
+        // into a false successful amount check.
+        amountNpr: typeof data.total_amount === 'number' ? data.total_amount / 100 : Number.NaN,
         orderId: context.orderId,
         ...(data.transaction_id ? { providerTransactionId: data.transaction_id } : {}),
       };

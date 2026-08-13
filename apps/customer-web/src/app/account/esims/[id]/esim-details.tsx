@@ -13,7 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import "./recovery.css";
-import { apiErrorMessage } from "@visa-compass/shared";
+import { apiErrorMessage, documentStatusLabel, documentTypeLabel, orderStatusLabel } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -214,7 +214,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
         <div className="detail-head">
           <div>
             <span className={`status-chip ${order.status.toLowerCase()}`}>
-              {order.status.replaceAll("_", " ")}
+              {orderStatusLabel(order.status)}
             </span>
             <h1>{order.plan.name}</h1>
             <p>
@@ -277,7 +277,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                       )}
                     </i>
                     <span>
-                      <b>{event.to.replaceAll("_", " ")}</b>
+                      <b>{orderStatusLabel(event.to)}</b>
                       <small>
                         {new Date(event.at).toLocaleString()}
                         {event.reason ? ` · ${event.reason}` : ""}
@@ -295,9 +295,9 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                   key={document.id}
                 >
                   <span>
-                    {document.type} · {document.fileName}
+                    {documentTypeLabel(document.type)} · {document.fileName}
                   </span>
-                  <b>{document.status}</b>
+                  <b>{documentStatusLabel(document.status)}</b>
                   {needsReupload && document.status === "REUPLOAD_REQUIRED" && (
                     <div className="replacement-control">
                       <input

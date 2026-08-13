@@ -57,6 +57,7 @@ export class OrdersPersistenceService {
     // Interactive transactions default to a 5000 ms timeout, which cloud DB
     // latency routinely exceeds during payment flows; raise it so payment
     // initiation does not die with "Transaction already closed".
+    try {
     await this.prisma.$transaction(async (tx) => {
       const identity = await this.ensureIdentity(tx, order);
       const country = await tx.country.upsert({ where: { isoCode: order.plan.countryCode }, update: { name: order.plan.countryName, active: true }, create: { isoCode: order.plan.countryCode, name: order.plan.countryName } });
@@ -94,6 +95,17 @@ export class OrdersPersistenceService {
       await tx.orderEvent.deleteMany({ where: { orderId: order.id } });
       if (order.timeline.length) await tx.orderEvent.createMany({ data: order.timeline.map((event) => ({ orderId: order.id, fromStatus: event.from as DbOrderStatus | null, toStatus: event.to as DbOrderStatus, createdAt: new Date(event.at), reason: event.reason ?? null })) });
     }, { maxWait: 15000, timeout: 45000 });
+    } catch (error) {
+      // Callers mutate the cached object before saving. On a CAS conflict (or
+      // a failed transaction), restore that same object from the database so
+      // future requests do not keep retrying with a stale version forever.
+      const persisted = await this.load(order.id).catch(() => []);
+      if (persisted[0]) {
+        for (const key of Object.keys(order)) delete (order as Record<string, unknown>)[key];
+        Object.assign(order, persisted[0]);
+      }
+      throw error;
+    }
     order.version += 1;
   }
 
