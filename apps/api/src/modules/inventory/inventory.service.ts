@@ -325,7 +325,7 @@ export class InventoryService implements OnModuleInit {
     if (status === 'ACTIVATED') return 'ACTIVE';
     if (status === 'EXPIRED') return 'EXPIRED';
     if (status === 'TERMINATED' || status === 'CANCELED') return 'TERMINATED';
-    if (status === 'SUSPENDED') return null;
+    if (status === 'SUSPENDED') return 'SUSPENDED';
     return 'PENDING';
   }
 

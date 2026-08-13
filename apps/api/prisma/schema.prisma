@@ -159,6 +159,7 @@ enum TransatelLifecycleState {
 enum SubscriptionStatus {
   PENDING
   ACTIVE
+  SUSPENDED
   EXPIRED
   TERMINATED
   FAILED

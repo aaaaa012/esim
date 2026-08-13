@@ -7,10 +7,12 @@ import { clientIp } from '../../common/client-ip.js';
 import { PaymentsService } from '../payments/payments.service.js';
 import { OrdersService } from './orders.service.js';
 
+const guestTokenTtlMs = 24 * 60 * 60_000;
 const tokenFor = (orderId: string) => {
   const secret = process.env.GUEST_ORDER_SECRET;
   if (!secret && process.env.NODE_ENV === 'production') throw new Error('GUEST_ORDER_SECRET is required in production');
-  return createHmac('sha256', secret ?? 'local-guest-checkout-secret').update(orderId).digest('hex');
+  const payload = Buffer.from(JSON.stringify({ orderId, expiresAt: Date.now() + guestTokenTtlMs })).toString('base64url');
+  return `${payload}.${createHmac('sha256', secret ?? 'local-guest-checkout-secret').update(payload).digest('base64url')}`;
 };
 const lookupTokenFor = (mobile: string) => {
   const secret = process.env.GUEST_ORDER_SECRET ?? 'local-guest-checkout-secret';
@@ -84,8 +86,14 @@ export class GuestOrdersController {
   private assert(id: string, token: string) {
     if (!this.orders.get(id)) throw new NotFoundException('Order not found');
     if (!token) throw new ForbiddenException('Guest token is required');
-    const expected = Buffer.from(tokenFor(id));
-    const actual = Buffer.from(token);
+    const [payload, signature] = token.split('.');
+    if (!payload || !signature) throw new ForbiddenException('Invalid or expired guest token');
+    const expected = Buffer.from(createHmac('sha256', process.env.GUEST_ORDER_SECRET ?? 'local-guest-checkout-secret').update(payload).digest('base64url'));
+    const actual = Buffer.from(signature);
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new ForbiddenException('Invalid or expired guest token');
+    let claims: { orderId?: string; expiresAt?: number };
+    try { claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as { orderId?: string; expiresAt?: number }; }
+    catch { throw new ForbiddenException('Invalid or expired guest token'); }
+    if (claims.orderId !== id || !claims.expiresAt || claims.expiresAt <= Date.now()) throw new ForbiddenException('Invalid or expired guest token');
   }
 }

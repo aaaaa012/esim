@@ -14,6 +14,7 @@ import {
   PlugZap,
   RadioTower,
   Server,
+  RotateCw,
   Settings,
   Users,
 } from "lucide-react";
@@ -32,6 +33,7 @@ const overviewItems: NavItem[] = [
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/inventory", label: "Inventory", icon: Boxes },
   { href: "/transatel", label: "Connectivity", icon: RadioTower },
+  { href: "/provisioning-operations", label: "Provisioning recovery", icon: RotateCw },
 ];
 const systemItems: NavItem[] = [
   { href: "/notifications", label: "Notifications", icon: Bell },

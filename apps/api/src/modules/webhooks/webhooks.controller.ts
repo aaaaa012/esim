@@ -8,6 +8,7 @@ import type { Request } from 'express';
 import { Webhook } from 'svix';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 import { QueueService } from '../../jobs/queue.service.js';
+import { ReconciliationService } from '../../jobs/reconciliation.service.js';
 import { QUEUES } from '../../jobs/queues.js';
 import { ClerkSyncService } from '../identity/clerk-sync.service.js';
 import { paymentSimulatorSecret } from '../../common/payment-simulator-secret.js';
@@ -118,8 +119,20 @@ export class WebhooksController {
 @UseGuards(AuthGuard,AccountGuard)
 @AccountTypes(UserRoleName.OPERATIONS,UserRoleName.SUPER_ADMIN)
 export class OperationsIntegrationEventsController {
-  constructor(private readonly prisma:PrismaService){}
+  constructor(private readonly prisma:PrismaService,private readonly queues:QueueService){}
   @Get() async list(@Req() request:AuthenticatedRequest){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);if(!this.prisma.enabled)return [];return this.prisma.webhookEvent.findMany({where:{NOT:{source:{startsWith:'idempotency:'}}},select:{id:true,source:true,eventId:true,signatureValid:true,processedAt:true,processingStartedAt:true,attemptCount:true,nextAttemptAt:true,deadLetteredAt:true,errorMessage:true,createdAt:true},orderBy:{createdAt:'desc'},take:200})}
+  @Post(':id/replay') async replay(@Param('id') id:string,@Req() request:AuthenticatedRequest){
+    requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);
+    if(!this.prisma.enabled)throw new BadRequestException('Webhook replay requires database persistence');
+    const event=await this.prisma.webhookEvent.findUnique({where:{id},select:{id:true,source:true,eventId:true,payload:true}});
+    if(!event)throw new BadRequestException('Webhook event not found');
+    const source=event.source.toLowerCase();
+    const queue=source==='transatel'?QUEUES.providerCallbacks:source==='khalti'?QUEUES.payments:null;
+    if(!queue)throw new BadRequestException(`Webhook replay is not supported for ${event.source}`);
+    await this.prisma.webhookEvent.update({where:{id},data:{processedAt:null,processingStartedAt:null,deadLetteredAt:null,errorMessage:null,nextAttemptAt:new Date()}});
+    await this.queues.add(queue,source==='transatel'?'connectivity-callback':'payment-callback',{provider:source,eventId:event.eventId,payload:event.payload as Record<string,unknown>},`replay-${source}-${event.eventId}-${Date.now()}`);
+    return {id,eventId:event.eventId,source,status:'QUEUED'};
+  }
 }
 
 @Controller('operations/integration-logs')
@@ -134,6 +147,7 @@ export class OperationsIntegrationLogsController {
 @UseGuards(AuthGuard,AccountGuard)
 @AccountTypes(UserRoleName.OPERATIONS,UserRoleName.SUPER_ADMIN)
 export class OperationsProvisioningOperationsController {
-  constructor(private readonly prisma:PrismaService){}
+  constructor(private readonly prisma:PrismaService,private readonly reconciliation:ReconciliationService){}
   @Get() async list(@Req() request:AuthenticatedRequest,@Query('state') state?:string){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);if(!this.prisma.enabled)return [];const allowed=['CREATED','SUBMITTING','ACCEPTED','WAITING_FOR_QR','QR_READY','ACTIVATED','RECONCILE_REQUIRED','REJECTED','MANUAL_REVIEW','CANCELLED'];const selected=state&&allowed.includes(state)?state as never:undefined;return this.prisma.provisioningOperation.findMany({where:selected?{state:selected}:{},select:{id:true,orderId:true,provider:true,state:true,idempotencyKey:true,iccid:true,providerProductId:true,providerOrderId:true,providerSubscriptionId:true,attemptCount:true,lastErrorCategory:true,lastErrorMessage:true,submittedAt:true,acceptedAt:true,nextReconcileAt:true,reconcileDeadlineAt:true,completedAt:true,createdAt:true,updatedAt:true},orderBy:{updatedAt:'desc'},take:200})}
+  @Post(':id/reconcile') async reconcile(@Param('id') id:string,@Req() request:AuthenticatedRequest){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);return this.reconciliation.reconcileProvisioningOperationNow(id)}
 }

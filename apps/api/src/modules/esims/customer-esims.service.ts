@@ -105,7 +105,7 @@ export class CustomerEsimsService {
     const mask = (value?: string | null) => value ? `${value.slice(0, 4)}••••${value.slice(-4)}` : undefined;
     return {
       id: row.id,
-      status: active.length ? row.status : 'NO_ACTIVE_PLAN',
+      status: subscriptions.some((item: any) => item.status === 'SUSPENDED') && !active.length ? 'SUSPENDED' : active.length ? row.status : 'NO_ACTIVE_PLAN',
       iccidMasked: mask(row.iccid),
       msisdnMasked: mask(row.msisdn),
       activatedAt: row.activatedAt?.toISOString(),

@@ -159,6 +159,28 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** An explicit, audited Ops recovery path for a delayed or dead-lettered
+   * provider submission. It reconciles one order only; it never re-submits a
+   * preload command, so an uncertain provider outcome cannot create a second
+   * subscription. */
+  async reconcileProvisioningOperationNow(operationId: string) {
+    if (!this.prisma.enabled) throw new Error('Provisioning reconciliation requires database persistence');
+    const operation = await this.prisma.provisioningOperation.findUnique({ where: { id: operationId }, include: { order: { select: { id: true, providerSubscriptionId: true, status: true } } } });
+    if (!operation) throw new Error('Provisioning operation not found');
+    if (!['ACCEPTED', 'WAITING_FOR_QR', 'RECONCILE_REQUIRED', 'MANUAL_REVIEW'].includes(operation.state)) throw new Error(`Operation in ${operation.state} cannot be reconciled`);
+    const details = await this.connectivity.getEsimDetails(operation.iccid);
+    const qrPayload = 'qrPayload' in details ? details.qrPayload : undefined;
+    const providerSubscriptionId = operation.order.providerSubscriptionId ?? operation.providerSubscriptionId;
+    if (qrPayload && providerSubscriptionId && details.status.toLowerCase() === 'active') {
+      await this.orders.applyProviderEvent({ eventType: 'OPS_MANUAL_RECONCILIATION', orderId: operation.orderId, iccid: operation.iccid, subscriptionId: providerSubscriptionId, status: 'ACTIVATED', qrPayload });
+      await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'ACTIVATED', completedAt: new Date(), nextReconcileAt: null, lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
+      return { id: operation.id, state: 'ACTIVATED', recovered: true };
+    }
+    const state = providerSubscriptionId ? 'WAITING_FOR_QR' : 'RECONCILE_REQUIRED';
+    await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state, nextReconcileAt: new Date(Date.now() + 5 * 60_000), lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
+    return { id: operation.id, state, recovered: false, providerStatus: details.status };
+  }
+
   private async sweepLifecycle() {
     const now = new Date();
     const subscriptions = await this.prisma.subscription.findMany({
