@@ -17,7 +17,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
@@ -119,7 +119,7 @@ export default function IntegrationLogsClient() {
           </span>
           <div className="leading-tight">
             <p className="text-2xl font-semibold tracking-tight tabular-nums">{stats.total}</p>
-            <p className="text-xs text-muted-foreground">Provider calls</p>
+            <p className="text-xs text-muted-foreground">Requests</p>
           </div>
         </div>
         <div className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow-card">
@@ -142,23 +142,18 @@ export default function IntegrationLogsClient() {
         </div>
       </div>
       <Panel
-        title="Provider calls"
-        description={`Most recent 200 requests · filter by operation`}
+        title="Technical record"
+        description={`The most recent 200 requests`}
         actions={
           <>
-            <div className="w-44">
-              <Input
-                readOnly
-                value={operation === "ALL" ? "All operations" : operation}
-                onClick={() => {
-                  const options = ["ALL", ...operations];
-                  const current = options.indexOf(operation);
-                  const next = options[(current + 1) % options.length] ?? "ALL";
-                  setOperation(next);
-                }}
-                className="h-9 cursor-pointer"
-                title="Click to cycle through operations"
-              />
+            <div className="w-52">
+              <Select value={operation} onValueChange={setOperation}>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All operations</SelectItem>
+                  {operations.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             <Button variant="outline" size="sm" onClick={downloadTxt} disabled={!visible.length}>
               <Download className="size-4" />
@@ -174,12 +169,12 @@ export default function IntegrationLogsClient() {
       >
         {loading ? (
           <EmptyState loading>
-            <span className="text-sm text-muted-foreground">Loading provider calls…</span>
+            <span className="text-sm text-muted-foreground">Loading activity…</span>
           </EmptyState>
         ) : !visible.length ? (
           <EmptyState
-            title={operation === "ALL" ? "No provider calls recorded" : `No "${operation}" calls recorded`}
-            description="Outbound integration activity will appear here."
+            title="No requests recorded yet"
+            description="This technical record is for troubleshooting with our technical team."
           />
         ) : (
           <Table>

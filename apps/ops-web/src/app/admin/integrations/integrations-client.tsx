@@ -96,11 +96,11 @@ export default function IntegrationsClient() {
   const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
     setBusy(`transatel:${action}`);
     try {
-      const result = await request<Record<string, unknown>>(
+      await request(
         `/admin/integrations/transatel/${action}`,
         { method: "POST" },
       );
-      toast.success(JSON.stringify(result, null, 2).slice(0, 400) || `${action.replace("-", " ")} complete`);
+      toast.success(action === "sync-catalog" ? "Plans synced with the network provider" : "Automatic notifications set up");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
     } finally {
@@ -109,19 +109,19 @@ export default function IntegrationsClient() {
   };
   const checkEligibility = async () => {
     if (!eligibilityPlanId || !eligibilityMsisdn) {
-      toast.error("Choose a plan and enter an MSISDN first");
+      toast.error("Choose a plan and enter a mobile number first");
       return;
     }
     setBusy("transatel:eligibility");
     try {
-      const result = await request<Record<string, unknown>>(
+      await request(
         "/admin/integrations/transatel/eligibility",
         {
           method: "POST",
           body: JSON.stringify({ planId: eligibilityPlanId, msisdn: eligibilityMsisdn }),
         },
       );
-      toast.success(JSON.stringify(result, null, 2).slice(0, 400) || "Eligibility check complete");
+      toast.success("Eligibility check complete");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Eligibility check failed");
     } finally {
@@ -143,7 +143,7 @@ export default function IntegrationsClient() {
     <>
       <PageHeader
         title="Integration health"
-        description="Live status is shown without exposing stored secrets. Credentials are managed as environment/secret values."
+        description="Live status is shown without exposing stored secrets. Credentials are kept secure and never shown here."
         badge={
           <Badge variant="success" className="gap-1.5">
             <ShieldCheck className="size-3" />
@@ -176,9 +176,9 @@ export default function IntegrationsClient() {
               <Separator className="my-4" />
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">
-                  {item.enabled ? "Enabled" : "Environment setup required"}
+                  {item.enabled ? "Configured and enabled" : "Needs configuration"}
                 </span>
-                <code className="rounded bg-muted px-2 py-0.5 text-xs">{item.secretValue}</code>
+                <span className="text-xs text-muted-foreground">Credentials are kept secure.</span>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
                 Last checked: {new Date(item.checkedAt).toLocaleString()}
@@ -240,7 +240,7 @@ export default function IntegrationsClient() {
                       </SelectContent>
                     </Select>
                     <Input
-                      placeholder="MSISDN, e.g. 97798…"
+                      placeholder="Mobile number, e.g. 97798…"
                       value={eligibilityMsisdn}
                       onChange={(e) => setEligibilityMsisdn(e.target.value)}
                       className="w-full sm:w-auto sm:flex-1"

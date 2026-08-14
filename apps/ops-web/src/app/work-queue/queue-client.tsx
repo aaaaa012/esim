@@ -2,6 +2,7 @@
 import { useAuthenticatedFetch } from '../authenticated-api-provider';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   ArrowRight,
   ChevronDown,
@@ -70,6 +71,11 @@ export default function QueueClient() {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState<Record<string, boolean>>({ review: true });
 
+  const statusParam = useSearchParams().get("status");
+  const initialOpen = statusParam
+    ? SECTIONS.find((s) => s.statuses.includes(statusParam))?.key ?? "review"
+    : "review";
+
   const load = () => {
     setLoading(true);
     authFetch(`${API}/operations/orders?limit=${PAGE_SIZE}`, { headers: {} })
@@ -92,7 +98,12 @@ export default function QueueClient() {
       );
       if (matched) (seed[matched.key] ??= []).push(o);
     });
+    const filteredStatuses = statusParam ? SECTIONS.filter((s) => s.statuses.includes(statusParam)).map((s) => s.key) : null;
     SECTIONS.forEach((s) => {
+      if (filteredStatuses && !filteredStatuses.includes(s.key)) {
+        result[s.key] = [];
+        return;
+      }
       const list = (seed[s.key] ?? []).filter((o) =>
         `${o.orderNumber} ${o.traveler?.firstName ?? ''} ${o.traveler?.surname ?? ''} ${o.traveler?.email ?? ''}`
           .toLowerCase()
@@ -102,17 +113,27 @@ export default function QueueClient() {
       result[s.key] = list;
     });
     return result;
-  }, [orders, q, today]);
+  }, [orders, q, today, statusParam]);
 
   const total = SECTIONS.reduce((n, s) => n + (grouped[s.key]?.length ?? 0), 0);
+  const showSections = statusParam
+    ? SECTIONS.filter((s) => s.statuses.includes(statusParam))
+    : SECTIONS;
 
   return (
     <>
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <SearchInput placeholder="Search order, customer, email…" value={query} onChange={setQuery} className="sm:w-80" />
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          <RefreshCcw className={cn('size-4', loading && 'animate-spin')} /> Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {statusParam && (
+            <Link href="/work-queue" className="text-sm text-muted-foreground hover:text-foreground">
+              Show full queue
+            </Link>
+          )}
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            <RefreshCcw className={cn('size-4', loading && 'animate-spin')} /> Refresh
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -123,10 +144,10 @@ export default function QueueClient() {
         <EmptyState icon={<ShieldQuestion className="size-6" />} title="Queue is clear" description="No orders currently require attention." />
       ) : (
         <div className="space-y-4">
-          {SECTIONS.map((section) => {
+          {showSections.map((section) => {
             const list = grouped[section.key] ?? [];
             const Icon = section.icon;
-            const isOpen = open[section.key] ?? false;
+            const isOpen = open[section.key] ?? (statusParam ? section.key === initialOpen : false);
             if (list.length === 0 && !isOpen) return null;
             return (
               <Panel key={section.key} className="p-0">
@@ -141,7 +162,7 @@ export default function QueueClient() {
                     </span>
                     <div>
                       <div className="font-semibold">{section.label}</div>
-                      <div className="text-xs text-muted-foreground">{section.todayOnly ? 'orders completed today' : 'requires an operations decision'}</div>
+                      <div className="text-xs text-muted-foreground">{section.todayOnly ? 'orders completed today' : 'orders that need your action'}</div>
                     </div>
                     <Badge variant="secondary" className="ml-1">{list.length}</Badge>
                   </div>
@@ -150,7 +171,7 @@ export default function QueueClient() {
                 {isOpen && (
                   <ul className="divide-y">
                     {list.length === 0 ? (
-                      <li className="p-6 text-sm text-muted-foreground">Nothing here.</li>
+                      <li className="p-6 text-sm text-muted-foreground">No orders in this section.</li>
                     ) : (
                       list.map((o) => (
                         <li key={o.id}>
@@ -162,14 +183,14 @@ export default function QueueClient() {
                                   <span className="hidden text-xs sm:inline">{o.plan.countryCode}</span>
                                 </div>
                                 <div className="truncate text-sm text-muted-foreground">
-                                  {o.traveler ? `${o.traveler.firstName} ${o.traveler.surname} · ${o.traveler.email}` : o.id}
+                                  {o.traveler ? `${o.traveler.firstName} ${o.traveler.surname} · ${o.traveler.email}` : 'Customer without a name'}
                                 </div>
                               </div>
                             </div>
                             <div className="flex shrink-0 items-center gap-3">
                               {o.partner && <span className="hidden text-xs text-muted-foreground md:inline">{o.partner.name}</span>}
                               <StatusBadge label={o.status} />
-                              <span className="text-sm font-medium tabular-nums">₹{o.totalAmountNpr.toLocaleString()}</span>
+                              <span className="text-sm font-medium tabular-nums">NPR {o.totalAmountNpr.toLocaleString()}</span>
                               <ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                             </div>
                           </Link>

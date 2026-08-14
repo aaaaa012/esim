@@ -6,7 +6,7 @@ export type StatusTone = "default" | "success" | "warning" | "danger" | "info" |
 
 type StatusBadgeProps = {
   label: string;
-  tone?: StatusTone;
+  tone?: StatusTone | undefined;
   className?: string;
   children?: ReactNode;
 };
@@ -21,7 +21,10 @@ const toneMap: Record<string, "success" | "warning" | "danger" | "info" | "destr
   processed: "success",
   completed: "success",
   active: "success",
+  activated: "success",
+  available: "success",
   verified: "success",
+  operational: "success",
   qr_ready: "info",
   warning: "warning",
   pending: "warning",
@@ -29,12 +32,123 @@ const toneMap: Record<string, "success" | "warning" | "danger" | "info" | "destr
   review_pending: "warning",
   awaiting_customer: "warning",
   provisioning_failed: "danger",
+  expired: "warning",
+  suspended: "warning",
+  degraded: "warning",
+  suspend_pending: "warning",
+  termination_pending: "danger",
+  terminated: "danger",
+  cancelled: "warning",
+  refunded: "success",
+  down: "danger",
+  action_required: "danger",
   failed: "danger",
   rejected: "danger",
   red: "danger",
   danger: "danger",
   draft: "info",
+  reserved: "info",
+  assigned: "info",
   quarantined: "destructive",
+};
+
+// Human-readable labels for internal status/reason codes shown on every page.
+const labelMap: Record<string, string> = {
+  DRAFT: "Draft",
+  PAYMENT_PENDING: "Payment pending",
+  PAYMENT_CONFIRMED: "Payment confirmed",
+  PAYMENT_FAILED: "Payment failed",
+  REVIEW_PENDING: "Awaiting review",
+  AWAITING_CUSTOMER: "Awaiting customer",
+  APPROVED: "Approved",
+  PROVISIONING: "Setting up",
+  QR_READY: "Ready to install",
+  COMPLETED: "Completed",
+  CANCELLED: "Cancelled",
+  PROVISIONING_FAILED: "Set-up failed",
+  SETUP_FAILED: "Set-up failed",
+  REFUND_PENDING: "Refund pending",
+  REFUNDED: "Refunded",
+  PENDING: "Pending",
+  ACTIVE: "Active",
+  SUSPENDED: "Suspended",
+  EXPIRED: "Expired",
+  TERMINATED: "Terminated",
+  FAILED: "Failed",
+  AVAILABLE: "Available",
+  IMPORTED: "Imported",
+  RESERVED: "Reserved",
+  ASSIGNED: "Assigned",
+  ACTIVATED: "Activated",
+  QUARANTINED: "Quarantined",
+  NOT_CHECKED: "Not checked",
+  SUSPEND_PENDING: "Suspension in progress",
+  TERMINATION_PENDING: "Termination in progress",
+  ACCEPTED: "Accepted",
+  WAITING_FOR_QR: "Waiting for QR",
+  RECONCILE_REQUIRED: "Needs checking",
+  MANUAL_REVIEW: "Needs manual review",
+  REQUESTED: "Requested",
+  REJECTED: "Rejected",
+  VERIFIED: "Verified",
+  LOOKUP_VERIFIED: "Verified — awaiting final confirmation",
+  PROCESSED: "Processed",
+  QUEUED: "Queued",
+  UP: "Online",
+  DEGRADED: "Degraded",
+  DOWN: "Down",
+  OPERATIONAL: "All good",
+  ACTION_REQUIRED: "Needs attention",
+  TOP_UP: "Top-up",
+  TOPUP: "Top-up",
+  TOP_UP_ORDER: "Top-up",
+  FIRST_PURCHASE: "First purchase",
+  INITIAL_PURCHASE: "First purchase",
+  NEW_PURCHASE: "First purchase",
+  PROVISIONING_FAILURE: "We couldn’t set up the service",
+  INCORRECT_FULFILLMENT: "Customer got the wrong plan",
+  DUPLICATE_CHARGE: "Customer was charged twice",
+  PROVIDER_SERVICE_FAILURE: "Network provider issue",
+  INTERNAL_OPERATIONAL_ERROR: "Our internal error",
+  INTEGRATION_FAILED: "Integration failed",
+  SIGNATURE_VALID: "Verified",
+  SIGNATURE_INVALID: "Signature invalid",
+  CUSTOMER_WEB: "Customer web",
+  PARTNER_API: "Partner API",
+  PARTNER_HOSTED: "Checkout link",
+  DIRECT: "Direct customer",
+  PARTNER: "Partner",
+  TRANSATEL: "Transatel",
+  KHALTI: "Khalti",
+  ORDER: "Order",
+  PAYMENT: "Payment",
+  INTEGRATION: "Integration",
+  NOTIFICATION: "Notification",
+  INVENTORY: "Inventory",
+  PLANS: "Plans",
+  PROVISIONING_REQUIRED: "Set-up required",
+  ACTIVATION_PENDING: "Awaiting activation",
+  CONFIG_REQUIRED: "Needs configuration",
+  NOT_STARTED: "Not started",
+  PASSPORT: "Passport",
+  TICKET: "Ticket",
+  VISA: "Visa",
+  IDENTITY: "Identity document",
+  ID_CARD: "ID card",
+  FLIGHT_ITINERARY: "Flight itinerary",
+  OTHER: "Other document",
+  EMAIL: "Email",
+  WHATSAPP: "WhatsApp",
+  ORDER_QR_READY: "Installation QR sent",
+  PLAN_EXPIRED: "Plan expired",
+  PLAN_EXHAUSTED: "Data finished",
+  PAYMENT_RECEIPT: "Payment receipt",
+  PAYMENT_CONFIRMED_EMAIL: "Payment confirmed",
+  DOCUMENT_REQUESTED: "Documents requested",
+  WELCOME: "Welcome message",
+  OPERATIONS: "Operations team",
+  SUPER_ADMIN: "Super admin",
+  CUSTOMER: "Customer",
 };
 
 const dotMap: Record<StatusTone, string> = {
@@ -48,7 +162,21 @@ const dotMap: Record<StatusTone, string> = {
 
 function toneFor(label: string, tone?: StatusTone): StatusTone {
   if (tone) return tone;
-  return toneMap[label.toLowerCase()] ?? "default";
+  return toneMap[normalize(label)] ?? "default";
+}
+
+function normalize(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function displayLabel(label: string) {
+  const key = label.trim().toUpperCase().replace(/\s+/g, "_");
+  return labelMap[key] ?? label.replaceAll("_", " ");
+}
+
+/** Plain-text human-readable version of an internal status/reason code. */
+export function humane(label: string | null | undefined): string {
+  return displayLabel(label == null ? "" : String(label));
 }
 
 export function StatusBadge({ label, tone, className, children }: StatusBadgeProps) {
@@ -67,11 +195,11 @@ export function StatusBadge({ label, tone, className, children }: StatusBadgePro
                 ? "info"
                 : "secondary"
       }
-      className={cn("gap-1.5 pl-2 capitalize", className)}
+      className={cn("gap-1.5 pl-2", className)}
     >
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotMap[resolved])} />
       {children}
-      {text.replaceAll("_", " ")}
+      {displayLabel(text)}
     </Badge>
   );
 }
