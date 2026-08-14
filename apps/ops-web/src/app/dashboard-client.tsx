@@ -213,7 +213,14 @@ export default function DashboardClient() {
           {data.recentOrders.length === 0 ? (
             <EmptyState title="No orders yet" description="New orders will appear here." />
           ) : (
-            <Table>
+            <><div className="divide-y sm:hidden">
+              {data.recentOrders.map((order) => (
+                <Link key={order.id} href={`/orders/${order.id}`} className="block space-y-2 px-4 py-4 active:bg-muted/60">
+                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold text-primary">{order.orderNumber}</p><p className="truncate text-sm text-muted-foreground">{customerLabel(order)}</p></div><StatusBadge label={order.status} /></div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground"><span className="truncate"><b className="text-foreground">{order.plan.countryCode}</b> · {order.plan.name}</span><span className="shrink-0">{new Date(order.createdAt).toLocaleDateString()}</span></div>
+                </Link>
+              ))}
+            </div><div className="hidden sm:block"><Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Order</TableHead>
@@ -250,7 +257,7 @@ export default function DashboardClient() {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table></div></>
           )}
         </Panel>
       </div>

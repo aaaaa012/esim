@@ -18,6 +18,7 @@ import {
   Settings,
   Undo2,
   Users,
+  X,
 } from "lucide-react";
 import { useAuthenticatedFetch } from "./authenticated-api-provider";
 import { cn } from "@/lib/utils";
@@ -66,7 +67,7 @@ function isActive(path: string, href: string) {
   return href === "/" ? path === "/" : path.startsWith(href);
 }
 
-export default function OpsSidebar() {
+export default function OpsSidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void }) {
   const authFetch = useAuthenticatedFetch();
   const [profile, setProfile] = useState<Profile | null>(null);
   useEffect(() => {
@@ -80,7 +81,9 @@ export default function OpsSidebar() {
   const path = usePathname();
   const items = isAdmin ? [...overviewItems, ...systemItems, adminItem, showcaseItem] : [...overviewItems, ...systemItems];
   return (
-    <aside className="ops-sidebar">
+    <>
+    <button type="button" aria-label="Close operations navigation" className={cn("ops-sidebar-backdrop", open && "open")} onClick={onClose} />
+    <aside className={cn("ops-sidebar", open && "open")} aria-label="Operations navigation">
       <div className="ops-sidebar-brand">
         <span className="mark">
           <Compass className="size-4" />
@@ -89,6 +92,7 @@ export default function OpsSidebar() {
           <b>Visa Compass</b>
           <span>Operations</span>
         </div>
+        <button type="button" className="ops-sidebar-close" aria-label="Close navigation" onClick={onClose}><X className="size-5" /></button>
       </div>
 
       <nav className="ops-sidebar-nav">
@@ -111,5 +115,6 @@ export default function OpsSidebar() {
         </div>
       </div>
     </aside>
+    </>
   );
 }
