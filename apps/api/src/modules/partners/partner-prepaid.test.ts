@@ -11,6 +11,7 @@ function service(prisma: Record<string, unknown>) {
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
   );
 }
 

@@ -5,6 +5,7 @@ export const QUEUES = {
   notifications: 'notifications',
   reconciliation: 'reconciliation',
   partnerWebhooks: 'partner-webhooks',
+  documents: 'documents',
 } as const;
 
 export const DEFAULT_JOB_OPTIONS = {

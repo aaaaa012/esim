@@ -33,6 +33,8 @@ import { ApiException } from "../../common/api-error.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
+import { QueueService } from "../../jobs/queue.service.js";
+import { QUEUES } from "../../jobs/queues.js";
 import { OrdersService } from "../orders/orders.service.js";
 import { PassportVerificationService } from "../orders/passport-verification.service.js";
 
@@ -124,6 +126,7 @@ export class PartnerService {
     private readonly connectivity: ConnectivityService,
     private readonly notifications: NotificationService,
     private readonly partnerWebhooks: PartnerWebhookProcessor,
+    private readonly queues: QueueService,
     private readonly applicationOrders: OrdersService,
     private readonly passportVerifier: PassportVerificationService,
   ) {}
@@ -411,6 +414,7 @@ export class PartnerService {
         }`,
       );
     }
+    await this.enqueuePassportOcr(orderId);
     return this.order(partnerId, orderId);
   }
 
@@ -803,6 +807,15 @@ export class PartnerService {
         status: DocumentStatus.PENDING,
         reviewedAt: null,
         reviewedById: null,
+        ...(input.type === DocumentType.PASSPORT
+          ? {
+              passportVerificationStatus: null,
+              passportVerificationMethod: null,
+              passportMatchedFields: Prisma.DbNull,
+              passportConfidence: null,
+              passportVerifiedAt: null,
+            }
+          : {}),
       },
       create: {
         orderId,
@@ -830,6 +843,8 @@ export class PartnerService {
     });
     if (!document) throw new ApiException({ code: "PARTNER_DOCUMENT_NOT_FOUND", message: "Document not found", status: 404 });
     await this.verifyUploadedDocument(document.privateAssetId);
+    if (document.type === DocumentType.PASSPORT)
+      await this.enqueuePassportOcr(orderId, documentId);
     return {
       id: document.id,
       type: document.type,
@@ -1081,6 +1096,15 @@ await tx.order.create({
         status: DocumentStatus.PENDING,
         reviewedAt: null,
         reviewedById: null,
+        ...(input.type === DocumentType.PASSPORT
+          ? {
+              passportVerificationStatus: null,
+              passportVerificationMethod: null,
+              passportMatchedFields: Prisma.DbNull,
+              passportConfidence: null,
+              passportVerifiedAt: null,
+            }
+          : {}),
       },
       create: {
         orderId: order.id,
@@ -1455,6 +1479,7 @@ await tx.order.create({
         id: document.id,
         type: document.type,
         status: document.status,
+        passportVerificationStatus: document.passportVerificationStatus,
       })),
       refund: order.partnerRefundRequests[0] ?? null,
       timeline: order.events.map((event) => ({
@@ -1814,6 +1839,32 @@ await tx.order.create({
         metadata: { reason },
       },
     });
+  }
+
+  private async enqueuePassportOcr(orderId: string, documentId?: string) {
+    const id =
+      documentId ??
+      (
+        await this.prisma.travelerDocument.findFirst({
+          where: { orderId, type: DocumentType.PASSPORT },
+          select: { id: true },
+        })
+      )?.id;
+    if (!id) return;
+    try {
+      await this.queues.add(
+        QUEUES.documents,
+        "verify-passport",
+        { orderId, documentId: id },
+        `ocr-${id}-${Date.now()}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Could not enqueue passport OCR for ${id}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
   }
 
   private async createEvent(
