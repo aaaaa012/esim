@@ -67,6 +67,30 @@ describe('comparePassport', () => {
     expect(matchedFields).toContain('dateOfBirth');
     expect(matchedFields).toContain('passportExpiryDate');
   });
+
+  it('verifies a real low-resolution US passport whose MRZ number has a 0/O OCR mis-read', () => {
+    const usTraveler: TravelerInput = {
+      ...traveler,
+      firstName: 'Happy',
+      surname: 'Traveler',
+      dateOfBirth: '1965-02-05',
+      passportNumber: 'E00007730',
+      passportExpiryDate: '2030-10-14',
+    };
+    const ocr = [
+      'UNITED STATES OF AMERICA',
+      'Date of birth 05 FEB 1965',
+      'Date of expiration 14 OCT 2030',
+      'P<USATRAVELER<K<KHAPPY<<K<K<KKLKLKLKLKLKLKLLLLKLLLLLLKKLKLKKL',
+      'EO00077303USA6502056F3010149500101920<091824',
+    ].join('\n');
+    const { matchedFields } = comparePassport(ocr, usTraveler);
+    expect(matchedFields).toContain('passportNumber');
+    expect(matchedFields).toContain('surname');
+    expect(matchedFields).toContain('dateOfBirth');
+    expect(matchedFields).toContain('passportExpiryDate');
+    expect(verdictFor(matchedFields)).toBe('VERIFIED');
+  });
 });
 
 describe('verdictFor', () => {

@@ -447,6 +447,7 @@ model TravelerDocument {
   fileName                   String
   privateAssetId             String
   status                     DocumentStatus @default(PENDING)
+  uploadVerified             Boolean        @default(false)
   reviewedById               String?        @db.Uuid
   reviewedAt                 DateTime?
   passportVerificationStatus String?

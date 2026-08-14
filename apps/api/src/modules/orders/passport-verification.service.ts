@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, ServiceUnavailableException } from
 import { createWorker, type Worker } from 'tesseract.js';
 import { DocumentType, type TravelerInput } from '@visa-compass/shared';
 import { CloudinaryStorageService } from '../../infrastructure/cloudinary-storage.service.js';
+import { confusableNormalize, editDistance, parseMrz } from './mrz-parser.js';
 import type { DemoOrder } from './orders.service.js';
 
 export type PassportVerificationStatus = 'VERIFIED' | 'PARTIAL' | 'FAILED' | 'NOT_READY' | 'SKIPPED';
@@ -42,8 +43,33 @@ export const comparePassport = (ocrText: string, traveler: TravelerInput): { mat
   const text = normalizeText(ocrText);
   const textNumeric = normalizeText(monthNamesToNumbers(ocrText));
   const matchesAny = (candidate: string) => text.includes(candidate) || textNumeric.includes(candidate);
+
+  const mrz = parseMrz(ocrText);
+  const mrzPassportNumber = mrz?.passportNumber;
+  const mrzNumberCandidates = mrzPassportNumber
+    ? [mrzPassportNumber.value, ...(mrzPassportNumber.corrections ?? [])]
+    : [];
+
+  const matchesPassportNumber = (candidate: string) => {
+    const normalized = normalizeText(candidate);
+    if (!normalized) return false;
+    // MRZ-first: a check-digit-validated passport number is authoritative, and
+    // a mis-read field is corrected by choosing the candidate that matches the
+    // entered number (the check digit guarantees only that *some* reading was
+    // printed; the entered value picks which one).
+    if (mrzNumberCandidates.some((mrzNumber) => confusableNormalize(mrzNumber) === confusableNormalize(normalized))) return true;
+    // No usable MRZ: fall back to a confusable + single-character-tolerant
+    // search across the whole OCR text.
+    if (matchesAny(confusableNormalize(normalized))) return true;
+    const fuzzy = confusableNormalize(text);
+    return fuzzy.includes(confusableNormalize(normalized)) || normalized.split('').every((char, i) => {
+      const window = fuzzy.slice(i, i + normalized.length);
+      return window && editDistance(window, normalized) <= 1;
+    });
+  };
+
   const matchedFields: PassportField[] = [];
-  if (normalizeText(traveler.passportNumber) && matchesAny(normalizeText(traveler.passportNumber))) matchedFields.push('passportNumber');
+  if (normalizeText(traveler.passportNumber) && matchesPassportNumber(traveler.passportNumber)) matchedFields.push('passportNumber');
   if (traveler.surname && matchesAny(normalizeText(traveler.surname))) matchedFields.push('surname');
   const given = [traveler.firstName, traveler.middleName].filter(Boolean).join(' ');
   if (given && matchesAny(normalizeText(given))) matchedFields.push('givenNames');
@@ -118,6 +144,7 @@ export class PassportVerificationService implements OnModuleDestroy {
       const result = await this.recognize(image.bytes);
       confidence = result.confidence;
       const { matchedFields } = comparePassport(result.text, order.traveler);
+      this.logger.log(`Passport OCR for order ${order.id}: verdict=${verdictFor(matchedFields)} matched=[${matchedFields.join(',')}] confidence=${confidence}`);
       return { status: verdictFor(matchedFields), matchedFields, ...(confidence !== undefined ? { confidence } : {}), checkedAt: new Date().toISOString(), method: 'tesseract-ocr' };
     } catch (error) {
       this.logger.error(`Passport OCR failed for order ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`);

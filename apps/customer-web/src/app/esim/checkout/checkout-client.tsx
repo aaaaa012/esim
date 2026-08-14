@@ -1127,10 +1127,11 @@ function PassportCheck({
       <div className="passport-check failed">
         <AlertTriangle size={20} />
         <span>
-          <b>Passport verification failed</b>
+          <b>We couldn&apos;t verify your passport</b>
           <small>
-            Your passport didn&apos;t match the traveller details you entered.
-            Review your details, then re-check before paying.
+            The photo wasn&apos;t clear enough to read. Please re-upload a
+            sharp, well-lit photo of the passport information page showing all
+            details, then re-check.
           </small>
         </span>
         {onEdit && (
