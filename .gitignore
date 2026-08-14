@@ -11,3 +11,7 @@ coverage
 *.tsbuildinfo
 apps/api/prisma/dev.db
 .clerk/
+.opencode/
+apps/api/eng.traineddata
+apps/customer-web/.next-dev/
+apps/ops-web/.next-dev/
