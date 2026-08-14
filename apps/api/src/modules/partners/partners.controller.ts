@@ -44,6 +44,7 @@ const legacyCreateSchema = z.object({
 });
 export const uploadSessionSchema = z.object({
   externalOrderId: z.string().trim().min(1).max(120),
+  traveler: travelerSchema,
   documents: z
     .array(
       z.object({
@@ -53,12 +54,13 @@ export const uploadSessionSchema = z.object({
         sizeBytes: z.number().int().min(1).max(10 * 1024 * 1024),
       }),
     )
-    .min(1)
+    .min(2)
     .max(3)
     .refine(
       (documents) => new Set(documents.map((item) => item.type)).size === documents.length,
       "Document types must be unique",
-    ),
+    )
+    .refine((documents) => [DocumentType.PASSPORT, DocumentType.TICKET].every((type) => documents.some((document) => document.type === type)), "Passport and ticket are required"),
 });
 export const completeCreateSchema = z.object({
   externalOrderId: z.string().trim().min(1).max(120),
@@ -72,15 +74,7 @@ export const completeCreateSchema = z.object({
       redirectUrl: z.url(),
     }),
   ]).optional(),
-  traveler: travelerSchema,
-  documents: z
-    .array(z.object({ type: z.enum(DocumentType), uploadId: z.string().uuid() }))
-    .min(2)
-    .max(3)
-    .refine(
-      (documents) => new Set(documents.map((item) => item.type)).size === documents.length,
-      "Document types must be unique",
-    ),
+  documentVerificationId: z.string().uuid(),
   consent: z.object({
     compatibilityAccepted: z.literal(true),
     termsAccepted: z.literal(true),
@@ -191,9 +185,10 @@ export class PartnersController {
   @ApiBody({
     schema: {
       type: "object",
-      required: ["externalOrderId", "documents"],
+      required: ["externalOrderId", "traveler", "documents"],
       properties: {
         externalOrderId: { type: "string", example: "agency-order-1042" },
+        traveler: { type: "object", description: "Traveller identity used for automatic passport OCR matching" },
         documents: {
           type: "array",
           minItems: 1,
@@ -222,6 +217,15 @@ export class PartnersController {
     );
   }
 
+  @Get("document-verifications/:verificationId")
+  @PartnerScopes("documents:write")
+  documentVerification(
+    @Param("verificationId") verificationId: string,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.documentVerification(request.partner!.id, verificationId);
+  }
+
   @Post("orders")
   @PartnerScopes("orders:write")
   @PartnerMutation()
@@ -235,8 +239,7 @@ export class PartnersController {
             "externalOrderId",
             "externalCustomerId",
             "planId",
-            "traveler",
-            "documents",
+            "documentVerificationId",
             "consent",
           ],
           properties: {
@@ -244,8 +247,7 @@ export class PartnersController {
             externalCustomerId: { type: "string", example: "customer-91" },
             planId: { type: "string", format: "uuid" },
             settlement: { type: "object" },
-            traveler: { type: "object" },
-            documents: { type: "array", items: { type: "object" } },
+            documentVerificationId: { type: "string", format: "uuid" },
             consent: { type: "object" },
             metadata: { type: "object", additionalProperties: { type: "string" } },
           },

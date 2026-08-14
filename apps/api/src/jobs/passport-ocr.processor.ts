@@ -3,12 +3,13 @@ import { DocumentType, type Prisma } from "@prisma/client";
 import type { Job } from "bullmq";
 import { randomUUID } from "node:crypto";
 import { CryptoService } from "../infrastructure/crypto.service.js";
+import { CloudinaryStorageService } from "../infrastructure/cloudinary-storage.service.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 import { PassportVerificationService } from "../modules/orders/passport-verification.service.js";
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
 
-type PassportOcrJob = { orderId: string; documentId: string };
+type PassportOcrJob = { orderId: string; documentId: string } | { verificationId: string };
 
 /**
  * Processes passport OCR for partner orders in the background. Triggered after
@@ -27,6 +28,7 @@ export class PassportOcrProcessor implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
     private readonly passportVerifier: PassportVerificationService,
+    private readonly storage: CloudinaryStorageService,
   ) {}
 
   onModuleInit() {
@@ -36,6 +38,7 @@ export class PassportOcrProcessor implements OnModuleInit {
   }
 
   async process(job: Job<PassportOcrJob>) {
+    if ("verificationId" in job.data) return this.processPreOrderVerification(job);
     const { orderId, documentId } = job.data;
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -96,6 +99,98 @@ export class PassportOcrProcessor implements OnModuleInit {
     );
 
     return result;
+  }
+
+  private async processPreOrderVerification(job: Job<PassportOcrJob>) {
+    if (!("verificationId" in job.data)) return;
+    const verification = await this.prisma.partnerDocumentVerification.findUnique({
+      where: { id: job.data.verificationId },
+      include: { documents: true },
+    });
+    if (!verification || ["VERIFIED", "INVALID", "CONSUMED", "EXPIRED"].includes(verification.status)) return { skipped: true };
+    if (verification.expiresAt <= new Date()) {
+      await this.prisma.partnerDocumentVerification.update({ where: { id: verification.id }, data: { status: "EXPIRED", failureCode: "VERIFICATION_EXPIRED" } });
+      return { status: "EXPIRED" };
+    }
+    try {
+      await this.prisma.partnerDocumentVerification.update({ where: { id: verification.id }, data: { status: "PROCESSING" } });
+      for (const document of verification.documents) {
+        const asset = await this.prismaSafeVerify(document.privateAssetId);
+        if (!asset.simulated && (asset.bytes !== document.declaredSizeBytes || !this.formatMatches(asset.format, document.contentType))) {
+          await this.markInvalid(verification.id, document.id, "UPLOAD_DECLARATION_MISMATCH");
+          return { status: "INVALID" };
+        }
+        if (document.type !== DocumentType.PASSPORT) {
+          await this.prisma.partnerDocumentUploadIntent.update({ where: { id: document.id }, data: { verificationStatus: "VERIFIED", verifiedAt: new Date() } });
+        }
+      }
+      const passport = verification.documents.find((document) => document.type === DocumentType.PASSPORT);
+      if (!passport) {
+        await this.prisma.partnerDocumentVerification.update({ where: { id: verification.id }, data: { status: "INVALID", failureCode: "PASSPORT_REQUIRED" } });
+        return { status: "INVALID" };
+      }
+      const traveler = this.decryptSnapshot(verification.travelerSnapshot);
+      const result = await this.passportVerifier.verify({
+        id: verification.id,
+        purchaseType: "INITIAL_PURCHASE",
+        traveler,
+        documents: [{ id: passport.id, type: DocumentType.PASSPORT, fileName: passport.fileName, privateAssetId: passport.privateAssetId, status: "PENDING", uploadVerified: true }],
+      } as never);
+      if (result.status === "NOT_READY" || (result.status === "FAILED" && result.method === "ocr-error"))
+        throw new Error(result.detail ?? "Passport OCR is temporarily unavailable");
+      const accepted = result.status === "VERIFIED" || result.status === "SKIPPED";
+      await this.prisma.$transaction([
+        this.prisma.partnerDocumentUploadIntent.update({ where: { id: passport.id }, data: { verificationStatus: accepted ? "VERIFIED" : "INVALID", verificationCode: accepted ? null : result.status, verificationResult: { method: result.method, matchedFields: result.matchedFields, confidence: result.confidence ?? null } as Prisma.InputJsonValue, verifiedAt: new Date(result.checkedAt) } }),
+        this.prisma.partnerDocumentVerification.update({ where: { id: verification.id }, data: { status: accepted ? "VERIFIED" : "INVALID", failureCode: accepted ? null : "PASSPORT_REUPLOAD_REQUIRED" } }),
+      ]);
+      await this.emitPreOrderEvent(verification.partnerId, verification.id, verification.externalOrderId, accepted ? "document.verification.verified" : "document.verification.reupload_required");
+      return result;
+    } catch (error) {
+      const exhausted = job.attemptsMade + 1 >= Number(job.opts.attempts ?? 1);
+      await this.prisma.partnerDocumentVerification.update({
+        where: { id: verification.id },
+        data: exhausted
+          ? { status: "PROCESSING_FAILED", failureCode: "DOCUMENT_PROCESSING_FAILED" }
+          : { status: "AWAITING_UPLOAD", failureCode: null },
+      });
+      if (exhausted)
+        await this.emitPreOrderEvent(verification.partnerId, verification.id, verification.externalOrderId, "document.verification.processing_failed");
+      throw error;
+    }
+  }
+
+  private async prismaSafeVerify(assetId: string) {
+    return this.storage.verifyDocument(assetId);
+  }
+
+  private formatMatches(format: string | undefined, contentType: string) {
+    if (!format) return false;
+    return ({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png" } as Record<string, string>)[contentType] === format.toLowerCase() || (contentType === "image/jpeg" && format.toLowerCase() === "jpeg");
+  }
+
+  private decryptSnapshot(value: Prisma.JsonValue) {
+    const snapshot = value as Record<string, string | null>;
+    return {
+      firstName: snapshot.firstName ?? "",
+      ...(snapshot.middleName ? { middleName: snapshot.middleName } : {}),
+      surname: snapshot.surname ?? "",
+      dateOfBirth: this.crypto.decrypt(snapshot.dateOfBirthEncrypted ?? ""),
+      passportNumber: this.crypto.decrypt(snapshot.passportNumberEncrypted ?? ""),
+      passportExpiryDate: this.crypto.decrypt(snapshot.passportExpiryEncrypted ?? ""),
+    };
+  }
+
+  private async markInvalid(verificationId: string, documentId: string, code: string) {
+    await this.prisma.$transaction([
+      this.prisma.partnerDocumentUploadIntent.update({ where: { id: documentId }, data: { verificationStatus: "INVALID", verificationCode: code, verifiedAt: new Date() } }),
+      this.prisma.partnerDocumentVerification.update({ where: { id: verificationId }, data: { status: "INVALID", failureCode: code } }),
+    ]);
+  }
+
+  private async emitPreOrderEvent(partnerId: string, verificationId: string, externalOrderId: string, type: string) {
+    const endpoints = await this.prisma.partnerWebhookEndpoint.findMany({ where: { partnerId, active: true } });
+    const eligible = endpoints.filter((endpoint) => { const types = Array.isArray(endpoint.eventTypes) ? endpoint.eventTypes : []; return types.includes("*") || types.includes(type); });
+    await this.prisma.partnerEvent.create({ data: { partnerId, type, resourceId: verificationId, correlationId: randomUUID(), payload: { verificationId, externalOrderId }, deliveries: { create: eligible.map((endpoint) => ({ endpointId: endpoint.id })) } } });
   }
 
   private async emitVerifiedEvent(

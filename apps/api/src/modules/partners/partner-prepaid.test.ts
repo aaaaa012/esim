@@ -25,8 +25,7 @@ describe('partner prepaid settlement', () => {
       externalCustomerId: 'customer-1',
       planId: '00000000-0000-4000-8000-000000000001',
       settlement: { method: 'HOSTED_PAYMENT', provider: 'KHALTI', redirectUrl: 'https://partner.example/return' },
-      traveler: {} as never,
-      documents: [],
+      documentVerificationId: '00000000-0000-4000-8000-000000000002',
       consent: { compatibilityAccepted: true, termsAccepted: true, privacyAccepted: true, acceptedAt: new Date().toISOString() },
     }, { ipAddress: '127.0.0.1', userAgent: 'test' })).rejects.toMatchObject({ response: { code: 'HOSTED_PAYMENT_DEPRECATED' } });
   });

@@ -42,13 +42,13 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async add(name: QueueName, jobName: string, payload: object, jobId: string) {
+  async add(name: QueueName, jobName: string, payload: object, jobId: string, options?: { attempts?: number; backoff?: { type: 'fixed' | 'exponential'; delay: number } }) {
     if (!this.enabled) {
       this.logger.debug(`Queue simulator accepted ${name}:${jobName}:${jobId}`);
       return { id: jobId, simulated: true };
     }
     const queue = this.getQueue(name);
-    const job = await queue.add(jobName, payload, { ...DEFAULT_JOB_OPTIONS, jobId });
+    const job = await queue.add(jobName, payload, { ...DEFAULT_JOB_OPTIONS, ...options, jobId });
     return { id: job.id, simulated: false };
   }
 

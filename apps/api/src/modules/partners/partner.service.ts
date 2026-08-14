@@ -80,8 +80,7 @@ type CompleteOrderInput = {
         provider: PaymentProvider;
         redirectUrl: string;
       }) | undefined;
-  traveler: TravelerInput;
-  documents: Array<{ type: DocumentType; uploadId: string }>;
+  documentVerificationId: string;
   consent: {
     compatibilityAccepted: true;
     termsAccepted: true;
@@ -93,6 +92,7 @@ type CompleteOrderInput = {
 
 type UploadSessionInput = {
   externalOrderId: string;
+  traveler: TravelerInput;
   documents: Array<{
     type: DocumentType;
     fileName: string;
@@ -204,8 +204,18 @@ export class PartnerService {
 
   async createUploadSessions(partnerId: string, input: UploadSessionInput) {
     await this.partner(partnerId);
-    const expiresAt = new Date(Date.now() + 15 * 60_000);
-    return this.prisma.$transaction(async (tx) => {
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60_000);
+    const verificationId = randomUUID();
+    const response = await this.prisma.$transaction(async (tx) => {
+      await tx.partnerDocumentVerification.create({
+        data: {
+          id: verificationId,
+          partnerId,
+          externalOrderId: input.externalOrderId,
+          travelerSnapshot: this.travelerData(input.traveler) as unknown as Prisma.InputJsonValue,
+          expiresAt,
+        },
+      });
       const items = [];
       for (const document of input.documents) {
         const id = randomUUID();
@@ -217,6 +227,7 @@ export class PartnerService {
           data: {
             id,
             partnerId,
+            verificationId,
             externalOrderId: input.externalOrderId,
             type: document.type,
             fileName: document.fileName,
@@ -227,15 +238,54 @@ export class PartnerService {
           },
         });
         items.push({
-          uploadId: intent.id,
+          id: intent.id,
           type: intent.type,
           fileName: intent.fileName,
           expiresAt: intent.expiresAt,
           upload: signed.upload,
         });
       }
-      return { externalOrderId: input.externalOrderId, documents: items };
+      return { verificationId, externalOrderId: input.externalOrderId, status: "AWAITING_UPLOAD", expiresAt, documents: items };
     });
+    try {
+      await this.queues.add(
+        QUEUES.documents,
+        "verify-partner-documents",
+        { verificationId },
+        `document-verification-${verificationId}`,
+        { attempts: 30, backoff: { type: "fixed", delay: 5_000 } },
+      );
+    } catch (error) {
+      await this.prisma.partnerDocumentVerification.update({
+        where: { id: verificationId },
+        data: { status: "PROCESSING_FAILED", failureCode: "QUEUE_UNAVAILABLE" },
+      });
+      this.logger.error(`Could not queue document verification ${verificationId}: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+    return response;
+  }
+
+  async documentVerification(partnerId: string, verificationId: string) {
+    const verification = await this.prisma.partnerDocumentVerification.findFirst({
+      where: { id: verificationId, partnerId },
+      include: { documents: true },
+    });
+    if (!verification) throw new NotFoundException({ code: "DOCUMENT_VERIFICATION_NOT_FOUND", message: "Document verification not found" });
+    return {
+      id: verification.id,
+      externalOrderId: verification.externalOrderId,
+      status: verification.status,
+      failureCode: verification.failureCode,
+      expiresAt: verification.expiresAt,
+      consumedAt: verification.consumedAt,
+      documents: verification.documents.map((document) => ({
+        id: document.id,
+        type: document.type,
+        status: document.verificationStatus,
+        code: document.verificationCode,
+        verifiedAt: document.verifiedAt,
+      })),
+    };
   }
 
   async createCompleteOrder(
@@ -257,52 +307,32 @@ export class PartnerService {
         code: "PLAN_UNAVAILABLE",
         message: "Plan is unavailable",
       });
+    const verification = await this.prisma.partnerDocumentVerification.findFirst({
+      where: { id: input.documentVerificationId, partnerId },
+      include: { documents: true },
+    });
+    if (!verification || verification.externalOrderId !== input.externalOrderId)
+      throw new BadRequestException({ code: "VERIFICATION_ORDER_MISMATCH", message: "Document verification does not match this order" });
+    if (verification.expiresAt <= new Date())
+      throw new GoneException({ code: "VERIFICATION_EXPIRED", message: "Document verification has expired" });
+    if (verification.consumedAt)
+      throw new ConflictException({ code: "VERIFICATION_ALREADY_CONSUMED", message: "Document verification was already consumed" });
+    if (verification.status !== "VERIFIED")
+      throw new ApiException({
+        code: verification.status === "INVALID" ? "DOCUMENT_REUPLOAD_REQUIRED" : "VERIFICATION_NOT_READY",
+        message: verification.status === "INVALID" ? "Documents are invalid; upload replacements" : "Document verification is not complete",
+        status: verification.status === "INVALID" ? 422 : 409,
+      });
     const required = this.requiredDocuments(plan.country.isoCode);
-    const suppliedTypes = new Set(input.documents.map((item) => item.type));
+    const suppliedTypes = new Set(verification.documents.map((item) => item.type));
     const missing = required.filter((type) => !suppliedTypes.has(type));
     if (missing.length)
       throw new BadRequestException({
         code: "DOCUMENT_REQUIRED",
         message: `Missing required documents: ${missing.map(documentTypeLabel).join(", ")}`,
       });
-    const uploadIds = input.documents.map((item) => item.uploadId);
-    const intents = await this.prisma.partnerDocumentUploadIntent.findMany({
-      where: {
-        id: { in: uploadIds },
-        partnerId,
-        externalOrderId: input.externalOrderId,
-        consumedAt: null,
-      },
-    });
-    if (intents.length !== uploadIds.length)
-      throw new BadRequestException({
-        code: "UPLOAD_NOT_VERIFIED",
-        message: "One or more document uploads are unavailable",
-      });
-    const now = new Date();
-    if (intents.some((intent) => intent.expiresAt <= now))
-      throw new BadRequestException({
-        code: "UPLOAD_EXPIRED",
-        message: "One or more document uploads have expired",
-      });
-    for (const requested of input.documents) {
-      const intent = intents.find((item) => item.id === requested.uploadId);
-      if (!intent || intent.type !== requested.type)
-        throw new BadRequestException({
-          code: "UPLOAD_NOT_VERIFIED",
-          message: "Document upload type does not match",
-        });
-      const verified = await this.verifyUploadedDocument(intent.privateAssetId);
-      if (
-        !verified.simulated &&
-        (verified.bytes !== intent.declaredSizeBytes ||
-          !this.formatMatchesContentType(verified.format, intent.contentType))
-      )
-        throw new BadRequestException({
-          code: "UPLOAD_NOT_VERIFIED",
-          message: "Uploaded document does not match its declaration",
-        });
-    }
+    const intents = verification.documents;
+    const uploadIds = intents.map((item) => item.id);
     const amountPaisa = Math.round(Number(plan.sellingPrice) * 100);
     const orderId = randomUUID();
     await this.prisma.$transaction(async (tx) => {
@@ -323,6 +353,12 @@ export class PartnerService {
       });
       if (consumable.count !== uploadIds.length)
         throw new ApiException({ code: "UPLOAD_ALREADY_CONSUMED", message: "Document upload was already consumed", status: 409 });
+      const consumedVerification = await tx.partnerDocumentVerification.updateMany({
+        where: { id: verification.id, partnerId, status: "VERIFIED", consumedAt: null, expiresAt: { gt: new Date() } },
+        data: { status: "CONSUMED", consumedAt: new Date(), consumedOrderId: orderId },
+      });
+      if (consumedVerification.count !== 1)
+        throw new ApiException({ code: "VERIFICATION_ALREADY_CONSUMED", message: "Document verification was already consumed", status: 409 });
       const partnerCustomer = await this.ensurePartnerCustomer(
         tx,
         partner.code,
@@ -359,13 +395,24 @@ export class PartnerService {
           totalAmount: amountPaisa / 100,
           pricingSnapshot,
           compatibilityAcceptedAt: new Date(input.consent.acceptedAt),
-          traveler: { create: this.travelerData(input.traveler) },
+          traveler: { create: verification.travelerSnapshot as Prisma.TravelerUncheckedCreateWithoutOrderInput },
           documents: {
-            create: intents.map((intent) => ({
-              type: intent.type,
-              fileName: intent.fileName,
-              privateAssetId: intent.privateAssetId,
-            })),
+            create: intents.map((intent) => {
+              const result = intent.verificationResult as { method?: string; matchedFields?: unknown; confidence?: number | null } | null;
+              return {
+                type: intent.type,
+                fileName: intent.fileName,
+                privateAssetId: intent.privateAssetId,
+                status: DocumentStatus.APPROVED,
+                ...(intent.type === DocumentType.PASSPORT ? {
+                  passportVerificationStatus: "VERIFIED",
+                  passportVerificationMethod: result?.method ?? null,
+                  passportMatchedFields: result?.matchedFields as Prisma.InputJsonValue,
+                  passportConfidence: result?.confidence ?? null,
+                  passportVerifiedAt: intent.verifiedAt,
+                } : {}),
+              };
+            }),
           },
           events: { create: { fromStatus: null, toStatus: status } },
         },
@@ -414,7 +461,6 @@ export class PartnerService {
         }`,
       );
     }
-    await this.enqueuePassportOcr(orderId);
     return this.order(partnerId, orderId);
   }
 

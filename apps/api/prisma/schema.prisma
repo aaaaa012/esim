@@ -584,6 +584,7 @@ model Partner {
   hostedSessions           PartnerHostedCheckoutSession[]
   rateBuckets              PartnerRateBucket[]
   documentUploadIntents    PartnerDocumentUploadIntent[]
+  documentVerifications    PartnerDocumentVerification[]
   createdAt                DateTime                       @default(now())
   updatedAt                DateTime                       @updatedAt
 }
@@ -592,6 +593,8 @@ model PartnerDocumentUploadIntent {
   id                String       @id @default(uuid()) @db.Uuid
   partnerId         String       @db.Uuid
   partner           Partner      @relation(fields: [partnerId], references: [id])
+  verificationId    String?      @db.Uuid
+  verification      PartnerDocumentVerification? @relation(fields: [verificationId], references: [id])
   externalOrderId   String
   type              DocumentType
   fileName          String
@@ -601,10 +604,33 @@ model PartnerDocumentUploadIntent {
   expiresAt         DateTime
   consumedAt        DateTime?
   consumedOrderId   String?      @db.Uuid
+  verificationStatus String      @default("AWAITING_UPLOAD")
+  verificationCode   String?
+  verificationResult Json?
+  verifiedAt          DateTime?
   createdAt         DateTime     @default(now())
 
   @@index([partnerId, externalOrderId, expiresAt])
   @@index([partnerId, consumedAt])
+}
+
+model PartnerDocumentVerification {
+  id                String   @id @default(uuid()) @db.Uuid
+  partnerId         String   @db.Uuid
+  partner           Partner  @relation(fields: [partnerId], references: [id])
+  externalOrderId   String
+  status            String   @default("AWAITING_UPLOAD")
+  travelerSnapshot  Json
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  consumedOrderId   String?  @unique @db.Uuid
+  failureCode       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  documents         PartnerDocumentUploadIntent[]
+
+  @@index([partnerId, externalOrderId])
+  @@index([status, expiresAt])
 }
 
 model PartnerCredential {

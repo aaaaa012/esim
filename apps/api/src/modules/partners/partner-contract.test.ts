@@ -23,17 +23,7 @@ describe("simplified partner order contract", () => {
         externalCustomerId: "customer-91",
         planId: "f17d6006-69fe-42ed-9ec8-47777f7569f1",
         settlement: { method: "PARTNER_ACCOUNT" },
-        traveler,
-        documents: [
-          {
-            type: "PASSPORT",
-            uploadId: "00000000-0000-4000-8000-000000000001",
-          },
-          {
-            type: "TICKET",
-            uploadId: "00000000-0000-4000-8000-000000000002",
-          },
-        ],
+        documentVerificationId: "00000000-0000-4000-8000-000000000003",
         consent: {
           compatibilityAccepted: true,
           termsAccepted: true,
@@ -49,11 +39,7 @@ describe("simplified partner order contract", () => {
       externalOrderId: "agency-order-1043",
       externalCustomerId: "customer-91",
       planId: "f17d6006-69fe-42ed-9ec8-47777f7569f1",
-      traveler,
-      documents: [
-        { type: "PASSPORT", uploadId: "00000000-0000-4000-8000-000000000001" },
-        { type: "TICKET", uploadId: "00000000-0000-4000-8000-000000000002" },
-      ],
+      documentVerificationId: "00000000-0000-4000-8000-000000000003",
       consent: {
         compatibilityAccepted: true,
         termsAccepted: true,
@@ -63,6 +49,20 @@ describe("simplified partner order contract", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.settlement).toBeUndefined();
+  });
+
+  it("rejects the former direct traveler and document order contract", () => {
+    expect(completeCreateSchema.safeParse({
+      externalOrderId: "agency-order-old",
+      externalCustomerId: "customer-91",
+      planId: "f17d6006-69fe-42ed-9ec8-47777f7569f1",
+      traveler,
+      documents: [
+        { type: "PASSPORT", uploadId: "00000000-0000-4000-8000-000000000001" },
+        { type: "TICKET", uploadId: "00000000-0000-4000-8000-000000000002" },
+      ],
+      consent: { compatibilityAccepted: true, termsAccepted: true, privacyAccepted: true, acceptedAt: "2026-08-08T00:00:00.000Z" },
+    }).success).toBe(false);
   });
 
   it("requires hosted payment provider and redirect URL", () => {
@@ -82,6 +82,7 @@ describe("simplified partner order contract", () => {
     expect(
       uploadSessionSchema.safeParse({
         externalOrderId: "agency-order-1042",
+        traveler,
         documents: [
           {
             type: "PASSPORT",
@@ -98,6 +99,7 @@ describe("simplified partner order contract", () => {
     expect(
       uploadSessionSchema.safeParse({
         externalOrderId: "agency-order-1042",
+        traveler,
         documents: [
           {
             type: "PASSPORT",
