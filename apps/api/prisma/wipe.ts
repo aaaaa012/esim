@@ -68,7 +68,6 @@ async function main() {
 
   console.log('\n=== DELETING ALL DATA ===');
   for (const t of order) {
-    // @ts-expect-error dynamic access
     const r = await (prisma as any)[t].deleteMany();
     console.log(`deleted ${r.count} from ${t}`);
   }
