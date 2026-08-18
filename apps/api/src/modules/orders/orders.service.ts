@@ -355,7 +355,7 @@ export class OrdersService implements OnModuleInit {
   async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); if (order.status !== OrderStatus.PROVISIONING || order.qrPayload) { this.logger.debug(`Order ${id} is not eligible for provisioning; skipping`); return; } const target = await this.provisioningTarget(order); const reuseExisting = Boolean(target); const profile = target?.inventory ?? await this.inventory.profileForOrder(order.id); const identity = order.purchaseType === 'TOPUP' ? target?.traveler ?? { email: (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail ?? '', mobile: order.topUpMobile ?? '', firstName: 'Existing', surname: 'Customer', city: '', countryOfResidence: 'NP' } : { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence }; const request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: identity }; try { const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.providerSubscriptionId) throw new Error('Connectivity provider did not return a subscription id'); order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'PRELOADED'; if (result.status === 'DELAYED' || !result.qrPayload) { await this.persistence.save(order); this.logger.log(`Transatel accepted order ${order.id} as ${result.providerSubscriptionId}; waiting for activation details`); return this.redact(order); } order.qrPayload = result.qrPayload; order.qrDeliveredAt = new Date().toISOString(); const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString(); const providerInfo = { provider: this.connectivity.descriptor().provider, providerSubscriptionId: result.providerSubscriptionId, expiresAt }; if (reuseExisting) await this.inventory.assignTopup(order.id, await this.inventory.customerIdForOrder(order.id), profile.iccid, result.qrPayload, providerInfo); else await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, providerInfo); const assigned = await this.inventory.inventoryForOrder(order.id); if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), providerSubscriptionId: result.providerSubscriptionId, verificationStatus: 'PENDING' }; this.transition(order, OrderStatus.QR_READY, `Provisioned on attempt ${attempt}; activation QR delivered`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
     const errorCode = error instanceof ApiException
       ? `${error.code} (HTTP ${error.getStatus()})${error.internalDetail !== undefined ? `: ${typeof error.internalDetail === 'string' ? error.internalDetail : JSON.stringify(error.internalDetail)}` : ''}`.slice(0, 2000)
-      : (error instanceof Error ? error.name : 'UNKNOWN');
+      : (error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 2000) : 'UNKNOWN');
     await this.persistence.provisioningAttempt(order.id, attempt, request, { errorCode });
     const ambiguousOutcome = error instanceof ApiException && String(error.internalDetail ?? '').includes('refusing to submit a duplicate command');
     if (ambiguousOutcome) {
@@ -375,6 +375,38 @@ export class OrdersService implements OnModuleInit {
     }
     throw error;
   } }
+  /**
+   * Finishes the local side of a provisioning operation that already succeeded
+   * at the provider. This path deliberately never calls provision(), making it
+   * safe for automatic and manual reconciliation after an uncertain DB commit.
+   */
+  async recoverProvisioningQrReady(id: string, input: { qrPayload: string; providerSubscriptionId: string; iccid?: string; reason?: string }) {
+    await this.refreshOne(id, true);
+    const order = this.get(id);
+    if ([OrderStatus.QR_READY, OrderStatus.COMPLETED].includes(order.status)) return this.redact(order);
+    if (order.status !== OrderStatus.PROVISIONING) throw new BadRequestException(`Order in ${order.status} cannot be recovered to QR ready`);
+
+    const target = await this.provisioningTarget(order);
+    const customerId = await this.inventory.customerIdForOrder(order.id);
+    const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString();
+    const providerInfo = { provider: this.connectivity.descriptor().provider, providerSubscriptionId: input.providerSubscriptionId, expiresAt };
+    if (target) {
+      await this.inventory.assignTopup(order.id, customerId, input.iccid ?? target.inventory.iccid, input.qrPayload, providerInfo);
+    } else {
+      await this.inventory.assign(order.id, customerId, input.qrPayload, providerInfo);
+    }
+
+    order.qrPayload = input.qrPayload;
+    order.qrDeliveredAt = new Date().toISOString();
+    order.providerSubscriptionId = input.providerSubscriptionId;
+    order.providerStatus = 'PRELOADED';
+    const assigned = await this.inventory.inventoryForOrder(order.id);
+    if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), providerSubscriptionId: input.providerSubscriptionId, verificationStatus: 'PENDING' };
+    this.transition(order, OrderStatus.QR_READY, input.reason ?? 'Recovered provider QR after local persistence failure');
+    await this.persistence.save(order);
+    await this.safeNotify(order, 'QR_READY');
+    return this.redact(order);
+  }
   async markProvisioningManualReview(id: string, reason: string) {
     const order = this.get(id);
     if (order.status !== OrderStatus.PROVISIONING) return;

@@ -148,11 +148,15 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     if (!this.prisma.enabled) return;
     const now = new Date();
     const operations = await this.prisma.provisioningOperation.findMany({
-      where: { state: { in: ['SUBMITTING', 'ACCEPTED', 'WAITING_FOR_QR', 'RECONCILE_REQUIRED'] }, OR: [{ nextReconcileAt: null }, { nextReconcileAt: { lte: now } }] },
-      include: { order: { select: { id: true, providerSubscriptionId: true } } },
+      where: { state: { in: ['SUBMITTING', 'ACCEPTED', 'WAITING_FOR_QR', 'QR_READY', 'RECONCILE_REQUIRED'] }, OR: [{ nextReconcileAt: null }, { nextReconcileAt: { lte: now } }] },
+      include: { order: { select: { id: true, providerSubscriptionId: true, status: true } } },
       take: 200,
     });
     for (const operation of operations) {
+      // QR_READY is terminal for provisioning reconciliation once the order
+      // commit has also succeeded. Keep it selectable only to heal the split
+      // state where the provider operation committed but the order did not.
+      if (operation.state === 'QR_READY' && operation.order.status !== 'PROVISIONING') continue;
       if (operation.reconcileDeadlineAt && operation.reconcileDeadlineAt <= now) {
         await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'MANUAL_REVIEW', nextReconcileAt: null, lastErrorCategory: 'RECONCILIATION_DEADLINE', lastErrorMessage: 'Automatic reconciliation deadline elapsed', version: { increment: 1 } } });
         await this.orders.markProvisioningManualReview(operation.orderId, 'Transatel submission requires manual reconciliation; inventory remains quarantined');
@@ -161,12 +165,18 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       try {
         const details = await this.connectivity.getEsimDetails(operation.iccid);
         const qrPayload = 'qrPayload' in details ? details.qrPayload : undefined;
-        if (qrPayload && operation.order.providerSubscriptionId && details.status.toLowerCase() === 'active') {
-          await this.orders.applyProviderEvent({ eventType: 'AUTOMATIC_RECONCILIATION', orderId: operation.orderId, iccid: operation.iccid, subscriptionId: operation.order.providerSubscriptionId, status: 'ACTIVATED', qrPayload });
+        const providerSubscriptionId = operation.order.providerSubscriptionId ?? operation.providerSubscriptionId;
+        if (qrPayload && providerSubscriptionId && details.status.toLowerCase() === 'active') {
+          await this.orders.applyProviderEvent({ eventType: 'AUTOMATIC_RECONCILIATION', orderId: operation.orderId, iccid: operation.iccid, subscriptionId: providerSubscriptionId, status: 'ACTIVATED', qrPayload });
           await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'ACTIVATED', completedAt: new Date(), nextReconcileAt: null, lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
           continue;
         }
-        const nextState = operation.order.providerSubscriptionId ? (qrPayload ? 'QR_READY' : 'WAITING_FOR_QR') : 'RECONCILE_REQUIRED';
+        if (qrPayload && providerSubscriptionId && operation.order.status === 'PROVISIONING') {
+          await this.orders.recoverProvisioningQrReady(operation.orderId, { qrPayload, providerSubscriptionId, iccid: operation.iccid, reason: 'Automatic recovery from provider QR-ready state' });
+          await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'QR_READY', completedAt: operation.completedAt ?? new Date(), nextReconcileAt: null, lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
+          continue;
+        }
+        const nextState = providerSubscriptionId ? (qrPayload ? 'QR_READY' : 'WAITING_FOR_QR') : 'RECONCILE_REQUIRED';
         await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: nextState, nextReconcileAt: new Date(Date.now() + 5 * 60_000), lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
       } catch (error) {
         await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { nextReconcileAt: new Date(Date.now() + 5 * 60_000), lastErrorCategory: 'TRANSIENT_PROVIDER', lastErrorMessage: error instanceof Error ? error.message.slice(0, 2000) : 'unknown error', version: { increment: 1 } } });
@@ -183,7 +193,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     if (!this.prisma.enabled) throw new Error('Provisioning reconciliation requires database persistence');
     const operation = await this.prisma.provisioningOperation.findUnique({ where: { id: operationId }, include: { order: { select: { id: true, providerSubscriptionId: true, status: true } } } });
     if (!operation) throw new Error('Provisioning operation not found');
-    if (!['ACCEPTED', 'WAITING_FOR_QR', 'RECONCILE_REQUIRED', 'MANUAL_REVIEW'].includes(operation.state)) throw new Error(`Operation in ${operation.state} cannot be reconciled`);
+    if (!['ACCEPTED', 'WAITING_FOR_QR', 'QR_READY', 'RECONCILE_REQUIRED', 'MANUAL_REVIEW'].includes(operation.state)) throw new Error(`Operation in ${operation.state} cannot be reconciled`);
     const details = await this.connectivity.getEsimDetails(operation.iccid);
     const qrPayload = 'qrPayload' in details ? details.qrPayload : undefined;
     const providerSubscriptionId = operation.order.providerSubscriptionId ?? operation.providerSubscriptionId;
@@ -191,6 +201,11 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       await this.orders.applyProviderEvent({ eventType: 'OPS_MANUAL_RECONCILIATION', orderId: operation.orderId, iccid: operation.iccid, subscriptionId: providerSubscriptionId, status: 'ACTIVATED', qrPayload });
       await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'ACTIVATED', completedAt: new Date(), nextReconcileAt: null, lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
       return { id: operation.id, state: 'ACTIVATED', recovered: true };
+    }
+    if (qrPayload && providerSubscriptionId && operation.order.status === 'PROVISIONING') {
+      await this.orders.recoverProvisioningQrReady(operation.orderId, { qrPayload, providerSubscriptionId, iccid: operation.iccid, reason: 'Ops recovery from provider QR-ready state' });
+      await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state: 'QR_READY', completedAt: operation.completedAt ?? new Date(), nextReconcileAt: null, lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
+      return { id: operation.id, state: 'QR_READY', recovered: true };
     }
     const state = providerSubscriptionId ? 'WAITING_FOR_QR' : 'RECONCILE_REQUIRED';
     await this.prisma.provisioningOperation.update({ where: { id: operation.id }, data: { state, nextReconcileAt: new Date(Date.now() + 5 * 60_000), lastErrorCategory: null, lastErrorMessage: null, version: { increment: 1 } } });
