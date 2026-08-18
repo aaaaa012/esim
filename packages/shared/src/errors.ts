@@ -139,3 +139,29 @@ export const apiErrorMessage = (
       return fallback;
   }
 };
+
+/**
+ * Customer-facing reasons an eSIM activation can fail on. Each code maps to a
+ * safe message customers can act on. Internal/provider detail is never
+ * serialized to clients; it stays in the order's timeline and ops views.
+ */
+export const ProvisioningFailureCode = {
+  INVENTORY_UNAVAILABLE: 'INVENTORY_UNAVAILABLE',
+  PLAN_UNAVAILABLE: 'PLAN_UNAVAILABLE',
+  PROVIDER_UNAVAILABLE: 'PROVIDER_UNAVAILABLE',
+  UNKNOWN: 'UNKNOWN',
+} as const;
+export type ProvisioningFailureCode = (typeof ProvisioningFailureCode)[keyof typeof ProvisioningFailureCode];
+
+export type ProvisioningFailure = { code: ProvisioningFailureCode; message: string };
+
+/** Builds a customer-safe activation-failure result for a given code. */
+export const provisioningFailure = (code: ProvisioningFailureCode): ProvisioningFailure => {
+  const messages: Record<ProvisioningFailureCode, string> = {
+    INVENTORY_UNAVAILABLE: 'We are out of stock for this plan right now. You have not been charged.',
+    PLAN_UNAVAILABLE: 'This plan is no longer offered. Please choose another plan.',
+    PROVIDER_UNAVAILABLE: 'We could not activate your eSIM right now. Our team is reviewing it and will contact you.',
+    UNKNOWN: 'We could not activate your eSIM right now. Our team is reviewing it and will contact you.',
+  };
+  return { code, message: messages[code] };
+};

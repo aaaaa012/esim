@@ -32,7 +32,7 @@ function connectivityStub() {
 
 const headers = ['countryiso2,name,providerplanid,dataallowance,validitydays,costprice,sellingprice'];
 
-function csv(validityDays: string, country = 'NP') {
+function csv(validityDays: string, country = 'IN') {
   return [...headers, `${country},Travel 5GB,TRVL-5GB-15D,5120 MB,${validityDays},8,10`].join('\n');
 }
 
@@ -89,6 +89,15 @@ describe('AdminService.importPlansFromTabular validity parsing', () => {
       }),
     );
   });
+
+  it('rejects plans for restricted destination countries such as Nepal', async () => {
+    const prisma = prismaStub();
+    const admin = new AdminService(prisma, connectivityStub());
+    const result = await admin.importPlansFromTabular(csv('7', 'NP'));
+    expect(result).toMatchObject({ imported: 0, updated: 0, skipped: 1 });
+    expect(prisma.plan.create).not.toHaveBeenCalled();
+    expect(prisma.country.upsert).not.toHaveBeenCalled();
+  });
 });
 
 describe('AdminService.importPlansFromTabular role-based default status', () => {
@@ -125,7 +134,7 @@ describe('AdminService.importPlansFromTabular role-based default status', () => 
     const prisma = prismaStub();
     const admin = new AdminService(prisma, connectivityStub());
     const fullHeaders = 'countryiso2,countryname,name,providerplanid,dataallowance,validitydays,costprice,sellingprice,currency,coveragecountries,status';
-    const explicit = `${fullHeaders}\nNP,Nepal,Travel 5GB,TRVL-5GB-15D,5120 MB,7,8,10,NPR,NPL,DISABLED`;
+    const explicit = `${fullHeaders}\nIN,India,Travel 5GB,TRVL-5GB-15D,5120 MB,7,8,10,NPR,IND,DISABLED`;
     await admin.importPlansFromTabular(explicit);
     expect(prisma.plan.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'DISABLED' }) }),
@@ -135,7 +144,7 @@ describe('AdminService.importPlansFromTabular role-based default status', () => 
   it('defaults costPrice to sellingPrice when the cost column is blank', async () => {
     const prisma = prismaStub();
     const admin = new AdminService(prisma, connectivityStub());
-    const blankCost = [...headers, 'NP,Travel 5GB,TRVL-5GB-15D,5120 MB,7,,10'].join('\n');
+    const blankCost = [...headers, 'IN,Travel 5GB,TRVL-5GB-15D,5120 MB,7,,10'].join('\n');
     await admin.importPlansFromTabular(blankCost);
     expect(prisma.plan.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -166,9 +175,9 @@ describe('AdminService.exportTransatelCatalog', () => {
     const connectivity = {
       catalogReport: vi.fn().mockResolvedValue({
         rows: [{
-          countryiso2: 'NP', countryname: 'Nepal', name: 'Travel 5GB', providerplanid: 'TRVL-5GB-15D',
+          countryiso2: 'IN', countryname: 'India', name: 'Travel 5GB', providerplanid: 'TRVL-5GB-15D',
           dataallowance: '5120 MB', validitydays: 15, costprice: 8, sellingprice: 10,
-          currency: 'NPR', coveragecountries: 'NPL', status: '',
+          currency: 'NPR', coveragecountries: 'IND', status: '',
         }],
         skipped: ['SKIP-1'],
       }),
@@ -179,7 +188,7 @@ describe('AdminService.exportTransatelCatalog', () => {
     expect(result.count).toBe(1);
     expect(result.skipped).toBe(1);
     expect(result.csv).toContain('countryiso2,countryname,name,providerplanid,dataallowance,validitydays,costprice,sellingprice,currency,coveragecountries,status');
-    expect(result.csv).toContain('NP,Nepal,Travel 5GB,TRVL-5GB-15D,5120 MB,15,8,10,NPR,NPL');
+    expect(result.csv).toContain('IN,India,Travel 5GB,TRVL-5GB-15D,5120 MB,15,8,10,NPR,IND');
     expect(result.fileName).toMatch(/^transatel-catalog-\d{4}-\d{2}-\d{2}\.csv$/);
   });
 });

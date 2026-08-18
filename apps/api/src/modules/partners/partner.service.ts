@@ -24,6 +24,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   documentTypeLabel,
   DocumentType as SharedDocumentType,
+  RESTRICTED_PLAN_COUNTRY_CODES,
   type TravelerInput,
 } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
@@ -169,7 +170,10 @@ export class PartnerService {
         status: "ACTIVE",
         country: {
           active: true,
-          ...(country ? { isoCode: country.toUpperCase() } : {}),
+          isoCode: {
+            ...(RESTRICTED_PLAN_COUNTRY_CODES.length ? { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } : {}),
+            ...(country ? { equals: country.toUpperCase() } : {}),
+          },
         },
       },
       include: { country: true },
@@ -299,7 +303,7 @@ export class PartnerService {
       throw this.hostedPaymentDeprecated();
     const settlementMethod = PartnerSettlementMethod.PARTNER_ACCOUNT;
     const plan = await this.prisma.plan.findFirst({
-      where: { id: input.planId, status: "ACTIVE", country: { active: true } },
+      where: { id: input.planId, status: "ACTIVE", country: { active: true, ...(RESTRICTED_PLAN_COUNTRY_CODES.length ? { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } } : {}) } },
       include: { country: true },
     });
     if (!plan)
@@ -928,7 +932,7 @@ export class PartnerService {
         message: "This partner is not approved for hosted checkout links",
       });
     const plan = await this.prisma.plan.findFirst({
-      where: { id: input.planId, status: "ACTIVE", country: { active: true } },
+      where: { id: input.planId, status: "ACTIVE", country: { active: true, ...(RESTRICTED_PLAN_COUNTRY_CODES.length ? { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } } : {}) } },
       include: { country: true },
     });
     if (!plan)

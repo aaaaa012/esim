@@ -10,6 +10,7 @@ import {
   UserStatus,
 } from "@prisma/client";
 import { randomBytes } from "node:crypto";
+import { isRestrictedPlanCountry, RESTRICTED_PLAN_COUNTRY_CODES } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
@@ -23,6 +24,9 @@ export class AdminService {
     if (!this.prisma.enabled) return [];
     return this.prisma.plan
       .findMany({
+        where: {
+          country: { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } },
+        },
         include: { country: true },
         orderBy: [{ country: { name: "asc" } }, { sellingPrice: "asc" }],
       })
@@ -79,6 +83,7 @@ export class AdminService {
     const plan = await this.prisma.plan.findUnique({ where: { id }, include: { country: true } });
     if (!plan) throw new NotFoundException("Plan not found");
     if (plan.status !== PlanStatus.DRAFT) throw new BadRequestException(`Plan is ${plan.status.toLowerCase()}; only draft plans can be approved`);
+    if (isRestrictedPlanCountry(plan.country.isoCode)) throw new BadRequestException(`Plans for destination country ${plan.country.isoCode} are not supported`);
     const actor = await this.actor(actorClerkId);
     await this.prisma.$transaction(async (tx) => {
       await tx.plan.update({ where: { id }, data: { status: PlanStatus.ACTIVE } });
@@ -177,6 +182,7 @@ export class AdminService {
         .map((value) => value.trim())
         .filter(Boolean);
       if (!/^[A-Z]{2}$/.test(countryIso2)) { rowErrors.push(`Line ${line}: invalid countryIso2 '${countryIso2 || '(empty)'}'`); continue; }
+      if (isRestrictedPlanCountry(countryIso2)) { rowErrors.push(`Line ${line}: destination country '${countryIso2}' is not supported`); continue; }
       if (!name) { rowErrors.push(`Line ${line}: name is required`); continue; }
       if (!providerPlanId) { rowErrors.push(`Line ${line}: providerPlanId is required`); continue; }
       if (!dataAllowance) { rowErrors.push(`Line ${line}: dataAllowance is required`); continue; }

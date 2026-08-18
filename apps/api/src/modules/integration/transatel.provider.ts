@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { ApiErrorCode } from '@visa-compass/shared';
+import { ApiErrorCode, isRestrictedPlanCountry } from '@visa-compass/shared';
 import { ApiException } from '../../common/api-error.js';
 import type { ConnectivityProvider, ProvisionRequest, ProvisionResult, EsimDetailsResult, EligibilityResult, CatalogSyncResult, CatalogExportRow, CatalogExportResult, ProviderWebhookResult, ProviderWebhookEvent, UsageBreakdown, LifecycleResult } from './connectivity-provider.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
@@ -557,8 +557,11 @@ export class TransatelProvider implements ConnectivityProvider {
       const name = names?.productShortText || names?.productLabel || definition.productId;
 
       try {
+        let syncedCountries = 0;
         await this.prisma.$transaction(async (tx) => {
           for (const isoCode of countries) {
+            if (isRestrictedPlanCountry(isoCode)) continue;
+            syncedCountries += 1;
             const country = await tx.country.upsert({
               where: { isoCode },
               update: { name: this.countryName(isoCode), active: true },
@@ -591,7 +594,7 @@ export class TransatelProvider implements ConnectivityProvider {
             });
           }
         });
-        synced += countries.length;
+        synced += syncedCountries;
       } catch (error) {
         this.logger.error(`Failed to sync Transatel product ${definition.productId}: ${error instanceof Error ? error.message : 'unknown'}`);
         skipped.push(definition.productId);
@@ -641,6 +644,7 @@ export class TransatelProvider implements ConnectivityProvider {
       const name = names?.productShortText || names?.productLabel || definition.productId;
 
       for (const isoCode of countries) {
+        if (isRestrictedPlanCountry(isoCode)) continue;
         rows.push({
           countryiso2: isoCode,
           countryname: this.countryName(isoCode),

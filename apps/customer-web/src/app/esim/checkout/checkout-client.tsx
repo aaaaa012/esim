@@ -35,6 +35,7 @@ type Order = {
     method?: string;
     detail?: string;
   };
+  provisioningFailure?: { code: string; message: string };
 };
 type Payment = { reference: string; redirectUrl: string; expiresAt: string };
 type DocumentAuthorization = {
@@ -596,7 +597,7 @@ export default function CheckoutClient({
       void verifyPayment(order);
     });
 
-  if ((!planId && !orderId) || planLoadFailed) return <main className="checkout-page"><div className="checkout-recovery"><QrCode/><h1>We could not load this checkout</h1><p>The plan link may be incomplete or no longer available.</p><div><Link className="button" href="/#plans">Choose a plan</Link><Link className="button secondary" href="/account/orders">Order history</Link></div></div></main>;
+  if ((!planId && !orderId) || planLoadFailed) return <main className="checkout-page"><div className="checkout-recovery"><QrCode/><h1>We could not load this checkout</h1><p>The plan link may be incomplete or no longer available.</p><div><Link className="button" href="/#plans">Choose a plan</Link>{isSignedIn === true && <Link className="button secondary" href="/account/orders">Order history</Link>}</div></div></main>;
   return (
     <main className="checkout-page">
       <div className="checkout-shell">
@@ -850,12 +851,16 @@ export default function CheckoutClient({
                       password-protected PDF, then connect to the network once to
                       activate it. Your order will complete automatically.
                     </p>
-                    <Link className="button" href="/account/esims">
-                      View my eSIMs
-                    </Link>
-                    <Link className="button" href={`/account/esims/${order.id}`}>
-                      Didn&apos;t get the QR? Recover it
-                    </Link>
+                    {isSignedIn === true && (
+                      <>
+                        <Link className="button" href="/account/esims">
+                          View my eSIMs
+                        </Link>
+                        <Link className="button" href={`/account/esims/${order.id}`}>
+                          Didn&apos;t get the QR? Recover it
+                        </Link>
+                      </>
+                    )}
                   </div>
                 ) : order?.status === "COMPLETED" ? (
                   <div className="success-panel">
@@ -867,12 +872,31 @@ export default function CheckoutClient({
                       PDF. Open it on your phone and enter the mobile number shown
                       in your email to reveal the QR.
                     </p>
-                    <Link className="button" href="/account/esims">
-                      View my eSIMs
+                    {isSignedIn === true && (
+                      <>
+                        <Link className="button" href="/account/esims">
+                          View my eSIMs
+                        </Link>
+                        <Link className="button" href={`/account/esims/${order.id}`}>
+                          Didn&apos;t get the QR? Recover it
+                        </Link>
+                      </>
+                    )}
+                  </div>
+                ) : order && order.status === "PROVISIONING_FAILED" ? (
+                  <div className="error-panel">
+                    <AlertTriangle size={42} />
+                    <b>We could not activate your eSIM</b>
+                    <span>{order.orderNumber}</span>
+                    <p>{order.provisioningFailure?.message ?? "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}</p>
+                    <Link className="button" href="/#plans">
+                      Choose another plan
                     </Link>
-                    <Link className="button" href={`/account/esims/${order.id}`}>
-                      Didn&apos;t get the QR? Recover it
-                    </Link>
+                    {isSignedIn === true && (
+                      <Link className="button secondary" href={`/account/esims/${order.id}`}>
+                        Check status
+                      </Link>
+                    )}
                   </div>
                 ) : order &&
                   ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(
@@ -886,9 +910,11 @@ export default function CheckoutClient({
                       Your eSIM is being activated automatically. Your QR will be
                       emailed to you as a password-protected PDF shortly.
                     </p>
-                    <Link className="button" href="/account/esims">
-                      View my eSIMs
-                    </Link>
+                    {isSignedIn === true && (
+                      <Link className="button" href="/account/esims">
+                        View my eSIMs
+                      </Link>
+                    )}
                   </div>
                 ) : verifying ? (
                   <div className="success-panel">
