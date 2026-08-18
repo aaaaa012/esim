@@ -43,7 +43,7 @@ function readyOrder(overrides: Partial<DemoOrder> = {}): DemoOrder {
   } as unknown as DemoOrder;
 }
 
-function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unknown = { release: vi.fn().mockResolvedValue(undefined) }, prisma: unknown = { enabled: false }) {
+function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unknown = { release: vi.fn().mockResolvedValue(undefined) }, prisma: unknown = { enabled: false }, notifications: unknown = {}) {
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
     save: vi.fn().mockResolvedValue(undefined),
@@ -55,7 +55,7 @@ function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unkn
     persistence,
     inventory as unknown as InventoryService,
     {} as unknown as QueueService,
-    {} as unknown as NotificationService,
+    notifications as unknown as NotificationService,
     {} as unknown as CatalogService,
     prisma as unknown as PrismaService,
     {} as unknown as QrPdfService,
@@ -152,6 +152,36 @@ describe('OrdersService asynchronous provisioning', () => {
     expect(orders.get('stock-2').status).toBe(OrderStatus.PROVISIONING);
     expect(orders.get('stock-2').provisioningFailure).toBeUndefined();
     expect(inventory.release).not.toHaveBeenCalled();
+  });
+
+  it('recovers a provider QR-ready result without submitting another preload', async () => {
+    const order = readyOrder({
+      id: 'p-recover',
+      status: OrderStatus.PROVISIONING,
+      traveler: { title: 'MS', firstName: 'Jane', surname: 'Doe', dateOfBirth: '1990-01-01', nationality: 'NP', email: 'jane@example.com', mobile: '9779800000000', city: 'Kathmandu', countryOfResidence: 'NP', passportNumber: 'P1234567', passportExpiryDate: '2030-01-01' },
+    });
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    delete order.providerStatus;
+    const connectivity = {
+      provision: vi.fn(),
+      descriptor: vi.fn().mockReturnValue({ provider: 'TRANSATEL', capabilities: {} }),
+    };
+    const inventory = {
+      customerIdForOrder: vi.fn().mockResolvedValue('cust-1'),
+      assign: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({ id: 'inv-1', iccid: '8988247076000000319', msisdn: '882470001' }),
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const orders = ordersService([order], connectivity, inventory, { enabled: false }, notifications);
+    await orders.refreshFromPersistence();
+
+    await orders.recoverProvisioningQrReady(order.id, { qrPayload: 'LPA:1$recovered', providerSubscriptionId: 'sub-existing', iccid: '8988247076000000319' });
+
+    expect(connectivity.provision).not.toHaveBeenCalled();
+    expect(inventory.assign).toHaveBeenCalledOnce();
+    expect(orders.get(order.id)).toMatchObject({ status: OrderStatus.QR_READY, providerSubscriptionId: 'sub-existing', providerStatus: 'PRELOADED' });
+    expect(notifications.enqueue).toHaveBeenCalledWith(expect.objectContaining({ orderId: order.id, template: 'QR_READY' }));
   });
 });
 
