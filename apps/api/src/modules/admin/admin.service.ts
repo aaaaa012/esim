@@ -14,10 +14,15 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
 import { tabularToRecords } from "../../common/tabular.util.js";
+import { KhaltiGateway } from "../payments/gateways/khalti.gateway.js";
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService, private readonly connectivity: ConnectivityService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly connectivity: ConnectivityService,
+    private readonly khalti: KhaltiGateway = new KhaltiGateway(),
+  ) {}
 
   async plans() {
     if (!this.prisma.enabled) return [];
@@ -387,11 +392,21 @@ export class AdminService {
     }));
   }
 
-  testIntegration(id: string) {
+  async testIntegration(id: string) {
     const item = this.integrations().find(
       (integration) => integration.id === id,
     );
     if (!item) throw new NotFoundException("Integration not found");
+    if (id === "khalti") {
+      const diagnostic = await this.khalti.diagnose();
+      return {
+        id,
+        status: "HEALTHY",
+        checkedAt: new Date().toISOString(),
+        message: `${diagnostic.message} Environment: ${diagnostic.environment}.`,
+        diagnostic: { environment: diagnostic.environment, providerStatus: diagnostic.providerStatus },
+      };
+    }
     return {
       id,
       status: item.enabled ? "HEALTHY" : "CONFIG_REQUIRED",

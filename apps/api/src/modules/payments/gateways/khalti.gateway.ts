@@ -98,6 +98,36 @@ export class KhaltiGateway implements PaymentGateway {
     );
   }
 
+  /**
+   * Performs a non-chargeable authentication diagnostic. Khalti has no health
+   * endpoint, so a lookup with a deliberately unknown pidx is used: a 400
+   * validation/not-found response proves the endpoint accepted the API key,
+   * while 401/403 means the environment and key do not match.
+   */
+  async diagnose(): Promise<{ healthy: true; environment: 'sandbox' | 'production'; providerStatus: number; message: string }> {
+    const response = await this.post(
+      '/epayment/lookup/',
+      { pidx: `visa-compass-health-${Date.now()}` },
+      'diagnostic',
+    );
+    const detail = await this.providerDetail(response);
+    if (response.status === 400 || response.status === 404)
+      return {
+        healthy: true,
+        environment: this.baseUrl.includes('dev.khalti.com') ? 'sandbox' : 'production',
+        providerStatus: response.status,
+        message: 'Khalti authenticated successfully; the diagnostic reference was correctly rejected.',
+      };
+    if (response.ok)
+      return {
+        healthy: true,
+        environment: this.baseUrl.includes('dev.khalti.com') ? 'sandbox' : 'production',
+        providerStatus: response.status,
+        message: 'Khalti authenticated successfully.',
+      };
+    throw this.providerError('diagnostic', response, detail);
+  }
+
   async initiate(input: { orderId: string; orderNumber: string; amountNpr: number; returnUrl: string }): Promise<PaymentInitiation> {
     const response = await this.post('/epayment/initiate/', {
       return_url: input.returnUrl,
