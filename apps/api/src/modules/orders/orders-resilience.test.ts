@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ConflictException } from '@nestjs/common';
 import { OrderStatus, PaymentStatus } from '@visa-compass/shared';
 import { OrdersService, type DemoOrder } from './orders.service.js';
 import type { ConnectivityService } from '../integration/connectivity.service.js';
@@ -10,7 +11,6 @@ import type { NotificationService } from '../notification/notification.service.j
 import type { CatalogService } from '../catalog/catalog.controller.js';
 import type { PrismaService } from '../../infrastructure/prisma.service.js';
 import type { QrPdfService } from '../notification/qr-pdf.service.js';
-import type { PassportVerificationService } from './passport-verification.service.js';
 import { PaymentsService } from '../payments/payments.service.js';
 import { PaymentSimulatorGateway } from '../payments/gateways/simulator.gateway.js';
 import type { KhaltiGateway } from '../payments/gateways/khalti.gateway.js';
@@ -58,7 +58,6 @@ function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unkn
     {} as unknown as CatalogService,
     prisma as unknown as PrismaService,
     {} as unknown as QrPdfService,
-    {} as unknown as PassportVerificationService,
   );
 }
 
@@ -99,6 +98,58 @@ describe('OrdersService asynchronous provisioning', () => {
     expect(orders.get('p-1')).toMatchObject({ status: OrderStatus.PROVISIONING, providerSubscriptionId: 'sub-accepted', providerStatus: 'PRELOADED' });
     expect(inventory.release).not.toHaveBeenCalled();
     expect(connectivity.provision).toHaveBeenCalledOnce();
+  });
+
+  it('marks an out-of-stock order PROVISIONING_FAILED with a safe reason on the final attempt', async () => {
+    const order = readyOrder({
+      id: 'stock-1',
+      orderNumber: 'VC-2026-R3',
+      status: OrderStatus.PROVISIONING,
+      traveler: { title: 'MR', firstName: 'Sam', surname: 'Rai', dateOfBirth: '1988-05-05', nationality: 'NP', email: 'sam@example.com', mobile: '9779800000001', city: 'Kathmandu', countryOfResidence: 'NP', passportNumber: 'P7654321', passportExpiryDate: '2030-01-01' },
+    });
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    delete order.providerStatus;
+    const connectivity = { provision: vi.fn(), descriptor: vi.fn().mockReturnValue({ provider: 'TRANSATEL', capabilities: {} }) } as unknown as ConnectivityService;
+    const inventory = {
+      profileForOrder: vi.fn().mockRejectedValue(new ConflictException('No eSIM inventory is currently available')),
+      release: vi.fn(),
+    } as unknown as InventoryService;
+    const orders = ordersService([order], connectivity, inventory);
+    await orders.refreshFromPersistence();
+
+    await expect(orders.processProvisioning('stock-1', 3, true)).rejects.toThrow('No eSIM inventory is currently available');
+
+    const failed = orders.get('stock-1');
+    expect(failed.status).toBe(OrderStatus.PROVISIONING_FAILED);
+    expect(failed.provisioningFailure).toEqual({ code: 'INVENTORY_UNAVAILABLE', message: expect.any(String) });
+    expect(connectivity.provision).not.toHaveBeenCalled();
+    expect(inventory.release).toHaveBeenCalledWith('stock-1');
+  });
+
+  it('stays PROVISIONING (retryable) when out of stock before the final attempt', async () => {
+    const order = readyOrder({
+      id: 'stock-2',
+      orderNumber: 'VC-2026-R4',
+      status: OrderStatus.PROVISIONING,
+      traveler: { title: 'MR', firstName: 'Sam', surname: 'Rai', dateOfBirth: '1988-05-05', nationality: 'NP', email: 'sam@example.com', mobile: '9779800000001', city: 'Kathmandu', countryOfResidence: 'NP', passportNumber: 'P7654321', passportExpiryDate: '2030-01-01' },
+    });
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    delete order.providerStatus;
+    const connectivity = { provision: vi.fn(), descriptor: vi.fn().mockReturnValue({ provider: 'TRANSATEL', capabilities: {} }) } as unknown as ConnectivityService;
+    const inventory = {
+      profileForOrder: vi.fn().mockRejectedValue(new ConflictException('No eSIM inventory is currently available')),
+      release: vi.fn(),
+    } as unknown as InventoryService;
+    const orders = ordersService([order], connectivity, inventory);
+    await orders.refreshFromPersistence();
+
+    await expect(orders.processProvisioning('stock-2', 1, false)).rejects.toThrow('No eSIM inventory is currently available');
+
+    expect(orders.get('stock-2').status).toBe(OrderStatus.PROVISIONING);
+    expect(orders.get('stock-2').provisioningFailure).toBeUndefined();
+    expect(inventory.release).not.toHaveBeenCalled();
   });
 
   it('recovers a provider QR-ready result without submitting another preload', async () => {

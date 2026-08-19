@@ -19,7 +19,7 @@ type Plan = {
   popular: boolean;
 };
 
-type Country = { code: string; name: string };
+type Country = { code: string; name: string; popular?: boolean };
 
 type Envelope<T> = { data: T; meta: { correlationId: string; timestamp: string } };
 
@@ -35,6 +35,7 @@ export default function CatalogPlans() {
   const [countries, setCountries] = useState<Country[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [coverage, setCoverage] = useState<Record<string, string>>({});
+  const [plansBusy, setPlansBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [topUpMobile, setTopUpMobile] = useState("");
   const [topUpCountry, setTopUpCountry] = useState("");
@@ -57,16 +58,11 @@ export default function CatalogPlans() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetch(`${API}/public/plans`), fetch(`${API}/public/countries`)])
-      .then(([plansResponse, countriesResponse]) =>
-        Promise.all([
-          plansResponse.ok ? plansResponse.json() : Promise.reject(new Error("catalog unavailable")),
-          countriesResponse.ok ? countriesResponse.json() : Promise.reject(new Error("catalog unavailable")),
-        ]),
-      )
-      .then(([plansData, countriesData]: [Envelope<Plan[]>, Envelope<Country[]>]) => {
+    fetch(`${API}/public/countries`)
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("catalog unavailable")))
+      .then((countriesData: Envelope<Country[]>) => {
         if (cancelled) return;
-        setPlans(plansData.data);
+        setPlans([]);
         setCountries(countriesData.data);
         setError(null);
       })
@@ -91,12 +87,21 @@ export default function CatalogPlans() {
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
-    fetch(`${API}/public/coverage/${selected}`)
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("coverage unavailable"))))
-      .then((data: Envelope<{ available: boolean; message: string }>) => {
-        if (!cancelled) setCoverage((previous) => ({ ...previous, [selected]: data.data.message }));
+    setPlansBusy(true);
+    fetch(`${API}/public/plans?country=${encodeURIComponent(selected)}`)
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("catalog unavailable")))
+      .then((plansData: Envelope<Plan[]>) => {
+        if (!cancelled) {
+          setPlans(plansData.data);
+          setCoverage((previous) => ({
+            ...previous,
+            [selected]: plansData.data.length ? "Coverage available" : "Coverage is unavailable. Please contact Visa Compass for assistance.",
+          }));
+          setError(null);
+        }
       })
-      .catch(() => {});
+      .catch(() => { if(!cancelled)setError("Plans for this destination could not be loaded. Please try again."); })
+      .finally(() => { if (!cancelled) setPlansBusy(false); });
     return () => {
       cancelled = true;
     };
@@ -104,12 +109,10 @@ export default function CatalogPlans() {
 
   const grouped = new Map<string, Plan[]>();
   for (const plan of plans ?? []) grouped.set(plan.countryCode, [...(grouped.get(plan.countryCode) ?? []), plan]);
-  const countryList = countries.length
-    ? countries.filter((country) => grouped.has(country.code))
-    : [...grouped.entries()].map(([code, items]) => ({ code, name: items[0]?.countryName ?? code }));
+  const countryList = countries.length ? countries : [...grouped.entries()].map(([code, items]) => ({ code, name: items[0]?.countryName ?? code }));
   const visible = selected ? (grouped.get(selected) ?? []) : [];
   const coverageMessage = selected ? coverage[selected] : undefined;
-  const popularCountries = new Set((plans ?? []).filter((plan) => plan.popular).map((plan) => plan.countryCode));
+  const popularCountries = new Set(countries.filter((country) => country.popular).map((country) => country.code));
   const supported = [...countryList].sort((a, b) => Number(popularCountries.has(b.code)) - Number(popularCountries.has(a.code)) || a.name.localeCompare(b.name));
   const popular = supported.filter((country) => popularCountries.has(country.code)).slice(0, 8);
 
@@ -188,6 +191,8 @@ export default function CatalogPlans() {
       ) : null}
       {!selected ? (
         <p className="catalog-empty">Select a destination above to see its available plans.</p>
+      ) : plansBusy ? (
+        <p className="catalog-empty">Loading plans for this destination…</p>
       ) : visible.length ? (
         <div className="cards">
           {visible.map((plan) => (

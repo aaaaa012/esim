@@ -13,7 +13,6 @@ import {
   OperationsController,
 } from "./modules/orders/orders.controller.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
-import { PassportVerificationService } from "./modules/orders/passport-verification.service.js";
 import { GuestOrdersController } from "./modules/orders/guest-orders.controller.js";
 import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
@@ -53,7 +52,6 @@ import { WhatsappChannel } from "./modules/notification/whatsapp.channel.js";
 import { QrPdfService } from "./modules/notification/qr-pdf.service.js";
 import { IntegrationProcessor } from "./jobs/integration.processor.js";
 import { ReconciliationService } from "./jobs/reconciliation.service.js";
-import { PassportOcrProcessor } from "./jobs/passport-ocr.processor.js";
 import { AuthController } from "./modules/identity/auth.controller.js";
 import { AccountGuard } from "./common/auth.guard.js";
 import { PassportVerificationRateLimitGuard } from "./common/passport-verification.rate-limit.guard.js";
@@ -107,7 +105,6 @@ OperationsController,
     CatalogService,
     OrdersService,
     OrdersPersistenceService,
-    PassportVerificationService,
     InventoryService,
     AdminService,
     PaymentsService,
@@ -126,7 +123,6 @@ OperationsController,
     ProvisioningProcessor,
     IntegrationProcessor,
     ReconciliationService,
-    PassportOcrProcessor,
     MetricsService,
     ClerkSyncService,
     PartnerAuthGuard,

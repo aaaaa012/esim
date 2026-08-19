@@ -7,6 +7,7 @@
     "build": "nest build",
     "dev": "node --env-file-if-exists=../../.env node_modules/@nestjs/cli/bin/nest.js start --watch",
     "start": "node dist/src/main.js",
+    "start:ocr-worker": "node dist/src/ocr-worker.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

@@ -2,7 +2,7 @@
 import { useAuthenticatedFetch } from '../authenticated-api-provider';
 import { useEffect, useState } from 'react';
 import { Panel } from '@/components/panel';
-import { StatusBadge } from '@/components/status-badge';
+import { StatusBadge, humane } from '@/components/status-badge';
 import { EmptyState } from '@/components/empty-state';
 import { Spinner } from '@/components/spinner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -45,16 +45,16 @@ export default function IntegrationEventsClient() {
         </div>
       )}
       <Panel
-        title="Provider callbacks"
-        description={`${items.length} events`}
+        title="Incoming updates"
+        description={`${items.length} updates received from our payment and network providers`}
         noPadding
       >
         {loading ? (
           <EmptyState loading>
-            <span className="text-sm text-muted-foreground">Loading callbacks…</span>
+            <span className="text-sm text-muted-foreground">Loading updates…</span>
           </EmptyState>
         ) : !items.length ? (
-          <EmptyState title="No provider callbacks" description="Nothing received yet." />
+          <EmptyState title="No updates received yet" description="Messages from Khalti and the network provider will appear here." />
         ) : (
           <Table>
             <TableHeader>
@@ -62,7 +62,7 @@ export default function IntegrationEventsClient() {
                 <TableHead>Received</TableHead>
                 <TableHead>Provider</TableHead>
                 <TableHead>Event</TableHead>
-                <TableHead>Signature</TableHead>
+                <TableHead>Security</TableHead>
                 <TableHead>Processing</TableHead>
                 <TableHead className="text-right">Recovery</TableHead>
               </TableRow>
@@ -73,14 +73,11 @@ export default function IntegrationEventsClient() {
                   <TableCell className="text-muted-foreground">
                     {new Date(item.createdAt).toLocaleString()}
                   </TableCell>
-                  <TableCell className="font-medium">{item.source.toUpperCase()}</TableCell>
+                  <TableCell className="font-medium">{humane(item.source)}</TableCell>
                   <TableCell>
                     <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
                       {item.eventId}
                     </code>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {item.deadLetteredAt ? <Button size="sm" variant="outline" disabled={busy === item.id} onClick={() => void replay(item.id)}><RefreshCcw className="size-3.5" /> Replay</Button> : '—'}
                   </TableCell>
                   <TableCell>
                     <StatusBadge label={item.signatureValid ? 'VERIFIED' : 'LOOKUP VERIFIED'} tone={item.signatureValid ? 'success' : 'warning'} />
@@ -92,6 +89,13 @@ export default function IntegrationEventsClient() {
                     {item.errorMessage && (
                       <p className="mt-1 text-xs text-destructive">{item.errorMessage}</p>
                     )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {item.deadLetteredAt ? (
+                      <Button size="sm" variant="outline" disabled={busy === item.id} onClick={() => { if (window.confirm("Send this update through the system again? Only use this if the order did not update automatically.")) void replay(item.id); }}>
+                        <RefreshCcw className="size-3.5" /> Replay
+                      </Button>
+                    ) : '—'}
                   </TableCell>
                 </TableRow>
               ))}

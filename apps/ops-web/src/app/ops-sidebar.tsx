@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuthenticatedFetch } from "./authenticated-api-provider";
+import { humane } from "@/components/status-badge";
 import { cn } from "@/lib/utils";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type NavItem = {
@@ -30,19 +31,19 @@ type NavItem = {
 };
 const overviewItems: NavItem[] = [
   { href: "/", label: "Dashboard", icon: Gauge },
-  { href: "/work-queue", label: "Review Queue", icon: ClipboardCheck },
+  { href: "/work-queue", label: "Review queue", icon: ClipboardCheck },
   { href: "/orders", label: "Orders", icon: PackageSearch },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/inventory", label: "Inventory", icon: Boxes },
-  { href: "/transatel", label: "Connectivity", icon: RadioTower },
-  { href: "/provisioning-operations", label: "Provisioning recovery", icon: RotateCw },
+  { href: "/transatel", label: "Network", icon: RadioTower },
+  { href: "/provisioning-operations", label: "Set-up recovery", icon: RotateCw },
 ];
 const systemItems: NavItem[] = [
-  { href: "/manual-refunds", label: "Manual Refunds", icon: Undo2 },
+  { href: "/manual-refunds", label: "Manual refunds", icon: Undo2 },
   { href: "/notifications", label: "Notifications", icon: Bell },
-  { href: "/integration-events", label: "Events", icon: PlugZap },
-  { href: "/integration-logs", label: "Provider Logs", icon: Server },
-  { href: "/audit", label: "Activity Log", icon: History },
+  { href: "/integration-events", label: "Incoming updates", icon: PlugZap },
+  { href: "/integration-logs", label: "System activity", icon: Server },
+  { href: "/audit", label: "Activity log", icon: History },
 ];
 type Profile = {
   email: string;
@@ -110,7 +111,7 @@ export default function OpsSidebar({ open = false, onClose }: { open?: boolean; 
           <span className="avatar">{profile?.email.slice(0, 1).toUpperCase() ?? "…"}</span>
           <div className="meta">
             <b>{profile?.email ?? "Loading…"}</b>
-            <span>{profile?.accountType.replace("_", " ") ?? "Authenticating"}</span>
+            <span>{profile ? humane(profile.accountType) : "Authenticating"}</span>
           </div>
         </div>
       </div>

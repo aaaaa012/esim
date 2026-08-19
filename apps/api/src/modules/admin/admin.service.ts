@@ -4,12 +4,15 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  DocumentReviewPolicy,
   PlanStatus,
   StaffInvitationStatus,
   UserRoleName,
   UserStatus,
+  Prisma,
 } from "@prisma/client";
 import { randomBytes } from "node:crypto";
+import { isRestrictedPlanCountry, RESTRICTED_PLAN_COUNTRY_CODES } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
@@ -24,10 +27,30 @@ export class AdminService {
     private readonly khalti: KhaltiGateway = new KhaltiGateway(),
   ) {}
 
+  async documentReviewPolicy() {
+    if (!this.prisma.enabled) return { policy: DocumentReviewPolicy.AUTO_OCR, ocrCheckoutWaitMs: 8000 };
+    const config = await this.prisma.platformConfiguration.upsert({ where: { id: "platform" }, update: {}, create: { id: "platform" } });
+    return { policy: config.documentReviewPolicy, ocrCheckoutWaitMs: config.ocrCheckoutWaitMs, updatedAt: config.updatedAt };
+  }
+
+  async updateDocumentReviewPolicy(input: { policy: DocumentReviewPolicy; ocrCheckoutWaitMs?: number }, actorClerkId: string) {
+    if (!Object.values(DocumentReviewPolicy).includes(input.policy)) throw new BadRequestException("Invalid document review policy");
+    const waitMs = input.ocrCheckoutWaitMs ?? 8000;
+    if (!Number.isInteger(waitMs) || waitMs < 1000 || waitMs > 30000) throw new BadRequestException("OCR checkout wait must be between 1 and 30 seconds");
+    const actor = await this.actor(actorClerkId);
+    const previous = await this.prisma.platformConfiguration.upsert({ where: { id: "platform" }, update: {}, create: { id: "platform" } });
+    const updated = await this.prisma.platformConfiguration.update({ where: { id: "platform" }, data: { documentReviewPolicy: input.policy, ocrCheckoutWaitMs: waitMs, updatedById: actor?.id ?? null } });
+    await this.prisma.auditLog.create({ data: { module: "DOCUMENT_RULES", entity: "PlatformConfiguration", entityId: updated.id, action: "DOCUMENT_REVIEW_POLICY_CHANGED", ...(actor ? { performedById: actor.id } : {}), previousValue: { policy: previous.documentReviewPolicy, ocrCheckoutWaitMs: previous.ocrCheckoutWaitMs }, newValue: { policy: updated.documentReviewPolicy, ocrCheckoutWaitMs: updated.ocrCheckoutWaitMs } } });
+    return { policy: updated.documentReviewPolicy, ocrCheckoutWaitMs: updated.ocrCheckoutWaitMs, updatedAt: updated.updatedAt };
+  }
+
   async plans() {
     if (!this.prisma.enabled) return [];
     return this.prisma.plan
       .findMany({
+        where: {
+          country: { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } },
+        },
         include: { country: true },
         orderBy: [{ country: { name: "asc" } }, { sellingPrice: "asc" }],
       })
@@ -46,6 +69,39 @@ export class AdminService {
           status: plan.status,
         })),
       );
+  }
+
+  async planPage(input: { q?: string; status?: PlanStatus; limit?: number; offset?: number }) {
+    if (!this.prisma.enabled) return { items: [], total: 0, limit: 50, offset: 0 };
+    const limit = Math.min(100, Math.max(1, Number.isFinite(input.limit) ? input.limit! : 50));
+    const offset = Math.max(0, Number.isFinite(input.offset) ? input.offset! : 0);
+    const query = input.q?.trim();
+    const where: Prisma.PlanWhereInput = {
+      country: { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } },
+      ...(input.status ? { status: input.status } : {}),
+      ...(query ? { OR: [
+        { name: { contains: query, mode: "insensitive" } },
+        { providerPlanId: { contains: query, mode: "insensitive" } },
+        { country: { name: { contains: query, mode: "insensitive" } } },
+        { country: { isoCode: { equals: query.toUpperCase() } } },
+      ] } : {}),
+    };
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.plan.findMany({
+        where,
+        select: { id: true, name: true, dataAllowance: true, validityDays: true, sellingPrice: true, costPrice: true, currency: true, popular: true, status: true, country: { select: { isoCode: true, name: true } } },
+        orderBy: [{ country: { name: "asc" } }, { sellingPrice: "asc" }, { id: "asc" }],
+        take: limit,
+        skip: offset,
+      }),
+      this.prisma.plan.count({ where }),
+    ]);
+    return {
+      items: rows.map((plan) => ({ id: plan.id, name: plan.name, countryCode: plan.country.isoCode, countryName: plan.country.name, dataAllowance: plan.dataAllowance, validityDays: plan.validityDays, sellingPriceNpr: Number(plan.sellingPrice), costPriceNpr: Number(plan.costPrice), currency: plan.currency, popular: plan.popular, status: plan.status })),
+      total,
+      limit,
+      offset,
+    };
   }
 
   async updatePlan(
@@ -84,6 +140,7 @@ export class AdminService {
     const plan = await this.prisma.plan.findUnique({ where: { id }, include: { country: true } });
     if (!plan) throw new NotFoundException("Plan not found");
     if (plan.status !== PlanStatus.DRAFT) throw new BadRequestException(`Plan is ${plan.status.toLowerCase()}; only draft plans can be approved`);
+    if (isRestrictedPlanCountry(plan.country.isoCode)) throw new BadRequestException(`Plans for destination country ${plan.country.isoCode} are not supported`);
     const actor = await this.actor(actorClerkId);
     await this.prisma.$transaction(async (tx) => {
       await tx.plan.update({ where: { id }, data: { status: PlanStatus.ACTIVE } });
@@ -182,6 +239,7 @@ export class AdminService {
         .map((value) => value.trim())
         .filter(Boolean);
       if (!/^[A-Z]{2}$/.test(countryIso2)) { rowErrors.push(`Line ${line}: invalid countryIso2 '${countryIso2 || '(empty)'}'`); continue; }
+      if (isRestrictedPlanCountry(countryIso2)) { rowErrors.push(`Line ${line}: destination country '${countryIso2}' is not supported`); continue; }
       if (!name) { rowErrors.push(`Line ${line}: name is required`); continue; }
       if (!providerPlanId) { rowErrors.push(`Line ${line}: providerPlanId is required`); continue; }
       if (!dataAllowance) { rowErrors.push(`Line ${line}: dataAllowance is required`); continue; }

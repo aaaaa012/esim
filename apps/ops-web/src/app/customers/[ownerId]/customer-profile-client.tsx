@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, RefreshCcw, UserRound } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
@@ -113,7 +113,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         title={profile ? (profile.name ?? "Customer profile") : "Loading…"}
         description={
           profile
-            ? `${profile.customerCode ?? profile.ownerId}${profile.email ? ` · ${profile.email}` : ""}`
+            ? `${profile.customerCode ?? "Customer"}${profile.email ? ` · ${profile.email}` : ""}`
             : "Identity and order history"
         }
         badge={
@@ -156,7 +156,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                   <TableHead>Order</TableHead>
                   <TableHead>Plan</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Traveler</TableHead>
+                  <TableHead>Traveller</TableHead>
                   <TableHead>eSIM / Usage</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead></TableHead>
@@ -218,7 +218,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                               </div>
                             ) : (
                               <p className="text-xs text-muted-foreground">
-                                Status: {order.esim.status}
+                                Status: {humane(order.esim.status)}
                               </p>
                             )}
                           </>
@@ -231,7 +231,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                       </TableCell>
                       <TableCell>
                         <div className="space-y-2">
-                          {order.esim ? <Button variant="outline" size="sm" disabled={busy === order.id} onClick={() => refreshUsage(order.id)}>{busy === order.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Refresh usage</Button> : null}
+                          {order.esim ? <Button variant="outline" size="sm" disabled={busy === order.id} onClick={() => refreshUsage(order.id)}>{busy === order.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Update data</Button> : null}
                           {order.esim ? <LifecycleActions orderId={order.id} iccid={order.esim.iccid} providerStatus={order.esim.providerStatus ?? order.esim.status} canTerminate={canTerminate} onCompleted={() => void load()} /> : "—"}
                           <Button asChild variant="outline" size="sm"><Link href={`/orders/${order.id}`}>Open order</Link></Button>
                         </div>

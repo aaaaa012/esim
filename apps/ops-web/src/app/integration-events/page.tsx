@@ -4,8 +4,8 @@ export default function IntegrationEvents() {
   return (
     <>
       <PageHeader
-        title="Events"
-        description="Payment and connectivity callbacks, processing results and replay protection."
+        title="Incoming updates"
+        description="Messages from Khalti and the network provider, and how the system handled them."
       />
       <IntegrationEventsClient />
     </>

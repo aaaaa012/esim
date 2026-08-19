@@ -5,8 +5,8 @@ export default function IntegrationLogsPage() {
   return (
     <>
       <PageHeader
-        title="Provider logs"
-        description="Outbound network provider requests and outcomes — request, response and error detail."
+        title="System activity"
+        description="A technical record of requests to our payment and network providers, used for troubleshooting with technical support."
       />
       <IntegrationLogsClient />
     </>

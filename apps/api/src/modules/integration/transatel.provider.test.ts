@@ -382,6 +382,42 @@ describe('TransatelProvider', () => {
     expect(planArgs[0].create).toMatchObject({ name: 'Travel 5GB', dataAllowance: '5120 MB', validityDays: 15, costPrice: 5, sellingPrice: 5, providerPlanId: 'TRVL-5GB-15D', status: 'ACTIVE' });
   });
 
+  it('skips restricted destination countries (Nepal) during catalog sync', async () => {
+    const tx = {
+      country: { upsert: vi.fn().mockResolvedValue({ id: 'country-1' }) },
+      plan: { upsert: vi.fn().mockResolvedValue({ id: 'plan-1' }) },
+    };
+    const prisma = prismaStub({ $transaction: vi.fn(async (fn: (transaction: unknown) => unknown) => fn(tx)) });
+    const provider = new TransatelProvider(prisma);
+    route({
+      '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
+      '/ocs/catalog/api/cos/WW_COS_TEST/products': () => jsonResponse({
+        cos: 'WW_COS_TEST',
+        products: [{
+          availability: { available: true },
+          canSubscribe: { allowed: true },
+          display: { priority: 1 },
+          hasSubProducts: false,
+          inventoryActive: false,
+          prices: { subscriptionFee: [[{ currency: 'EUR', unit: 'CENTS', amount: 499 }]] },
+          productDefinition: {
+            productId: 'TRVL-NPL-15D',
+            productCategory: 'One-off',
+            allowances: { data: [{ resourceName: 'DATA', startValue: 5120, unit: 'MB' }] },
+            countryList: ['GBR', 'NPL'],
+            validityPeriod: { validityDuration: 15, validityDurationUnit: 'days' },
+            description: { productLabel: 'Travel 5GB' },
+          },
+        }],
+      }),
+    });
+    const result = await provider.syncCatalog();
+    expect(result).toEqual({ synced: 1, skipped: 0 });
+    expect(tx.plan.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.country.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.plan.upsert.mock.calls[0]![0].where).toEqual({ countryId_providerPlanId: { countryId: 'country-1', providerPlanId: 'TRVL-NPL-15D' } });
+  });
+
   it('parses subscription fees expressed in major units without dividing', async () => {
     const tx = {
       country: { upsert: vi.fn().mockResolvedValue({ id: 'country-1' }) },
@@ -453,6 +489,34 @@ describe('TransatelProvider', () => {
       sellingprice: 18,
       currency: 'NPR',
     });
+  });
+
+  it('excludes restricted destination countries (Nepal) from the catalog report', async () => {
+    const provider = new TransatelProvider(prismaStub());
+    route({
+      '/authentication/api/token': () => jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
+      '/ocs/catalog/api/cos/WW_COS_TEST/products': () => jsonResponse({
+        cos: 'WW_COS_TEST',
+        products: [{
+          availability: { available: true },
+          canSubscribe: { allowed: true },
+          display: { priority: 1 },
+          hasSubProducts: false,
+          inventoryActive: false,
+          prices: { subscriptionFee: [[{ currency: 'EUR', unit: 'CENTS', amount: 1800 }]] },
+          productDefinition: {
+            productId: 'WW_901O_STACK_ONEOFF_NPL_1GB_7D',
+            productCategory: 'One-off',
+            allowances: { data: [{ resourceName: 'DATA_BUNDLE_COUNTRY', resourceUnit: 'KB', resourceValue: 1048576 }] },
+            countryList: ['NPL'],
+            validityPeriod: { validityDuration: 7, validityDurationUnit: 'days' },
+            description: { productLabel: 'NEPAL', productShortText: 'One-off data plan Nepal 1GB 7 day(s)' },
+          },
+        }],
+      }),
+    });
+    const { rows } = await provider.catalogReport();
+    expect(rows).toHaveLength(0);
   });
 
   it('registers a webhook when none exists for the target URL', async () => {

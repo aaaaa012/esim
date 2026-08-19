@@ -91,7 +91,7 @@ export default function AuditClient() {
     <>
       <PageHeader
         title="Activity log"
-        description="Immutable operational events ordered newest first."
+        description="A record of what happened across the system, newest first. Kept for your records."
         actions={
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <SearchInput
@@ -113,16 +113,16 @@ export default function AuditClient() {
         }
       />
       <Panel
-        title="Audit events"
-        description={`${visible.length} events`}
+        title="Activity records"
+        description={`${visible.length} records`}
         noPadding
       >
         {loading ? (
           <EmptyState loading>
-            <span className="text-sm text-muted-foreground">Loading audit events…</span>
+            <span className="text-sm text-muted-foreground">Loading activity…</span>
           </EmptyState>
         ) : visible.length === 0 ? (
-          <EmptyState title="No matching events" description="Try adjusting your search." />
+          <EmptyState title="No matching records" description="Try adjusting your search." />
         ) : (
           <Table>
             <TableHeader>
@@ -162,8 +162,10 @@ export default function AuditClient() {
                   <TableCell className="text-xs text-muted-foreground">
                     {item.performedByEmail ?? 'system'}
                   </TableCell>
-                  <TableCell className="max-w-[240px] truncate text-xs text-muted-foreground">
-                    {detailOf(item.newValue)}
+                  <TableCell className="max-w-[240px]">
+                    <code className="block truncate rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" title={detailOf(item.newValue)}>
+                      {detailOf(item.newValue)}
+                    </code>
                   </TableCell>
                 </TableRow>
               ))}

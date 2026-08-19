@@ -10,20 +10,22 @@ export default clerkMiddleware(async (auth, request) => {
     return;
   }
   const token = await session.getToken();
-  if (!token) return new NextResponse(null, { status: 404 });
+  // A signed-in session that cannot issue a token, or that is not a customer
+  // account, must never land on a bare 404. Send them to a meaningful page.
+  if (!token) return NextResponse.redirect(new URL("/", request.url));
   try {
     const response = await fetch(`${API}/auth/me`, {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store",
     });
-    if (!response.ok) return new NextResponse(null, { status: 404 });
+    if (!response.ok) return NextResponse.redirect(new URL("/", request.url));
     const envelope = (await response.json()) as {
       data: { accountType: string };
     };
     if (envelope.data.accountType !== "CUSTOMER")
-      return new NextResponse(null, { status: 404 });
+      return NextResponse.redirect(new URL("/", request.url));
   } catch {
-    return new NextResponse(null, { status: 404 });
+    return NextResponse.redirect(new URL("/", request.url));
   }
 });
 export const config = {

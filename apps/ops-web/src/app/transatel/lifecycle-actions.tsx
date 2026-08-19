@@ -32,7 +32,7 @@ export function LifecycleActions({ orderId, iccid, providerStatus, canTerminate,
       });
       const value = await response.json();
       if (!response.ok) throw new Error(value.error?.message ?? value.message ?? `Could not ${action} eSIM`);
-      toast.success(action === "suspend" ? "Suspension accepted by Transatel" : "Termination accepted by Transatel");
+      toast.success(action === "suspend" ? "Suspension sent to the network" : "Termination sent to the network");
       setAction(null);
       setReason("");
       setConfirmation("");
@@ -47,7 +47,7 @@ export function LifecycleActions({ orderId, iccid, providerStatus, canTerminate,
   return (
     <>
       <div className="flex justify-end gap-2">
-        <Button size="sm" variant="ghost" disabled={busy} onClick={()=>void reconcile()} title="Fetch the current eSIM status directly from Transatel"><RefreshCcw className="size-3.5" /> Check live</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={()=>void reconcile()} title="Get the latest eSIM status from the network provider"><RefreshCcw className="size-3.5" /> Check status</Button>
         <Button size="sm" variant="outline" disabled={pending || !suspendable} onClick={() => setAction("suspend")}><PauseCircle className="size-3.5" /> Suspend</Button>
         {canTerminate ? <Button size="sm" variant="destructive" disabled={providerStatus === "TERMINATED" || providerStatus === "TERMINATION_PENDING"} onClick={() => setAction("terminate")}><Trash2 className="size-3.5" /> Terminate</Button> : null}
       </div>
@@ -55,11 +55,11 @@ export function LifecycleActions({ orderId, iccid, providerStatus, canTerminate,
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{action === "terminate" ? "Permanently terminate eSIM" : "Suspend eSIM connectivity"}</DialogTitle>
-            <DialogDescription>{action === "terminate" ? "Termination is irreversible and immediately disables network service. Remaining plan balances may be lost." : "Suspension blocks network service but recurring billing may continue. The provider processes this asynchronously."}</DialogDescription>
+            <DialogDescription>{action === "terminate" ? "This permanently removes the eSIM from the network and cannot be undone. Any remaining data will be lost." : "Temporarily pauses the customer's mobile data. They can be reconnected later. The network processes this automatically."}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <label className="block space-y-1.5 text-sm font-medium">Reason<textarea className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm" value={reason} maxLength={500} onChange={(event) => setReason(event.target.value)} placeholder="Operational reason (required)" /></label>
-            <label className="block space-y-1.5 text-sm font-medium">Type <code>{required}</code> to confirm<Input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" /></label>
+            <label className="block space-y-1.5 text-sm font-medium">Reason<textarea className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm" value={reason} maxLength={500} onChange={(event) => setReason(event.target.value)} placeholder="Reason (required)" /></label>
+            <label className="block space-y-1.5 text-sm font-medium">{action === "terminate" ? <>Type the eSIM number to confirm</> : <>Type <code>SUSPEND</code> to confirm</>}<Input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" /></label>
           </div>
           <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={close}>Cancel</Button>

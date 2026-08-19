@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Bell, ExternalLink, RefreshCcw } from 'lucide-react';
 import { Panel } from '@/components/panel';
-import { StatusBadge } from '@/components/status-badge';
+import { StatusBadge, humane } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/empty-state';
 import { Spinner } from '@/components/spinner';
@@ -66,7 +66,7 @@ export default function NotificationsClient() {
 
   return (
     <>
-      {health && <div className={`mb-6 grid gap-3 rounded-xl border p-4 sm:grid-cols-4 ${health.operational ? 'bg-card' : 'border-destructive/30 bg-destructive/5'}`}><div><p className="text-xs text-muted-foreground">Delivery</p><StatusBadge label={health.operational ? 'OPERATIONAL' : 'ACTION REQUIRED'} /></div><div><p className="text-xs text-muted-foreground">Worker queue</p><p className="mt-1 text-sm font-medium">{health.queue}</p></div><div><p className="text-xs text-muted-foreground">Mode</p><p className="mt-1 text-sm font-medium">{health.mode}</p></div><div><p className="text-xs text-muted-foreground">Email channel</p><p className="mt-1 text-sm font-medium">{health.channels.email.replaceAll('_',' ')}</p></div>{!health.operational&&<p className="sm:col-span-4 text-sm text-destructive">Retries cannot deliver until Redis and the live email channel are configured. Failed rows are retained for a controlled retry.</p>}</div>}
+      {health && <div className={`mb-6 grid gap-3 rounded-xl border p-4 sm:grid-cols-4 ${health.operational ? 'bg-card' : 'border-destructive/30 bg-destructive/5'}`}><div><p className="text-xs text-muted-foreground">Delivery</p><StatusBadge label={health.operational ? 'OPERATIONAL' : 'ACTION REQUIRED'} /></div><div><p className="text-xs text-muted-foreground">Queue</p><p className="mt-1 text-sm font-medium">{health.queue}</p></div><div><p className="text-xs text-muted-foreground">Mode</p><p className="mt-1 text-sm font-medium">{health.mode}</p></div><div><p className="text-xs text-muted-foreground">Email sending</p><p className="mt-1 text-sm font-medium">{humane(health.channels.email)}</p></div>{!health.operational&&<p className="sm:col-span-4 text-sm text-destructive">Automatic sending needs to be configured before failed messages can be retried. Please ask a technical team member to set up email sending.</p>}</div>}
       {error && (
         <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {error}
@@ -78,15 +78,15 @@ export default function NotificationsClient() {
             <Bell className="size-4 text-primary" /> Delivery history
           </span>
         }
-        description={`${items.length} attempts`}
+        description={`${items.length} messages`}
         noPadding
       >
         {loading ? (
           <EmptyState loading>
-            <span className="text-sm text-muted-foreground">Loading delivery attempts…</span>
+            <span className="text-sm text-muted-foreground">Loading messages…</span>
           </EmptyState>
         ) : items.length === 0 ? (
-          <EmptyState title="No notifications queued" description="Nothing to show yet." />
+          <EmptyState title="No messages yet" description="Emails the system sends to customers will appear here." />
         ) : (
           <Table>
             <TableHeader>
@@ -117,8 +117,8 @@ export default function NotificationsClient() {
                       '—'
                     )}
                   </TableCell>
-                  <TableCell className="font-medium">{item.channel}</TableCell>
-                  <TableCell>{item.template.replaceAll('_', ' ')}</TableCell>
+                  <TableCell className="font-medium">{humane(item.channel)}</TableCell>
+                  <TableCell>{humane(item.template)}</TableCell>
                   <TableCell>
                     <StatusBadge label={item.status} />
                   </TableCell>
@@ -128,14 +128,16 @@ export default function NotificationsClient() {
                         variant="outline"
                         size="sm"
                         disabled={busy === item.id}
-                        onClick={() => retry(item.id)}
+                        onClick={() => {
+                          if (window.confirm("Send this message to the customer again?")) retry(item.id);
+                        }}
                       >
                         {busy === item.id ? (
                           <Spinner />
                         ) : (
                           <RefreshCcw className="size-3.5" />
                         )}
-                        Retry
+                        Send again
                       </Button>
                     )}
                   </TableCell>

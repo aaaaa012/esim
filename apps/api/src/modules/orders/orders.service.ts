@@ -1,6 +1,6 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { DocumentStatus, DocumentType, OrderStatus, PaymentProvider, PaymentStatus, type TravelerInput } from '@visa-compass/shared';
+import { DocumentStatus, DocumentType, ApiErrorCode, OrderStatus, PaymentProvider, PaymentStatus, provisioningFailure, type ProvisioningFailure, type TravelerInput } from '@visa-compass/shared';
 import { CatalogService,type CatalogPlan } from '../catalog/catalog.controller.js';
 import { assertTransition } from './order-machine.js';
 import { ConnectivityService } from '../integration/connectivity.service.js';
@@ -16,7 +16,7 @@ import { QrPdfService } from '../notification/qr-pdf.service.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 import { MetricsService } from '../../observability/metrics.service.js';
 import { normalizeMsisdn, msisdnVariants } from '../../common/msisdn.util.js';
-import { PassportVerificationService, type PassportVerificationResult } from './passport-verification.service.js';
+import type { PassportVerificationResult } from './passport-verification.service.js';
 
 type Timeline = { from: OrderStatus | null; to: OrderStatus; at: string; reason?: string };
 export type DemoOrder = {
@@ -28,9 +28,14 @@ export type DemoOrder = {
   purchaseType?: 'INITIAL_PURCHASE' | 'TOPUP';
   topUpMobile?: string;
   passportVerification?: PassportVerificationResult;
+  documentReviewPolicy?: 'AUTO_OCR' | 'MANUAL_REVIEW';
+  documentReviewStatus?: 'NOT_STARTED' | 'OCR_PENDING' | 'OCR_BACKGROUND' | 'VERIFIED' | 'MANUAL_REVIEW' | 'REUPLOAD_REQUIRED' | 'MANUALLY_APPROVED' | 'SKIPPED';
+  documentReviewStartedAt?: string;
+  documentCheckoutReleaseAt?: string;
   assignment?: { inventoryId: string; iccid: string; msisdn?: string; providerSubscriptionId?: string; verificationStatus?: string; verifiedAt?: string; providerLastSeenAt?: string };
   partner?: { id: string; code: string; name: string };
   externalOrderId?: string;
+  provisioningFailure?: ProvisioningFailure;
 };
 
 @Injectable()
@@ -39,7 +44,7 @@ export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
   private readonly confirmLocks = new Map<string, Promise<unknown>>();
   private readonly maxActivationRefetches = (() => { const parsed = Number(process.env.ACTIVATION_REFETCH_ATTEMPTS); return Number.isFinite(parsed) && parsed > 0 ? parsed : 3; })();
-  constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService, private readonly qrPdf: QrPdfService, private readonly passportVerifier: PassportVerificationService, private readonly metrics?: MetricsService) {}
+  constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService, private readonly qrPdf: QrPdfService, private readonly metrics?: MetricsService) {}
   async refreshFromPersistence(orderId?: string) { for (const order of await this.persistence.load()) if (!orderId || order.id === orderId) this.orders.set(order.id, order); }
   async refreshOne(orderId: string, force = false) { if (!force && this.orders.has(orderId)) return; for (const order of await this.persistence.load(orderId)) if (order.id === orderId) this.orders.set(order.id, order); }
   async onModuleInit() {
@@ -158,19 +163,45 @@ export class OrdersService implements OnModuleInit {
     throw new NotFoundException('Usage is available after provisioning');
   }
   async setTraveler(id: string, ownerId: string | null, traveler: TravelerInput) { const order = this.get(id, ownerId ?? undefined); if (order.status !== OrderStatus.DRAFT) throw new BadRequestException('Submitted order is immutable'); order.traveler = traveler; await this.persistence.save(order); return this.redact(order); }
-  async addDocument(id: string, ownerId: string | null, input: { type: DocumentType; fileName: string; contentType?: string }) { const order = this.get(id, ownerId ?? undefined); if (![OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER].includes(order.status)) throw new BadRequestException('Documents cannot be changed now'); const signed = this.storage.createDocumentUpload(id, input.type); const document = { id: randomUUID(), type: input.type, fileName: input.fileName, privateAssetId: signed.assetId, status: DocumentStatus.PENDING }; order.documents = order.documents.filter((d) => d.type !== input.type).concat(document); await this.persistence.save(order); return { ...document, upload: signed.upload }; }
+  async addDocument(id: string, ownerId: string | null, input: { type: DocumentType; fileName: string; contentType?: string }) { const order = this.get(id, ownerId ?? undefined); const replacement = order.documentReviewStatus === 'REUPLOAD_REQUIRED'; if (![OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER].includes(order.status) && !replacement) throw new BadRequestException('Documents cannot be changed now'); const signed = this.storage.createDocumentUpload(id, input.type); const document = { id: randomUUID(), type: input.type, fileName: input.fileName, privateAssetId: signed.assetId, status: DocumentStatus.PENDING }; order.documents = order.documents.filter((d) => d.type !== input.type).concat(document); if (replacement) order.documentReviewStatus = 'NOT_STARTED'; await this.persistence.save(order); return { ...document, upload: signed.upload }; }
   async confirmDocument(id: string, documentId: string, ownerId: string | null) { const order = this.get(id, ownerId ?? undefined); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); await this.storage.verifyDocument(document.privateAssetId); document.uploadVerified = true; if (order.status === OrderStatus.AWAITING_CUSTOMER && !order.documents.some((item) => item.status === DocumentStatus.REUPLOAD_REQUIRED)) this.transition(order, OrderStatus.REVIEW_PENDING, 'Customer supplied requested document'); await this.persistence.save(order); return { id: document.id, type: document.type, status: document.status, uploadVerified: true }; }
   async documentPreview(id: string, documentId: string) { const order = this.get(id); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); return { url: this.storage.signedReadUrl(document.privateAssetId), fileName: document.fileName, contentType: document.fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image', expiresInSeconds: 300 } }
   async documentContent(id: string, documentId: string) { const order = this.get(id); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); return { ...(await this.storage.downloadDocument(document.privateAssetId)), fileName: document.fileName }; }
   async verifyPassport(id: string, ownerId: string | null) {
     const order = this.get(id, ownerId ?? undefined);
     if (order.purchaseType === 'TOPUP') throw new BadRequestException('Passport verification is not required for top-ups');
-    const result = await this.passportVerifier.verify(order);
-    order.passportVerification = result;
-    await this.persistence.save(order);
+    const passport = order.documents.find((document) => document.type === DocumentType.PASSPORT && document.uploadVerified);
+    if (!passport || !order.traveler) throw new BadRequestException('Confirmed passport and traveller details are required');
+    const config = this.prisma.enabled
+      ? await this.prisma.platformConfiguration.upsert({ where: { id: 'platform' }, update: {}, create: { id: 'platform' } })
+      : { documentReviewPolicy: 'AUTO_OCR' as const, ocrCheckoutWaitMs: 8000 };
+    const now = new Date();
+    order.documentReviewPolicy = config.documentReviewPolicy;
+    order.documentReviewStartedAt ??= now.toISOString();
+    order.documentCheckoutReleaseAt ??= new Date(now.getTime() + config.ocrCheckoutWaitMs).toISOString();
+    if (config.documentReviewPolicy === 'MANUAL_REVIEW') {
+      order.documentReviewStatus = 'MANUAL_REVIEW';
+      order.passportVerification = { status: 'NOT_READY', matchedFields: [], checkedAt: now.toISOString(), method: 'ocr-error', detail: 'Documents will be reviewed manually without delaying fulfillment' };
+      await this.persistence.save(order);
+      return this.redact(order);
+    }
+    if (!['OCR_PENDING', 'OCR_BACKGROUND'].includes(order.documentReviewStatus ?? '')) {
+      order.documentReviewStatus = 'OCR_PENDING';
+      await this.persistence.save(order);
+      try {
+        await this.queues.add(QUEUES.documents, 'verify-order-passport', { orderId: order.id, documentId: passport.id }, `order-passport-${order.id}-${passport.id}`, { attempts: 3, backoff: { type: 'exponential', delay: 2_000 } });
+      } catch (error) {
+        order.documentReviewStatus = 'MANUAL_REVIEW';
+        order.passportVerification = { status: 'NOT_READY', matchedFields: [], checkedAt: now.toISOString(), method: 'ocr-error', detail: `OCR queue unavailable; routed to manual review (${error instanceof Error ? error.message : 'unknown error'})` };
+        await this.persistence.save(order);
+      }
+    } else if (order.documentCheckoutReleaseAt && new Date(order.documentCheckoutReleaseAt) <= now && order.documentReviewStatus === 'OCR_PENDING') {
+      order.documentReviewStatus = 'OCR_BACKGROUND';
+      await this.persistence.save(order);
+    }
     return this.redact(order);
   }
-  async beginPayment(id: string, ownerId: string | null, provider: PaymentProvider, initiation: { reference: string; correlationId?: string; expiresAt?: string; returnUrl: string; redirectUrl?: string }) { const order = this.get(id, ownerId ?? undefined); if (order.purchaseType !== 'TOPUP') { const required = order.documents.filter((d) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type)); if (!order.traveler || required.length !== 2) throw new BadRequestException('Traveler, passport, and ticket are required'); await Promise.all(required.map((document) => this.storage.verifyDocument(document.privateAssetId))); required.forEach((document) => { document.uploadVerified = true; }); const verification = order.passportVerification; if (!verification || !['VERIFIED', 'SKIPPED'].includes(verification.status)) throw new ApiException({ code: 'PASSPORT_VERIFICATION_REQUIRED', message: 'Passport verification is required before payment' }); } if (order.status !== OrderStatus.PAYMENT_PENDING) this.transition(order, OrderStatus.PAYMENT_PENDING); order.payment = { provider, reference: initiation.reference, status: PaymentStatus.PENDING, ...(initiation.correlationId ? { correlationId: initiation.correlationId } : {}), ...(initiation.expiresAt ? { expiresAt: initiation.expiresAt } : {}), returnUrl: initiation.returnUrl, ...(initiation.redirectUrl ? { redirectUrl: initiation.redirectUrl } : {}) }; await this.persistence.save(order); return this.redact(order); }
+  async beginPayment(id: string, ownerId: string | null, provider: PaymentProvider, initiation: { reference: string; correlationId?: string; expiresAt?: string; returnUrl: string; redirectUrl?: string }) { const order = this.get(id, ownerId ?? undefined); if (order.purchaseType !== 'TOPUP') { const required = order.documents.filter((d) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type)); if (!order.traveler || required.length !== 2) throw new BadRequestException('Traveler, passport, and ticket are required'); await Promise.all(required.map((document) => this.storage.verifyDocument(document.privateAssetId))); required.forEach((document) => { document.uploadVerified = true; }); const review = order.documentReviewStatus; const timedOut = Boolean(order.documentCheckoutReleaseAt && new Date(order.documentCheckoutReleaseAt) <= new Date()); if (review === 'REUPLOAD_REQUIRED') throw new ApiException({ code: 'PASSPORT_VERIFICATION_REQUIRED', message: 'Upload a clearer passport before payment' }); if (!['VERIFIED', 'MANUAL_REVIEW', 'MANUALLY_APPROVED', 'SKIPPED', 'OCR_BACKGROUND'].includes(review ?? '') && !(review === 'OCR_PENDING' && timedOut)) throw new ApiException({ code: 'PASSPORT_VERIFICATION_REQUIRED', message: 'Passport verification is still processing' }); if (review === 'OCR_PENDING' && timedOut) order.documentReviewStatus = 'OCR_BACKGROUND'; } if (order.status !== OrderStatus.PAYMENT_PENDING) this.transition(order, OrderStatus.PAYMENT_PENDING); order.payment = { provider, reference: initiation.reference, status: PaymentStatus.PENDING, ...(initiation.correlationId ? { correlationId: initiation.correlationId } : {}), ...(initiation.expiresAt ? { expiresAt: initiation.expiresAt } : {}), returnUrl: initiation.returnUrl, ...(initiation.redirectUrl ? { redirectUrl: initiation.redirectUrl } : {}) }; await this.persistence.save(order); return this.redact(order); }
   async confirmPayment(id: string, reference: string, transactionId?: string) {
     if (this.prisma.enabled) return this.confirmPaymentPersisted(id, reference, transactionId);
     return this.runExclusive(id, () => this.confirmPaymentUnlocked(id, reference, transactionId));
@@ -348,15 +379,15 @@ export class OrdersService implements OnModuleInit {
     }
     return this.priorCompletedOrderFor(mobile);
   }
-  async requestReupload(id: string, reason: string) { const order = this.get(id); this.transition(order, OrderStatus.AWAITING_CUSTOMER, reason); order.documents.forEach((d) => { d.status = DocumentStatus.REUPLOAD_REQUIRED; }); await this.persistence.save(order); return order; }
-  async reviewDocument(id: string, documentId: string, actorId: string, decision: 'APPROVE' | 'REUPLOAD', reason?: string) { const order = this.get(id); if (order.status !== OrderStatus.REVIEW_PENDING) throw new BadRequestException('Order is not awaiting review'); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); if (decision === 'APPROVE') { document.status = DocumentStatus.APPROVED; order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `${document.type} approved by ${actorId}` }); } else { if (!reason?.trim()) throw new BadRequestException('Re-upload reason is required'); document.status = DocumentStatus.REUPLOAD_REQUIRED; this.transition(order, OrderStatus.AWAITING_CUSTOMER, `${document.type}: ${reason.trim()} (requested by ${actorId})`); } await this.persistence.save(order); await this.persistence.recordReview(order.id, documentId, actorId, decision, reason); return this.redact(order); }
+  async requestReupload(id: string, reason: string) { const order = this.get(id); if (!reason.trim()) throw new BadRequestException('Re-upload reason is required'); order.documentReviewStatus = 'REUPLOAD_REQUIRED'; order.documents.forEach((d) => { d.status = DocumentStatus.REUPLOAD_REQUIRED; }); order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `Documents requested again: ${reason.trim()}` }); await this.persistence.save(order); return order; }
+  async reviewDocument(id: string, documentId: string, actorId: string, decision: 'APPROVE' | 'REUPLOAD', reason?: string) { const order = this.get(id); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); if (decision === 'APPROVE') { document.status = DocumentStatus.APPROVED; if (order.documents.filter((item) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(item.type)).every((item) => item.id === documentId || item.status === DocumentStatus.APPROVED)) order.documentReviewStatus = 'MANUALLY_APPROVED'; order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `${document.type} approved by ${actorId}` }); } else { if (!reason?.trim()) throw new BadRequestException('Re-upload reason is required'); document.status = DocumentStatus.REUPLOAD_REQUIRED; order.documentReviewStatus = 'REUPLOAD_REQUIRED'; order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `${document.type}: ${reason.trim()} (requested by ${actorId})` }); } await this.persistence.save(order); await this.persistence.recordReview(order.id, documentId, actorId, decision, reason); return this.redact(order); }
   async approve(id: string, actorId: string) { const order = this.get(id); const required = order.documents.filter((document) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type)); if (required.length !== 2 || required.some((document) => document.status !== DocumentStatus.APPROVED)) throw new BadRequestException('Passport and ticket must be individually approved first'); const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.APPROVED, `Approved by ${actorId}; inventory ${profile.iccid} reserved`); this.transition(order, OrderStatus.PROVISIONING); await this.persistence.save(order); let queued = true; try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); } catch (error) { this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`); if (process.env.NODE_ENV === 'production') throw error; queued = false; } if ((!queued || !this.queues.enabled) && process.env.NODE_ENV !== 'production') await this.processLocally(order.id); return this.redact(order); }
   async approveToProvisioning(orderId: string, note: string) { const order = this.get(orderId); if (order.status !== OrderStatus.APPROVED) throw new BadRequestException(`Order in ${order.status} cannot be auto-approved`); if (order.purchaseType === 'TOPUP') { const target = await this.provisioningTarget(order); this.transition(order, OrderStatus.PROVISIONING, target?.inventory ? `${note}; top-up on existing eSIM ${target.inventory.iccid}` : note); } else { const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.PROVISIONING, `${note}; inventory ${profile.iccid} reserved`); } await this.persistence.save(order); let queued = true; try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); } catch (error) { this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`); if (process.env.NODE_ENV === 'production') throw error; queued = false; } if ((!queued || !this.queues.enabled) && process.env.NODE_ENV !== 'production') await this.processLocally(order.id); return this.redact(order); }
-  async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); if (order.status !== OrderStatus.PROVISIONING || order.qrPayload) { this.logger.debug(`Order ${id} is not eligible for provisioning; skipping`); return; } const target = await this.provisioningTarget(order); const reuseExisting = Boolean(target); const profile = target?.inventory ?? await this.inventory.profileForOrder(order.id); const identity = order.purchaseType === 'TOPUP' ? target?.traveler ?? { email: (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail ?? '', mobile: order.topUpMobile ?? '', firstName: 'Existing', surname: 'Customer', city: '', countryOfResidence: 'NP' } : { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence }; const request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: identity }; try { const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.providerSubscriptionId) throw new Error('Connectivity provider did not return a subscription id'); order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'PRELOADED'; if (result.status === 'DELAYED' || !result.qrPayload) { await this.persistence.save(order); this.logger.log(`Transatel accepted order ${order.id} as ${result.providerSubscriptionId}; waiting for activation details`); return this.redact(order); } order.qrPayload = result.qrPayload; order.qrDeliveredAt = new Date().toISOString(); const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString(); const providerInfo = { provider: this.connectivity.descriptor().provider, providerSubscriptionId: result.providerSubscriptionId, expiresAt }; if (reuseExisting) await this.inventory.assignTopup(order.id, await this.inventory.customerIdForOrder(order.id), profile.iccid, result.qrPayload, providerInfo); else await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, providerInfo); const assigned = await this.inventory.inventoryForOrder(order.id); if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), providerSubscriptionId: result.providerSubscriptionId, verificationStatus: 'PENDING' }; this.transition(order, OrderStatus.QR_READY, `Provisioned on attempt ${attempt}; activation QR delivered`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
+  async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); if (order.status !== OrderStatus.PROVISIONING || order.qrPayload) { this.logger.debug(`Order ${id} is not eligible for provisioning; skipping`); return; } const target = await this.provisioningTarget(order); const reuseExisting = Boolean(target); let profile: { id: string; eid: string; iccid: string } | undefined; let request: { orderId: string; planId: string; eid: string; traveler: { firstName: string; surname: string; email: string; mobile: string; city: string; countryOfResidence: string } } | undefined; try { profile = target?.inventory ?? await this.inventory.profileForOrder(order.id); const identity = order.purchaseType === 'TOPUP' ? target?.traveler ?? { email: (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail ?? '', mobile: order.topUpMobile ?? '', firstName: 'Existing', surname: 'Customer', city: '', countryOfResidence: 'NP' } : { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence }; request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: identity }; const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.providerSubscriptionId) throw new Error('Connectivity provider did not return a subscription id'); order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'PRELOADED'; if (result.status === 'DELAYED' || !result.qrPayload) { await this.persistence.save(order); this.logger.log(`Transatel accepted order ${order.id} as ${result.providerSubscriptionId}; waiting for activation details`); return this.redact(order); } order.qrPayload = result.qrPayload; order.qrDeliveredAt = new Date().toISOString(); const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString(); const providerInfo = { provider: this.connectivity.descriptor().provider, providerSubscriptionId: result.providerSubscriptionId, expiresAt }; if (reuseExisting) await this.inventory.assignTopup(order.id, await this.inventory.customerIdForOrder(order.id), profile.iccid, result.qrPayload, providerInfo); else await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, providerInfo); const assigned = await this.inventory.inventoryForOrder(order.id); if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), providerSubscriptionId: result.providerSubscriptionId, verificationStatus: 'PENDING' }; this.transition(order, OrderStatus.QR_READY, `Provisioned on attempt ${attempt}; activation QR delivered`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
     const errorCode = error instanceof ApiException
       ? `${error.code} (HTTP ${error.getStatus()})${error.internalDetail !== undefined ? `: ${typeof error.internalDetail === 'string' ? error.internalDetail : JSON.stringify(error.internalDetail)}` : ''}`.slice(0, 2000)
       : (error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 2000) : 'UNKNOWN');
-    await this.persistence.provisioningAttempt(order.id, attempt, request, { errorCode });
+    if (request) await this.persistence.provisioningAttempt(order.id, attempt, request, { errorCode });
     const ambiguousOutcome = error instanceof ApiException && String(error.internalDetail ?? '').includes('refusing to submit a duplicate command');
     if (ambiguousOutcome) {
       this.logger.warn(`Order ${order.id} has an ambiguous Transatel submission; leaving it in PROVISIONING for reconciliation`);
@@ -366,6 +397,7 @@ export class OrdersService implements OnModuleInit {
     if (finalAttempt || permanentRejection) {
       this.metrics?.recordFailure('provisioning', 'exhausted');
       if (permanentRejection) order.providerStatus = 'REJECTED';
+      order.provisioningFailure = this.classifyProvisioningFailure(error);
       this.transition(order, OrderStatus.PROVISIONING_FAILED, permanentRejection ? 'Transatel permanently rejected the provisioning request' : 'Provisioning retries exhausted');
       // release() itself refuses profiles with a provider subscription, so it
       // is safe for every terminal failure, not only explicit rejections.
@@ -411,6 +443,7 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id);
     if (order.status !== OrderStatus.PROVISIONING) return;
     this.transition(order, OrderStatus.PROVISIONING_FAILED, reason);
+    order.provisioningFailure = this.classifyProvisioningFailure(new ApiException({ code: ApiErrorCode.PROVISIONING_FAILED, message: reason, status: 502, details: reason }));
     await this.persistence.save(order);
     await this.alertProvisioningFailure(order);
   }
@@ -649,6 +682,21 @@ export class OrdersService implements OnModuleInit {
   private async processLocally(orderId:string){let failure:unknown;for(let attempt=1;attempt<=3;attempt++){try{return await this.processProvisioning(orderId,attempt,attempt===3)}catch(error){failure=error}}throw failure}
   private transition(order: DemoOrder, to: OrderStatus, reason?: string) { assertTransition(order.status, to); const from = order.status; order.status = to; order.timeline.push({ from, to, at: new Date().toISOString(), ...(reason ? { reason } : {}) }); }
   private notifyEmailFor(order: DemoOrder) { return order.traveler?.email ?? (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail; }
+  private classifyProvisioningFailure(error: unknown) {
+    if (error instanceof ConflictException && /inventory|available/i.test(error.message)) return provisioningFailure('INVENTORY_UNAVAILABLE');
+    if (error instanceof ApiException) {
+      switch (error.code) {
+        case ApiErrorCode.INVENTORY_UNAVAILABLE: return provisioningFailure('INVENTORY_UNAVAILABLE');
+        case ApiErrorCode.PLAN_NOT_AVAILABLE:
+        case ApiErrorCode.PLAN_UNAVAILABLE:
+        case ApiErrorCode.PRODUCT_UNAVAILABLE: return provisioningFailure('PLAN_UNAVAILABLE');
+        case ApiErrorCode.CONNECTIVITY_UNAVAILABLE:
+        case ApiErrorCode.PROVISIONING_FAILED: return provisioningFailure('PROVIDER_UNAVAILABLE');
+        default: return provisioningFailure('UNKNOWN');
+      }
+    }
+    return provisioningFailure('UNKNOWN');
+  }
   private async safeNotify(order:DemoOrder,template:'QR_READY'|'DOCUMENT_REUPLOAD',reason?:string){const recipient=this.notifyEmailFor(order);if(!recipient)return;try{await this.notifications.enqueue({orderId:order.id,channel:'EMAIL',template,recipient,orderNumber:order.orderNumber,...(reason?{reason}:{})})}catch(error){this.logger.error(`Notification enqueue failed for order ${order.id}: ${error instanceof Error?error.message:'unknown'}`)}}
   /**
    * Alerts operators (OPS_ALERT_EMAIL) when a provisioning run fails after its
