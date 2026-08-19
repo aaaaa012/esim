@@ -4,7 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal, AlertTriangle } from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal, AlertTriangle, Clock3 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import DatePicker from "./date-picker";
 import {
@@ -118,7 +118,6 @@ export default function CheckoutClient({
     }
   };
   const [guestToken, setGuestToken] = useState(readToken);
-  const [documentNotice, setDocumentNotice] = useState("");
   const guestTokenRef = useRef(guestToken);
   guestTokenRef.current = guestToken;
   const currentToken = () => guestTokenRef.current || readToken();
@@ -364,9 +363,6 @@ export default function CheckoutClient({
       }
       if (updated.documentReviewStatus === "OCR_PENDING")
         updated = await api<Order>(`/customer/orders/${order.id}/verify-passport`, { method: "POST", body: "{}" });
-      if (["OCR_BACKGROUND", "MANUAL_REVIEW"].includes(updated.documentReviewStatus ?? ""))
-        setDocumentNotice(updated.documentReviewStatus === "OCR_BACKGROUND" ? "Your payment can continue while document verification finishes securely in the background." : "Your payment can continue. Our operations team will review your documents separately, without delaying eSIM activation.");
-      else setDocumentNotice("");
       setOrder(updated);
       return updated;
     } catch (e) {
@@ -624,7 +620,7 @@ export default function CheckoutClient({
           <h1>{isTopUp ? "Top up your eSIM" : "Your travel eSIM"}</h1>
           <p>
             {isTopUp
-              ? "Recharge your existing eSIM. No verification needed — pay and activate in seconds."
+              ? "Recharge your existing eSIM. No verification needed. Pay and activate in seconds."
               : "Complete verification once. We’ll keep your order safe while our team reviews it."}
           </p>
         </div>
@@ -653,7 +649,6 @@ export default function CheckoutClient({
               )}
             </div>
             {error && <div className="form-error">{error}</div>}
-            {documentNotice && <div className="mx-6 mt-5 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900" role="status">{documentNotice}</div>}
             {step === 1 && (
               <div className="form-section">
                 <span className="form-icon">
@@ -917,7 +912,7 @@ export default function CheckoutClient({
                   ) ? (
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
-                    <b>Payment verified — activating your eSIM</b>
+                    <b>Payment verified. Activating your eSIM</b>
                     <span>{order.orderNumber}</span>
                     <p>
                       Your eSIM is being activated automatically. Your QR will be
@@ -932,11 +927,11 @@ export default function CheckoutClient({
                 ) : verifying ? (
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
-                    <b>Confirming your payment</b>
+                    <b>Checking payment status</b>
                     <span>{order?.orderNumber}</span>
                     <p>
-                      Your wallet confirmed the payment. We are verifying it
-                      securely — this takes a few seconds.
+                      We are checking with Khalti. Your order will only be marked
+                      as paid after the gateway confirms the transaction.
                     </p>
                   </div>
                 ) : (
@@ -944,6 +939,8 @@ export default function CheckoutClient({
                     {order && !isTopUp && (
                       <PassportCheck
                         result={order.passportVerification}
+                        reviewStatus={order.documentReviewStatus}
+                        {...(order.payment?.status ? { paymentStatus: order.payment.status } : {})}
                         busy={verifyingPassport}
                         onRecheck={() => void verifyPassport()}
                         onEdit={() => setStep(2)}
@@ -973,7 +970,7 @@ export default function CheckoutClient({
                         <div className="simulator-box">
                           <span>Local signed simulator</span>
                           <small>
-                            Reference: {payment.reference.slice(0, 14)}…
+                            Reference: {payment.reference.slice(0, 14)}...
                           </small>
                           <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>
                             Simulate verified payment
@@ -981,7 +978,7 @@ export default function CheckoutClient({
                         </div>
                       ) : (
                         <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>
-                          Confirm my payment
+                          Check payment status
                         </Action>
                       )
                     ) : isTopUp && !order ? (
@@ -1013,7 +1010,7 @@ export default function CheckoutClient({
             </div>
             <div>
               <small>Destination</small>
-              <b>{summaryPlan?.countryCode ?? "—"}</b>
+              <b>{summaryPlan?.countryCode ?? "Not selected"}</b>
             </div>
             <div>
               <small>Data & validity</small>
@@ -1090,16 +1087,70 @@ const FIELD_LABELS: Record<string, string> = {
 
 function PassportCheck({
   result,
+  reviewStatus,
+  paymentStatus,
   busy,
   onRecheck,
   onEdit,
 }: {
   result: Order["passportVerification"];
+  reviewStatus?: Order["documentReviewStatus"];
+  paymentStatus?: string;
   busy: boolean;
   onRecheck: () => void;
   onEdit?: () => void;
 }) {
   const status = result?.status;
+  const paymentLabel = paymentStatus === "PENDING"
+    ? "Payment awaiting confirmation"
+    : paymentStatus === "FAILED"
+      ? "No confirmed payment"
+      : "Payment not started";
+  if (reviewStatus === "OCR_BACKGROUND") {
+    return (
+      <div className="passport-check background" role="status">
+        <Clock3 size={20} />
+        <span>
+          <b>Document check continuing in the background</b>
+          <small>
+            You can continue to Khalti now. Verification is separate from payment,
+            and we will contact you only if a clearer document is needed.
+          </small>
+        </span>
+        <span className="passport-check-tag">{paymentLabel}</span>
+      </div>
+    );
+  }
+  if (reviewStatus === "MANUAL_REVIEW") {
+    return (
+      <div className="passport-check manual" role="status">
+        <ShieldCheck size={20} />
+        <span>
+          <b>Documents saved for review</b>
+          <small>
+            You can continue to payment. Our team will review the documents
+            separately, without delaying eSIM activation after payment.
+          </small>
+        </span>
+        <span className="passport-check-tag">{paymentLabel}</span>
+      </div>
+    );
+  }
+  if (reviewStatus === "REUPLOAD_REQUIRED") {
+    return (
+      <div className="passport-check failed">
+        <AlertTriangle size={20} />
+        <span>
+          <b>A clearer passport image is needed</b>
+          <small>
+            We could not match the uploaded passport reliably. Replace it with a
+            sharp image of the information page before continuing.
+          </small>
+        </span>
+        {onEdit && <button className="button secondary" onClick={onEdit}>Replace document</button>}
+      </div>
+    );
+  }
   if (status === "VERIFIED") {
     return (
       <div className="passport-check verified">
@@ -1132,7 +1183,7 @@ function PassportCheck({
         <span>
           <b>Verifying your passport</b>
           <small>
-            Reading the document and comparing it with your traveller details…
+            Reading the document and comparing it with your traveller details.
           </small>
         </span>
       </div>
