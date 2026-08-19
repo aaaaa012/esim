@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Download } from 'lucide-react';
 import { Panel } from '@/components/panel';
-import { StatusBadge } from '@/components/status-badge';
+import { StatusBadge, humane } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/empty-state';
@@ -136,7 +136,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
       {!queueOnly && (
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <SearchInput
-            placeholder="Order, external ID, traveller or partner…"
+            placeholder="Order, reference, traveller or partner…"
             value={query}
             onChange={setQuery}
             className="w-full sm:w-80"
@@ -155,7 +155,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
           </Select>
           <Select value={status} onValueChange={(value) => { setStatus(value); setPage(1); }}>
             <SelectTrigger className="w-full sm:w-44"><SelectValue placeholder="Status" /></SelectTrigger>
-            <SelectContent><SelectItem value="ALL">All statuses</SelectItem>{ORDER_STATUSES.map((value) => <SelectItem key={value} value={value}>{value.replaceAll('_', ' ')}</SelectItem>)}</SelectContent>
+            <SelectContent><SelectItem value="ALL">All statuses</SelectItem>{ORDER_STATUSES.map((value) => <SelectItem key={value} value={value}>{humane(value)}</SelectItem>)}</SelectContent>
           </Select>
           <Input aria-label="From date" type="date" value={from} onChange={(event) => { setFrom(event.target.value); setPage(1); }} className="w-full sm:w-40" />
           <Input aria-label="To date" type="date" value={to} onChange={(event) => { setTo(event.target.value); setPage(1); }} className="w-full sm:w-40" />
@@ -204,8 +204,8 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
                     </p>
                   </TableCell>
                   <TableCell className="sticky right-24 bg-card">
-                    <span className="inline-block rounded bg-muted px-1.5 py-0.5 text-[11px] uppercase tracking-wide">
-                      {(order.channel ?? (order.partner ? (order.externalOrderId?.startsWith('vc-portal-') ? 'PARTNER_HOSTED' : 'PARTNER_API') : 'CUSTOMER_WEB')).replaceAll('_', ' ')}
+                    <span className="inline-block rounded bg-muted px-1.5 py-0.5 text-[11px] tracking-wide">
+                      {humane(order.channel ?? (order.partner ? (order.externalOrderId?.startsWith('vc-portal-') ? 'PARTNER_HOSTED' : 'PARTNER_API') : 'CUSTOMER_WEB'))}
                     </span>
                   </TableCell>
                   <TableCell>
@@ -217,7 +217,7 @@ export default function OrdersClient({ queueOnly = false }: { queueOnly?: boolea
                     {order.plan.countryCode} · {order.plan.name}
                     {order.purchaseType === 'TOPUP' && (
                       <Badge variant="info" className="ml-2">
-                        TOP-UP
+                        {humane('TOP-UP')}
                       </Badge>
                     )}
                   </TableCell>

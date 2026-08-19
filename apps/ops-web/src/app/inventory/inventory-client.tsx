@@ -20,7 +20,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Panel } from "@/components/panel";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -424,7 +424,7 @@ export default function InventoryClient() {
     <>
       <PageHeader
         title="eSIM Inventory"
-        description="Upload eSIM profiles and packages, review pending batches, and track stock levels."
+        description="Upload eSIM profiles and packages, review pending approvals, and track stock."
         badge={
           <Badge
             variant={data.lowStock ? "warning" : "success"}
@@ -489,10 +489,10 @@ export default function InventoryClient() {
         </TabsList>
 
         <TabsContent value="live-stock" className="mt-6">
-          <Panel title="Transatel inventory reconciliation" description="Live provider status for the latest 100 inventory profiles. Unassigned profiles with unexpected provider state are quarantined automatically." noPadding>
-            {!reconciliationProfiles.length ? <EmptyState title="No inventory profiles" /> : (
+          <Panel title="Stock check against the network provider" description="Compares the latest 100 profiles with the network provider. Profiles that don't match are flagged automatically." noPadding>
+            {!reconciliationProfiles.length ? <EmptyState title="No inventory profiles" description="Uploaded profiles will appear here." /> : (
               <Table>
-                <TableHeader><TableRow><TableHead>ICCID</TableHead><TableHead>Local</TableHead><TableHead>Transatel</TableHead><TableHead>Last checked</TableHead><TableHead>Error</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>eSIM</TableHead><TableHead>Our system</TableHead><TableHead>Network provider</TableHead><TableHead>Last checked</TableHead><TableHead>Issue</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
                 <TableBody>{reconciliationProfiles.map((profile) => (
                   <TableRow key={profile.id}>
                     <TableCell><code className="text-xs">{profile.iccid}</code><p className="text-xs text-muted-foreground">{profile.batchReference ?? "—"}</p></TableCell>
@@ -500,7 +500,7 @@ export default function InventoryClient() {
                     <TableCell><StatusBadge label={profile.providerStatus ?? "NOT CHECKED"} /></TableCell>
                     <TableCell className="text-xs text-muted-foreground">{profile.lastProviderCheckedAt ? new Date(profile.lastProviderCheckedAt).toLocaleString() : "Never"}</TableCell>
                     <TableCell className="max-w-64 truncate text-xs text-destructive">{profile.providerCheckError ?? "—"}</TableCell>
-                    <TableCell className="text-right"><Button size="sm" variant="outline" disabled={reconciling === profile.id} onClick={() => void reconcileProfile(profile)}>{reconciling === profile.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Check live</Button></TableCell>
+                    <TableCell className="text-right"><Button size="sm" variant="outline" disabled={reconciling === profile.id} onClick={() => void reconcileProfile(profile)}>{reconciling === profile.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Check with network</Button></TableCell>
                   </TableRow>
                 ))}</TableBody>
               </Table>
@@ -535,13 +535,13 @@ export default function InventoryClient() {
                     type="text"
                     value={profileSource}
                     onChange={(e) => setProfileSource(e.target.value)}
-                    placeholder="e.g. Transatel batch 42, warehouse A"
+                    placeholder="e.g. warehouse A, supplier B"
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
                   />
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
-                    Files are validated server-side before staging.
+                    Uploads are checked automatically before being added.
                   </p>
                   <Button onClick={() => void submitProfiles()} disabled={profileBusy || !profileFile}>
                     {profileBusy ? <Spinner className="text-primary-foreground" /> : <FileUp className="size-4" />}
@@ -624,7 +624,9 @@ export default function InventoryClient() {
                               size="sm"
                               variant="success"
                               disabled={decision === batch.id}
-                              onClick={() => void decide(batch, true)}
+                              onClick={() => {
+                                if (window.confirm(`Approve this batch of ${batch.importedCount} profile(s)? They will become available for sale.`)) void decide(batch, true);
+                              }}
                             >
                               {decision === batch.id ? (
                                 <Spinner className="text-success-foreground" />
@@ -638,7 +640,9 @@ export default function InventoryClient() {
                               variant="outline"
                               className="text-destructive hover:bg-destructive/10"
                               disabled={decision === batch.id}
-                              onClick={() => void decide(batch, false)}
+                              onClick={() => {
+                                if (window.confirm("Reject this batch? It will not be made available for sale.")) void decide(batch, false);
+                              }}
                             >
                               <XCircle className="size-4" />
                               Reject
@@ -693,7 +697,7 @@ export default function InventoryClient() {
                       <TableCell>
                         {plan.dataAllowance} / {plan.validityDays} days
                       </TableCell>
-                      <TableCell>Rs {plan.sellingPriceNpr}</TableCell>
+                      <TableCell>NPR {plan.sellingPriceNpr}</TableCell>
                       <TableCell className="text-right">
                         {isSuperAdmin ? (
                           <div className="flex justify-end gap-2">
@@ -701,7 +705,9 @@ export default function InventoryClient() {
                               size="sm"
                               variant="success"
                               disabled={planDecision === plan.id}
-                              onClick={() => void decidePlan(plan, true)}
+                              onClick={() => {
+                                if (window.confirm(`Publish "${plan.name}"? It will become available for sale.`)) void decidePlan(plan, true);
+                              }}
                             >
                               {planDecision === plan.id ? (
                                 <Spinner className="text-success-foreground" />
@@ -715,7 +721,9 @@ export default function InventoryClient() {
                               variant="outline"
                               className="text-destructive hover:bg-destructive/10"
                               disabled={planDecision === plan.id}
-                              onClick={() => void decidePlan(plan, false)}
+                              onClick={() => {
+                                if (window.confirm(`Reject "${plan.name}"? It will not be published.`)) void decidePlan(plan, false);
+                              }}
                             >
                               <XCircle className="size-4" />
                               Reject
@@ -786,7 +794,7 @@ export default function InventoryClient() {
               <div>
                 <h3 className="font-semibold">eSIM profiles</h3>
                 <p className="text-sm text-muted-foreground">
-                  {profilesTotal.toLocaleString()} pins · filter by status to see assignment / availability
+                  {profilesTotal.toLocaleString()} profiles · filter by status to see assignment and availability
                 </p>
               </div>
               <div className="w-full sm:w-56">
@@ -796,7 +804,7 @@ export default function InventoryClient() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ALL">All statuses</SelectItem>
-                    {PROFILE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    {PROFILE_STATUSES.map((s) => <SelectItem key={s} value={s}>{humane(s)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -816,12 +824,12 @@ export default function InventoryClient() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>ICCID / Assignment</TableHead>
+                      <TableHead>eSIM</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>eID</TableHead>
+                      <TableHead>Device eID</TableHead>
                       <TableHead>Orders</TableHead>
                       <TableHead>Batch</TableHead>
-                      <TableHead className="text-right">SM-DP</TableHead>
+                      <TableHead className="text-right">Provider</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -841,9 +849,9 @@ export default function InventoryClient() {
                         </TableCell>
                         <TableCell>
                           {p.status === "ACTIVATED" ? (
-                            <Badge className="bg-emerald-500/15 text-emerald-600"><CheckCircle2 className="size-3" /> ACTIVE</Badge>
+                            <Badge className="bg-emerald-500/15 text-emerald-600"><CheckCircle2 className="size-3" /> {humane('ACTIVATED')}</Badge>
                           ) : p.status === "AVAILABLE" ? (
-                            <Badge className="bg-sky-500/15 text-sky-600">{p.status}</Badge>
+                            <Badge className="bg-sky-500/15 text-sky-600">{humane(p.status)}</Badge>
                           ) : (
                             <StatusBadge label={p.status} />
                           )}

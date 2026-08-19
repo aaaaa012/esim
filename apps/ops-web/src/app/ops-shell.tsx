@@ -32,7 +32,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> Securing operator session…
+          <Spinner /> Loading operations…
         </div>
       </div>
     );
@@ -60,8 +60,8 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
                 Customer Portal <ExternalLink className="size-3.5" />
               </a>
             ) : (
-              <span className="hidden rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 md:inline-flex" title="Set NEXT_PUBLIC_CUSTOMER_WEB_URL during the ops-web build">
-                Customer portal URL missing
+              <span className="hidden rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 md:inline-flex" title="The customer portal link is not configured yet. Ask a technical team member to set it up.">
+                Customer portal not linked
               </span>
             )}
             <Button

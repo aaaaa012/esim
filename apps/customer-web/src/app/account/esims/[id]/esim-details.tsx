@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   ChevronLeft,
   Clock3,
@@ -46,6 +47,7 @@ type Order = {
   payment?: { provider: string; status: string; reference?: string };
   timeline: { from: string | null; to: string; at: string; reason?: string }[];
   usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
+  provisioningFailure?: { code: string; message: string };
 };
 
 export default function EsimDetails({ id }: { id: string }) {const authFetch=useAuthenticatedFetch();
@@ -440,6 +442,28 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                     reconciled.
                   </p>
                 )}
+              </>
+            ) : order.status === "PROVISIONING_FAILED" ? (
+              <>
+                <p>
+                  {order.provisioningFailure?.message ?? "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}
+                </p>
+                <div className="processing">
+                  <AlertTriangle size={18} />
+                  Activation unsuccessful
+                </div>
+                <div className="qr-recovery">
+                  <b>Need help?</b>
+                  <small>
+                    Our team reviews failed activations. You can also choose
+                    another plan without being charged.
+                  </small>
+                  <div className="qr-recovery-buttons">
+                    <Link className="button" href="/#plans">
+                      Choose another plan
+                    </Link>
+                  </div>
+                </div>
               </>
             ) : (
               <>

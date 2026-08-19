@@ -15,7 +15,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Panel } from "@/components/panel";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import {
@@ -78,7 +78,7 @@ export default function DashboardClient() {
       value: data.counts.reviewPending,
       icon: <ClipboardCheck className="size-4" />,
       tone: "info" as const,
-      hint: "Orders awaiting an operations decision",
+      hint: "Orders waiting for your review",
       href: "/work-queue?status=REVIEW_PENDING",
     },
     {
@@ -94,7 +94,7 @@ export default function DashboardClient() {
       value: data.counts.provisioningFailed,
       icon: <ServerCrash className="size-4" />,
       tone: "danger" as const,
-      hint: "Require attention",
+      hint: "Set-up failed — needs your attention",
       href: "/work-queue?status=PROVISIONING_FAILED",
     },
     {
@@ -102,7 +102,7 @@ export default function DashboardClient() {
       value: data.counts.qrReady,
       icon: <QrCode className="size-4" />,
       tone: "info" as const,
-      hint: "Provisioned, waiting for the device to activate",
+      hint: "QR sent; waiting for the customer to install it",
       href: "/orders?status=QR_READY",
     },
     {
@@ -110,7 +110,7 @@ export default function DashboardClient() {
       value: data.counts.activatedToday,
       icon: <CheckCircle2 className="size-4" />,
       tone: "success" as const,
-      hint: "eSIMs truly activated since midnight",
+      hint: "eSIMs activated since midnight",
       href: "/orders?status=COMPLETED",
     },
     {
@@ -119,13 +119,13 @@ export default function DashboardClient() {
       icon: <Clock3 className="size-4" />,
       tone: "warning" as const,
       hint: "Completed plans past their validity window",
-      href: "/orders?type=expired",
+      href: "/orders",
     },
   ];
 
   const customerLabel = (order: Order) => {
     if (order.traveler) return `${order.traveler.firstName} ${order.traveler.surname}`;
-    return order.ownerId.includes('-') ? `Guest · ${order.ownerId.slice(0, 8)}` : order.ownerId;
+    return "Guest customer";
   };
 
   return (
@@ -184,12 +184,12 @@ export default function DashboardClient() {
                   <div className="leading-tight">
                     <p className="text-sm font-medium">{item.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {item.status.replaceAll("_", " ")}
+                      {humane(item.status)}
                     </p>
                   </div>
                 </div>
                 <StatusBadge
-                  label={item.status}
+                  label={humane(item.status)}
                   tone={item.status === "UP" ? "success" : "warning"}
                 />
               </li>

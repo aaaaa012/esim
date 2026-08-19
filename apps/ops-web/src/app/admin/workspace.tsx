@@ -325,13 +325,11 @@ export default function AdminWorkspace() {
   const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
     setBusy(`transatel:${action}`);
     try {
-      const result = await request<Record<string, unknown>>(
+      await request(
         `/admin/integrations/transatel/${action}`,
         { method: "POST" },
       );
-      toast.success(
-        JSON.stringify(result, null, 2).slice(0, 400) || `${action.replace("-", " ")} complete`,
-      );
+      toast.success(action === "sync-catalog" ? "Plans synced with the network provider" : "Automatic notifications set up");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
     } finally {
@@ -408,6 +406,14 @@ export default function AdminWorkspace() {
     }
   };
   const changePartnerStatus = async (partner: Partner, status: Partner["status"]) => {
+    if (["SUSPENDED", "DISABLED"].includes(status)) {
+      const ok = window.confirm(
+        status === "SUSPENDED"
+          ? `Suspend ${partner.name}? They can still view details but cannot make changes.`
+          : `Disable ${partner.name}? They will no longer be able to connect.`,
+      );
+      if (!ok) return;
+    }
     setBusy(partner.id);
     try {
       await request(`/admin/partners/${partner.id}`, {
@@ -465,11 +471,13 @@ export default function AdminWorkspace() {
     }
   };
   const revokePartnerKey = async (partner: Partner, credentialId: string) => {
+    const ok = window.confirm(`Revoke this access key for ${partner.name}? This cannot be undone and the partner will lose access immediately.`);
+    if (!ok) return;
     setBusy(`revoke-${credentialId}`);
     try {
       await request(`/admin/partners/${partner.id}/credentials/${credentialId}`, { method: "DELETE" });
       await load();
-      toast.success(`Credential revoked for ${partner.name}.`);
+      toast.success(`Access key revoked for ${partner.name}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Credential revocation failed");
     } finally {
@@ -568,13 +576,15 @@ export default function AdminWorkspace() {
       toast.error("Enter an amount first");
       return;
     }
+    const amountNpr = Number(adjustAmountNpr);
+    if (!Number.isFinite(amountNpr) || amountNpr <= 0) {
+      toast.error("Enter a positive amount");
+      return;
+    }
+    const action = adjustType === "credit" ? "add" : "deduct";
+    if (!window.confirm(`${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} to/from ${adjustFor.name}'s balance? This changes their available credit.`)) return;
     setAdjustBusy(true);
     try {
-      const amountNpr = Number(adjustAmountNpr);
-      if (!Number.isFinite(amountNpr) || amountNpr <= 0) {
-        toast.error("Enter a positive amount");
-        return;
-      }
       const amountPaisa =
         (adjustType === "credit" ? 1 : -1) * Math.round(amountNpr * 100);
       await request(`/admin/partners/${adjustFor.id}/ledger-adjustments`, {
@@ -599,7 +609,7 @@ export default function AdminWorkspace() {
   };
   const checkEligibility = async () => {
     if (!eligibilityPlanId || !eligibilityMsisdn) {
-      toast.error("Choose a plan and enter an MSISDN first");
+      toast.error("Choose a plan and enter a mobile number first");
       return;
     }
     setBusy("transatel:eligibility");
@@ -753,10 +763,10 @@ export default function AdminWorkspace() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="ACTIVE">ACTIVE</SelectItem>
-                            <SelectItem value="DISABLED">DISABLED</SelectItem>
-                            <SelectItem value="DRAFT">DRAFT</SelectItem>
-                            <SelectItem value="ARCHIVED">ARCHIVED</SelectItem>
+                            <SelectItem value="ACTIVE">Active</SelectItem>
+                            <SelectItem value="DISABLED">Disabled</SelectItem>
+                            <SelectItem value="DRAFT">Draft</SelectItem>
+                            <SelectItem value="ARCHIVED">Archived</SelectItem>
                           </SelectContent>
                         </Select>
                       </TableCell>
@@ -838,9 +848,9 @@ export default function AdminWorkspace() {
                   <Separator className="my-4" />
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">
-                      {item.enabled ? "Enabled" : "Environment setup required"}
+                      {item.enabled ? "Configured and enabled" : "Needs configuration"}
                     </span>
-                    <code className="rounded bg-muted px-2 py-0.5 text-xs">{item.secretValue}</code>
+                    <span className="text-xs text-muted-foreground">Credentials are kept secure and never shown here.</span>
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
                     Last checked: {new Date(item.checkedAt).toLocaleString()}
@@ -890,7 +900,7 @@ export default function AdminWorkspace() {
                       <div>
                         <p className="text-sm font-medium">Eligibility check</p>
                         <p className="text-xs text-muted-foreground">
-                          Confirm a plan works for a subscriber MSISDN before approval.
+                          Confirm a plan works for a subscriber's mobile number before approval.
                         </p>
                       </div>
                       <div className="flex flex-col gap-2 sm:flex-row">
@@ -907,7 +917,7 @@ export default function AdminWorkspace() {
                           </SelectContent>
                         </Select>
                         <Input
-                          placeholder="MSISDN, e.g. 97798…"
+                          placeholder="Mobile number, e.g. 97798…"
                           value={eligibilityMsisdn}
                           onChange={(event) => setEligibilityMsisdn(event.target.value)}
                           className="w-full sm:w-auto sm:flex-1"
@@ -1348,7 +1358,7 @@ export default function AdminWorkspace() {
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">
-                          Earlier subscriber MSISDN (optional)
+                          Earlier mobile number (optional)
                         </Label>
                         <Input
                           value={hostedLinkMobile}
@@ -1629,7 +1639,7 @@ function ConfigPanel({
       {tab === "System Config" && (
         <div className="space-y-4 p-6">
           <div className="rounded-lg border p-4">
-            <p className="font-medium">Look up a subscriber by MSISDN</p>
+            <p className="font-medium">Look up a subscriber by mobile number</p>
             <p className="text-xs text-muted-foreground">
               Detect an existing eSIM so future purchases are routed as top-ups.
             </p>
@@ -1679,7 +1689,7 @@ function ConfigPanel({
                 </p>
               ) : (
                 <p className="mt-3 text-sm text-warning-foreground">
-                  No active eSIM found for that MSISDN.
+                  No active eSIM found for that mobile number.
                 </p>
               ))}
           </div>
@@ -1693,13 +1703,14 @@ function ConfigPanel({
               className="mt-3"
               disabled={Boolean(busy)}
               onClick={() => {
+                if (!window.confirm("Expire all abandoned payments? Customers with a pending-but-unfinished payment will be able to start again.")) return;
                 setBusy("sweep");
                 setError("");
                 request<{ expired: number }>("/operations/payments/expire-stale", {
                   method: "POST",
                   headers: { "x-idempotency-key": crypto.randomUUID() },
                 })
-                  .then((r) => setSweepResult(`${r.expired} stale payment(s) expired`))
+                  .then((r) => setSweepResult(`${r.expired} old payment(s) marked as expired`))
                   .catch((e) =>
                     setError(e instanceof Error ? e.message : "Sweep failed"),
                   )
