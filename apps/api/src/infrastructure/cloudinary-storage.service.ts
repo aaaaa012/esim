@@ -74,7 +74,7 @@ export class CloudinaryStorageService {
   async downloadDocumentImage(assetId: string) {
     if (!this.isConfigured()) throw new ServiceUnavailableException('Private document storage is not configured');
     this.configure();
-    const url = cloudinary.url(assetId, { type: 'authenticated', resource_type: 'image', format: 'jpg', page: 1, sign_url: true, secure: true, expires_at: Math.floor(Date.now() / 1000) + 300 });
+    const url = cloudinary.url(assetId, { type: 'authenticated', resource_type: 'image', format: 'jpg', page: 1, transformation: [{ width: 2000, height: 2000, crop: 'limit', effect: 'grayscale', quality: 'auto:good' }], sign_url: true, secure: true, expires_at: Math.floor(Date.now() / 1000) + 300 });
     const response = await fetch(url);
     if (!response.ok) throw new BadRequestException('Document content is unavailable');
     const maxBytes = Number(process.env.PASSPORT_OCR_MAX_IMAGE_BYTES ?? 5 * 1024 * 1024);

@@ -11,7 +11,7 @@ import {
   Req,
   UseGuards,
 } from "@nestjs/common";
-import { PlanStatus, UserRoleName, UserStatus } from "@prisma/client";
+import { DocumentReviewPolicy, PlanStatus, UserRoleName, UserStatus } from "@prisma/client";
 import {
   AccountGuard,
   AccountTypes,
@@ -25,9 +25,29 @@ import { AdminService } from "./admin.service.js";
 @AccountTypes(UserRoleName.SUPER_ADMIN)
 export class AdminController {
   constructor(private readonly admin: AdminService) {}
+  @Get("document-review-policy")
+  documentReviewPolicy() {
+    return this.admin.documentReviewPolicy();
+  }
+  @Patch("document-review-policy")
+  updateDocumentReviewPolicy(
+    @Body() body: { policy: DocumentReviewPolicy; ocrCheckoutWaitMs?: number },
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.admin.updateDocumentReviewPolicy(body, req.user!.id);
+  }
   @Get("plans") @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
   plans() {
     return this.admin.plans();
+  }
+  @Get("plans/page") @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  planPage(
+    @Query("q") q?: string,
+    @Query("status") status?: PlanStatus,
+    @Query("limit") limit?: string,
+    @Query("offset") offset?: string,
+  ) {
+    return this.admin.planPage({ ...(q ? { q } : {}), ...(status ? { status } : {}), limit: Number(limit), offset: Number(offset) });
   }
   @Post("plans/import-csv") @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
   importPlansCsv(@Body() body: { csv?: string; content?: string; fileName?: string }, @Req() req: AuthenticatedRequest) {

@@ -11,7 +11,6 @@ import type { NotificationService } from '../notification/notification.service.j
 import type { CatalogService } from '../catalog/catalog.controller.js';
 import type { PrismaService } from '../../infrastructure/prisma.service.js';
 import type { QrPdfService } from '../notification/qr-pdf.service.js';
-import type { PassportVerificationService } from './passport-verification.service.js';
 import { PaymentsService } from '../payments/payments.service.js';
 import { PaymentSimulatorGateway } from '../payments/gateways/simulator.gateway.js';
 import type { KhaltiGateway } from '../payments/gateways/khalti.gateway.js';
@@ -59,7 +58,6 @@ function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unkn
     {} as unknown as CatalogService,
     prisma as unknown as PrismaService,
     {} as unknown as QrPdfService,
-    {} as unknown as PassportVerificationService,
   );
 }
 

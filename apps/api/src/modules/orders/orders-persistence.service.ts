@@ -41,6 +41,10 @@ export class OrdersPersistenceService {
         ...(row.providerStatus ? { providerStatus: row.providerStatus } : {}),
         ...(row.qrDeliveredAt ? { qrDeliveredAt: row.qrDeliveredAt.toISOString() } : {}),
         ...(row.activatedAt ? { activatedAt: row.activatedAt.toISOString() } : {}),
+        documentReviewPolicy: row.documentReviewPolicy,
+        documentReviewStatus: row.documentReviewStatus,
+        ...(row.documentReviewStartedAt ? { documentReviewStartedAt: row.documentReviewStartedAt.toISOString() } : {}),
+        ...(row.documentCheckoutReleaseAt ? { documentCheckoutReleaseAt: row.documentCheckoutReleaseAt.toISOString() } : {}),
         activationRefetchAttempts: row.activationRefetchAttempts,
         ...(row.lastProvisioningRecoveryAt ? { lastProvisioningRecoveryAt: row.lastProvisioningRecoveryAt.toISOString() } : {}),
         purchaseType: row.orderType as 'INITIAL_PURCHASE' | 'TOPUP',
@@ -66,7 +70,7 @@ export class OrdersPersistenceService {
       await tx.plan.upsert({ where: { id: order.plan.id }, update: { name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' }, create: { id: order.plan.id, countryId: country.id, providerPlanId: `TRANSATEL-${order.plan.countryCode}`, name: order.plan.name, dataAllowance: order.plan.dataAllowance, validityDays: order.plan.validityDays, costPrice: Math.round(order.plan.sellingPriceNpr * 0.65), sellingPrice: order.plan.sellingPriceNpr, coverage: order.plan.coverage, popular: order.plan.popular, status: 'ACTIVE' } });
       const existing = await tx.order.findUnique({ where: { id: order.id }, select: { id: true, status: true, partnerId: true, externalOrderId: true } });
       if (existing) {
-      const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, orderType: (order.purchaseType ?? 'INITIAL_PURCHASE') as DbOrderType, providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, qrDeliveredAt: order.qrDeliveredAt ? new Date(order.qrDeliveredAt) : null, activatedAt: order.activatedAt ? new Date(order.activatedAt) : null, version: { increment: 1 } } });
+      const updated = await tx.order.updateMany({ where: { id: order.id, version: order.version }, data: { status: order.status as DbOrderStatus, totalAmount: order.totalAmountNpr, pricingSnapshot: order.pricingSnapshot as Prisma.InputJsonValue, orderType: (order.purchaseType ?? 'INITIAL_PURCHASE') as DbOrderType, providerSubscriptionId: order.providerSubscriptionId ?? null, providerStatus: order.providerStatus ?? null, qrDeliveredAt: order.qrDeliveredAt ? new Date(order.qrDeliveredAt) : null, activatedAt: order.activatedAt ? new Date(order.activatedAt) : null, ...(order.documentReviewPolicy ? { documentReviewPolicy: order.documentReviewPolicy } : {}), ...(order.documentReviewStatus ? { documentReviewStatus: order.documentReviewStatus } : {}), documentReviewStartedAt: order.documentReviewStartedAt ? new Date(order.documentReviewStartedAt) : null, documentCheckoutReleaseAt: order.documentCheckoutReleaseAt ? new Date(order.documentCheckoutReleaseAt) : null, version: { increment: 1 } } });
         if (updated.count !== 1) throw new ConflictException('Order was changed by another request; reload and retry');
         if (existing.partnerId && existing.status !== order.status) {
           const eventType = this.partnerEventType(order.status);

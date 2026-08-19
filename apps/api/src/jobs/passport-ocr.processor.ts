@@ -32,8 +32,10 @@ export class PassportOcrProcessor implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.queues.registerWorker(QUEUES.documents, (job) =>
-      this.process(job as Job<PassportOcrJob>),
+    this.queues.registerWorker(
+      QUEUES.documents,
+      (job) => this.process(job as Job<PassportOcrJob>),
+      { concurrency: 1 },
     );
   }
 
@@ -48,7 +50,7 @@ export class PassportOcrProcessor implements OnModuleInit {
         partner: { select: { id: true } },
       },
     });
-    if (!order || !order.partnerId) return { skipped: true };
+    if (!order) return { skipped: true };
     const passport = order.documents.find(
       (document) =>
         document.type === DocumentType.PASSPORT && document.id === documentId,
@@ -79,24 +81,28 @@ export class PassportOcrProcessor implements OnModuleInit {
       ],
     } as never);
 
-    await this.prisma.travelerDocument.update({
-      where: { id: passport.id },
-      data: {
-        passportVerificationStatus: result.status,
-        passportVerificationMethod: result.method,
-        passportMatchedFields: result.matchedFields as Prisma.InputJsonValue,
-        passportConfidence: result.confidence ?? null,
-        passportVerifiedAt: new Date(result.checkedAt),
-      },
-    });
+    const technicalFailure = result.method === "ocr-error" || result.status === "NOT_READY";
+    if (technicalFailure && job.attemptsMade + 1 < Number(job.opts.attempts ?? 1))
+      throw new Error(result.detail ?? "Passport OCR is temporarily unavailable");
+    const verified = result.status === "VERIFIED" || result.status === "SKIPPED";
+    const reviewStatus = verified ? "VERIFIED" : technicalFailure ? "MANUAL_REVIEW" : "REUPLOAD_REQUIRED";
+    await this.prisma.$transaction([
+      this.prisma.travelerDocument.update({
+        where: { id: passport.id },
+        data: {
+          status: verified ? "APPROVED" : technicalFailure ? "PENDING" : "REUPLOAD_REQUIRED",
+          passportVerificationStatus: result.status,
+          passportVerificationMethod: result.method,
+          passportMatchedFields: result.matchedFields as Prisma.InputJsonValue,
+          passportConfidence: result.confidence ?? null,
+          passportVerifiedAt: new Date(result.checkedAt),
+        },
+      }),
+      this.prisma.order.update({ where: { id: order.id }, data: { documentReviewStatus: reviewStatus } }),
+      this.prisma.orderEvent.create({ data: { orderId: order.id, fromStatus: order.status, toStatus: order.status, reason: verified ? "Passport verified automatically" : technicalFailure ? "OCR technical failure; routed to non-blocking manual review" : "Passport verification failed; replacement requested", metadata: { documentReviewStatus: reviewStatus } } }),
+    ]);
 
-    await this.emitVerifiedEvent(
-      order.partnerId,
-      order.id,
-      order.externalOrderId,
-      passport.id,
-      result.status,
-    );
+    if (order.partnerId) await this.emitVerifiedEvent(order.partnerId, order.id, order.externalOrderId, passport.id, reviewStatus);
 
     return result;
   }
@@ -107,7 +113,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       where: { id: job.data.verificationId },
       include: { documents: true },
     });
-    if (!verification || ["VERIFIED", "INVALID", "CONSUMED", "EXPIRED"].includes(verification.status)) return { skipped: true };
+    if (!verification || ["VERIFIED", "INVALID", "CONSUMED", "MANUAL_REVIEW", "EXPIRED"].includes(verification.status)) return { skipped: true };
     if (verification.expiresAt <= new Date()) {
       await this.prisma.partnerDocumentVerification.update({ where: { id: verification.id }, data: { status: "EXPIRED", failureCode: "VERIFICATION_EXPIRED" } });
       return { status: "EXPIRED" };
@@ -143,6 +149,12 @@ export class PassportOcrProcessor implements OnModuleInit {
         this.prisma.partnerDocumentUploadIntent.update({ where: { id: passport.id }, data: { verificationStatus: accepted ? "VERIFIED" : "INVALID", verificationCode: accepted ? null : result.status, verificationResult: { method: result.method, matchedFields: result.matchedFields, confidence: result.confidence ?? null } as Prisma.InputJsonValue, verifiedAt: new Date(result.checkedAt) } }),
         this.prisma.partnerDocumentVerification.update({ where: { id: verification.id }, data: { status: accepted ? "VERIFIED" : "INVALID", failureCode: accepted ? null : "PASSPORT_REUPLOAD_REQUIRED" } }),
       ]);
+      if (verification.consumedOrderId) {
+        await this.prisma.$transaction([
+          this.prisma.order.update({ where: { id: verification.consumedOrderId }, data: { documentReviewStatus: accepted ? "VERIFIED" : "REUPLOAD_REQUIRED" } }),
+          this.prisma.travelerDocument.updateMany({ where: { orderId: verification.consumedOrderId, type: DocumentType.PASSPORT }, data: { status: accepted ? "APPROVED" : "REUPLOAD_REQUIRED", passportVerificationStatus: result.status, passportVerificationMethod: result.method, passportMatchedFields: result.matchedFields as Prisma.InputJsonValue, passportConfidence: result.confidence ?? null, passportVerifiedAt: new Date(result.checkedAt) } }),
+        ]);
+      }
       await this.emitPreOrderEvent(verification.partnerId, verification.id, verification.externalOrderId, accepted ? "document.verification.verified" : "document.verification.reupload_required");
       return result;
     } catch (error) {
@@ -150,12 +162,15 @@ export class PassportOcrProcessor implements OnModuleInit {
       await this.prisma.partnerDocumentVerification.update({
         where: { id: verification.id },
         data: exhausted
-          ? { status: "PROCESSING_FAILED", failureCode: "DOCUMENT_PROCESSING_FAILED" }
+          ? { status: "MANUAL_REVIEW", failureCode: "DOCUMENT_PROCESSING_FAILED" }
           : { status: "AWAITING_UPLOAD", failureCode: null },
       });
       if (exhausted)
-        await this.emitPreOrderEvent(verification.partnerId, verification.id, verification.externalOrderId, "document.verification.processing_failed");
-      throw error;
+        await this.emitPreOrderEvent(verification.partnerId, verification.id, verification.externalOrderId, "document.verification.manual_review");
+      if (exhausted && verification.consumedOrderId)
+        await this.prisma.order.update({ where: { id: verification.consumedOrderId }, data: { documentReviewStatus: "MANUAL_REVIEW" } });
+      if (!exhausted) throw error;
+      return { status: "MANUAL_REVIEW" };
     }
   }
 
