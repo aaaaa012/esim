@@ -40,6 +40,15 @@ export class AdminController {
   plans() {
     return this.admin.plans();
   }
+  @Get("plans/page") @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  planPage(
+    @Query("q") q?: string,
+    @Query("status") status?: PlanStatus,
+    @Query("limit") limit?: string,
+    @Query("offset") offset?: string,
+  ) {
+    return this.admin.planPage({ ...(q ? { q } : {}), ...(status ? { status } : {}), limit: Number(limit), offset: Number(offset) });
+  }
   @Post("plans/import-csv") @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
   importPlansCsv(@Body() body: { csv?: string; content?: string; fileName?: string }, @Req() req: AuthenticatedRequest) {
     const content = typeof body.content === "string" && body.content.trim()
