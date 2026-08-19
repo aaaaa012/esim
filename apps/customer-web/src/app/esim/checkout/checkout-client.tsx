@@ -204,12 +204,11 @@ export default function CheckoutClient({
   useEffect(() => {
     if (!planId || orderId) return;
     let cancelled = false;
-    fetch(`${API}/public/plans`)
+    fetch(`${API}/public/plans/${encodeURIComponent(planId)}`)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error("catalog unavailable"))))
-      .then((data: Envelope<PlanSummary[]>) => {
+      .then((data: Envelope<PlanSummary>) => {
         if (cancelled) return;
-        const plan = data.data.find((item) => item.id === planId);
-        if (plan) setPreviewPlan(plan); else setPlanLoadFailed(true);
+        if (data.data) setPreviewPlan(data.data); else setPlanLoadFailed(true);
       })
       .catch(() => setPlanLoadFailed(true));
     return () => {

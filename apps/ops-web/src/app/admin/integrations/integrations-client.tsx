@@ -63,23 +63,40 @@ export default function IntegrationsClient() {
   const [logs, setLogs] = useState<IntegrationLog[]>([]);
   const [busy, setBusy] = useState("");
   const [eligibilityPlanId, setEligibilityPlanId] = useState("");
+  const [eligibilityPlanQuery, setEligibilityPlanQuery] = useState("");
+  const [plansBusy, setPlansBusy] = useState(false);
   const [eligibilityMsisdn, setEligibilityMsisdn] = useState("");
   const [logsBusy, setLogsBusy] = useState(false);
-  const load = () =>
-    Promise.all([
-      request<Integration[]>("/admin/integrations"),
-      request<Plan[]>("/admin/plans"),
-      request<IntegrationLog[]>("/operations/integration-logs"),
-    ])
-      .then(([i, p, l]) => {
-        setIntegrations(i);
-        setPlans(p);
-        setLogs(l);
-      })
-      .catch((e) => toast.error(e.message));
   useEffect(() => {
-    void load();
+    void request<Integration[]>("/admin/integrations")
+      .then(setIntegrations)
+      .catch((e) => toast.error(e.message));
+    void request<IntegrationLog[]>("/operations/integration-logs")
+      .then(setLogs)
+      .catch((e) => toast.error(e.message));
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setPlansBusy(true);
+      const params = new URLSearchParams({ limit: "50", offset: "0" });
+      if (eligibilityPlanQuery.trim()) params.set("q", eligibilityPlanQuery.trim());
+      void request<{ items: Plan[] }>(`/admin/plans/page?${params}`)
+        .then((result) => {
+          if (!cancelled) setPlans(result.items);
+        })
+        .catch((e) => {
+          if (!cancelled) toast.error(e.message);
+        })
+        .finally(() => {
+          if (!cancelled) setPlansBusy(false);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [eligibilityPlanQuery]);
   const test = async (item: Integration) => {
     setBusy(item.id);
     try {
@@ -226,10 +243,15 @@ export default function IntegrationsClient() {
               {item.id === "transatel" && (
                 <div className="mt-4 space-y-3 rounded-lg border border-dashed p-4">
                   <p className="text-sm font-medium">Eligibility check</p>
+                  <Input
+                    placeholder="Search country or plan…"
+                    value={eligibilityPlanQuery}
+                    onChange={(event) => setEligibilityPlanQuery(event.target.value)}
+                  />
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Select value={eligibilityPlanId} onValueChange={setEligibilityPlanId}>
                       <SelectTrigger className="w-full sm:w-auto">
-                        <SelectValue placeholder="Select plan…" />
+                        <SelectValue placeholder={plansBusy ? "Loading plans…" : "Select plan…"} />
                       </SelectTrigger>
                       <SelectContent>
                         {plans.map((plan) => (
