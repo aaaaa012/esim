@@ -1541,6 +1541,7 @@ function ConfigPanel({
   };
   const [inventory, setInventory] = useState<InventoryOverview | null>(null);
   const [systemConfig, setSystemConfig] = useState<Record<string, string>>({});
+  const [documentPolicy, setDocumentPolicy] = useState<"AUTO_OCR" | "MANUAL_REVIEW" | null>(null);
   const [error, setError] = useState("");
   const [topupMobile, setTopupMobile] = useState("");
   const [topupResult, setTopupResult] = useState<null | {
@@ -1555,7 +1556,12 @@ function ConfigPanel({
   const [busy, setBusy] = useState("");
   const [sweepResult, setSweepResult] = useState("");
   useEffect(() => {
-    if (tab === "Inventory Settings") {
+    if (tab === "Document Rules") {
+      setError("");
+      request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" }>("/admin/document-review-policy")
+        .then((value) => setDocumentPolicy(value.policy))
+        .catch((e) => setError(e instanceof Error ? e.message : "Document policy unavailable"));
+    } else if (tab === "Inventory Settings") {
       setError("");
       request<InventoryOverview>("/operations/inventory")
         .then(setInventory)
@@ -1576,10 +1582,10 @@ function ConfigPanel({
     tab === "Document Rules"
       ? [
           { label: "Passport", value: "Required and verified for every purchase" },
-          { label: "Travel ticket", value: "Required and verified before payment" },
+          { label: "Travel ticket", value: "Required for records; review never pauses paid fulfillment" },
           { label: "Supported formats", value: "JPEG, PNG, or PDF" },
           { label: "Maximum file size", value: "10 MB" },
-          { label: "Review", value: "Operationally verified before approval" },
+          { label: "Review", value: documentPolicy === "MANUAL_REVIEW" ? "Manual review (non-blocking)" : documentPolicy === "AUTO_OCR" ? "OCR with 8-second checkout wait and manual failover" : "Loading…" },
         ]
       : tab === "Inventory Settings"
         ? inventory
@@ -1605,6 +1611,13 @@ function ConfigPanel({
       {error ? (
         <div className="m-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {error}
+        </div>
+      ) : null}
+      {tab === "Document Rules" && documentPolicy ? (
+        <div className="flex flex-wrap items-center gap-3 border-b px-6 py-4">
+          <Button variant={documentPolicy === "AUTO_OCR" ? "default" : "outline"} disabled={Boolean(busy)} onClick={() => { setBusy("policy"); request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" }>("/admin/document-review-policy", { method: "PATCH", body: JSON.stringify({ policy: "AUTO_OCR", ocrCheckoutWaitMs: 8000 }) }).then((value) => setDocumentPolicy(value.policy)).catch((e) => setError(e instanceof Error ? e.message : "Update failed")).finally(() => setBusy("")); }}>Automatic OCR</Button>
+          <Button variant={documentPolicy === "MANUAL_REVIEW" ? "default" : "outline"} disabled={Boolean(busy)} onClick={() => { setBusy("policy"); request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" }>("/admin/document-review-policy", { method: "PATCH", body: JSON.stringify({ policy: "MANUAL_REVIEW", ocrCheckoutWaitMs: 8000 }) }).then((value) => setDocumentPolicy(value.policy)).catch((e) => setError(e instanceof Error ? e.message : "Update failed")).finally(() => setBusy("")); }}>Manual review</Button>
+          <p className="text-xs text-muted-foreground">Only this global policy changes OCR behavior. Neither mode pauses provisioning after payment.</p>
         </div>
       ) : null}
       {rows.length ? (

@@ -120,6 +120,22 @@ enum ReviewDecision {
   REUPLOAD_REQUIRED
 }
 
+enum DocumentReviewPolicy {
+  AUTO_OCR
+  MANUAL_REVIEW
+}
+
+enum DocumentReviewStatus {
+  NOT_STARTED
+  OCR_PENDING
+  OCR_BACKGROUND
+  VERIFIED
+  MANUAL_REVIEW
+  REUPLOAD_REQUIRED
+  MANUALLY_APPROVED
+  SKIPPED
+}
+
 enum ProvisioningStatus {
   QUEUED
   RUNNING
@@ -386,6 +402,10 @@ model Order {
   providerStatus               String?
   qrDeliveredAt                DateTime?
   activatedAt                  DateTime?
+  documentReviewPolicy         DocumentReviewPolicy          @default(AUTO_OCR)
+  documentReviewStatus         DocumentReviewStatus          @default(NOT_STARTED)
+  documentReviewStartedAt      DateTime?
+  documentCheckoutReleaseAt    DateTime?
   activationRefetchAttempts   Int                            @default(0)
   lastProvisioningRecoveryAt  DateTime?
   traveler                     Traveler?
@@ -412,6 +432,14 @@ model Order {
   @@index([customerId, status])
   @@index([status, createdAt])
   @@index([partnerId])
+}
+
+model PlatformConfiguration {
+  id                   String               @id @default("platform")
+  documentReviewPolicy DocumentReviewPolicy @default(AUTO_OCR)
+  ocrCheckoutWaitMs    Int                  @default(8000)
+  updatedById          String?              @db.Uuid
+  updatedAt            DateTime             @updatedAt
 }
 
 model Traveler {
@@ -625,6 +653,8 @@ model PartnerDocumentVerification {
   consumedAt        DateTime?
   consumedOrderId   String?  @unique @db.Uuid
   failureCode       String?
+  reviewPolicy      DocumentReviewPolicy @default(AUTO_OCR)
+  checkoutReleaseAt DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   documents         PartnerDocumentUploadIntent[]

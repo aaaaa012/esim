@@ -88,12 +88,12 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     return { count, retryAfterSeconds: Math.max(1, Math.ceil((ttl > 0 ? ttl : windowMs) / 1000)) };
   }
 
-  registerWorker(name: QueueName, processor: (job: Job) => Promise<unknown>) {
+  registerWorker(name: QueueName, processor: (job: Job) => Promise<unknown>, options?: { concurrency?: number }) {
     if (!this.enabled || this.workers.has(name)) return false;
     const connection = new Redis(process.env.REDIS_URL!, { maxRetriesPerRequest: null, enableReadyCheck: true });
     const worker = new Worker(name, processor, {
       connection,
-      concurrency: Number(process.env.QUEUE_CONCURRENCY ?? 3),
+      concurrency: options?.concurrency ?? Number(process.env.QUEUE_CONCURRENCY ?? 3),
       stalledInterval: 30_000,
     });
     worker.on('failed', (job, error) => this.logger.error(`Job ${job?.id ?? 'unknown'} failed after ${job?.attemptsMade ?? 0} attempt(s): ${error?.message ?? 'unknown'}`));

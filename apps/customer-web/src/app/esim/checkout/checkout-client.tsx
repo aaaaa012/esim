@@ -35,6 +35,7 @@ type Order = {
     method?: string;
     detail?: string;
   };
+  documentReviewStatus?: "NOT_STARTED" | "OCR_PENDING" | "OCR_BACKGROUND" | "VERIFIED" | "MANUAL_REVIEW" | "REUPLOAD_REQUIRED" | "MANUALLY_APPROVED" | "SKIPPED";
   provisioningFailure?: { code: string; message: string };
 };
 type Payment = { reference: string; redirectUrl: string; expiresAt: string };
@@ -117,6 +118,7 @@ export default function CheckoutClient({
     }
   };
   const [guestToken, setGuestToken] = useState(readToken);
+  const [documentNotice, setDocumentNotice] = useState("");
   const guestTokenRef = useRef(guestToken);
   guestTokenRef.current = guestToken;
   const currentToken = () => guestTokenRef.current || readToken();
@@ -354,7 +356,17 @@ export default function CheckoutClient({
     setVerifyingPassport(true);
     setError("");
     try {
-      const updated = await api<Order>(`/customer/orders/${order.id}/verify-passport`, { method: "POST", body: "{}" });
+      let updated = await api<Order>(`/customer/orders/${order.id}/verify-passport`, { method: "POST", body: "{}" });
+      const deadline = Date.now() + 8_500;
+      while (updated.documentReviewStatus === "OCR_PENDING" && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        updated = await api<Order>(`/customer/orders/${order.id}`);
+      }
+      if (updated.documentReviewStatus === "OCR_PENDING")
+        updated = await api<Order>(`/customer/orders/${order.id}/verify-passport`, { method: "POST", body: "{}" });
+      if (["OCR_BACKGROUND", "MANUAL_REVIEW"].includes(updated.documentReviewStatus ?? ""))
+        setDocumentNotice(updated.documentReviewStatus === "OCR_BACKGROUND" ? "Your payment can continue while document verification finishes securely in the background." : "Your payment can continue. Our operations team will review your documents separately, without delaying eSIM activation.");
+      else setDocumentNotice("");
       setOrder(updated);
       return updated;
     } catch (e) {
@@ -365,7 +377,7 @@ export default function CheckoutClient({
     }
   };
   const passportGatePassed = (target: Order | null) =>
-    !target || isTopUp || target.passportVerification?.status === "VERIFIED" || target.passportVerification?.status === "SKIPPED";
+    !target || isTopUp || ["VERIFIED", "MANUAL_REVIEW", "MANUALLY_APPROVED", "SKIPPED", "OCR_BACKGROUND"].includes(target.documentReviewStatus ?? "") || target.passportVerification?.status === "VERIFIED" || target.passportVerification?.status === "SKIPPED";
   useEffect(() => {
     if (step !== 4 || isTopUp) return;
     if (!order || order.passportVerification) return;
@@ -557,7 +569,7 @@ export default function CheckoutClient({
           target = updated;
           verification = updated.passportVerification;
         }
-        if (!isTopUp && verification?.status !== "VERIFIED" && verification?.status !== "SKIPPED") {
+        if (!isTopUp && !passportGatePassed(target)) {
           throw new Error("Verify your passport before continuing to payment.");
         }
         const value = await api<Payment>(`/customer/orders/${target.id}/payment`, {
@@ -641,6 +653,7 @@ export default function CheckoutClient({
               )}
             </div>
             {error && <div className="form-error">{error}</div>}
+            {documentNotice && <div className="mx-6 mt-5 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900" role="status">{documentNotice}</div>}
             {step === 1 && (
               <div className="form-section">
                 <span className="form-icon">
