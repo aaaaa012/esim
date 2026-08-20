@@ -612,7 +612,7 @@ export class OperationsController {
     @Req() req: AuthenticatedRequest,
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    await this.orders.refreshOne(id);
+    await this.orders.refreshOne(id, true);
     return this.orders.view(id);
   }
   @Get("orders/:id/documents/:documentId/preview") preview(

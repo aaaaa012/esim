@@ -159,6 +159,9 @@ export default function OrderReview({ id }: { id: string }) {
     order.documentReviewPolicy !== "NO_REVIEW" &&
     !["CANCELLED", "REFUNDED"].includes(order.status) &&
     order.documents.length > 0;
+  const canResendQr =
+    ["QR_READY", "ACTIVATION_ATTENTION", "COMPLETED"].includes(order.status) &&
+    Boolean(order.assignment?.inventoryId && order.assignment?.iccid);
   const requiredApproved = ["PASSPORT", "TICKET"].every((type) =>
     order.documents.some(
       (document) => document.type === type && document.status === "APPROVED",
@@ -676,7 +679,7 @@ export default function OrderReview({ id }: { id: string }) {
                   set-up recovery first to avoid a duplicate.
                 </p>
               </div>
-            ) : ["QR_READY", "COMPLETED"].includes(order.status) ? (
+            ) : canResendQr ? (
               <Button
                 className="w-full"
                 variant="outline"
@@ -697,6 +700,15 @@ export default function OrderReview({ id }: { id: string }) {
                   <QrCode className="size-4" />
                 )}
                 Resend installation QR
+              </Button>
+            ) : ["QR_READY", "ACTIVATION_ATTENTION", "COMPLETED"].includes(
+                order.status,
+              ) ? (
+              <Button className="w-full" variant="outline" size="lg" asChild>
+                <Link href="/provisioning-operations">
+                  <RefreshCcw className="size-4" />
+                  Reconcile QR assignment
+                </Link>
               </Button>
             ) : (
               <div className="flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground">

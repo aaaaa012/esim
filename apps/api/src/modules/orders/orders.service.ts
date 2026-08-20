@@ -554,7 +554,9 @@ export class OrdersService implements OnModuleInit {
     if (!document) throw new NotFoundException("Document not found");
     await this.storage.verifyDocument(document.privateAssetId);
     document.uploadVerified = true;
-    const fulfillmentStarted = [
+    const reviewResubmission = [
+      OrderStatus.REVIEW_PENDING,
+      OrderStatus.AWAITING_CUSTOMER,
       OrderStatus.PAYMENT_CONFIRMED,
       OrderStatus.APPROVED,
       OrderStatus.PROVISIONING,
@@ -563,7 +565,7 @@ export class OrdersService implements OnModuleInit {
       OrderStatus.COMPLETED,
     ].includes(order.status);
     let queueReplacementOcr = false;
-    if (fulfillmentStarted && order.documentReviewStatus === "NOT_STARTED") {
+    if (reviewResubmission && order.documentReviewStatus === "NOT_STARTED") {
       order.documentReviewStartedAt = new Date().toISOString();
       if (order.documentReviewPolicy === "NO_REVIEW") {
         order.documentReviewStatus = "SKIPPED";
@@ -1293,6 +1295,7 @@ export class OrdersService implements OnModuleInit {
       reason: `Documents requested again: ${reason.trim()}`,
     });
     await this.persistence.save(order);
+    await this.safeNotify(order, "DOCUMENT_REUPLOAD", reason.trim());
     return order;
   }
   async reviewDocument(
@@ -1345,6 +1348,8 @@ export class OrdersService implements OnModuleInit {
       decision,
       reason,
     );
+    if (decision === "REUPLOAD")
+      await this.safeNotify(order, "DOCUMENT_REUPLOAD", reason!.trim());
     if (order.documentReviewStatus === "MANUALLY_APPROVED")
       await this.resilience?.resolve(
         `document-review:${order.id}`,
@@ -1876,6 +1881,7 @@ export class OrdersService implements OnModuleInit {
    * pipeline as the original QR_READY notification (password-protected PDF).
    */
   async resendQr(id: string, ownerId?: string) {
+    await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
     if (
       ![
@@ -1889,9 +1895,32 @@ export class OrdersService implements OnModuleInit {
       );
     if (!order.qrPayload)
       throw new BadRequestException("Order has no activation QR to resend");
-    await this.safeNotify(order, "QR_READY");
-    this.logger.log(`QR re-sent for order ${order.orderNumber} (${order.id})`);
-    return this.redact(order);
+    const inventory = await this.inventory.inventoryForOrder(order.id);
+    if (!inventory)
+      throw new BadRequestException(
+        "Order has no assigned eSIM for this installation QR",
+      );
+    const recipient = this.notifyEmailFor(order);
+    if (!recipient)
+      throw new BadRequestException(
+        "Customer email is required to resend the installation QR",
+      );
+    await this.notifications.enqueue({
+      orderId: order.id,
+      channel: "EMAIL",
+      template: "QR_READY",
+      recipient,
+      orderNumber: order.orderNumber,
+    });
+    order.timeline.push({
+      from: order.status,
+      to: order.status,
+      at: new Date().toISOString(),
+      reason: "Installation QR resend queued",
+    });
+    await this.persistence.save(order);
+    this.logger.log(`QR resend queued for order ${order.orderNumber} (${order.id})`);
+    return ownerId ? this.redact(order) : this.expand(order);
   }
   /**
    * Builds the same password-protected QR PDF emailed at QR_READY so an
