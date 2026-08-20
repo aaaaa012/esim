@@ -56,6 +56,7 @@ function ordersService(
   inventory: unknown = { release: vi.fn().mockResolvedValue(undefined) },
   prisma: unknown = { enabled: false },
   notifications: unknown = {},
+  resilience?: unknown,
 ) {
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
@@ -72,8 +73,92 @@ function ordersService(
     {} as unknown as CatalogService,
     prisma as unknown as PrismaService,
     {} as unknown as QrPdfService,
+    undefined,
+    resilience as never,
   );
 }
+
+describe("OrdersService provider callback conflict safety", () => {
+  it("ignores an older preload callback after activation", async () => {
+    const order = readyOrder({
+      status: OrderStatus.COMPLETED,
+      providerStatus: "ACTIVATED",
+    });
+    const applyLifecycle = vi.fn();
+    const inventory = {
+      inventoryForOrder: vi.fn(async () => ({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+        providerSubscriptionId: "sub-1",
+      })),
+      applyLifecycle,
+    };
+    const orders = ordersService(
+      [order],
+      { descriptor: () => ({ provider: "TRANSATEL" }) },
+      inventory,
+    );
+    await orders.refreshFromPersistence();
+
+    await expect(
+      orders.applyProviderEvent({
+        eventType: "ESIM_PRELOADED",
+        orderId: order.id,
+        status: "PRELOADED",
+        iccid: "8988247076000000319",
+        subscriptionId: "sub-1",
+      }),
+    ).resolves.toMatchObject({
+      accepted: true,
+      ignored: true,
+      reason: "OUT_OF_ORDER_PROVIDER_STATE",
+    });
+    expect(applyLifecycle).not.toHaveBeenCalled();
+    expect(orders.get(order.id).providerStatus).toBe("ACTIVATED");
+  });
+
+  it("rejects a callback for the wrong ICCID before any lifecycle mutation", async () => {
+    const order = readyOrder();
+    const applyLifecycle = vi.fn();
+    const attention = vi.fn(async () => undefined);
+    const inventory = {
+      inventoryForOrder: vi.fn(async () => ({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+        providerSubscriptionId: "sub-1",
+      })),
+      applyLifecycle,
+    };
+    const orders = ordersService(
+      [order],
+      { descriptor: () => ({ provider: "TRANSATEL" }) },
+      inventory,
+      { enabled: false },
+      {},
+      { attention },
+    );
+    await orders.refreshFromPersistence();
+
+    await expect(
+      orders.applyProviderEvent({
+        eventType: "ESIM_ACTIVATED",
+        orderId: order.id,
+        status: "ACTIVATED",
+        iccid: "wrong-iccid",
+        subscriptionId: "sub-1",
+        qrPayload: "LPA:1$wrong",
+      }),
+    ).rejects.toThrow("does not match the assigned eSIM");
+    expect(applyLifecycle).not.toHaveBeenCalled();
+    expect(attention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "PROVIDER_CALLBACK_IDENTITY_CONFLICT",
+        severity: "CRITICAL",
+      }),
+    );
+    expect(orders.get(order.id).status).toBe(OrderStatus.QR_READY);
+  });
+});
 
 describe("OrdersService provisioning retry safety", () => {
   it("blocks a retry when Transatel may already have accepted the order", async () => {
@@ -84,13 +169,11 @@ describe("OrdersService provisioning retry safety", () => {
     const prisma = {
       enabled: true,
       provisioningOperation: {
-        findUnique: vi
-          .fn()
-          .mockResolvedValue({
-            state: "WAITING_FOR_QR",
-            providerOrderId: "provider-order-1",
-            providerSubscriptionId: "sub-1",
-          }),
+        findUnique: vi.fn().mockResolvedValue({
+          state: "WAITING_FOR_QR",
+          providerOrderId: "provider-order-1",
+          providerSubscriptionId: "sub-1",
+        }),
       },
     };
     const orders = ordersService([order], {}, undefined, prisma);
@@ -107,6 +190,11 @@ describe("OrdersService asynchronous provisioning", () => {
     const order = readyOrder({
       id: "p-1",
       status: OrderStatus.PROVISIONING,
+      provisioningFailure: {
+        code: "INVENTORY_UNAVAILABLE",
+        message: "Waiting for stock",
+      },
+      operationalDisposition: "RETRY_AUTOMATIC",
       traveler: {
         title: "MS",
         firstName: "Jane",
@@ -125,27 +213,30 @@ describe("OrdersService asynchronous provisioning", () => {
     delete order.providerSubscriptionId;
     delete order.providerStatus;
     const connectivity = {
-      provision: vi
-        .fn()
-        .mockResolvedValue({
-          providerSubscriptionId: "sub-accepted",
-          status: "DELAYED",
-        }),
+      provision: vi.fn().mockResolvedValue({
+        providerSubscriptionId: "sub-accepted",
+        status: "DELAYED",
+      }),
       descriptor: vi
         .fn()
         .mockReturnValue({ provider: "TRANSATEL", capabilities: {} }),
     } as unknown as ConnectivityService;
     const inventory = {
-      profileForOrder: vi
-        .fn()
-        .mockResolvedValue({
-          id: "inv-1",
-          eid: "eid-1",
-          iccid: "8988247076000000319",
-        }),
+      profileForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        eid: "eid-1",
+        iccid: "8988247076000000319",
+      }),
       release: vi.fn(),
     } as unknown as InventoryService;
-    const orders = ordersService([order], connectivity, inventory);
+    const orders = ordersService(
+      [order],
+      connectivity,
+      inventory,
+      { enabled: false },
+      {},
+      { resolve: vi.fn().mockRejectedValue(new Error("attention DB delayed")) },
+    );
     await orders.refreshFromPersistence();
 
     await orders.processProvisioning("p-1", 1, false);
@@ -155,11 +246,13 @@ describe("OrdersService asynchronous provisioning", () => {
       providerSubscriptionId: "sub-accepted",
       providerStatus: "PRELOADED",
     });
+    expect(orders.get("p-1").provisioningFailure).toBeUndefined();
+    expect(orders.get("p-1").operationalDisposition).toBeUndefined();
     expect(inventory.release).not.toHaveBeenCalled();
     expect(connectivity.provision).toHaveBeenCalledOnce();
   });
 
-  it("marks an out-of-stock order PROVISIONING_FAILED with a safe reason on the final attempt", async () => {
+  it("keeps an out-of-stock paid order recoverable after queue retries exhaust", async () => {
     const order = readyOrder({
       id: "stock-1",
       orderNumber: "VC-2026-R3",
@@ -203,13 +296,14 @@ describe("OrdersService asynchronous provisioning", () => {
     ).rejects.toThrow("No eSIM inventory is currently available");
 
     const failed = orders.get("stock-1");
-    expect(failed.status).toBe(OrderStatus.PROVISIONING_FAILED);
+    expect(failed.status).toBe(OrderStatus.PROVISIONING);
     expect(failed.provisioningFailure).toEqual({
       code: "INVENTORY_UNAVAILABLE",
       message: expect.any(String),
     });
     expect(connectivity.provision).not.toHaveBeenCalled();
-    expect(inventory.release).toHaveBeenCalledWith("stock-1");
+    expect(failed.operationalDisposition).toBe("RETRY_AUTOMATIC");
+    expect(inventory.release).not.toHaveBeenCalled();
   });
 
   it("stays PROVISIONING (retryable) when out of stock before the final attempt", async () => {
@@ -256,7 +350,10 @@ describe("OrdersService asynchronous provisioning", () => {
     ).rejects.toThrow("No eSIM inventory is currently available");
 
     expect(orders.get("stock-2").status).toBe(OrderStatus.PROVISIONING);
-    expect(orders.get("stock-2").provisioningFailure).toBeUndefined();
+    expect(orders.get("stock-2").provisioningFailure).toMatchObject({
+      code: "INVENTORY_UNAVAILABLE",
+      message: expect.stringContaining("payment is already confirmed"),
+    });
     expect(inventory.release).not.toHaveBeenCalled();
   });
 
@@ -290,13 +387,11 @@ describe("OrdersService asynchronous provisioning", () => {
     const inventory = {
       customerIdForOrder: vi.fn().mockResolvedValue("cust-1"),
       assign: vi.fn().mockResolvedValue(undefined),
-      inventoryForOrder: vi
-        .fn()
-        .mockResolvedValue({
-          id: "inv-1",
-          iccid: "8988247076000000319",
-          msisdn: "882470001",
-        }),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+        msisdn: "882470001",
+      }),
     };
     const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
     const orders = ordersService(
@@ -335,25 +430,21 @@ describe("OrdersService.reconcileStaleActivationOrders", () => {
         provider: "MOCK",
         capabilities: { esimDetails: true },
       }),
-      getEsimDetails: vi
-        .fn()
-        .mockResolvedValue({
-          subscriptionId: "sub-1",
-          status: "downloaded",
-          qrPayload: "LPA:1$recovered",
-        }),
+      getEsimDetails: vi.fn().mockResolvedValue({
+        subscriptionId: "sub-1",
+        status: "downloaded",
+        qrPayload: "LPA:1$recovered",
+      }),
     } as unknown as ConnectivityService;
     const inventory = {
       customerIdForOrder: vi.fn().mockResolvedValue("cust-1"),
       assign: vi.fn().mockResolvedValue(undefined),
       applyLifecycle: vi.fn().mockResolvedValue(undefined),
-      inventoryForOrder: vi
-        .fn()
-        .mockResolvedValue({
-          id: "inventory-1",
-          iccid: "8900000000000000001",
-          msisdn: "882470001",
-        }),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inventory-1",
+        iccid: "8900000000000000001",
+        msisdn: "882470001",
+      }),
     } as unknown as InventoryService;
     const orders = ordersService([readyOrder()], connectivity, inventory);
     await orders.refreshFromPersistence();

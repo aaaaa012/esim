@@ -456,6 +456,7 @@ export class PartnerService {
         code: "PLAN_UNAVAILABLE",
         message: "Plan is unavailable",
       });
+    await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const verification =
       await this.prisma.partnerDocumentVerification.findFirst({
         where: { id: input.documentVerificationId, partnerId },
@@ -1310,6 +1311,8 @@ export class PartnerService {
     // than silently downgrading without any signal.
     const topUpUnavailable =
       Boolean(input.topUpMobile) && !isTopUp && topUp !== null;
+    if (!isTopUp)
+      await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const token = randomBytes(24).toString("base64url");
     const sessionId = randomUUID();
     const id = randomUUID();

@@ -536,8 +536,13 @@ export class OrdersPersistenceService {
     orderId: string,
     reference: string,
     transactionId?: string,
-  ): Promise<{ claimed: boolean; alreadyCompleted: boolean }> {
-    if (!this.prisma.enabled) return { claimed: true, alreadyCompleted: false };
+  ): Promise<{
+    claimed: boolean;
+    alreadyCompleted: boolean;
+    requiresReview: boolean;
+  }> {
+    if (!this.prisma.enabled)
+      return { claimed: true, alreadyCompleted: false, requiresReview: false };
     return this.prisma.$transaction(
       async (tx) => {
         const payment = await tx.payment.findUnique({
@@ -553,7 +558,15 @@ export class OrdersPersistenceService {
             "Payment reference does not belong to this order",
           );
         if (payment.status === PaymentStatus.COMPLETED)
-          return { claimed: false, alreadyCompleted: true };
+          return {
+            claimed: false,
+            alreadyCompleted: true,
+            requiresReview: false,
+          };
+        const orderCanAdvance = [
+          OrderStatus.PAYMENT_PENDING,
+          OrderStatus.PAYMENT_REVIEW_REQUIRED,
+        ].includes(payment.order.status as OrderStatus);
         const paid = await tx.payment.updateMany({
           where: {
             paymentReference: reference,
@@ -579,8 +592,15 @@ export class OrdersPersistenceService {
           return {
             claimed: false,
             alreadyCompleted: latest?.status === PaymentStatus.COMPLETED,
+            requiresReview: false,
           };
         }
+        if (!orderCanAdvance)
+          return {
+            claimed: true,
+            alreadyCompleted: false,
+            requiresReview: true,
+          };
         const transitioned = await tx.order.updateMany({
           where: {
             id: orderId,
@@ -606,7 +626,11 @@ export class OrdersPersistenceService {
             },
           });
         }
-        return { claimed: true, alreadyCompleted: false };
+        return {
+          claimed: true,
+          alreadyCompleted: false,
+          requiresReview: false,
+        };
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,

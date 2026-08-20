@@ -10,11 +10,13 @@ export type PaymentVerification = {
   providerTransactionId?: string;
   status: PaymentStatus;
   amountNpr: number;
+  currency?: string;
   orderId: string;
 };
 export type PaymentContext = {
   orderId: string;
   amountNpr: number;
+  currency?: string;
   correlationId?: string;
 };
 export interface PaymentGateway {

@@ -68,6 +68,8 @@ import {
 import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
 import { ManualRefundsController } from "./modules/payments/manual-refunds.controller.js";
 import { ManualRefundsService } from "./modules/payments/manual-refunds.service.js";
+import { PaymentDisputesController } from "./modules/payments/payment-disputes.controller.js";
+import { PaymentDisputesService } from "./modules/payments/payment-disputes.service.js";
 import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
 import { AttentionController } from "./modules/operations/attention.controller.js";
 
@@ -103,6 +105,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     PartnerShowcaseAdminController,
     PartnerShowcasePublicController,
     ManualRefundsController,
+    PaymentDisputesController,
     AttentionController,
   ],
   providers: [
@@ -142,6 +145,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     TransatelOperationsService,
     PartnerShowcaseService,
     ManualRefundsService,
+    PaymentDisputesService,
     ProductionResilienceService,
   ],
 })

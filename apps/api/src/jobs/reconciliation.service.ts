@@ -15,6 +15,7 @@ import { PaymentsService } from "../modules/payments/payments.service.js";
 import { InventoryService } from "../modules/inventory/inventory.service.js";
 import { TransatelOperationsService } from "../modules/integration/transatel-operations.service.js";
 import { ProductionResilienceService } from "./production-resilience.service.js";
+import { ManualRefundsService } from "../modules/payments/manual-refunds.service.js";
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -41,6 +42,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly inventory: InventoryService,
     private readonly transatelOperations: TransatelOperationsService,
     private readonly resilience: ProductionResilienceService,
+    private readonly refunds: ManualRefundsService,
     private readonly metrics?: MetricsService,
   ) {}
 
@@ -114,9 +116,6 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async run() {
-    await this.resilience.heartbeat("reconciliation", {
-      role: process.env.PROCESS_ROLE ?? "api",
-    });
     await this.resilience.dispatchOutbox();
     await this.requeueUnprocessedWebhooks();
     await this.reconcileStaleDocumentReviews();
@@ -127,7 +126,12 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     await this.orders.recoverStuckProvisioningOrders();
     await this.orders.recoverApprovedOrders();
     await this.payments.reconcilePendingPayments();
-    if (!this.prisma.enabled) return;
+    await this.inventory.reconcileStaleReservations();
+    await this.refunds.reconcilePending();
+    if (!this.prisma.enabled) {
+      await this.markReconciliationSuccess();
+      return;
+    }
     if (!this.repairedReusableInventory) {
       await this.repairReusableEsims();
       this.repairedReusableInventory = true;
@@ -143,7 +147,10 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       },
       take: 500,
     });
-    if (!subscriptions.length) return;
+    if (!subscriptions.length) {
+      await this.markReconciliationSuccess();
+      return;
+    }
     const minutes = Number(process.env.RECONCILIATION_INTERVAL_MINUTES ?? 15);
     const stalenessMs =
       (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
@@ -166,6 +173,14 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `Queued ${queued} subscription usage reconciliation job(s)`,
       );
+    await this.markReconciliationSuccess();
+  }
+
+  private markReconciliationSuccess() {
+    return this.resilience.heartbeat("reconciliation", {
+      role: process.env.PROCESS_ROLE ?? "workflow-worker",
+      completedAt: new Date().toISOString(),
+    });
   }
 
   private async requeueUnprocessedWebhooks() {
@@ -243,12 +258,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const orders = await this.prisma.order.findMany({
       where: {
         status: {
-          in: [
-            "PROVISIONING",
-            "QR_READY",
-            "ACTIVATION_ATTENTION",
-            "COMPLETED",
-          ],
+          in: ["PROVISIONING", "QR_READY", "ACTIVATION_ATTENTION", "COMPLETED"],
         },
         documentReviewPolicy: { not: "NO_REVIEW" },
         documentReviewStatus: "NOT_STARTED",
@@ -685,6 +695,26 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
           item.providerSubscriptionId === subscription.providerSubscriptionId,
       );
       if (usage.subscriptions && !own) {
+        await this.prisma.subscription.update({
+          where: { id: subscriptionId },
+          data: { assignmentVerificationStatus: "MISMATCH" },
+        });
+        await this.resilience.attention({
+          dedupeKey: `subscription-assignment:${subscriptionId}`,
+          category: "SUBSCRIPTION_ASSIGNMENT_CONFLICT",
+          entityType: "Subscription",
+          entityId: subscriptionId,
+          orderId: subscription.customerEsim.orderId,
+          severity: "CRITICAL",
+          summary: "Provider subscription is missing from its assigned eSIM",
+          detail:
+            "Provider usage evidence lists different subscriptions for the assigned ICCID; last-known usage was preserved",
+          localState: subscription.status,
+          externalState: "SUBSCRIPTION_NOT_FOUND_ON_ICCID",
+          lastSuccessfulStep: "ESIM_ASSIGNED",
+          failureCategory: "PROVIDER_ASSIGNMENT_MISMATCH",
+          availableActions: ["RECHECK_ORDER_PROVIDER"],
+        });
         this.logger.warn(
           `Provider subscription ${subscription.providerSubscriptionId} was not found on its assigned eSIM`,
         );
@@ -706,6 +736,11 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
             : {}),
         },
       });
+      await this.resilience.resolve(
+        `subscription-assignment:${subscriptionId}`,
+        null,
+        "Provider usage confirms the assigned subscription",
+      );
       this.logger.debug(
         `Reconciled usage for subscription ${subscriptionId}: ${usage.usedMb}/${usage.totalMb} MB`,
       );

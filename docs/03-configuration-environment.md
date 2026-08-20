@@ -35,11 +35,15 @@ the reading code.
 
 ## Queues
 
-| Variable                          | Default | Used by                                                                                         |
-| --------------------------------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `REDIS_URL`                       | —       | Enables BullMQ (`queue.service.ts:14`)                                                          |
-| `QUEUE_CONCURRENCY`               | `3`     | Worker concurrency (`queue.service.ts:29`)                                                      |
-| `RECONCILIATION_INTERVAL_MINUTES` | `15`    | Reconciliation sweep interval and staleness threshold (`reconciliation.service.ts:32-33,55-56`) |
+| Variable                             | Default | Used by                                                                                         |
+| ------------------------------------ | ------- | ----------------------------------------------------------------------------------------------- |
+| `REDIS_URL`                          | —       | Enables BullMQ (`queue.service.ts:14`)                                                          |
+| `QUEUE_CONCURRENCY`                  | `3`     | Worker concurrency (`queue.service.ts:29`)                                                      |
+| `RECONCILIATION_INTERVAL_MINUTES`    | `15`    | Reconciliation sweep interval and staleness threshold (`reconciliation.service.ts:32-33,55-56`) |
+| `PAYMENT_VERIFY_ATTEMPTS`            | `3`     | Durable gateway verification attempts before payment moves to Ops review                        |
+| `INVENTORY_PROVIDER_FRESHNESS_HOURS` | `24`    | Maximum provider-check age for sellable inventory                                               |
+| `INVENTORY_RESERVATION_STALE_HOURS`  | `2`     | Age at which provider-unbound reservations enter safe reconciliation                            |
+| `REFUND_ATTENTION_HOURS`             | `24`    | Age at which unresolved manual refunds create an Ops attention case                             |
 
 ## Guest checkout
 
@@ -111,16 +115,16 @@ blocking payment, matching the local-simulator flow.
 
 ## Notifications
 
-| Variable                                                                | Used by                                                                                                                                          |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `NOTIFICATION_MODE`                                                     | `live` enables real delivery; `simulator` never calls Resend or WhatsApp                                                                         |
-| `EMAIL_PROVIDER`                                                        | Must be `resend`; the provider-neutral channel is ready for a future SES adapter                                                                 |
-| `RESEND_API_KEY`                                                        | Sending-only Resend API key                                                                                                                       |
-| `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`               | Verified-domain sender, display name, and optional reply-to address                                                                               |
-| `WHATSAPP_API_URL`                                                      | WhatsApp Graph URL, default `https://graph.facebook.com/v21.0` (`whatsapp.channel.ts:7`)                                                         |
-| `WHATSAPP_ACCESS_TOKEN`                                                 | WhatsApp auth (`whatsapp.channel.ts:7`)                                                                                                          |
-| `WHATSAPP_PHONE_NUMBER_ID`                                              | WhatsApp sender (`whatsapp.channel.ts:7`)                                                                                                        |
-| `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | Reports WhatsApp integration HEALTHY when `NOTIFICATION_MODE === 'live'` and all three present (`admin.service.ts:257-269`)                      |
+| Variable                                                                | Used by                                                                                                                     |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `NOTIFICATION_MODE`                                                     | `live` enables real delivery; `simulator` never calls Resend or WhatsApp                                                    |
+| `EMAIL_PROVIDER`                                                        | Must be `resend`; the provider-neutral channel is ready for a future SES adapter                                            |
+| `RESEND_API_KEY`                                                        | Sending-only Resend API key                                                                                                 |
+| `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`               | Verified-domain sender, display name, and optional reply-to address                                                         |
+| `WHATSAPP_API_URL`                                                      | WhatsApp Graph URL, default `https://graph.facebook.com/v21.0` (`whatsapp.channel.ts:7`)                                    |
+| `WHATSAPP_ACCESS_TOKEN`                                                 | WhatsApp auth (`whatsapp.channel.ts:7`)                                                                                     |
+| `WHATSAPP_PHONE_NUMBER_ID`                                              | WhatsApp sender (`whatsapp.channel.ts:7`)                                                                                   |
+| `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | Reports WhatsApp integration HEALTHY when `NOTIFICATION_MODE === 'live'` and all three present (`admin.service.ts:257-269`) |
 
 ## Partner API
 

@@ -175,29 +175,70 @@ describe("InventoryService.release", () => {
   });
 });
 
+describe("InventoryService.assertAvailableForNewOrder", () => {
+  it("rejects order admission when no fresh, approved provider stock exists", async () => {
+    const count = vi.fn().mockResolvedValue(0);
+    const prisma = {
+      enabled: true,
+      esimInventory: { count },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await expect(inventory.assertAvailableForNewOrder()).rejects.toThrow(
+      "No eSIM inventory is currently available",
+    );
+    expect(count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: "AVAILABLE",
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          batch: { status: "APPROVED" },
+        }),
+      }),
+    );
+  });
+
+  it("allows order admission when at least one eligible profile exists", async () => {
+    const prisma = {
+      enabled: true,
+      esimInventory: { count: vi.fn().mockResolvedValue(1) },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await expect(
+      inventory.assertAvailableForNewOrder(),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe("InventoryService.reconcileProviderProfile", () => {
   function reconciliationPrisma() {
-    const update = vi
-      .fn()
-      .mockImplementation(({ data }) =>
-        Promise.resolve({
-          id: "inv-1",
-          iccid: "8988247076000000319",
-          status: data.status ?? "AVAILABLE",
-          lastProviderCheckedAt: data.lastProviderCheckedAt,
-        }),
-      );
+    const update = vi.fn().mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+        status: data.status ?? "AVAILABLE",
+        lastProviderCheckedAt: data.lastProviderCheckedAt,
+      }),
+    );
     return {
       enabled: true,
       esimInventory: {
-        findUnique: vi
-          .fn()
-          .mockResolvedValue({
-            id: "inv-1",
-            iccid: "8988247076000000319",
-            status: "AVAILABLE",
-            assignedOrderId: null,
-          }),
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inv-1",
+          iccid: "8988247076000000319",
+          status: "AVAILABLE",
+          assignedOrderId: null,
+        }),
         update,
       },
     } as unknown as PrismaService;
@@ -206,12 +247,10 @@ describe("InventoryService.reconcileProviderProfile", () => {
   it("keeps an unassigned profile available when Transatel reports a safe stock state", async () => {
     const prisma = reconciliationPrisma();
     const connectivity = {
-      getEsimDetails: vi
-        .fn()
-        .mockResolvedValue({
-          subscriptionId: "8988247076000000319",
-          status: "available",
-        }),
+      getEsimDetails: vi.fn().mockResolvedValue({
+        subscriptionId: "8988247076000000319",
+        status: "available",
+      }),
     } as unknown as ConnectivityService;
     const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
     const result = await inventory.reconcileProviderProfile("inv-1");
@@ -230,12 +269,10 @@ describe("InventoryService.reconcileProviderProfile", () => {
   it("quarantines unassigned inventory that Transatel reports as already downloaded", async () => {
     const prisma = reconciliationPrisma();
     const connectivity = {
-      getEsimDetails: vi
-        .fn()
-        .mockResolvedValue({
-          subscriptionId: "8988247076000000319",
-          status: "downloaded",
-        }),
+      getEsimDetails: vi.fn().mockResolvedValue({
+        subscriptionId: "8988247076000000319",
+        status: "downloaded",
+      }),
     } as unknown as ConnectivityService;
     const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
     const result = await inventory.reconcileProviderProfile("inv-1");
@@ -393,8 +430,153 @@ describe("InventoryService.reserve provider safety", () => {
             in: expect.arrayContaining(["available", "allocated"]),
           },
           lastProviderCheckedAt: { gte: expect.any(Date) },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
           batch: { status: "APPROVED" },
         }),
+      }),
+    );
+  });
+
+  it("allows only one concurrent order to claim the last eligible profile", async () => {
+    let claimed = false;
+    const candidate = {
+      id: "inv-last",
+      iccid: "8988247000000000999",
+      eid: "eid-last",
+      status: "AVAILABLE",
+      assignedOrderId: null,
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn(async () => null),
+        findFirst: vi.fn(async () => (claimed ? null : candidate)),
+        updateMany: vi.fn(async () => {
+          if (claimed) return { count: 0 };
+          claimed = true;
+          return { count: 1 };
+        }),
+      },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    const results = await Promise.allSettled([
+      inventory.reserve("order-a"),
+      inventory.reserve("order-b"),
+    ]);
+
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
+  });
+});
+
+describe("InventoryService stale reservation reconciliation", () => {
+  it("releases only a provider-unbound reservation for a terminal order", async () => {
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findMany: vi.fn(async () => [
+          {
+            id: "inv-1",
+            iccid: "8988247000000000001",
+            status: "RESERVED",
+            assignedOrderId: "order-1",
+            providerSubscriptionId: null,
+            providerStatus: "available",
+            assignedOrder: {
+              id: "order-1",
+              orderNumber: "VC-1",
+              status: "CANCELLED",
+              provisioningOperation: {
+                state: "CREATED",
+                providerOrderId: null,
+              },
+            },
+          },
+        ]),
+        updateMany,
+      },
+    } as unknown as PrismaService;
+    const attention = vi.fn();
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+      { attention } as never,
+    );
+
+    await expect(inventory.reconcileStaleReservations()).resolves.toEqual({
+      released: ["inv-1"],
+      attention: [],
+    });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          providerSubscriptionId: null,
+          assignedOrderId: "order-1",
+        }),
+        data: expect.objectContaining({
+          status: "AVAILABLE",
+          assignedOrderId: null,
+        }),
+      }),
+    );
+    expect(attention).not.toHaveBeenCalled();
+  });
+
+  it("keeps an ambiguous reservation locked and creates an Ops case", async () => {
+    const updateMany = vi.fn();
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findMany: vi.fn(async () => [
+          {
+            id: "inv-2",
+            iccid: "8988247000000000002",
+            status: "RESERVED",
+            assignedOrderId: "order-2",
+            providerSubscriptionId: null,
+            providerStatus: "allocated",
+            assignedOrder: {
+              id: "order-2",
+              orderNumber: "VC-2",
+              status: "PROVISIONING",
+              provisioningOperation: {
+                state: "SUBMITTING",
+                providerOrderId: null,
+              },
+            },
+          },
+        ]),
+        updateMany,
+      },
+    } as unknown as PrismaService;
+    const attention = vi.fn(async () => undefined);
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+      { attention } as never,
+    );
+
+    await expect(inventory.reconcileStaleReservations()).resolves.toEqual({
+      released: [],
+      attention: ["inv-2"],
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(attention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "INVENTORY_RESERVATION_STALE",
+        availableActions: ["RECONCILE_RESERVATION"],
       }),
     );
   });

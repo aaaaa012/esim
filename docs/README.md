@@ -31,6 +31,7 @@ FROM CODE` rather than guessed.
 | [18-ops-web.md](./18-ops-web.md)                                                             | Operations portal pages and their API calls                                         |
 | [19-observability-hardening.md](./19-observability-hardening.md)                             | Health, rate limiting, logging, correlation, exception handling, audit              |
 | [20-documentation-gaps.md](./20-documentation-gaps.md)                                       | Things that could not be determined from the code                                   |
+| [PRODUCTION-SCENARIO-ACCEPTANCE.md](./PRODUCTION-SCENARIO-ACCEPTANCE.md)                     | Production failure scenarios, implemented controls, and launch evidence             |
 
 ## Pre-existing documentation
 

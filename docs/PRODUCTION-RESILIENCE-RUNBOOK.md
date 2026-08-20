@@ -15,10 +15,22 @@ All processes share `DATABASE_URL`, `REDIS_URL`, encryption keys, provider crede
 - `PAYMENT_REVIEW_REQUIRED`: recheck the payment provider; never create another charge or mark paid manually.
 - `ACTIVATION_ATTENTION`: preserve the delivered QR and reconcile Transatel; do not release inventory automatically.
 - Inventory is sellable only after a fresh provider state of `available` or `allocated`.
+- Paid orders with no safe inventory remain `PROVISIONING`, are retried by reconciliation, and create `INVENTORY_SHORTAGE` attention. They are not changed to a terminal failure.
+- Reservations older than `INVENTORY_RESERVATION_STALE_HOURS` are released only when the order is terminal and no provider submission evidence exists. Every ambiguous reservation stays locked.
+- Payment verification attempt counts live on the payment row. Exhausted gateway-unreachable checks create `PAYMENT_REVIEW_REQUIRED`, never `PAYMENT_FAILED`.
+- Chargeback and dispute callbacks create durable financial cases. Never rewrite the original order history or suspend service without an audited Ops decision.
+- An older Transatel callback is ignored when it would regress an activated or terminal provider state. Wrong ICCID/subscription evidence is rejected before any lifecycle mutation.
 - Replay callbacks and reconcile provisioning from the Attention queue. Every action is audited.
 - `NO_REVIEW` may only be selected explicitly by Super Admin; infrastructure failure always falls back to manual review.
 
 Monitor `/api/v1/operations/attention/platform-health` for worker heartbeats, queue age/depth, pending outbox messages, dead letters, dependencies, and open attention cases.
+
+## Customer-support policies
+
+- Incompatible device after successful provisioning: do not auto-refund; Ops applies the published compatibility/refund policy.
+- Deleted eSIM: do not automatically create a replacement subscription or a new QR.
+- Shared or compromised QR: preserve payment evidence, open a security/support case, and reconcile or suspend through audited provider actions.
+- Unexpected post-activation suspension or termination: open a critical service/refund case; never rewrite payment history.
 
 # Database deployment gate
 

@@ -165,7 +165,7 @@ export const provisioningFailure = (
 ): ProvisioningFailure => {
   const messages: Record<ProvisioningFailureCode, string> = {
     INVENTORY_UNAVAILABLE:
-      "We are out of stock for this plan right now. You have not been charged.",
+      "Safe eSIM stock is temporarily unavailable. If payment is already confirmed, it remains recorded while our team completes activation.",
     PLAN_UNAVAILABLE:
       "This plan is no longer offered. Please choose another plan.",
     PROVIDER_UNAVAILABLE:

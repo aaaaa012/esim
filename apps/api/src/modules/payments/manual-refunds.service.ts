@@ -13,6 +13,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { OrdersService } from "../orders/orders.service.js";
+import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 
 const ACTIVE = [ManualRefundStatus.REQUESTED, ManualRefundStatus.APPROVED];
 
@@ -21,6 +22,7 @@ export class ManualRefundsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
+    private readonly resilience?: ProductionResilienceService,
   ) {}
 
   async list(input: {
@@ -53,6 +55,52 @@ export class ManualRefundsService {
       this.prisma.manualRefund.count({ where }),
     ]);
     return { items, total, limit, offset };
+  }
+
+  async item(id: string) {
+    const refund = await this.prisma.manualRefund.findUnique({
+      where: { id },
+      include: {
+        order: { select: { orderNumber: true, status: true } },
+        payment: true,
+      },
+    });
+    if (!refund) throw new NotFoundException("Manual refund request not found");
+    return refund;
+  }
+
+  async reconcilePending() {
+    if (!this.prisma.enabled || !this.resilience)
+      return { attention: [] as string[] };
+    const hours = Math.max(1, Number(process.env.REFUND_ATTENTION_HOURS ?? 24));
+    const staleBefore = new Date(Date.now() - hours * 60 * 60_000);
+    const refunds = await this.prisma.manualRefund.findMany({
+      where: {
+        status: { in: ACTIVE },
+        updatedAt: { lte: staleBefore },
+      },
+      include: { order: { select: { orderNumber: true } } },
+      take: 100,
+      orderBy: { updatedAt: "asc" },
+    });
+    for (const refund of refunds)
+      await this.resilience.attention({
+        dedupeKey: `manual-refund-stale:${refund.id}`,
+        category: "REFUND_ACTION_REQUIRED",
+        entityType: "ManualRefund",
+        entityId: refund.id,
+        orderId: refund.orderId,
+        summary: `Refund for ${refund.order.orderNumber} needs action`,
+        detail: `${refund.status} refund has not changed for ${hours} hour(s)`,
+        localState: refund.status,
+        lastSuccessfulStep:
+          refund.status === ManualRefundStatus.APPROVED
+            ? "REFUND_APPROVED"
+            : "REFUND_REQUESTED",
+        failureCategory: "REFUND_STALE",
+        availableActions: ["REVIEW_MANUAL_REFUND"],
+      });
+    return { attention: refunds.map((refund) => refund.id) };
   }
 
   async request(

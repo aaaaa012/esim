@@ -321,6 +321,8 @@ export class OrdersService implements OnModuleInit {
     const purchaseType = selectedTarget?.countryCodes.includes(plan.countryCode)
       ? ("TOPUP" as const)
       : ("INITIAL_PURCHASE" as const);
+    if (purchaseType === "INITIAL_PURCHASE")
+      await this.assertInventoryAvailableForNewOrder();
     const topUpEmail =
       purchaseType === "TOPUP"
         ? meta?.mobile
@@ -377,6 +379,10 @@ export class OrdersService implements OnModuleInit {
         );
     }
     return this.redact(order);
+  }
+
+  async assertInventoryAvailableForNewOrder() {
+    await this.inventory.assertAvailableForNewOrder();
   }
   /**
    * Builds the Prisma `OR` filter for looking up a customer by either its
@@ -816,7 +822,7 @@ export class OrdersService implements OnModuleInit {
     reference: string,
     transactionId?: string,
   ) {
-    await this.persistence.confirmPaymentAtomically(
+    const claim = await this.persistence.confirmPaymentAtomically(
       id,
       reference,
       transactionId,
@@ -825,6 +831,25 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id);
     if (order.payment?.reference !== reference)
       throw new BadRequestException("Payment reference mismatch");
+    if (claim.requiresReview) {
+      await this.resilience?.attention({
+        dedupeKey: `late-payment:${id}:${reference}`,
+        category: "PAYMENT_REFUND_REVIEW",
+        entityType: "Order",
+        entityId: id,
+        orderId: id,
+        severity: "CRITICAL",
+        summary: `Payment arrived after ${order.orderNumber} could no longer advance`,
+        detail:
+          "Gateway payment evidence was preserved, but provisioning was not started because the local order was cancelled, failed, refunded, or otherwise ineligible",
+        localState: order.status,
+        externalState: PaymentStatus.COMPLETED,
+        lastSuccessfulStep: "PAYMENT_CONFIRMED_EXTERNALLY",
+        failureCategory: "LATE_PAYMENT_ON_INELIGIBLE_ORDER",
+        availableActions: ["RECHECK_PAYMENT", "REVIEW_MANUAL_REFUND"],
+      });
+      return this.redact(order);
+    }
     // Another replica may already have handed this order to provisioning. The
     // canonical database state determines the response and prevents duplicate
     // provisioning commands.
@@ -851,9 +876,8 @@ export class OrdersService implements OnModuleInit {
     if (current.status === OrderStatus.PROVISIONING)
       await this.enqueueProvisioning(current, `provision-${current.id}`);
     await this.ensureDocumentReviewAttention(current);
-    await this.resilience?.resolve(
+    await this.safeResolveAttention(
       `payment-review:${id}`,
-      null,
       "Payment confirmed by the gateway",
     );
     return this.redact(current);
@@ -861,11 +885,9 @@ export class OrdersService implements OnModuleInit {
 
   /**
    * Guards payment confirmation per order id. Browser verification, the
-   * callback path and the background reconcile can all reach confirmation for
-   * the same order simultaneously; without this, two callers could read
-   * PENDING before either persists COMPLETED and both auto-approve/provision.
-   * This is a single-instance safeguard — multi-instance deployments need an
-   * atomic database transition (see plan follow-up).
+   * callback path and the background reconcile can all reach confirmation at
+   * once. This lock is only the non-persistent development fallback;
+   * production uses confirmPaymentAtomically() and optimistic order versions.
    */
   private async confirmPaymentUnlocked(
     id: string,
@@ -1351,10 +1373,10 @@ export class OrdersService implements OnModuleInit {
     if (decision === "REUPLOAD")
       await this.safeNotify(order, "DOCUMENT_REUPLOAD", reason!.trim());
     if (order.documentReviewStatus === "MANUALLY_APPROVED")
-      await this.resilience?.resolve(
+      await this.safeResolveAttention(
         `document-review:${order.id}`,
-        actorId,
         "All required documents manually approved",
+        actorId,
       );
     else if (decision === "REUPLOAD")
       await this.resilience?.attention({
@@ -1540,10 +1562,16 @@ export class OrdersService implements OnModuleInit {
         throw new Error(
           "Connectivity provider did not return a subscription id",
         );
+      delete order.provisioningFailure;
+      delete order.operationalDisposition;
       order.providerSubscriptionId = result.providerSubscriptionId;
       order.providerStatus = "PRELOADED";
       if (result.status === "DELAYED" || !result.qrPayload) {
         await this.persistence.save(order);
+        await this.safeResolveAttention(
+          `provisioning-failure:${order.id}`,
+          "Provider accepted the provisioning request",
+        );
         this.logger.log(
           `Transatel accepted order ${order.id} as ${result.providerSubscriptionId}; waiting for activation details`,
         );
@@ -1589,6 +1617,10 @@ export class OrdersService implements OnModuleInit {
         `Provisioned on attempt ${attempt}; activation QR delivered`,
       );
       await this.persistence.save(order);
+      await this.safeResolveAttention(
+        `provisioning-failure:${order.id}`,
+        "Provider accepted the provisioning request",
+      );
       await this.safeNotify(order, "QR_READY");
       return this.redact(order);
     } catch (error) {
@@ -1619,13 +1651,43 @@ export class OrdersService implements OnModuleInit {
       const permanentRejection =
         error instanceof ApiException &&
         String(error.internalDetail ?? "").startsWith("PERMANENT_");
+      const classifiedFailure = this.classifyProvisioningFailure(error);
+      const inventoryShortage =
+        classifiedFailure.code === "INVENTORY_UNAVAILABLE";
+      if (inventoryShortage) {
+        order.provisioningFailure = classifiedFailure;
+        order.operationalDisposition = "RETRY_AUTOMATIC";
+        await this.persistence.save(order);
+        await this.resilience?.attention({
+          dedupeKey: `provisioning-failure:${order.id}`,
+          category: "INVENTORY_SHORTAGE",
+          entityType: "Order",
+          entityId: order.id,
+          orderId: order.id,
+          summary: `Safe inventory is unavailable for ${order.orderNumber}`,
+          detail: errorCode,
+          localState: OrderStatus.PROVISIONING,
+          lastSuccessfulStep: "PAYMENT_CONFIRMED",
+          failureCategory: "INVENTORY_UNAVAILABLE",
+          nextRetryAt: new Date(
+            Date.now() +
+              Number(process.env.PROVISIONING_RECOVERY_RETRY_MINUTES ?? 10) *
+                60_000,
+          ),
+          availableActions: ["RECHECK_INVENTORY"],
+        });
+        this.logger.warn(
+          `Order ${order.id} is waiting for safe inventory; provisioning remains recoverable`,
+        );
+        throw error;
+      }
       if (finalAttempt || permanentRejection) {
         this.metrics?.recordFailure("provisioning", "exhausted");
         if (permanentRejection) order.providerStatus = "REJECTED";
+        order.provisioningFailure = classifiedFailure;
         order.operationalDisposition = permanentRejection
           ? "TERMINAL_REJECTION"
           : "MANUAL_ACTION";
-        order.provisioningFailure = this.classifyProvisioningFailure(error);
         this.transition(
           order,
           OrderStatus.PROVISIONING_FAILED,
@@ -1709,6 +1771,8 @@ export class OrdersService implements OnModuleInit {
     order.qrDeliveredAt = new Date().toISOString();
     order.providerSubscriptionId = input.providerSubscriptionId;
     order.providerStatus = "PRELOADED";
+    delete order.provisioningFailure;
+    delete order.operationalDisposition;
     const assigned = await this.inventory.inventoryForOrder(order.id);
     if (assigned)
       order.assignment = {
@@ -1724,6 +1788,10 @@ export class OrdersService implements OnModuleInit {
       input.reason ?? "Recovered provider QR after local persistence failure",
     );
     await this.persistence.save(order);
+    await this.safeResolveAttention(
+      `provisioning-failure:${order.id}`,
+      "Provider QR was recovered successfully",
+    );
     await this.safeNotify(order, "QR_READY");
     return this.redact(order);
   }
@@ -1753,6 +1821,80 @@ export class OrdersService implements OnModuleInit {
     if (!order)
       throw new NotFoundException(`No active order found for ${event.orderId}`);
     const provider = this.connectivity.descriptor().provider;
+    const assignedBeforeEvent = await this.inventory.inventoryForOrder(
+      order.id,
+    );
+    const identityConflict =
+      (event.iccid &&
+        assignedBeforeEvent?.iccid &&
+        event.iccid !== assignedBeforeEvent.iccid) ||
+      (event.subscriptionId &&
+        order.providerSubscriptionId &&
+        event.subscriptionId !== order.providerSubscriptionId);
+    if (identityConflict) {
+      await this.resilience?.attention({
+        dedupeKey: `provider-callback-identity:${order.id}:${event.eventType}:${event.status ?? "UNKNOWN"}`,
+        category: "PROVIDER_CALLBACK_IDENTITY_CONFLICT",
+        entityType: "Order",
+        entityId: order.id,
+        orderId: order.id,
+        severity: "CRITICAL",
+        summary: `Transatel callback identity does not match ${order.orderNumber}`,
+        detail:
+          "The callback ICCID or subscription belongs to different provider evidence; no lifecycle mutation was applied",
+        localState: order.status,
+        externalState: event.status ?? event.eventType,
+        lastSuccessfulStep: "CALLBACK_RECEIVED",
+        failureCategory: "PROVIDER_IDENTITY_CONFLICT",
+        availableActions: ["RECONCILE_ORDER_PROVISIONING"],
+      });
+      throw new BadRequestException(
+        "Provider callback identity does not match the assigned eSIM",
+      );
+    }
+
+    const currentProviderState = order.providerStatus?.toUpperCase();
+    const incomingProviderState = event.status?.toUpperCase();
+    const currentIsTerminal = [
+      "TERMINATED",
+      "CANCELED",
+      "CANCELLED",
+      "EXPIRED",
+    ].includes(currentProviderState ?? "");
+    const incomingWouldRegress =
+      (currentProviderState === "ACTIVATED" &&
+        incomingProviderState === "PRELOADED") ||
+      (currentIsTerminal &&
+        Boolean(incomingProviderState) &&
+        incomingProviderState !== currentProviderState);
+    if (incomingWouldRegress) {
+      if (currentIsTerminal) {
+        await this.resilience?.attention({
+          dedupeKey: `provider-callback-ordering:${order.id}:${event.eventType}:${incomingProviderState}`,
+          category: "PROVIDER_CALLBACK_ORDERING_CONFLICT",
+          entityType: "Order",
+          entityId: order.id,
+          orderId: order.id,
+          severity: "HIGH",
+          summary: `An older Transatel callback conflicted with ${order.orderNumber}`,
+          detail:
+            "The callback was retained for audit but ignored because it would replace a terminal provider state",
+          ...(currentProviderState ? { localState: currentProviderState } : {}),
+          ...(incomingProviderState
+            ? { externalState: incomingProviderState }
+            : {}),
+          lastSuccessfulStep: "CALLBACK_ORDER_VALIDATED",
+          failureCategory: "OUT_OF_ORDER_CALLBACK",
+          availableActions: ["RECHECK_ORDER_PROVIDER"],
+        });
+      }
+      return {
+        accepted: true,
+        eventType: event.eventType,
+        ignored: true,
+        reason: "OUT_OF_ORDER_PROVIDER_STATE",
+      };
+    }
     if (this.prisma.enabled && event.orderId) {
       const state =
         event.status === "ACTIVATED"
@@ -1830,14 +1972,34 @@ export class OrdersService implements OnModuleInit {
       this.prisma.enabled &&
       (event.status === "SUSPENDED" || event.status === "TERMINATED")
     ) {
-      await this.prisma.transatelLifecycleOperation.updateMany({
-        where: {
-          orderId: order.id,
-          action: event.status === "SUSPENDED" ? "SUSPEND" : "TERMINATE",
-          state: "ACCEPTED",
+      const expected = await this.prisma.transatelLifecycleOperation.updateMany(
+        {
+          where: {
+            orderId: order.id,
+            action: event.status === "SUSPENDED" ? "SUSPEND" : "TERMINATE",
+            state: "ACCEPTED",
+          },
+          data: { state: "CONFIRMED" },
         },
-        data: { state: "CONFIRMED" },
-      });
+      );
+      if (expected.count === 0) {
+        await this.resilience?.attention({
+          dedupeKey: `unexpected-provider-lifecycle:${order.id}:${event.status}`,
+          category: "UNEXPECTED_PROVIDER_LIFECYCLE",
+          entityType: "Order",
+          entityId: order.id,
+          orderId: order.id,
+          severity: "CRITICAL",
+          summary: `Transatel unexpectedly reported ${event.status.toLowerCase()} for ${order.orderNumber}`,
+          detail:
+            "No matching approved lifecycle operation exists; service and refund impact require review",
+          localState: order.status,
+          externalState: event.status,
+          lastSuccessfulStep: "ESIM_FULFILLED",
+          failureCategory: "UNEXPECTED_PROVIDER_STATE",
+          availableActions: ["RECHECK_ORDER_PROVIDER"],
+        });
+      }
     }
     await this.persistence.save(order);
     return { accepted: true, eventType: event.eventType };
@@ -2214,30 +2376,68 @@ export class OrdersService implements OnModuleInit {
       ...(input.iccid ? { iccid: input.iccid } : {}),
       ...(order.activatedAt ? { activatedAt: order.activatedAt } : {}),
     };
+    if (provider === "TRANSATEL" && input.subscriptionId) {
+      const topupTarget = await this.provisioningTarget(order);
+      const target =
+        topupTarget?.inventory ??
+        (await this.inventory.inventoryForOrder(order.id));
+      if (!target?.iccid)
+        throw new Error(
+          "Assigned eSIM could not be resolved for provider verification",
+        );
+      if (input.iccid && input.iccid !== target.iccid) {
+        await this.resilience?.attention({
+          dedupeKey: `provider-activation-conflict:${order.id}:${input.subscriptionId}`,
+          category: "PROVISIONING_IDENTITY_CONFLICT",
+          entityType: "Order",
+          entityId: order.id,
+          orderId: order.id,
+          severity: "CRITICAL",
+          summary: `Transatel activation identity does not match ${order.orderNumber}`,
+          detail: `Expected ICCID ${target.iccid}; provider reported ${input.iccid}`,
+          localState: order.status,
+          externalState: "ACTIVATED",
+          lastSuccessfulStep: "PROVIDER_SUBMISSION",
+          failureCategory: "PROVIDER_ICCID_MISMATCH",
+          availableActions: ["RECONCILE_ORDER_PROVISIONING"],
+        });
+        throw new ConflictException(
+          "Provider activation belongs to a different eSIM",
+        );
+      }
+      const usage = await this.connectivity.getUsage(target.iccid);
+      if (
+        !usage.subscriptions?.some(
+          (item) => item.providerSubscriptionId === input.subscriptionId,
+        )
+      ) {
+        await this.resilience?.attention({
+          dedupeKey: `provider-activation-conflict:${order.id}:${input.subscriptionId}`,
+          category: "PROVISIONING_IDENTITY_CONFLICT",
+          entityType: "Order",
+          entityId: order.id,
+          orderId: order.id,
+          severity: "CRITICAL",
+          summary: `Transatel subscription does not belong to ${order.orderNumber}`,
+          detail:
+            "The activated subscription was not present on the assigned ICCID",
+          localState: order.status,
+          externalState: "ACTIVATED",
+          lastSuccessfulStep: "PROVIDER_SUBMISSION",
+          failureCategory: "PROVIDER_SUBSCRIPTION_MISMATCH",
+          availableActions: ["RECONCILE_ORDER_PROVISIONING"],
+        });
+        throw new Error(
+          "Provider subscription is not present on the assigned eSIM",
+        );
+      }
+    }
     await this.activateOrder(
       order,
       input.qrPayload,
       provider,
       input.subscriptionId,
     );
-    if (provider === "TRANSATEL" && input.subscriptionId) {
-      const target = await this.inventory.inventoryForOrder(order.id);
-      if (!target?.iccid)
-        throw new Error(
-          "Assigned eSIM could not be resolved for provider verification",
-        );
-      if (input.iccid && input.iccid !== target.iccid)
-        await this.inventory.applyLifecycle(order.id, lifecycle);
-      const usage = await this.connectivity.getUsage(target.iccid);
-      if (
-        !usage.subscriptions?.some(
-          (item) => item.providerSubscriptionId === input.subscriptionId,
-        )
-      )
-        throw new Error(
-          "Provider subscription is not present on the assigned eSIM",
-        );
-    }
     await this.inventory.applyLifecycle(order.id, lifecycle);
     const assigned = await this.inventory.inventoryForOrder(order.id);
     if (assigned)
@@ -2257,7 +2457,17 @@ export class OrdersService implements OnModuleInit {
       OrderStatus.COMPLETED,
       `Provider ${input.label ? `${input.label} ` : ""}delivered activation`,
     );
+    delete order.provisioningFailure;
+    delete order.operationalDisposition;
     await this.persistence.save(order);
+    await this.safeResolveAttention(
+      `provisioning-failure:${order.id}`,
+      "Provider activation was confirmed",
+    );
+    await this.safeResolveAttention(
+      `activation-attention:${order.id}`,
+      "Provider activation was confirmed",
+    );
     if (!wasReady) await this.safeNotify(order, "QR_READY");
   }
   private async activateOrder(
@@ -2451,6 +2661,19 @@ export class OrdersService implements OnModuleInit {
     } catch (error) {
       this.logger.error(
         `Ops alert enqueue failed for order ${order.id}: ${error instanceof Error ? error.message : "unknown"}`,
+      );
+    }
+  }
+  private async safeResolveAttention(
+    dedupeKey: string,
+    resolution: string,
+    actorId: string | null = null,
+  ) {
+    try {
+      await this.resilience?.resolve(dedupeKey, actorId, resolution);
+    } catch (error) {
+      this.logger.warn(
+        `Attention resolution ${dedupeKey} was deferred: ${error instanceof Error ? error.message : "unknown"}`,
       );
     }
   }

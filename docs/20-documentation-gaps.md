@@ -13,17 +13,17 @@ documentation set had to make an assumption.
   `payments.service.ts` / `transatel.provider.ts` map it to `UNEXPECTED`.
 - **Business acceptance rules.** Which visa/passport combinations are
   acceptable is human judgement in ops review; no automated policy exists.
-- **Scheduler drift / job durability.** `QueueService` is in-process
-  (`docs/12`); no cross-process guarantees.
+- **Provider retry contracts.** Repository code cannot prove Khalti callback
+  redelivery timing or Transatel's account-specific idempotency guarantees;
+  both require written production confirmation and failure-injection tests.
 
 ## Confirmed inconsistencies / rough edges
 
-1. **Payments webhook has no production signature verification.**
-   `webhooks.controller.ts:36-45` only verifies `x-visa-signature` when
-   `NODE_ENV !== 'production'` and the header is present; in production any
-   caller can post `{ eventId }`. The later `verifyCallback` still validates
-   order/amount/status invariants, but the endpoint itself is not
-   authenticated. Flagged in `docs/15`.
+1. **Payment provider callback contract must be certified.** The endpoint
+   requires an HMAC signature, accepts only Khalti, persists a durable inbox,
+   and validates reference/order/amount/currency before confirmation. The
+   exact production event names and dispute/refund callback contract still
+   require Khalti certification.
 2. **`CustomerSource` value `KHALTI` is never set.** The Prisma
    schema defines `CustomerSource` including `KHALTI`, but no code path
    sets it from the payment provider — orders created via payment flows use
@@ -39,9 +39,9 @@ documentation set had to make an assumption.
    than `sandbox` (outside production) selects the simulator. `.env.example`
    documents this, but it is a common misreading.
 5. **Rate limiter is per-process.** `rate-limit.guard.ts` keeps buckets in
-   memory (`docs/19`); multi-instance deployments need a shared store. The
-   health check reports Redis as `configured`/`not-configured`
-   (`health.controller.ts:29`) but Redis is not used by the limiter or queue.
+   memory (`docs/19`); multi-instance deployments need a shared store. Redis
+   does provide durable BullMQ transport and distributed reconciliation
+   leases, but it is not currently used by the HTTP rate limiter.
 6. **`safeNotify` trigger path for `DOCUMENT_REUPLOAD`.** `safeNotify` is
    defined in `notification.service.ts` and called during `requestReupload`
    / document transitions (`docs/07`, `docs/11`); the call site at

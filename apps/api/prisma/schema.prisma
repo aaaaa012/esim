@@ -85,6 +85,21 @@ enum PaymentStatus {
   CANCELLED
   REVIEW_REQUIRED
   REFUNDED
+  DISPUTED
+  CHARGED_BACK
+}
+
+enum PaymentDisputeType {
+  CHARGEBACK
+  DISPUTE
+}
+
+enum PaymentDisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  WON
+  LOST
+  RESOLVED
 }
 
 enum DocumentType {
@@ -427,13 +442,13 @@ model Order {
   providerStatus               String?
   qrDeliveredAt                DateTime?
   activatedAt                  DateTime?
-  documentReviewPolicy         DocumentReviewPolicy          @default(AUTO_OCR)
-  documentReviewStatus         DocumentReviewStatus          @default(NOT_STARTED)
+  documentReviewPolicy         DocumentReviewPolicy           @default(AUTO_OCR)
+  documentReviewStatus         DocumentReviewStatus           @default(NOT_STARTED)
   documentReviewStartedAt      DateTime?
   documentCheckoutReleaseAt    DateTime?
-  activationRefetchAttempts   Int                            @default(0)
-  lastProvisioningRecoveryAt  DateTime?
-  operationalDisposition      OperationalDisposition?
+  activationRefetchAttempts    Int                            @default(0)
+  lastProvisioningRecoveryAt   DateTime?
+  operationalDisposition       OperationalDisposition?
   traveler                     Traveler?
   documents                    TravelerDocument[]
   payments                     Payment[]
@@ -445,6 +460,7 @@ model Order {
   provisioningOperation        ProvisioningOperation?
   transatelLifecycleOperations TransatelLifecycleOperation[]
   manualRefunds                ManualRefund[]
+  paymentDisputes              PaymentDispute[]
   notifications                Notification[]
   partnerLedgerEntries         PartnerLedgerEntry[]
   partnerHostedSessions        PartnerHostedCheckoutSession[]
@@ -518,25 +534,26 @@ model TravelerDocument {
 }
 
 model Payment {
-  id                    String          @id @default(uuid()) @db.Uuid
-  orderId               String          @db.Uuid
-  order                 Order           @relation(fields: [orderId], references: [id])
+  id                    String           @id @default(uuid()) @db.Uuid
+  orderId               String           @db.Uuid
+  order                 Order            @relation(fields: [orderId], references: [id])
   manualRefunds         ManualRefund[]
+  disputes              PaymentDispute[]
   provider              PaymentProvider
   providerTransactionId String?
   providerCorrelationId String?
-  paymentReference      String          @unique
-  amount                Decimal         @db.Decimal(12, 2)
-  currency              String          @default("NPR")
-  status                PaymentStatus   @default(INITIATED)
+  paymentReference      String           @unique
+  amount                Decimal          @db.Decimal(12, 2)
+  currency              String           @default("NPR")
+  status                PaymentStatus    @default(INITIATED)
   paidAt                DateTime?
   expiresAt             DateTime?
   returnUrl             String?
   redirectUrl           String?
-  verificationAttempts  Int             @default(0)
+  verificationAttempts  Int              @default(0)
   lastVerifiedAt        DateTime?
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
 
   @@unique([provider, providerTransactionId])
   @@index([orderId])
@@ -646,46 +663,46 @@ model Partner {
 }
 
 model PartnerDocumentUploadIntent {
-  id                String       @id @default(uuid()) @db.Uuid
-  partnerId         String       @db.Uuid
-  partner           Partner      @relation(fields: [partnerId], references: [id])
-  verificationId    String?      @db.Uuid
-  verification      PartnerDocumentVerification? @relation(fields: [verificationId], references: [id])
-  externalOrderId   String
-  type              DocumentType
-  fileName          String
-  contentType       String
-  declaredSizeBytes Int
-  privateAssetId    String       @unique
-  expiresAt         DateTime
-  consumedAt        DateTime?
-  consumedOrderId   String?      @db.Uuid
-  verificationStatus String      @default("AWAITING_UPLOAD")
-  uploadVerified     Boolean      @default(false)
+  id                 String                       @id @default(uuid()) @db.Uuid
+  partnerId          String                       @db.Uuid
+  partner            Partner                      @relation(fields: [partnerId], references: [id])
+  verificationId     String?                      @db.Uuid
+  verification       PartnerDocumentVerification? @relation(fields: [verificationId], references: [id])
+  externalOrderId    String
+  type               DocumentType
+  fileName           String
+  contentType        String
+  declaredSizeBytes  Int
+  privateAssetId     String                       @unique
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  consumedOrderId    String?                      @db.Uuid
+  verificationStatus String                       @default("AWAITING_UPLOAD")
+  uploadVerified     Boolean                      @default(false)
   verificationCode   String?
   verificationResult Json?
-  verifiedAt          DateTime?
-  createdAt         DateTime     @default(now())
+  verifiedAt         DateTime?
+  createdAt          DateTime                     @default(now())
 
   @@index([partnerId, externalOrderId, expiresAt])
   @@index([partnerId, consumedAt])
 }
 
 model PartnerDocumentVerification {
-  id                String   @id @default(uuid()) @db.Uuid
-  partnerId         String   @db.Uuid
-  partner           Partner  @relation(fields: [partnerId], references: [id])
+  id                String                        @id @default(uuid()) @db.Uuid
+  partnerId         String                        @db.Uuid
+  partner           Partner                       @relation(fields: [partnerId], references: [id])
   externalOrderId   String
-  status            String   @default("AWAITING_UPLOAD")
+  status            String                        @default("AWAITING_UPLOAD")
   travelerSnapshot  Json
   expiresAt         DateTime
   consumedAt        DateTime?
-  consumedOrderId   String?  @unique @db.Uuid
+  consumedOrderId   String?                       @unique @db.Uuid
   failureCode       String?
-  reviewPolicy      DocumentReviewPolicy @default(AUTO_OCR)
+  reviewPolicy      DocumentReviewPolicy          @default(AUTO_OCR)
   checkoutReleaseAt DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
   documents         PartnerDocumentUploadIntent[]
 
   @@index([partnerId, externalOrderId])
@@ -1007,31 +1024,58 @@ model TransatelLifecycleOperation {
 }
 
 model ManualRefund {
-  id                  String             @id @default(uuid()) @db.Uuid
-  orderId             String             @db.Uuid
-  order               Order              @relation(fields: [orderId], references: [id])
-  paymentId           String             @db.Uuid
-  payment             Payment            @relation(fields: [paymentId], references: [id])
-  status              ManualRefundStatus @default(REQUESTED)
-  activeKey           String?            @unique
-  reason              ManualRefundReason
-  explanation         String
-  amount              Decimal            @db.Decimal(12, 2)
-  requestedById       String             @db.Uuid
-  requestedBy         User               @relation("ManualRefundRequester", fields: [requestedById], references: [id])
-  reviewedById        String?            @db.Uuid
-  reviewedBy          User?              @relation("ManualRefundReviewer", fields: [reviewedById], references: [id])
-  reviewNote          String?
-  providerReference   String?            @unique
-  completionNote      String?
-  completedAt         DateTime?
-  rejectedAt          DateTime?
-  approvedAt          DateTime?
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
+  id                String             @id @default(uuid()) @db.Uuid
+  orderId           String             @db.Uuid
+  order             Order              @relation(fields: [orderId], references: [id])
+  paymentId         String             @db.Uuid
+  payment           Payment            @relation(fields: [paymentId], references: [id])
+  status            ManualRefundStatus @default(REQUESTED)
+  activeKey         String?            @unique
+  reason            ManualRefundReason
+  explanation       String
+  amount            Decimal            @db.Decimal(12, 2)
+  requestedById     String             @db.Uuid
+  requestedBy       User               @relation("ManualRefundRequester", fields: [requestedById], references: [id])
+  reviewedById      String?            @db.Uuid
+  reviewedBy        User?              @relation("ManualRefundReviewer", fields: [reviewedById], references: [id])
+  reviewNote        String?
+  providerReference String?            @unique
+  completionNote    String?
+  completedAt       DateTime?
+  rejectedAt        DateTime?
+  approvedAt        DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
   @@index([status, createdAt])
   @@index([orderId, createdAt])
+}
+
+model PaymentDispute {
+  id               String               @id @default(uuid()) @db.Uuid
+  orderId          String               @db.Uuid
+  order            Order                @relation(fields: [orderId], references: [id])
+  paymentId        String               @db.Uuid
+  payment          Payment              @relation(fields: [paymentId], references: [id])
+  provider         PaymentProvider
+  providerCaseId   String
+  openedEventId    String
+  type             PaymentDisputeType
+  status           PaymentDisputeStatus @default(OPEN)
+  amount           Decimal?             @db.Decimal(12, 2)
+  currency         String               @default("NPR")
+  reason           String?
+  providerEvidence Json?
+  resolutionNote   String?
+  openedAt         DateTime             @default(now())
+  resolvedAt       DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@unique([provider, providerCaseId])
+  @@unique([provider, openedEventId])
+  @@index([status, openedAt])
+  @@index([orderId, status])
 }
 
 model WebhookEvent {
@@ -1069,20 +1113,20 @@ model IntegrationLog {
 }
 
 model Notification {
-  id        String    @id @default(uuid()) @db.Uuid
-  orderId   String?   @db.Uuid
-  order     Order?    @relation(fields: [orderId], references: [id])
-  channel   String
-  template  String
-  recipient String?
-  orderNumber String?
-  reason    String?
-  status    String
-  sentAt    DateTime?
-  attemptCount Int       @default(0)
+  id            String    @id @default(uuid()) @db.Uuid
+  orderId       String?   @db.Uuid
+  order         Order?    @relation(fields: [orderId], references: [id])
+  channel       String
+  template      String
+  recipient     String?
+  orderNumber   String?
+  reason        String?
+  status        String
+  sentAt        DateTime?
+  attemptCount  Int       @default(0)
   nextAttemptAt DateTime?
-  errorMessage String?
-  createdAt DateTime  @default(now())
+  errorMessage  String?
+  createdAt     DateTime  @default(now())
 
   @@index([status, nextAttemptAt])
 }
@@ -1118,32 +1162,32 @@ model AttentionCase {
 }
 
 model OutboxMessage {
-  id          String       @id @default(uuid()) @db.Uuid
-  dedupeKey   String       @unique
-  topic       String
-  jobName     String
-  payload     Json
-  orderId     String?      @db.Uuid
-  order       Order?       @relation(fields: [orderId], references: [id])
-  status      OutboxStatus @default(PENDING)
-  attemptCount Int         @default(0)
-  nextAttemptAt DateTime   @default(now())
-  dispatchedAt DateTime?
-  errorMessage String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id            String       @id @default(uuid()) @db.Uuid
+  dedupeKey     String       @unique
+  topic         String
+  jobName       String
+  payload       Json
+  orderId       String?      @db.Uuid
+  order         Order?       @relation(fields: [orderId], references: [id])
+  status        OutboxStatus @default(PENDING)
+  attemptCount  Int          @default(0)
+  nextAttemptAt DateTime     @default(now())
+  dispatchedAt  DateTime?
+  errorMessage  String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
   @@index([status, nextAttemptAt])
 }
 
 model WorkerHeartbeat {
-  worker       String   @id
-  instanceId   String
-  status       String   @default("RUNNING")
-  lastSeenAt   DateTime @default(now())
-  metadata     Json?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  worker     String   @id
+  instanceId String
+  status     String   @default("RUNNING")
+  lastSeenAt DateTime @default(now())
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model CustomerConsent {

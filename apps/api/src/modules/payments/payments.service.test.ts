@@ -47,6 +47,7 @@ function makeService(opts: {
   orderId?: string;
   transactionId?: string;
   gatewayError?: unknown;
+  currency?: string;
   order?: AnyRecord;
 }) {
   const order = (opts.order ?? orderFor()) as AnyRecord;
@@ -104,6 +105,7 @@ function makeService(opts: {
         reference: order.payment.reference,
         orderId: opts.orderId ?? order.id,
         amountNpr: opts.amountNpr ?? order.totalAmountNpr,
+        ...(opts.currency ? { currency: opts.currency } : {}),
         status: opts.status ?? PaymentStatus.COMPLETED,
         ...(opts.transactionId
           ? { providerTransactionId: opts.transactionId }
@@ -143,6 +145,18 @@ describe("PaymentsService payment verification mapping", () => {
     const { svc, confirmedCalls, failedCalls } = makeService({
       status: PaymentStatus.COMPLETED,
       amountNpr: 2500,
+    });
+    await expect(
+      svc.verify("order-1", "user-1", "pidx-1"),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_REFERENCE_MISMATCH });
+    expect(confirmedCalls).toHaveLength(0);
+    expect(failedCalls).toHaveLength(0);
+  });
+
+  it("rejects a currency mismatch and leaves the order unresolved", async () => {
+    const { svc, confirmedCalls, failedCalls } = makeService({
+      status: PaymentStatus.COMPLETED,
+      currency: "USD",
     });
     await expect(
       svc.verify("order-1", "user-1", "pidx-1"),
@@ -324,5 +338,64 @@ describe("PaymentsService.reconcileRecentPendingPayments", () => {
     expect(result.stillPending).toHaveLength(0);
     expect(confirmedCalls).toHaveLength(0);
     expect(failedCalls).toHaveLength(0);
+  });
+});
+
+describe("PaymentsService durable verification attempts", () => {
+  it("uses the persisted attempt count after a process restart and requires review", async () => {
+    const order = orderFor({
+      payment: {
+        ...orderFor().payment,
+        expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+    });
+    const requirePaymentReview = vi.fn(async () => undefined);
+    const attention = vi.fn(async () => undefined);
+    const resetAttempts = vi.fn(async () => ({ count: 1 }));
+    const prisma = {
+      enabled: true,
+      payment: {
+        update: vi.fn(async () => ({ verificationAttempts: 3 })),
+        updateMany: resetAttempts,
+      },
+    };
+    const service = new PaymentsService(
+      {
+        get: () => order,
+        view: () => order,
+        list: () => [order],
+        requirePaymentReview,
+      } as never,
+      {} as never,
+      {} as never,
+      undefined,
+      { attention } as never,
+      prisma as never,
+    );
+    const gateway = {
+      provider: "KHALTI",
+      verify: vi.fn(async () => {
+        throw new Error("gateway unavailable");
+      }),
+    };
+    (service as unknown as { gateway: () => typeof gateway }).gateway = () =>
+      gateway;
+
+    const result = await service.reconcilePendingPayments();
+
+    expect(result.reviewRequired).toEqual(["order-1"]);
+    expect(result.failed).toHaveLength(0);
+    expect(requirePaymentReview).toHaveBeenCalledWith(
+      "order-1",
+      expect.stringContaining("3 verification attempts"),
+    );
+    expect(attention).toHaveBeenCalledWith(
+      expect.objectContaining({ category: "PAYMENT_UNCERTAIN" }),
+    );
+    expect(resetAttempts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ verificationAttempts: 0 }),
+      }),
+    );
   });
 });

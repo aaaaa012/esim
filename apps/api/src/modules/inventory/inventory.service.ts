@@ -76,6 +76,7 @@ export class InventoryService implements OnModuleInit {
             in: ["available", "allocated", "AVAILABLE", "ALLOCATED"],
           },
           lastProviderCheckedAt: { gte: freshAfter },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
           batch: { status: BatchStatus.APPROVED },
         },
         orderBy: { createdAt: "asc" },
@@ -89,6 +90,7 @@ export class InventoryService implements OnModuleInit {
           assignedOrderId: null,
           providerSubscriptionId: null,
           lastProviderCheckedAt: { gte: freshAfter },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
         },
         data: {
           status: InventoryStatus.RESERVED,
@@ -106,6 +108,36 @@ export class InventoryService implements OnModuleInit {
     throw new ConflictException(
       "Inventory reservation conflict; retry the approval",
     );
+  }
+
+  /**
+   * Rejects a new eSIM purchase before an order (and any payment obligation)
+   * is created when there is no profile that could be reserved right now.
+   * Top-ups do not call this guard because they reuse an already assigned eSIM.
+   */
+  async assertAvailableForNewOrder() {
+    if (!this.prisma.enabled) return;
+    const freshnessHours = Math.max(
+      1,
+      Number(process.env.INVENTORY_PROVIDER_FRESHNESS_HOURS ?? 24),
+    );
+    const available = await this.prisma.esimInventory.count({
+      where: {
+        status: InventoryStatus.AVAILABLE,
+        assignedOrderId: null,
+        providerSubscriptionId: null,
+        providerStatus: {
+          in: ["available", "allocated", "AVAILABLE", "ALLOCATED"],
+        },
+        lastProviderCheckedAt: {
+          gte: new Date(Date.now() - freshnessHours * 60 * 60_000),
+        },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        batch: { status: BatchStatus.APPROVED },
+      },
+    });
+    if (available === 0)
+      throw new ConflictException("No eSIM inventory is currently available");
   }
 
   async profileForOrder(orderId: string) {
@@ -626,8 +658,47 @@ export class InventoryService implements OnModuleInit {
             providerLastSeenAt: new Date(),
           },
         });
+      await this.resilience?.attention({
+        dedupeKey: `inventory-assignment-conflict:${orderId}:${event.subscriptionId ?? "unknown"}`,
+        category: "INVENTORY_ASSIGNMENT_CONFLICT",
+        entityType: "EsimInventory",
+        entityId: inventory.id,
+        orderId,
+        severity: "CRITICAL",
+        summary: `Provider returned an unexpected ICCID for order ${orderId}`,
+        detail: `Expected ${inventory.iccid}; provider reported ${event.iccid}`,
+        localState: inventory.status,
+        ...(event.status ? { externalState: event.status } : {}),
+        lastSuccessfulStep: "INVENTORY_RESERVED",
+        failureCategory: "PROVIDER_ICCID_MISMATCH",
+        availableActions: ["RECONCILE_RESERVATION"],
+      });
       throw new ConflictException(
         "Provider subscription was assigned to a different eSIM",
+      );
+    }
+    if (
+      event.subscriptionId &&
+      inventory.providerSubscriptionId &&
+      event.subscriptionId !== inventory.providerSubscriptionId
+    ) {
+      await this.resilience?.attention({
+        dedupeKey: `inventory-subscription-conflict:${orderId}:${event.subscriptionId}`,
+        category: "INVENTORY_ASSIGNMENT_CONFLICT",
+        entityType: "EsimInventory",
+        entityId: inventory.id,
+        orderId,
+        severity: "CRITICAL",
+        summary: `Provider returned an unexpected subscription for order ${orderId}`,
+        detail: `The assigned inventory is already bound to a different provider subscription`,
+        localState: inventory.status,
+        ...(event.status ? { externalState: event.status } : {}),
+        lastSuccessfulStep: "PROVIDER_SUBSCRIPTION_ASSIGNED",
+        failureCategory: "PROVIDER_SUBSCRIPTION_MISMATCH",
+        availableActions: ["RECONCILE_RESERVATION"],
+      });
+      throw new ConflictException(
+        "Provider subscription does not match the assigned eSIM",
       );
     }
 
@@ -724,6 +795,131 @@ export class InventoryService implements OnModuleInit {
     if (status === "TERMINATED" || status === "CANCELED") return "TERMINATED";
     if (status === "SUSPENDED") return "SUSPENDED";
     return "PENDING";
+  }
+
+  async reconcileStaleReservations() {
+    if (!this.prisma.enabled) return { released: [], attention: [] };
+    const hours = Math.max(
+      1,
+      Number(process.env.INVENTORY_RESERVATION_STALE_HOURS ?? 2),
+    );
+    const staleBefore = new Date(Date.now() - hours * 60 * 60_000);
+    const profiles = await this.prisma.esimInventory.findMany({
+      where: {
+        status: InventoryStatus.RESERVED,
+        providerSubscriptionId: null,
+        updatedAt: { lte: staleBefore },
+      },
+      include: {
+        assignedOrder: {
+          select: {
+            id: true,
+            orderNumber: true,
+            status: true,
+            provisioningOperation: {
+              select: { state: true, providerOrderId: true },
+            },
+          },
+        },
+      },
+      take: 100,
+      orderBy: { updatedAt: "asc" },
+    });
+    const released: string[] = [];
+    const attention: string[] = [];
+    for (const profile of profiles) {
+      const order = profile.assignedOrder;
+      const operation = order?.provisioningOperation;
+      const terminalOrder =
+        !order ||
+        [
+          "CANCELLED",
+          "PAYMENT_FAILED",
+          "PROVISIONING_FAILED",
+          "REFUNDED",
+        ].includes(order.status);
+      const noProviderEvidence =
+        !operation ||
+        (["CREATED", "REJECTED", "CANCELLED"].includes(operation.state) &&
+          !operation.providerOrderId);
+      if (terminalOrder && noProviderEvidence) {
+        const changed = await this.prisma.esimInventory.updateMany({
+          where: {
+            id: profile.id,
+            status: InventoryStatus.RESERVED,
+            providerSubscriptionId: null,
+            assignedOrderId: profile.assignedOrderId,
+          },
+          data: {
+            status: InventoryStatus.AVAILABLE,
+            assignedOrderId: null,
+            version: { increment: 1 },
+          },
+        });
+        if (changed.count === 1) released.push(profile.id);
+        continue;
+      }
+      await this.resilience?.attention({
+        dedupeKey: `stale-inventory-reservation:${profile.id}`,
+        category: "INVENTORY_RESERVATION_STALE",
+        entityType: "EsimInventory",
+        entityId: profile.id,
+        ...(order?.id ? { orderId: order.id } : {}),
+        summary: `Reserved eSIM ${profile.iccid} needs reconciliation`,
+        detail: `Reservation is older than ${hours} hour(s) and cannot be released without provider evidence`,
+        localState: profile.status,
+        ...(profile.providerStatus
+          ? { externalState: profile.providerStatus }
+          : {}),
+        lastSuccessfulStep: "INVENTORY_RESERVED",
+        failureCategory: "STALE_RESERVATION",
+        availableActions: ["RECONCILE_RESERVATION"],
+      });
+      attention.push(profile.id);
+    }
+    return { released, attention };
+  }
+
+  async reconcileReservation(id: string) {
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    const profile = await this.prisma.esimInventory.findUnique({
+      where: { id },
+      include: {
+        assignedOrder: {
+          select: { id: true, status: true, orderNumber: true },
+        },
+      },
+    });
+    if (!profile) throw new NotFoundException("Inventory profile not found");
+    if (!profile.assignedOrderId)
+      return this.reconcileProviderProfile(profile.id);
+    const details = await this.connectivity.getEsimDetails(profile.iccid);
+    const safe = ["available", "allocated"].includes(
+      details.status.toLowerCase(),
+    );
+    if (
+      safe &&
+      !profile.providerSubscriptionId &&
+      profile.assignedOrder &&
+      [
+        "CANCELLED",
+        "PAYMENT_FAILED",
+        "PROVISIONING_FAILED",
+        "REFUNDED",
+      ].includes(profile.assignedOrder.status)
+    ) {
+      await this.release(profile.assignedOrderId);
+      await this.resilience?.resolve(
+        `stale-inventory-reservation:${profile.id}`,
+        null,
+        "Provider confirmed the terminal order never bound this profile",
+      );
+      return { id, status: "RELEASED", providerStatus: details.status };
+    }
+    throw new ConflictException(
+      "The reservation cannot be released; reconcile the provisioning operation using provider evidence",
+    );
   }
 
   async customerIdForOrder(orderId: string) {

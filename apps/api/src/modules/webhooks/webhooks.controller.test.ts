@@ -36,6 +36,29 @@ describe("WebhooksController payment inbox", () => {
       `khalti-${body.eventId}`,
     );
   });
+
+  it("normalizes Khalti source names and rejects unknown payment providers", async () => {
+    process.env.PAYMENT_WEBHOOK_SECRET = "payment-secret";
+    const { value, queues } = controller(null);
+    const body = {
+      eventId: "payment-event-456",
+      orderId: "order-1",
+      reference: "pidx-1",
+    };
+    const rawBody = Buffer.from(JSON.stringify(body));
+    const signature = `sha256=${createHmac("sha256", "payment-secret").update(rawBody).digest("hex")}`;
+
+    await value.payment("KHALTI", body, { rawBody }, signature);
+    expect(queues.add).toHaveBeenCalledWith(
+      "payments",
+      "payment-callback",
+      expect.objectContaining({ provider: "khalti" }),
+      `khalti-${body.eventId}`,
+    );
+    await expect(
+      value.payment("unknown", body, { rawBody }, signature),
+    ).rejects.toThrow("Unsupported payment provider");
+  });
 });
 
 function controller(processedAt: Date | null = null) {

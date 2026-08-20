@@ -257,6 +257,7 @@ export class KhaltiGateway implements PaymentGateway {
           typeof data.total_amount === "number"
             ? data.total_amount / 100
             : Number.NaN,
+        currency: "NPR",
         orderId: context.orderId,
         ...(data.transaction_id
           ? { providerTransactionId: data.transaction_id }

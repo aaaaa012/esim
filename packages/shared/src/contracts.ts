@@ -34,6 +34,8 @@ export enum PaymentStatus {
   CANCELLED = "CANCELLED",
   REVIEW_REQUIRED = "REVIEW_REQUIRED",
   REFUNDED = "REFUNDED",
+  DISPUTED = "DISPUTED",
+  CHARGED_BACK = "CHARGED_BACK",
 }
 export enum DocumentType {
   PASSPORT = "PASSPORT",

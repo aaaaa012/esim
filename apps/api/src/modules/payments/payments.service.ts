@@ -11,6 +11,7 @@ import { KhaltiGateway } from "./gateways/khalti.gateway.js";
 import { PaymentSimulatorGateway } from "./gateways/simulator.gateway.js";
 import { MetricsService } from "../../observability/metrics.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
+import { PrismaService } from "../../infrastructure/prisma.service.js";
 
 type VerifySource =
   "verify" | "callback" | "recent-reconcile" | "expiry-reconcile";
@@ -41,6 +42,7 @@ export class PaymentsService {
     private simulator: PaymentSimulatorGateway,
     private readonly metrics?: MetricsService,
     private readonly resilience?: ProductionResilienceService,
+    private readonly prisma?: PrismaService,
   ) {}
 
   async initiate(
@@ -93,6 +95,13 @@ export class PaymentsService {
   async verify(orderId: string, ownerId: string | null, reference: string) {
     await this.orders.refreshOne?.(orderId, true);
     const order = this.orders.get(orderId, ownerId ?? undefined);
+    if (order.payment?.reference !== reference) {
+      await this.flagPaymentMismatch(
+        order,
+        "Submitted payment reference does not belong to this order",
+      );
+      throw new BadRequestException("Payment reference mismatch");
+    }
     const verdict = await this.lookup(order, reference, "verify");
     return this.applyVerdict(orderId, ownerId, reference, verdict);
   }
@@ -202,6 +211,11 @@ export class PaymentsService {
         verdict.reason,
         verdict.paymentStatus,
       );
+    else
+      await this.flagPaymentMismatch(
+        this.orders.get(orderId, ownerId ?? undefined),
+        verdict.reason,
+      );
     throw new ApiException({
       code: verdict.code,
       message: verdict.message,
@@ -230,7 +244,9 @@ export class PaymentsService {
     if (result.status === PaymentStatus.COMPLETED) {
       if (
         result.orderId === order.id &&
-        result.amountNpr === order.totalAmountNpr
+        result.amountNpr === order.totalAmountNpr &&
+        (!("currency" in result) ||
+          (result.currency ?? "NPR").toUpperCase() === "NPR")
       )
         return result.providerTransactionId
           ? {
@@ -245,7 +261,7 @@ export class PaymentsService {
         code: ApiErrorCode.PAYMENT_REFERENCE_MISMATCH,
         message:
           "We could not confirm your payment. Please verify with your wallet or contact support.",
-        reason: `Payment verification mismatch (order/amount) for order ${order.id}`,
+        reason: `Payment verification mismatch (order/amount/currency) for order ${order.id}`,
       };
     }
     if (result.status === PaymentStatus.PENDING) return { outcome: "PENDING" };
@@ -276,7 +292,8 @@ export class PaymentsService {
    * payment that completed server-side but whose callback was dropped is
    * recovered instead of being failed on a timer. When the gateway is
    * transiently unavailable the verdict is deferred for up to
-   * PAYMENT_VERIFY_ATTEMPTS before the payment is failed.
+   * PAYMENT_VERIFY_ATTEMPTS before the payment is moved to durable operational
+   * review. Provider unavailability never proves that a payment failed.
    */
   async reconcilePendingPayments(): Promise<{
     verified: string[];
@@ -304,8 +321,7 @@ export class PaymentsService {
           new Date(order.createdAt).getTime() + 30 * 60_000,
         ).toISOString();
       if (now < new Date(expiry).getTime()) continue;
-      const attempt = (this.verifyAttempts.get(order.id) ?? 0) + 1;
-      this.verifyAttempts.set(order.id, attempt);
+      const attempt = await this.nextVerifyAttempt(order);
       try {
         const verdict = await this.lookup(order, reference, "expiry-reconcile");
         if (verdict.outcome === "CONFIRMED") {
@@ -314,7 +330,7 @@ export class PaymentsService {
             reference,
             verdict.transactionId,
           );
-          this.verifyAttempts.delete(order.id);
+          await this.clearVerifyAttempts(order);
           verified.push(order.id);
         } else if (verdict.outcome === "TERMINAL" && verdict.resolve) {
           await this.orders.resolvePaymentFailure(
@@ -323,14 +339,14 @@ export class PaymentsService {
             verdict.reason,
             verdict.paymentStatus,
           );
-          this.verifyAttempts.delete(order.id);
+          await this.clearVerifyAttempts(order);
           failed.push(order.id);
         } else {
           await this.markReviewRequired(
             order,
             `Payment completion remains ${verdict.outcome === "PENDING" ? "pending" : "mismatched"} after the payment window`,
           );
-          this.verifyAttempts.delete(order.id);
+          await this.clearVerifyAttempts(order);
           reviewRequired.push(order.id);
         }
       } catch (error) {
@@ -339,7 +355,7 @@ export class PaymentsService {
             order,
             `Payment gateway remained unreachable after ${attempt} verification attempts`,
           );
-          this.verifyAttempts.delete(order.id);
+          await this.clearVerifyAttempts(order);
           reviewRequired.push(order.id);
         } else {
           deferred.push(order.id);
@@ -350,6 +366,34 @@ export class PaymentsService {
       }
     }
     return { verified, failed, deferred, reviewRequired };
+  }
+
+  private async nextVerifyAttempt(order: DemoOrder): Promise<number> {
+    if (this.prisma?.enabled && order.payment?.reference) {
+      const payment = await this.prisma.payment.update({
+        where: { paymentReference: order.payment.reference },
+        data: {
+          verificationAttempts: { increment: 1 },
+          lastVerifiedAt: new Date(),
+        },
+        select: { verificationAttempts: true },
+      });
+      return payment.verificationAttempts;
+    }
+    const attempt = (this.verifyAttempts.get(order.id) ?? 0) + 1;
+    this.verifyAttempts.set(order.id, attempt);
+    return attempt;
+  }
+
+  private async clearVerifyAttempts(order: DemoOrder): Promise<void> {
+    if (this.prisma?.enabled && order.payment?.reference) {
+      await this.prisma.payment.updateMany({
+        where: { paymentReference: order.payment.reference },
+        data: { verificationAttempts: 0, lastVerifiedAt: new Date() },
+      });
+      return;
+    }
+    this.verifyAttempts.delete(order.id);
   }
   private async markReviewRequired(order: DemoOrder, reason: string) {
     await this.orders.requirePaymentReview?.(order.id, reason);
@@ -368,6 +412,23 @@ export class PaymentsService {
         "RECHECK_PAYMENT",
         "CANCEL_IF_GATEWAY_CONFIRMS_FAILURE",
       ],
+    });
+  }
+
+  private async flagPaymentMismatch(order: DemoOrder, reason: string) {
+    await this.resilience?.attention({
+      dedupeKey: `payment-security-mismatch:${order.id}`,
+      category: "PAYMENT_SECURITY",
+      entityType: "Order",
+      entityId: order.id,
+      orderId: order.id,
+      severity: "CRITICAL",
+      summary: `Payment verification mismatch for ${order.orderNumber}`,
+      detail: reason,
+      localState: order.status,
+      lastSuccessfulStep: "PAYMENT_INITIATED",
+      failureCategory: "PAYMENT_REFERENCE_AMOUNT_OR_CURRENCY_MISMATCH",
+      availableActions: ["RECHECK_PAYMENT"],
     });
   }
   async simulate(
@@ -410,6 +471,7 @@ export class PaymentsService {
     return {
       orderId: order.id,
       amountNpr: order.totalAmountNpr,
+      currency: "NPR",
       ...(order.payment.correlationId
         ? { correlationId: order.payment.correlationId }
         : {}),

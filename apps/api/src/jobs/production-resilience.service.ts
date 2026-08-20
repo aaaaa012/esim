@@ -251,6 +251,10 @@ export class ProductionResilienceService {
       deadLetters,
       oldestOutbox,
       queues,
+      oldestPaymentReview,
+      lifecycleCounts,
+      unsafeAvailableInventory,
+      openDisputes,
     ] = await Promise.all([
       this.prisma.workerHeartbeat.findMany({ orderBy: { worker: "asc" } }),
       this.prisma.attentionCase.count({
@@ -268,22 +272,83 @@ export class ProductionResilienceService {
         select: { createdAt: true },
       }),
       this.queues.stats(),
+      this.prisma.payment.findFirst({
+        where: { status: "REVIEW_REQUIRED" },
+        orderBy: { updatedAt: "asc" },
+        select: { updatedAt: true },
+      }),
+      this.prisma.order.groupBy({
+        by: ["status"],
+        where: {
+          status: {
+            in: [
+              "PAYMENT_PENDING",
+              "PAYMENT_REVIEW_REQUIRED",
+              "APPROVED",
+              "PROVISIONING",
+              "ACTIVATION_ATTENTION",
+              "REFUND_PENDING",
+            ],
+          },
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.esimInventory.count({
+        where: {
+          status: "AVAILABLE",
+          OR: [
+            { providerSubscriptionId: { not: null } },
+            {
+              providerStatus: {
+                notIn: ["available", "allocated", "AVAILABLE", "ALLOCATED"],
+              },
+            },
+            { lastProviderCheckedAt: null },
+            {
+              lastProviderCheckedAt: {
+                lt: new Date(
+                  Date.now() -
+                    Math.max(
+                      1,
+                      Number(
+                        process.env.INVENTORY_PROVIDER_FRESHNESS_HOURS ?? 24,
+                      ),
+                    ) *
+                      60 *
+                      60_000,
+                ),
+              },
+            },
+          ],
+        },
+      }),
+      this.prisma.paymentDispute.count({
+        where: { status: { in: ["OPEN", "UNDER_REVIEW", "LOST"] } },
+      }),
     ]);
     const now = Date.now();
-    const requiredWorkers = ["workflow-worker", "ocr-worker"];
+    const requiredWorkers = ["workflow-worker", "ocr-worker", "reconciliation"];
+    const reconciliationHealthyMs = Math.max(
+      120_000,
+      Number(process.env.RECONCILIATION_INTERVAL_MINUTES ?? 15) * 2 * 60_000,
+    );
+    const heartbeatHealthy = (worker: { worker: string; lastSeenAt: Date }) =>
+      now - worker.lastSeenAt.getTime() <=
+      (worker.worker === "reconciliation" ? reconciliationHealthyMs : 120_000);
     const missingWorkers = requiredWorkers.filter(
       (name) => !workers.some((worker) => worker.worker === name),
     );
     return {
       status:
         missingWorkers.length > 0 ||
-        workers.some((worker) => now - worker.lastSeenAt.getTime() > 120_000) ||
-        deadLetters > 0
+        workers.some((worker) => !heartbeatHealthy(worker)) ||
+        deadLetters > 0 ||
+        unsafeAvailableInventory > 0
           ? "degraded"
           : "healthy",
       workers: workers.map((worker) => ({
         ...worker,
-        healthy: now - worker.lastSeenAt.getTime() <= 120_000,
+        healthy: heartbeatHealthy(worker),
       })),
       missingWorkers,
       queues,
@@ -295,6 +360,23 @@ export class ProductionResilienceService {
           : 0,
       },
       webhooks: { deadLetters },
+      payments: {
+        oldestReviewAgeSeconds: oldestPaymentReview
+          ? Math.floor((now - oldestPaymentReview.updatedAt.getTime()) / 1000)
+          : 0,
+        openDisputes,
+      },
+      orders: {
+        stuckByState: Object.fromEntries(
+          lifecycleCounts.map((row) => [row.status, row._count._all]),
+        ),
+      },
+      inventory: { unsafeAvailable: unsafeAvailableInventory },
+      reconciliation: {
+        lastSuccessAt:
+          workers.find((worker) => worker.worker === "reconciliation")
+            ?.lastSeenAt ?? null,
+      },
     };
   }
 

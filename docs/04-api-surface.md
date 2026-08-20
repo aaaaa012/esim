@@ -204,7 +204,7 @@ exempt. Returns HTTP 202.
 | Method | Path                               | Verification                                                                                 | Behavior                                                                                   |
 | ------ | ---------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | POST   | `/webhooks/clerk`                  | Svix via `CLERK_WEBHOOK_SECRET`; simulated (accepted) when not configured and not production | Synchronizes user lifecycle (`clerk-sync.service.ts`)                                      |
-| POST   | `/webhooks/payments/:provider`     | `x-visa-signature` HMAC (non-production only)                                                | Persists webhook event + enqueues `payments` job `payment-callback`                        |
+| POST   | `/webhooks/payments/:provider`     | Required `x-visa-signature` HMAC over raw bytes; Khalti only                                 | Persists durable inbox event + enqueues payment/dispute callback processing                |
 | POST   | `/webhooks/connectivity/:provider` | `x-tsl-signature-256` or `x-visa-signature`; required in production                          | Persists event + enqueues `providerCallbacks` job `connectivity-callback` (Transatel only) |
 
 ## Integration events & logs (auth: OPERATIONS/SUPER_ADMIN)

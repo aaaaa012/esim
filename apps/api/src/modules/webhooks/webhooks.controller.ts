@@ -102,10 +102,20 @@ export class WebhooksController {
       orderId?: string;
       reference?: string;
       pidx?: string;
+      eventType?: string;
+      caseId?: string;
+      amount?: number;
+      currency?: string;
+      reason?: string;
     },
     @Req() request: { rawBody?: Buffer },
     @Headers("x-visa-signature") signature?: string,
   ) {
+    const source = provider.toLowerCase();
+    if (source !== "khalti")
+      throw new BadRequestException(
+        `Unsupported payment provider: ${provider}`,
+      );
     const eventId = body.eventId;
     if (!eventId) throw new BadRequestException("eventId is required");
     if (
@@ -118,7 +128,7 @@ export class WebhooksController {
       this.rawPayload(body, request.rawBody),
       signature,
     );
-    const existing = await this.webhookState(provider, eventId);
+    const existing = await this.webhookState(source, eventId);
     if (existing?.processedAt) return { accepted: true, duplicate: true };
     const reference = body.reference ?? body.pidx;
     let orderId = body.orderId;
@@ -135,16 +145,16 @@ export class WebhooksController {
       ...(reference ? { reference } : {}),
       ...(orderId ? { orderId } : {}),
     };
-    if (!existing) await this.persistWebhook(provider, eventId, payload, true);
+    if (!existing) await this.persistWebhook(source, eventId, payload, true);
     // Persisted-but-unprocessed duplicates are deliberately re-enqueued. This
     // closes the database-commit/Redis-enqueue failure window.
     await this.queues.add(
       QUEUES.payments,
       "payment-callback",
-      { provider, eventId, payload },
-      `${provider}-${eventId}`,
+      { provider: source, eventId, payload },
+      `${source}-${eventId}`,
     );
-    this.remember(`${provider}:${eventId}`);
+    this.remember(`${source}:${eventId}`);
     return { accepted: true, queued: true };
   }
 

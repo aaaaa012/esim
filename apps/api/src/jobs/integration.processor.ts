@@ -20,6 +20,10 @@ import { QUEUES } from "./queues.js";
 import { InventoryService } from "../modules/inventory/inventory.service.js";
 import { ProductionResilienceService } from "./production-resilience.service.js";
 import { ClerkSyncService } from "../modules/identity/clerk-sync.service.js";
+import {
+  PaymentDisputesService,
+  type PaymentDisputeEventType,
+} from "../modules/payments/payment-disputes.service.js";
 
 type CallbackJob = {
   provider: string;
@@ -49,6 +53,7 @@ export class IntegrationProcessor implements OnModuleInit {
     private readonly inventory: InventoryService,
     private readonly resilience: ProductionResilienceService,
     private readonly clerkSync: ClerkSyncService,
+    private readonly paymentDisputes: PaymentDisputesService,
   ) {}
   onModuleInit() {
     if (process.env.PROCESS_ROLE === "api") return;
@@ -225,8 +230,48 @@ export class IntegrationProcessor implements OnModuleInit {
     try {
       const orderId = String(payload.orderId ?? "");
       const reference = String(payload.reference ?? "");
-      if (!orderId || !reference)
+      const eventType = String(payload.eventType ?? "");
+      if (this.isDisputeEvent(eventType)) {
+        if (!reference || !payload.caseId)
+          throw new Error(
+            "Payment dispute callback requires reference and caseId",
+          );
+        const result = await this.paymentDisputes.recordProviderEvent({
+          provider: job.data.provider,
+          eventId: job.data.eventId,
+          eventType,
+          reference,
+          caseId: String(payload.caseId),
+          ...(typeof payload.amount === "number"
+            ? { amount: payload.amount }
+            : {}),
+          ...(typeof payload.currency === "string"
+            ? { currency: payload.currency }
+            : {}),
+          ...(typeof payload.reason === "string"
+            ? { reason: payload.reason }
+            : {}),
+          evidence: payload,
+        });
+        await this.complete(job.data);
+        return result;
+      }
+      if (!orderId || !reference) {
+        await this.resilience.attention({
+          dedupeKey: `unknown-payment-callback:${job.data.provider}:${job.data.eventId}`,
+          category: "PAYMENT_SECURITY",
+          entityType: "WebhookEvent",
+          entityId: job.data.eventId,
+          severity: "CRITICAL",
+          summary: "Payment callback cannot be linked to an order",
+          detail:
+            "The signed callback is missing a known payment reference or local order",
+          externalState: eventType || "UNKNOWN",
+          failureCategory: "UNKNOWN_PAYMENT_REFERENCE",
+          availableActions: ["REPLAY_WEBHOOK"],
+        });
         throw new Error("Payment callback requires orderId and reference");
+      }
       const result = await this.payments.verifyCallback(orderId, reference);
       await this.complete(job.data);
       return result;
@@ -234,6 +279,17 @@ export class IntegrationProcessor implements OnModuleInit {
       await this.complete(job.data, error, job.attemptsMade + 1);
       throw error;
     }
+  }
+  private isDisputeEvent(value: string): value is PaymentDisputeEventType {
+    return [
+      "CHARGEBACK_OPENED",
+      "DISPUTE_OPENED",
+      "CHARGEBACK_WON",
+      "CHARGEBACK_LOST",
+      "DISPUTE_WON",
+      "DISPUTE_LOST",
+      "DISPUTE_RESOLVED",
+    ].includes(value);
   }
   private async connectivity(job: Job<CallbackJob>) {
     await this.start(job.data);

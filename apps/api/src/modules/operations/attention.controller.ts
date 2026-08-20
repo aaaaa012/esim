@@ -26,6 +26,8 @@ import { InventoryService } from "../inventory/inventory.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { OrdersService } from "../orders/orders.service.js";
+import { PaymentDisputesService } from "../payments/payment-disputes.service.js";
+import { ManualRefundsService } from "../payments/manual-refunds.service.js";
 
 @Controller("operations/attention")
 @UseGuards(AuthGuard, AccountGuard)
@@ -40,6 +42,8 @@ export class AttentionController {
     private readonly connectivity: ConnectivityService,
     private readonly notifications: NotificationService,
     private readonly orders: OrdersService,
+    private readonly paymentDisputes: PaymentDisputesService,
+    private readonly refunds: ManualRefundsService,
   ) {}
 
   @Get()
@@ -64,12 +68,10 @@ export class AttentionController {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     const [platform, connectivity] = await Promise.all([
       this.resilience.platformHealth(),
-      this.connectivity
-        .health()
-        .catch((error) => ({
-          ok: false,
-          detail: error instanceof Error ? error.message : "unavailable",
-        })),
+      this.connectivity.health().catch((error) => ({
+        ok: false,
+        detail: error instanceof Error ? error.message : "unavailable",
+      })),
     ]);
     return {
       ...platform,
@@ -145,6 +147,7 @@ export class AttentionController {
     if (
       ![
         "RECHECK_INVENTORY",
+        "RECONCILE_RESERVATION",
         "REPLAY_WEBHOOK",
         "RECONCILE_PROVISIONING",
       ].includes(body.action ?? "")
@@ -192,10 +195,31 @@ export class AttentionController {
     }
     if (action === "RECHECK_INVENTORY")
       return this.inventory.reconcileProviderProfile(item.entityId);
+    if (action === "RECHECK_ORDER_PROVIDER") {
+      if (!item.orderId) throw new BadRequestException("Order is unavailable");
+      const inventory = await this.inventory.inventoryForOrder(item.orderId);
+      if (!inventory?.iccid)
+        throw new BadRequestException("Assigned inventory is unavailable");
+      return this.connectivity.getEsimDetails(inventory.iccid);
+    }
+    if (action === "RECONCILE_RESERVATION")
+      return this.inventory.reconcileReservation(item.entityId);
     if (action === "RECONCILE_PROVISIONING")
       return this.reconciliation.reconcileProvisioningOperationNow(
         item.entityId,
       );
+    if (action === "RECONCILE_ORDER_PROVISIONING") {
+      if (!item.orderId) throw new BadRequestException("Order is unavailable");
+      const operation = await this.prisma.provisioningOperation.findUnique({
+        where: { orderId: item.orderId },
+        select: { id: true },
+      });
+      if (!operation)
+        throw new BadRequestException("Provisioning operation is unavailable");
+      return this.reconciliation.reconcileProvisioningOperationNow(
+        operation.id,
+      );
+    }
     if (action === "RETRY_PROVISIONING") {
       if (!item.orderId) throw new BadRequestException("Order is unavailable");
       return this.orders.retry(item.orderId);
@@ -214,6 +238,10 @@ export class AttentionController {
         notification.orderNumber,
       );
     }
+    if (action === "REVIEW_FINANCIAL_DISPUTE")
+      return this.paymentDisputes.item(item.entityId);
+    if (action === "REVIEW_MANUAL_REFUND")
+      return this.refunds.item(item.entityId);
     if (action === "REPLAY_WEBHOOK") {
       const event = await this.prisma.webhookEvent.findUnique({
         where: { id: item.entityId },
