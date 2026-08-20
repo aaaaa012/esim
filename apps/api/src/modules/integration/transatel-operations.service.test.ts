@@ -49,3 +49,36 @@ describe('TransatelOperationsService lifecycle', () => {
     expect(context.lifecycleUpdate).toHaveBeenCalledWith({ where: { id: 'operation-1' }, data: { state: 'RECONCILE_REQUIRED', errorMessage: 'socket closed after send' } });
   });
 });
+
+describe('TransatelOperationsService dashboard search', () => {
+  it('applies each table search on the server before limiting results', async () => {
+    const subscriptionFindMany = vi.fn().mockResolvedValue([]);
+    const inventoryFindMany = vi.fn().mockResolvedValue([]);
+    const logFindMany = vi.fn().mockResolvedValue([]);
+    const lifecycleFindMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      enabled: true,
+      esimInventory: { count: vi.fn().mockResolvedValue(0), findMany: inventoryFindMany },
+      subscription: { count: vi.fn().mockResolvedValue(0), findMany: subscriptionFindMany },
+      order: { count: vi.fn().mockResolvedValue(0) },
+      provisioningOperation: { count: vi.fn().mockResolvedValue(0) },
+      webhookEvent: { count: vi.fn().mockResolvedValue(0) },
+      integrationLog: { findMany: logFindMany },
+      transatelLifecycleOperation: { findMany: lifecycleFindMany },
+    } as unknown as PrismaService;
+    const connectivity = { transatelHealth: vi.fn().mockResolvedValue({ ok: true }) } as unknown as ConnectivityService;
+    const service = new TransatelOperationsService(prisma, connectivity);
+
+    await service.dashboard({ scope: 'subscribers', q: 'VC-2026-SEARCH' });
+    expect(subscriptionFindMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ provider: 'TRANSATEL', OR: expect.any(Array) }), take: 100 }));
+
+    await service.dashboard({ scope: 'inventory', q: '8988247' });
+    expect(inventoryFindMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ assignedOrderId: null, OR: expect.any(Array) }), take: 100 }));
+
+    await service.dashboard({ scope: 'failures', q: 'timeout' });
+    expect(logFindMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ AND: expect.any(Array) }), take: 50 }));
+
+    await service.dashboard({ scope: 'actions', q: 'operator@example.com' });
+    expect(lifecycleFindMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ OR: expect.any(Array) }), take: 50 }));
+  });
+});

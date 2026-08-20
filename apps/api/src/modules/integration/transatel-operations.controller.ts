@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { UserRole } from '@visa-compass/shared';
 import { UserRoleName } from '@prisma/client';
 import { AccountGuard, AccountTypes, AuthGuard, type AuthenticatedRequest, requireRole } from '../../common/auth.guard.js';
@@ -13,9 +13,9 @@ export class TransatelOperationsController {
   constructor(private readonly transatel: TransatelOperationsService) {}
 
   @Get()
-  dashboard(@Req() request: AuthenticatedRequest) {
+  dashboard(@Req() request: AuthenticatedRequest, @Query('scope') scope?: 'subscribers' | 'inventory' | 'failures' | 'actions', @Query('q') q?: string) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    return this.transatel.dashboard();
+    return this.transatel.dashboard({ ...(scope ? { scope } : {}), ...(q ? { q } : {}) });
   }
 
   @Get('diagnostics')

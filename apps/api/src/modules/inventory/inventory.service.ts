@@ -447,7 +447,7 @@ export class InventoryService implements OnModuleInit {
 
   async overview() {
     if (!this.prisma.enabled) return { counts: { available: 0, reserved: 0, assigned: 0, activated: 0 }, lowStockThreshold: 10, lowStock: true, batches: [] };
-    const [groups, batches] = await Promise.all([this.prisma.esimInventory.groupBy({ by: ['status'], _count: { _all: true } }), this.prisma.inventoryBatch.findMany({ orderBy: { createdAt: 'desc' }, take: 20 })]);
+    const [groups, batches] = await Promise.all([this.prisma.esimInventory.groupBy({ by: ['status'], _count: { _all: true } }), this.prisma.inventoryBatch.findMany({ orderBy: { createdAt: 'desc' }, take: 100 })]);
     const count = (status: InventoryStatus) => groups.find((item) => item.status === status)?._count._all ?? 0;
     const available = count(InventoryStatus.AVAILABLE);
     return { counts: { available, reserved: count(InventoryStatus.RESERVED), assigned: count(InventoryStatus.ASSIGNED), activated: count(InventoryStatus.ACTIVATED), pending: count(InventoryStatus.IMPORTED), expired: count(InventoryStatus.EXPIRED), terminated: count(InventoryStatus.TERMINATED), quarantined: count(InventoryStatus.QUARANTINED) }, lowStockThreshold: 10, lowStock: available <= 10, batches: batches.map((batch) => ({ id: batch.id, batchReference: batch.batchReference, totalProfiles: batch.totalProfiles, importedCount: batch.importedCount, failedCount: batch.failedCount, status: batch.status, rejectionReason: batch.rejectionReason, createdAt: batch.createdAt.toISOString() })) };
@@ -458,13 +458,14 @@ export class InventoryService implements OnModuleInit {
    * reserved/owns each SIM, which customer bought it, and which package (plan)
    * it belongs to. Available to OPERATIONS and SUPER_ADMIN.
    */
-  async profiles(params?: { status?: InventoryStatus; q?: string; limit?: number; offset?: number }) {
+  async profiles(params?: { status?: InventoryStatus; assignment?: 'ASSIGNED' | 'UNASSIGNED'; q?: string; limit?: number; offset?: number }) {
     if (!this.prisma.enabled) return { total: 0, items: [] };
     const limit = Math.min(params?.limit ?? 50, 200);
     const skip = params?.offset ? Number(params.offset) : 0;
     const query = params?.q?.trim().slice(0, 200);
     const where = {
       ...(params?.status ? { status: params.status } : {}),
+      ...(params?.assignment === 'ASSIGNED' ? { assignedOrderId: { not: null } } : params?.assignment === 'UNASSIGNED' ? { assignedOrderId: null } : {}),
       ...(query ? {
         OR: [
           { iccid: { contains: query, mode: 'insensitive' as const } },

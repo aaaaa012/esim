@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import { Prisma, TransatelLifecycleAction, TransatelLifecycleState } from '@prisma/client';
+import { InventoryStatus, Prisma, SubscriptionStatus, TransatelLifecycleAction, TransatelLifecycleState } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 import { ConnectivityService } from './connectivity.service.js';
 
@@ -15,10 +15,81 @@ type LifecycleInput = {
 export class TransatelOperationsService {
   constructor(private readonly prisma: PrismaService, private readonly connectivity: ConnectivityService) {}
 
-  async dashboard() {
+  async dashboard(params?: { scope?: 'subscribers' | 'inventory' | 'failures' | 'actions'; q?: string }) {
     const health = await this.connectivity.transatelHealth().catch((error) => ({ ok: false, error: error instanceof Error ? error.message : 'Health check failed' }));
     if (!this.prisma.enabled) return { health, persistence: 'DISABLED', counts: { available: 0, quarantined: 0, activeSubscriptions: 0, suspended: 0, provisioningAttention: 0, webhookDeadLetters: 0 }, subscribers: [], inventory: [], failures: [], lifecycleOperations: [] };
     const attentionStates = ['RECONCILE_REQUIRED', 'REJECTED', 'MANUAL_REVIEW'] as const;
+    const query = params?.q?.trim().slice(0, 200);
+    const normalizedQuery = query?.toUpperCase().replaceAll(' ', '_');
+    const subscriptionStatus = normalizedQuery && Object.values(SubscriptionStatus).includes(normalizedQuery as SubscriptionStatus) ? normalizedQuery as SubscriptionStatus : undefined;
+    const inventoryStatus = normalizedQuery && Object.values(InventoryStatus).includes(normalizedQuery as InventoryStatus) ? normalizedQuery as InventoryStatus : undefined;
+    const lifecycleAction = normalizedQuery && Object.values(TransatelLifecycleAction).includes(normalizedQuery as TransatelLifecycleAction) ? normalizedQuery as TransatelLifecycleAction : undefined;
+    const lifecycleState = normalizedQuery && Object.values(TransatelLifecycleState).includes(normalizedQuery as TransatelLifecycleState) ? normalizedQuery as TransatelLifecycleState : undefined;
+    const subscriberWhere: Prisma.SubscriptionWhereInput = {
+      provider: 'TRANSATEL',
+      ...(query && params?.scope === 'subscribers' ? { OR: [
+        { providerSubscriptionId: { contains: query, mode: 'insensitive' } },
+        ...(subscriptionStatus ? [{ status: subscriptionStatus }] : []),
+        { customerEsim: { is: { OR: [
+          { inventory: { is: { OR: [
+            { iccid: { contains: query, mode: 'insensitive' } },
+            { eid: { contains: query, mode: 'insensitive' } },
+            { msisdn: { contains: query, mode: 'insensitive' } },
+          ] } } },
+          { customer: { is: { OR: [
+            { email: { contains: query, mode: 'insensitive' } },
+            { customerCode: { contains: query, mode: 'insensitive' } },
+            { phone: { contains: query, mode: 'insensitive' } },
+          ] } } },
+          { order: { is: { OR: [
+            { orderNumber: { contains: query, mode: 'insensitive' } },
+            { externalOrderId: { contains: query, mode: 'insensitive' } },
+            { traveler: { is: { OR: [
+              { firstName: { contains: query, mode: 'insensitive' } },
+              { surname: { contains: query, mode: 'insensitive' } },
+              { email: { contains: query, mode: 'insensitive' } },
+              { mobile: { contains: query, mode: 'insensitive' } },
+            ] } } },
+            { plan: { is: { name: { contains: query, mode: 'insensitive' } } } },
+          ] } } },
+        ] } } },
+      ] } : {}),
+    };
+    const inventoryWhere: Prisma.EsimInventoryWhereInput = {
+      assignedOrderId: null,
+      ...(query && params?.scope === 'inventory' ? { OR: [
+        { iccid: { contains: query, mode: 'insensitive' } },
+        { eid: { contains: query, mode: 'insensitive' } },
+        { msisdn: { contains: query, mode: 'insensitive' } },
+        { providerSubscriptionId: { contains: query, mode: 'insensitive' } },
+        { providerStatus: { contains: query, mode: 'insensitive' } },
+        ...(inventoryStatus ? [{ status: inventoryStatus }] : []),
+        { batch: { is: { batchReference: { contains: query, mode: 'insensitive' } } } },
+      ] } : {}),
+    };
+    const failureWhere: Prisma.IntegrationLogWhereInput = {
+      AND: [
+        { OR: [{ status: { gte: 400 } }, { errorCode: { not: null } }] },
+        ...(query && params?.scope === 'failures' ? [{ OR: [
+          { operation: { contains: query, mode: 'insensitive' as const } },
+          { endpoint: { contains: query, mode: 'insensitive' as const } },
+          { errorCode: { contains: query, mode: 'insensitive' as const } },
+          { errorMessage: { contains: query, mode: 'insensitive' as const } },
+          { correlationId: { contains: query, mode: 'insensitive' as const } },
+          ...(/^\d{3}$/.test(query) ? [{ status: Number(query) }] : []),
+        ] }] : []),
+      ],
+    };
+    const lifecycleWhere: Prisma.TransatelLifecycleOperationWhereInput = query && params?.scope === 'actions' ? { OR: [
+      { order: { is: { orderNumber: { contains: query, mode: 'insensitive' } } } },
+      { performedBy: { is: { email: { contains: query, mode: 'insensitive' } } } },
+      { reason: { contains: query, mode: 'insensitive' } },
+      { providerTransactionId: { contains: query, mode: 'insensitive' } },
+      { idempotencyKey: { contains: query, mode: 'insensitive' } },
+      { errorMessage: { contains: query, mode: 'insensitive' } },
+      ...(lifecycleAction ? [{ action: lifecycleAction }] : []),
+      ...(lifecycleState ? [{ state: lifecycleState }] : []),
+    ] } : {};
     const [available, quarantined, activeSubscriptions, suspended, provisioningAttention, webhookDeadLetters, subscribers, inventory, failures, lifecycleOperations] = await Promise.all([
       this.prisma.esimInventory.count({ where: { status: 'AVAILABLE' } }),
       this.prisma.esimInventory.count({ where: { status: 'QUARANTINED' } }),
@@ -27,7 +98,7 @@ export class TransatelOperationsService {
       this.prisma.provisioningOperation.count({ where: { state: { in: [...attentionStates] } } }),
       this.prisma.webhookEvent.count({ where: { source: 'transatel', deadLetteredAt: { not: null } } }),
       this.prisma.subscription.findMany({
-        where: { provider: 'TRANSATEL' },
+        where: subscriberWhere,
         include: {
           customerEsim: {
             include: {
@@ -40,9 +111,9 @@ export class TransatelOperationsService {
         orderBy: { customerEsim: { assignedAt: 'desc' } },
         take: 100,
       }),
-      this.prisma.esimInventory.findMany({ where: { assignedOrderId: null }, include: { batch: true }, orderBy: { updatedAt: 'desc' }, take: 100 }),
-      this.prisma.integrationLog.findMany({ where: { OR: [{ status: { gte: 400 } }, { errorCode: { not: null } }] }, orderBy: { createdAt: 'desc' }, take: 50 }),
-      this.prisma.transatelLifecycleOperation.findMany({ include: { order: { select: { orderNumber: true } }, performedBy: { select: { email: true } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
+      this.prisma.esimInventory.findMany({ where: inventoryWhere, include: { batch: true }, orderBy: { updatedAt: 'desc' }, take: 100 }),
+      this.prisma.integrationLog.findMany({ where: failureWhere, orderBy: { createdAt: 'desc' }, take: 50 }),
+      this.prisma.transatelLifecycleOperation.findMany({ where: lifecycleWhere, include: { order: { select: { orderNumber: true } }, performedBy: { select: { email: true } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
     ]);
     return {
       health,

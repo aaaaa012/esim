@@ -170,6 +170,9 @@ export default function InventoryClient() {
   const [decision, setDecision] = useState("");
   const [reconciliationProfiles, setReconciliationProfiles] = useState<InventoryProfile[]>([]);
   const [reconciling, setReconciling] = useState("");
+  const [liveQuery, setLiveQuery] = useState("");
+  const [liveSearch, setLiveSearch] = useState("");
+  const [batchQuery, setBatchQuery] = useState("");
 
   const [profileFile, setProfileFile] = useState<File | null>(null);
   const [profileSource, setProfileSource] = useState("");
@@ -180,6 +183,8 @@ export default function InventoryClient() {
 
   const [draftPlans, setDraftPlans] = useState<Plan[]>([]);
   const [planDecision, setPlanDecision] = useState("");
+  const [planQuery, setPlanQuery] = useState("");
+  const [planSearch, setPlanSearch] = useState("");
 
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profilesTotal, setProfilesTotal] = useState(0);
@@ -222,9 +227,11 @@ export default function InventoryClient() {
   }, [profilesQuery]);
 
   const load = () => {
+    const liveParams = new URLSearchParams({ limit: "100", assignment: "UNASSIGNED" });
+    if (liveSearch) liveParams.set("q", liveSearch);
     void Promise.all([
       authFetch(`${API}/operations/inventory`, { headers: {} }),
-      authFetch(`${API}/operations/inventory/profiles?limit=100`, { headers: {} }),
+      authFetch(`${API}/operations/inventory/profiles?${liveParams}`, { headers: {} }),
     ])
       .then(async ([overviewResponse, profilesResponse]) => {
         const [overviewValue, profilesValue] = await Promise.all([overviewResponse.json(), profilesResponse.json()]);
@@ -235,6 +242,14 @@ export default function InventoryClient() {
       })
       .catch((e) => setError(e.message));
   };
+  useEffect(() => {
+    const timer = window.setTimeout(() => setLiveSearch(liveQuery.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [liveQuery]);
+  useEffect(() => {
+    if (data) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveSearch]);
   const reconcileProfile = async (profile: InventoryProfile) => {
     setReconciling(profile.id);
     try {
@@ -272,7 +287,6 @@ export default function InventoryClient() {
       })
       .catch(() => undefined);
     load();
-    loadPlans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -366,14 +380,24 @@ export default function InventoryClient() {
   };
 
   const loadPlans = () => {
-    void authFetch(`${API}/admin/plans`, { headers: {} })
+    const params = new URLSearchParams({ status: "DRAFT", limit: "100", offset: "0" });
+    if (planSearch) params.set("q", planSearch);
+    void authFetch(`${API}/admin/plans/page?${params}`, { headers: {} })
       .then(async (r) => {
         const v = await r.json();
         if (!r.ok) throw new Error(v.error?.message);
-        setDraftPlans((Array.isArray(v.data) ? v.data : v.data?.plans ?? []).filter((p: Plan) => p.status === "DRAFT"));
+        setDraftPlans(v.data?.items ?? []);
       })
       .catch((e) => toast.error(e.message));
   };
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPlanSearch(planQuery.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [planQuery]);
+  useEffect(() => {
+    loadPlans();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planSearch]);
 
   const decidePlan = async (plan: Plan, approve: boolean) => {
     setPlanDecision(plan.id);
@@ -444,7 +468,9 @@ export default function InventoryClient() {
       tone: data.counts.quarantined ? ("danger" as const) : ("default" as const),
     },
   ];
-  const pendingBatches = data.batches.filter((batch) => batch.status === "PENDING");
+  const batchSearch = batchQuery.trim().toLowerCase();
+  const filteredBatches = data.batches.filter((batch) => !batchSearch || batch.batchReference.toLowerCase().includes(batchSearch) || batch.id.toLowerCase().includes(batchSearch));
+  const pendingBatches = filteredBatches.filter((batch) => batch.status === "PENDING");
 
   return (
     <>
@@ -515,7 +541,7 @@ export default function InventoryClient() {
         </TabsList>
 
         <TabsContent value="live-stock" className="mt-6">
-          <Panel title="Stock check against the network provider" description="Compares the latest 100 profiles with the network provider. Profiles that don't match are flagged automatically." noPadding>
+          <Panel title="Stock check against the network provider" description="Compares the latest 100 unassigned profiles with the network provider. Profiles that don't match are flagged automatically." actions={<SearchInput value={liveQuery} onChange={setLiveQuery} placeholder="Search ICCID, EID, MSISDN or batch…" className="w-full sm:w-80" />} noPadding>
             {!reconciliationProfiles.length ? <EmptyState title="No inventory profiles" description="Uploaded profiles will appear here." /> : (
               <Table>
                 <TableHeader><TableRow><TableHead>eSIM</TableHead><TableHead>Our system</TableHead><TableHead>Network provider</TableHead><TableHead>Last checked</TableHead><TableHead>Issue</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
@@ -622,6 +648,7 @@ export default function InventoryClient() {
           <Panel
             title="Profile batches awaiting approval"
             description="Super Admin must approve every upload before it becomes sellable."
+            actions={<SearchInput value={batchQuery} onChange={setBatchQuery} placeholder="Search batch reference or ID…" className="w-full sm:w-72" />}
             noPadding
           >
             {pendingBatches.length === 0 ? (
@@ -699,6 +726,7 @@ export default function InventoryClient() {
           <Panel
             title="Packages awaiting approval"
             description="Uploaded packages are DRAFT; approval releases them for sale."
+            actions={<SearchInput value={planQuery} onChange={setPlanQuery} placeholder="Search package or country…" className="w-full sm:w-72" />}
             noPadding
           >
             {draftPlans.length === 0 ? (
@@ -780,10 +808,11 @@ export default function InventoryClient() {
           <Panel
             title="Batch history"
             description="Traceability for every profile upload."
+            actions={<SearchInput value={batchQuery} onChange={setBatchQuery} placeholder="Search batch reference or ID…" className="w-full sm:w-72" />}
             noPadding
           >
-            {data.batches.length === 0 ? (
-              <EmptyState title="No batches yet" description="Uploaded batches will appear here." />
+            {filteredBatches.length === 0 ? (
+              <EmptyState title="No batches found" description={batchSearch ? `No batch matches “${batchQuery.trim()}”.` : "Uploaded batches will appear here."} />
             ) : (
               <Table>
                 <TableHeader>
@@ -795,7 +824,7 @@ export default function InventoryClient() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.batches.slice(0, 15).map((batch) => (
+                  {filteredBatches.map((batch) => (
                     <TableRow key={batch.id}>
                       <TableCell>
                         <p className="font-medium">{batch.batchReference}</p>
