@@ -554,6 +554,29 @@ export class OrdersService implements OnModuleInit {
     if (!document) throw new NotFoundException("Document not found");
     await this.storage.verifyDocument(document.privateAssetId);
     document.uploadVerified = true;
+    const fulfillmentStarted = [
+      OrderStatus.PAYMENT_CONFIRMED,
+      OrderStatus.APPROVED,
+      OrderStatus.PROVISIONING,
+      OrderStatus.QR_READY,
+      OrderStatus.ACTIVATION_ATTENTION,
+      OrderStatus.COMPLETED,
+    ].includes(order.status);
+    let queueReplacementOcr = false;
+    if (fulfillmentStarted && order.documentReviewStatus === "NOT_STARTED") {
+      order.documentReviewStartedAt = new Date().toISOString();
+      if (order.documentReviewPolicy === "NO_REVIEW") {
+        order.documentReviewStatus = "SKIPPED";
+      } else if (
+        order.documentReviewPolicy === "AUTO_OCR" &&
+        document.type === DocumentType.PASSPORT
+      ) {
+        order.documentReviewStatus = "OCR_PENDING";
+        queueReplacementOcr = true;
+      } else {
+        order.documentReviewStatus = "MANUAL_REVIEW";
+      }
+    }
     if (
       order.status === OrderStatus.AWAITING_CUSTOMER &&
       !order.documents.some(
@@ -566,6 +589,24 @@ export class OrdersService implements OnModuleInit {
         "Customer supplied requested document",
       );
     await this.persistence.save(order);
+    if (queueReplacementOcr) {
+      try {
+        await this.queues.add(
+          QUEUES.documents,
+          "verify-order-passport",
+          { orderId: order.id, documentId: document.id },
+          `order-passport-${order.id}-${document.id}`,
+          { attempts: 3, backoff: { type: "exponential", delay: 2_000 } },
+        );
+      } catch (error) {
+        order.documentReviewStatus = "MANUAL_REVIEW";
+        await this.persistence.save(order);
+        this.logger.warn(
+          `Replacement OCR handoff failed for ${order.id}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
+    await this.ensureDocumentReviewAttention(order);
     return {
       id: document.id,
       type: document.type,
@@ -807,6 +848,7 @@ export class OrdersService implements OnModuleInit {
     const current = this.get(id);
     if (current.status === OrderStatus.PROVISIONING)
       await this.enqueueProvisioning(current, `provision-${current.id}`);
+    await this.ensureDocumentReviewAttention(current);
     await this.resilience?.resolve(
       `payment-review:${id}`,
       null,
@@ -844,7 +886,24 @@ export class OrdersService implements OnModuleInit {
     await this.persistence.save(confirmed);
     this.orders.set(id, confirmed);
     await this.enqueueProvisioning(confirmed, `provision-${confirmed.id}`);
+    await this.ensureDocumentReviewAttention(confirmed);
     return this.redact(confirmed);
+  }
+
+  private async ensureDocumentReviewAttention(order: DemoOrder) {
+    if (order.documentReviewStatus !== "MANUAL_REVIEW") return;
+    await this.resilience?.attention({
+      dedupeKey: `document-review:${order.id}`,
+      category: "DOCUMENT_MANUAL_REVIEW",
+      entityType: "Order",
+      entityId: order.id,
+      orderId: order.id,
+      summary: "Documents require manual review",
+      localState: order.status,
+      failureCategory: "DOCUMENT_REVIEW_POLICY",
+      lastSuccessfulStep: "PAYMENT_OR_SETTLEMENT_CONFIRMED",
+      availableActions: [],
+    });
   }
   async resolvePaymentFailure(
     id: string,
@@ -1286,6 +1345,26 @@ export class OrdersService implements OnModuleInit {
       decision,
       reason,
     );
+    if (order.documentReviewStatus === "MANUALLY_APPROVED")
+      await this.resilience?.resolve(
+        `document-review:${order.id}`,
+        actorId,
+        "All required documents manually approved",
+      );
+    else if (decision === "REUPLOAD")
+      await this.resilience?.attention({
+        dedupeKey: `document-review:${order.id}`,
+        category: "DOCUMENT_REUPLOAD",
+        entityType: "Order",
+        entityId: order.id,
+        orderId: order.id,
+        summary: "Customer document replacement requested",
+        detail: reason!.trim(),
+        localState: order.status,
+        failureCategory: "MANUAL_REVIEW_REJECTED",
+        lastSuccessfulStep: "FULFILLMENT_CONTINUES",
+        availableActions: [],
+      });
     return this.redact(order);
   }
   async approve(id: string, actorId: string) {
@@ -1356,6 +1435,7 @@ export class OrdersService implements OnModuleInit {
       );
     }
     await this.persistence.save(order);
+    await this.ensureDocumentReviewAttention(order);
     let queued = true;
     try {
       await this.queues.add(

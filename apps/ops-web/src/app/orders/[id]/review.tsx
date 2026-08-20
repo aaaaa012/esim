@@ -33,6 +33,8 @@ import { ManualRefundCard } from "./manual-refund-card";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Detail = OpsOrder & {
+  documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
+  documentReviewStatus?: string;
   traveler?: {
     title: string;
     firstName: string;
@@ -152,7 +154,11 @@ export default function OrderReview({ id }: { id: string }) {
       </div>
     );
 
-  const canReview = order.status === "REVIEW_PENDING";
+  const canAdvanceOrder = order.status === "REVIEW_PENDING";
+  const canReviewDocuments =
+    order.documentReviewPolicy !== "NO_REVIEW" &&
+    !["CANCELLED", "REFUNDED"].includes(order.status) &&
+    order.documents.length > 0;
   const requiredApproved = ["PASSPORT", "TICKET"].every((type) =>
     order.documents.some(
       (document) => document.type === type && document.status === "APPROVED",
@@ -494,7 +500,7 @@ export default function OrderReview({ id }: { id: string }) {
                   >
                     Preview
                   </Button>
-                  {canReview && document.status !== "APPROVED" && (
+                  {canReviewDocuments && document.status !== "APPROVED" && (
                     <Button
                       size="sm"
                       variant="success"
@@ -516,7 +522,7 @@ export default function OrderReview({ id }: { id: string }) {
                       Approve
                     </Button>
                   )}
-                  {canReview && (
+                  {canReviewDocuments && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -570,7 +576,36 @@ export default function OrderReview({ id }: { id: string }) {
             <p className="text-xs text-muted-foreground">
               Paid through {humane(order.payment?.provider ?? "—")}
             </p>
-            {canReview ? (
+            <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5 text-sm">
+              <span className="text-muted-foreground">Documents</span>
+              <StatusBadge
+                label={order.documentReviewStatus ?? "NOT STARTED"}
+              />
+            </div>
+            {canReviewDocuments && !canAdvanceOrder && (
+              <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
+                <p className="text-xs text-muted-foreground">
+                  Document review remains open while activation continues. Your
+                  decision updates the document record and does not stop or
+                  reverse the eSIM lifecycle.
+                </p>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">
+                    Reason for a re-upload request
+                  </Label>
+                  <textarea
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    rows={3}
+                    className="w-full rounded-md border border-input bg-transparent p-3 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2"
+                  />
+                </div>
+                <p className="text-xs font-medium">
+                  Use Approve or Re-upload beside each document.
+                </p>
+              </div>
+            )}
+            {canAdvanceOrder ? (
               <>
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">

@@ -19,3 +19,9 @@ All processes share `DATABASE_URL`, `REDIS_URL`, encryption keys, provider crede
 - `NO_REVIEW` may only be selected explicitly by Super Admin; infrastructure failure always falls back to manual review.
 
 Monitor `/api/v1/operations/attention/platform-health` for worker heartbeats, queue age/depth, pending outbox messages, dead letters, dependencies, and open attention cases.
+
+# Database deployment gate
+
+The API startup command applies committed Prisma migrations with `prisma migrate deploy` before opening the HTTP port. This prevents a new application build from starting against an older schema. On platforms that support a dedicated pre-deploy command, prefer `pnpm db:deploy` there; the startup gate remains safe and idempotent as a fallback.
+
+For BullMQ, configure the production Redis/Valkey instance with `noeviction`. An eviction policy such as `volatile-lru` can discard queue coordination keys and is not safe for durable job transport.

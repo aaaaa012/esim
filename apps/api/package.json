@@ -6,13 +6,14 @@
   "scripts": {
     "build": "nest build",
     "dev": "node --env-file-if-exists=../../.env node_modules/@nestjs/cli/bin/nest.js start --watch",
-    "start": "node dist/src/main.js",
+    "start": "pnpm prisma:deploy && node dist/src/main.js",
     "start:ocr-worker": "node dist/src/ocr-worker.js",
     "start:workflow-worker": "node dist/src/workflow-worker.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js generate",
+    "prisma:deploy": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js migrate deploy",
     "prisma:migrate": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js migrate dev",
     "prisma:seed": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/seed.ts"
   },

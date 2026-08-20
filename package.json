@@ -12,6 +12,7 @@
     "format": "prettier --write .",
     "db:generate": "pnpm --filter @visa-compass/api prisma:generate",
     "db:migrate": "pnpm --filter @visa-compass/api prisma:migrate",
+    "db:deploy": "pnpm --filter @visa-compass/api prisma:deploy",
     "db:seed": "pnpm --filter @visa-compass/api prisma:seed"
   },
   "devDependencies": {

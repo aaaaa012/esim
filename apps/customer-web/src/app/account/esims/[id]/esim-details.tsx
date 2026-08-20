@@ -53,6 +53,8 @@ type Order = {
   timeline: { from: string | null; to: string; at: string; reason?: string }[];
   usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
   provisioningFailure?: { code: string; message: string };
+  documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
+  documentReviewStatus?: string;
 };
 
 export default function EsimDetails({ id }: { id: string }) {
@@ -248,7 +250,12 @@ export default function EsimDetails({ id }: { id: string }) {
   );
   const paymentPending =
     order.status === "PAYMENT_PENDING" && Boolean(order.payment?.reference);
-  const needsReupload = order.status === "AWAITING_CUSTOMER";
+  const needsReupload = order.documents.some(
+    (document) => document.status === "REUPLOAD_REQUIRED",
+  );
+  const documentReviewPending = ["MANUAL_REVIEW", "OCR_BACKGROUND"].includes(
+    order.documentReviewStatus ?? "",
+  );
   const resumeLabel = paymentPending
     ? "Check payment status"
     : order.status === "PAYMENT_FAILED"
@@ -313,6 +320,18 @@ export default function EsimDetails({ id }: { id: string }) {
             </span>
           </section>
         )}
+        {documentReviewPending && !needsReupload && (
+          <section className="customer-action-banner">
+            <Clock3 />
+            <span>
+              <b>Your documents are being reviewed separately</b>
+              <small>
+                Your payment and eSIM activation continue normally. Our team
+                will contact you only if another document is required.
+              </small>
+            </span>
+          </section>
+        )}
         <div className="detail-grid">
           <div className="detail-column">
             <section className="detail-card">
@@ -352,7 +371,7 @@ export default function EsimDetails({ id }: { id: string }) {
                     {documentTypeLabel(document.type)} · {document.fileName}
                   </span>
                   <b>{documentStatusLabel(document.status)}</b>
-                  {needsReupload && document.status === "REUPLOAD_REQUIRED" && (
+                  {document.status === "REUPLOAD_REQUIRED" && (
                     <div className="replacement-control">
                       <input
                         type="file"

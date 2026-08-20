@@ -119,6 +119,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     });
     await this.resilience.dispatchOutbox();
     await this.requeueUnprocessedWebhooks();
+    await this.reconcileStaleDocumentReviews();
     await this.retryFailedNotifications();
     await this.reconcileProvisioningOperations();
     await this.reconcileLifecycleOperations();
@@ -234,6 +235,60 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
           `Notification recovery failed for ${row.id}: ${error instanceof Error ? error.message : "unknown"}`,
         );
       }
+    }
+  }
+
+  private async reconcileStaleDocumentReviews() {
+    if (!this.prisma.enabled) return;
+    const orders = await this.prisma.order.findMany({
+      where: {
+        status: {
+          in: [
+            "PROVISIONING",
+            "QR_READY",
+            "ACTIVATION_ATTENTION",
+            "COMPLETED",
+          ],
+        },
+        documentReviewPolicy: { not: "NO_REVIEW" },
+        documentReviewStatus: "NOT_STARTED",
+        documents: { some: { status: "PENDING" } },
+      },
+      select: { id: true, status: true },
+      take: 100,
+      orderBy: { createdAt: "asc" },
+    });
+    for (const order of orders) {
+      const updated = await this.prisma.order.updateMany({
+        where: { id: order.id, documentReviewStatus: "NOT_STARTED" },
+        data: {
+          documentReviewStatus: "MANUAL_REVIEW",
+          documentReviewStartedAt: new Date(),
+        },
+      });
+      if (!updated.count) continue;
+      await this.prisma.orderEvent.create({
+        data: {
+          orderId: order.id,
+          fromStatus: order.status,
+          toStatus: order.status,
+          reason:
+            "Document review was not started; recovered to non-blocking manual review",
+          metadata: { documentReviewStatus: "MANUAL_REVIEW" },
+        },
+      });
+      await this.resilience.attention({
+        dedupeKey: `document-review:${order.id}`,
+        category: "DOCUMENT_MANUAL_REVIEW",
+        entityType: "Order",
+        entityId: order.id,
+        orderId: order.id,
+        summary: "Documents require manual review after fulfillment started",
+        localState: order.status,
+        failureCategory: "DOCUMENT_REVIEW_HANDOFF_MISSED",
+        lastSuccessfulStep: "FULFILLMENT_CONTINUES",
+        availableActions: [],
+      });
     }
   }
 
