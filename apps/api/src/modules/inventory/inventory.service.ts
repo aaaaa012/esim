@@ -385,6 +385,66 @@ export class InventoryService implements OnModuleInit {
     }
   }
 
+  /**
+   * Returns quarantined, unassigned stock to the sellable pool only after a
+   * fresh provider check proves that the eSIM is currently safe to allocate.
+   * The guarded update prevents a concurrent reservation from being undone.
+   */
+  async restoreQuarantinedProfile(id: string, actorClerkId: string) {
+    if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
+    const profile = await this.prisma.esimInventory.findUnique({
+      where: { id },
+      include: { batch: { select: { id: true, status: true, batchReference: true } } },
+    });
+    if (!profile) throw new NotFoundException('Inventory profile not found');
+    if (profile.status !== InventoryStatus.QUARANTINED)
+      throw new ConflictException('Only quarantined inventory can be restored');
+    if (profile.assignedOrderId || profile.providerSubscriptionId)
+      throw new ConflictException('Assigned or provider-bound inventory cannot be restored');
+    if (profile.batch?.status !== BatchStatus.APPROVED)
+      throw new ConflictException('Only inventory from an approved batch can be restored');
+
+    const details = await this.connectivity.getEsimDetails(profile.iccid);
+    const providerStatus = details.status.toLowerCase();
+    if (providerStatus !== 'available' && providerStatus !== 'allocated')
+      throw new ConflictException(`Transatel reports ${providerStatus}; only available or allocated inventory can be restored`);
+
+    const actor = await this.localUser(actorClerkId);
+    const checkedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      const restored = await tx.esimInventory.updateMany({
+        where: {
+          id,
+          status: InventoryStatus.QUARANTINED,
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+        },
+        data: {
+          status: InventoryStatus.AVAILABLE,
+          providerStatus: details.status,
+          lastProviderCheckedAt: checkedAt,
+          providerCheckError: null,
+          ...(details.smDpAddress ? { smDpAddress: details.smDpAddress } : {}),
+          version: { increment: 1 },
+        },
+      });
+      if (restored.count !== 1)
+        throw new ConflictException('Inventory changed during restoration; check it again');
+      await tx.auditLog.create({
+        data: {
+          module: 'INVENTORY',
+          entity: 'EsimInventory',
+          entityId: id,
+          action: 'QUARANTINE_RESTORED',
+          ...(actor ? { performedById: actor.id } : {}),
+          previousValue: { status: profile.status, providerStatus: profile.providerStatus, batchReference: profile.batch.batchReference },
+          newValue: { status: InventoryStatus.AVAILABLE, providerStatus: details.status },
+        },
+      });
+    });
+    return { id, iccid: profile.iccid, localStatus: InventoryStatus.AVAILABLE, providerStatus: details.status, checkedAt: checkedAt.toISOString() };
+  }
+
   async overview() {
     if (!this.prisma.enabled) return { counts: { available: 0, reserved: 0, assigned: 0, activated: 0 }, lowStockThreshold: 10, lowStock: true, batches: [] };
     const [groups, batches] = await Promise.all([this.prisma.esimInventory.groupBy({ by: ['status'], _count: { _all: true } }), this.prisma.inventoryBatch.findMany({ orderBy: { createdAt: 'desc' }, take: 20 })]);

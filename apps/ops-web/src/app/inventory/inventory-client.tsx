@@ -185,6 +185,7 @@ export default function InventoryClient() {
   const [profilesPage, setProfilesPage] = useState(1);
   const [profilesStatus, setProfilesStatus] = useState("ALL");
   const [profilesLoading, setProfilesLoading] = useState(false);
+  const [restoring, setRestoring] = useState("");
   const PAGE_SIZE = 50;
 
   const loadProfiles = () => {
@@ -235,6 +236,20 @@ export default function InventoryClient() {
       toast.error(cause instanceof Error ? cause.message : "Provider reconciliation failed");
     } finally {
       setReconciling("");
+    }
+  };
+  const restoreProfile = async (profile: InventoryProfile) => {
+    setRestoring(profile.id);
+    try {
+      const response = await authFetch(`${API}/operations/inventory/profiles/${profile.id}/restore-availability`, { method: "POST", headers: {} });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error?.message ?? "Availability restoration failed");
+      toast.success(`${profile.iccid} restored to available stock`);
+      load();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Availability restoration failed");
+    } finally {
+      setRestoring("");
     }
   };
   useEffect(() => {
@@ -499,8 +514,15 @@ export default function InventoryClient() {
                     <TableCell><StatusBadge label={profile.status} {...(profile.status === "QUARANTINED" ? { tone: "warning" as const } : {})} /></TableCell>
                     <TableCell><StatusBadge label={profile.providerStatus ?? "NOT CHECKED"} /></TableCell>
                     <TableCell className="text-xs text-muted-foreground">{profile.lastProviderCheckedAt ? new Date(profile.lastProviderCheckedAt).toLocaleString() : "Never"}</TableCell>
-                    <TableCell className="max-w-64 truncate text-xs text-destructive">{profile.providerCheckError ?? "—"}</TableCell>
-                    <TableCell className="text-right"><Button size="sm" variant="outline" disabled={reconciling === profile.id} onClick={() => void reconcileProfile(profile)}>{reconciling === profile.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Check with network</Button></TableCell>
+                    <TableCell className="max-w-64 text-xs text-destructive">{profile.providerCheckError ?? (profile.status === "QUARANTINED" ? `${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale` : "—")}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button size="sm" variant="outline" disabled={reconciling === profile.id || restoring === profile.id} onClick={() => void reconcileProfile(profile)}>{reconciling === profile.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Check network</Button>
+                        {isSuperAdmin && profile.status === "QUARANTINED" && ["available", "allocated"].includes(profile.providerStatus?.toLowerCase() ?? "") ? (
+                          <Button size="sm" disabled={restoring === profile.id || reconciling === profile.id} onClick={() => void restoreProfile(profile)}>{restoring === profile.id ? <Spinner /> : <ShieldCheck className="size-3.5" />} Restore availability</Button>
+                        ) : null}
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}</TableBody>
               </Table>

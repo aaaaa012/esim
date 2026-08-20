@@ -146,3 +146,47 @@ describe('InventoryService.reconcileProviderProfile', () => {
     expect(prisma.esimInventory.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'QUARANTINED' }) }));
   });
 });
+
+describe('InventoryService.restoreQuarantinedProfile', () => {
+  function restorePrisma(providerStatus = 'released') {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const auditCreate = vi.fn().mockResolvedValue({});
+    const prisma = {
+      enabled: true,
+      user: { findUnique: vi.fn().mockResolvedValue({ id: 'local-user-1' }) },
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'inv-1',
+          iccid: '8988247076000000319',
+          status: 'QUARANTINED',
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          providerStatus,
+          batch: { id: 'batch-1', status: 'APPROVED', batchReference: 'MANUAL-1' },
+        }),
+      },
+      $transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) => work({ esimInventory: { updateMany }, auditLog: { create: auditCreate } })),
+    } as unknown as PrismaService;
+    return { prisma, updateMany, auditCreate };
+  }
+
+  it('restores freshly verified safe stock and records an audit event', async () => {
+    const { prisma, updateMany, auditCreate } = restorePrisma();
+    const connectivity = { getEsimDetails: vi.fn().mockResolvedValue({ status: 'available' }) } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+
+    await expect(inventory.restoreQuarantinedProfile('inv-1', 'user_clerk')).resolves.toMatchObject({ localStatus: 'AVAILABLE', providerStatus: 'available' });
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'AVAILABLE', providerStatus: 'available' }) }));
+    expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: 'QUARANTINE_RESTORED', performedById: 'local-user-1' }) }));
+  });
+
+  it('refuses restoration while the provider still reports an unsafe state', async () => {
+    const { prisma, updateMany, auditCreate } = restorePrisma();
+    const connectivity = { getEsimDetails: vi.fn().mockResolvedValue({ status: 'released' }) } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+
+    await expect(inventory.restoreQuarantinedProfile('inv-1', 'user_clerk')).rejects.toThrow('only available or allocated inventory can be restored');
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+});

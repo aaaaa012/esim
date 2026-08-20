@@ -52,4 +52,9 @@ export class InventoryController {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     return this.inventory.reconcileProviderProfile(id);
   }
+  @Post('profiles/:id/restore-availability')
+  restoreProfileAvailability(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    requireRole(req, [UserRole.SUPER_ADMIN]);
+    return this.inventory.restoreQuarantinedProfile(id, req.user!.id);
+  }
 }
