@@ -11,10 +11,11 @@ export class InventoryController {
   constructor(private readonly inventory: InventoryService) {}
   @Get() overview(@Req() req: AuthenticatedRequest) { requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]); return this.inventory.overview(); }
   @Get('profiles')
-  profiles(@Req() req: AuthenticatedRequest, @Query('status') status?: string, @Query('limit') limit?: string, @Query('offset') offset?: string) {
+  profiles(@Req() req: AuthenticatedRequest, @Query('status') status?: string, @Query('q') q?: string, @Query('limit') limit?: string, @Query('offset') offset?: string) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     return this.inventory.profiles({
       ...(status ? { status: status as never } : {}),
+      ...(q ? { q } : {}),
       ...(limit ? { limit: Number(limit) } : {}),
       ...(offset ? { offset: Number(offset) } : {}),
     });

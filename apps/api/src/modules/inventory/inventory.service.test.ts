@@ -190,3 +190,23 @@ describe('InventoryService.restoreQuarantinedProfile', () => {
     expect(auditCreate).not.toHaveBeenCalled();
   });
 });
+
+describe('InventoryService.profiles search', () => {
+  it('applies one server-side query to identifiers, assignments, batches, and customers', async () => {
+    const count = vi.fn().mockResolvedValue(0);
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = { enabled: true, esimInventory: { count, findMany } } as unknown as PrismaService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivityStub());
+
+    await inventory.profiles({ q: 'VC-2026-TEST', status: 'ASSIGNED' as never, limit: 50, offset: 0 });
+
+    const where = count.mock.calls[0]?.[0]?.where;
+    expect(where).toMatchObject({ status: 'ASSIGNED' });
+    expect(where.OR).toEqual(expect.arrayContaining([
+      expect.objectContaining({ iccid: expect.any(Object) }),
+      expect.objectContaining({ batch: expect.any(Object) }),
+      expect.objectContaining({ assignedOrder: expect.any(Object) }),
+    ]));
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where, take: 50, skip: 0 }));
+  });
+});

@@ -30,6 +30,7 @@ import { EmptyState } from "@/components/empty-state";
 import { FileUploader } from "@/components/file-uploader";
 import { Spinner } from "@/components/spinner";
 import { PaginationBar } from "@/components/pagination-bar";
+import { SearchInput } from "@/components/search-input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -184,6 +185,8 @@ export default function InventoryClient() {
   const [profilesTotal, setProfilesTotal] = useState(0);
   const [profilesPage, setProfilesPage] = useState(1);
   const [profilesStatus, setProfilesStatus] = useState("ALL");
+  const [profilesQuery, setProfilesQuery] = useState("");
+  const [profilesSearch, setProfilesSearch] = useState("");
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [restoring, setRestoring] = useState("");
   const PAGE_SIZE = 50;
@@ -195,6 +198,7 @@ export default function InventoryClient() {
       offset: String((profilesPage - 1) * PAGE_SIZE),
     });
     if (profilesStatus !== "ALL") params.set("status", profilesStatus);
+    if (profilesSearch) params.set("q", profilesSearch);
     authFetch(`${API}/operations/inventory/profiles?${params}`, { headers: {} })
       .then(async (r) => {
         const v = await r.json();
@@ -208,7 +212,14 @@ export default function InventoryClient() {
   useEffect(() => {
     if (data) loadProfiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profilesPage, profilesStatus, data]);
+  }, [profilesPage, profilesStatus, profilesSearch, data]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setProfilesPage(1);
+      setProfilesSearch(profilesQuery.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [profilesQuery]);
 
   const load = () => {
     void Promise.all([
@@ -816,10 +827,16 @@ export default function InventoryClient() {
               <div>
                 <h3 className="font-semibold">eSIM profiles</h3>
                 <p className="text-sm text-muted-foreground">
-                  {profilesTotal.toLocaleString()} profiles · filter by status to see assignment and availability
+                  {profilesTotal.toLocaleString()} profiles · search identifiers, orders, batches, or customers
                 </p>
               </div>
-              <div className="w-full sm:w-56">
+              <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(20rem,28rem)_14rem]">
+                <SearchInput
+                  value={profilesQuery}
+                  onChange={setProfilesQuery}
+                  placeholder="Search ICCID, MSISDN, order or customer…"
+                  className="w-full"
+                />
                 <Select value={profilesStatus} onValueChange={(v) => { setProfilesPage(1); setProfilesStatus(v); }}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Status" />
@@ -839,7 +856,7 @@ export default function InventoryClient() {
               <EmptyState
                             icon={<Boxes className="size-6" />}
                             title="No profiles"
-                            description="No eSIM profiles match the selected filters."
+                            description={profilesSearch ? `No eSIM profiles match “${profilesSearch}”.` : "No eSIM profiles match the selected filters."}
                           />
             ) : (
               <div className="overflow-x-auto">

@@ -458,15 +458,38 @@ export class InventoryService implements OnModuleInit {
    * reserved/owns each SIM, which customer bought it, and which package (plan)
    * it belongs to. Available to OPERATIONS and SUPER_ADMIN.
    */
-  async profiles(params?: { status?: InventoryStatus; limit?: number; offset?: number }) {
+  async profiles(params?: { status?: InventoryStatus; q?: string; limit?: number; offset?: number }) {
     if (!this.prisma.enabled) return { total: 0, items: [] };
     const limit = Math.min(params?.limit ?? 50, 200);
     const skip = params?.offset ? Number(params.offset) : 0;
-    const statusFilter = params?.status ? { status: params.status } : undefined;
+    const query = params?.q?.trim().slice(0, 200);
+    const where = {
+      ...(params?.status ? { status: params.status } : {}),
+      ...(query ? {
+        OR: [
+          { iccid: { contains: query, mode: 'insensitive' as const } },
+          { eid: { contains: query, mode: 'insensitive' as const } },
+          { msisdn: { contains: query, mode: 'insensitive' as const } },
+          { providerSubscriptionId: { contains: query, mode: 'insensitive' as const } },
+          { smDpAddress: { contains: query, mode: 'insensitive' as const } },
+          { batch: { batchReference: { contains: query, mode: 'insensitive' as const } } },
+          { assignedOrder: { is: { OR: [
+            { orderNumber: { contains: query, mode: 'insensitive' as const } },
+            { externalOrderId: { contains: query, mode: 'insensitive' as const } },
+            { providerSubscriptionId: { contains: query, mode: 'insensitive' as const } },
+            { customer: { is: { OR: [
+              { email: { contains: query, mode: 'insensitive' as const } },
+              { customerCode: { contains: query, mode: 'insensitive' as const } },
+              { phone: { contains: query, mode: 'insensitive' as const } },
+            ] } } },
+          ] } } },
+        ],
+      } : {}),
+    };
     const [total, items] = await Promise.all([
-      this.prisma.esimInventory.count({ ...(statusFilter ? { where: statusFilter } : {}) }),
+      this.prisma.esimInventory.count({ where }),
       this.prisma.esimInventory.findMany({
-        ...(statusFilter ? { where: statusFilter } : {}),
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
