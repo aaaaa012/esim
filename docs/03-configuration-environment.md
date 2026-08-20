@@ -113,9 +113,10 @@ blocking payment, matching the local-simulator flow.
 
 | Variable                                                                | Used by                                                                                                                                          |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `NOTIFICATION_MODE`                                                     | `live` enables real delivery (`gmail.channel.ts:8`, `whatsapp.channel.ts:6`); also gates "Email" integration status (`admin.service.ts:188-201`) |
-| `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`         | Gmail OAuth token refresh (`gmail.channel.ts:9-15`)                                                                                              |
-| `GMAIL_FROM_ADDRESS`                                                    | Gmail sender, default `me` (`gmail.channel.ts:17`)                                                                                               |
+| `NOTIFICATION_MODE`                                                     | `live` enables real delivery; `simulator` never calls Resend or WhatsApp                                                                         |
+| `EMAIL_PROVIDER`                                                        | Must be `resend`; the provider-neutral channel is ready for a future SES adapter                                                                 |
+| `RESEND_API_KEY`                                                        | Sending-only Resend API key                                                                                                                       |
+| `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`               | Verified-domain sender, display name, and optional reply-to address                                                                               |
 | `WHATSAPP_API_URL`                                                      | WhatsApp Graph URL, default `https://graph.facebook.com/v21.0` (`whatsapp.channel.ts:7`)                                                         |
 | `WHATSAPP_ACCESS_TOKEN`                                                 | WhatsApp auth (`whatsapp.channel.ts:7`)                                                                                                          |
 | `WHATSAPP_PHONE_NUMBER_ID`                                              | WhatsApp sender (`whatsapp.channel.ts:7`)                                                                                                        |

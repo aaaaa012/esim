@@ -41,16 +41,16 @@ describe("NotificationService queue-disabled delivery guard", () => {
 
   it("reports delivery configuration without exposing credentials", () => {
     vi.stubEnv("NOTIFICATION_MODE", "live");
-    vi.stubEnv("GMAIL_CLIENT_ID", "client");
-    vi.stubEnv("GMAIL_CLIENT_SECRET", "secret");
-    vi.stubEnv("GMAIL_REFRESH_TOKEN", "refresh");
-    vi.stubEnv("GMAIL_SENDER", "sender@example.com");
+    vi.stubEnv("EMAIL_PROVIDER", "resend");
+    vi.stubEnv("RESEND_API_KEY", "resend-key");
+    vi.stubEnv("EMAIL_FROM_ADDRESS", "sender@example.com");
     const service = new NotificationService(memoryPrisma(), queueStub(true));
 
     expect(service.health()).toEqual(
       expect.objectContaining({
         queue: "READY",
         mode: "LIVE",
+        provider: "RESEND",
         operational: true,
         channels: expect.objectContaining({ email: "CONFIGURED" }),
       }),

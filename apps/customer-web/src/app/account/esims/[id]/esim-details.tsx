@@ -190,7 +190,7 @@ export default function EsimDetails({ id }: { id: string }) {
           ),
         );
       setNotice(
-        "QR email sent — check your inbox (and spam) for the password-protected PDF.",
+        "QR email sent — check your inbox (and spam) for the QR image.",
       );
     } catch (cause) {
       setError(
@@ -219,9 +219,7 @@ export default function EsimDetails({ id }: { id: string }) {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setNotice(
-        "QR PDF downloaded. Open it on your phone and enter your eSIM number (MSISDN) when prompted.",
-      );
+      setNotice("QR PDF downloaded. No password is required.");
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -423,9 +421,9 @@ export default function EsimDetails({ id }: { id: string }) {
             ) : order.status === "QR_READY" ? (
               <>
                 <p>
-                  Your activation QR was emailed to you as a password-protected
-                  PDF. Install the eSIM and connect once to activate it — your
-                  order will then be marked complete.
+                  Your activation QR was emailed to you as an image. Install the
+                  eSIM and connect once to activate it — your order will then be
+                  marked complete.
                 </p>
                 <div className="processing">
                   <QrCode size={18} />
@@ -434,8 +432,8 @@ export default function EsimDetails({ id }: { id: string }) {
                 <div className="qr-recovery">
                   <b>Did the QR email not arrive?</b>
                   <small>
-                    Resend it or download the same password-protected PDF here.
-                    You&apos;ll enter your eSIM number (MSISDN) when opening it.
+                    Resend the QR image or download an unencrypted PDF here. No
+                    password is required.
                   </small>
                   <div className="qr-recovery-buttons">
                     <button
@@ -468,9 +466,9 @@ export default function EsimDetails({ id }: { id: string }) {
             ) : order.status === "COMPLETED" ? (
               <>
                 <p>
-                  Your activation QR was emailed to you as a password-protected
-                  PDF. Open the PDF on your phone and enter the eSIM number
-                  (MSISDN) shown in your email to reveal the QR.
+                  Your activation QR was emailed to you as an image. Open it on
+                  another screen and scan it from your phone&apos;s eSIM
+                  settings.
                 </p>
                 <div className="processing">
                   <Mail size={18} />
@@ -479,8 +477,8 @@ export default function EsimDetails({ id }: { id: string }) {
                 <div className="qr-recovery">
                   <b>Did the QR email not arrive?</b>
                   <small>
-                    Resend it or download the same password-protected PDF here.
-                    You&apos;ll enter your eSIM number (MSISDN) when opening it.
+                    Resend the QR image or download an unencrypted PDF here. No
+                    password is required.
                   </small>
                   <div className="qr-recovery-buttons">
                     <button

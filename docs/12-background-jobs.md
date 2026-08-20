@@ -54,7 +54,7 @@ job.attemptsMade + 1, final = (attemptsMade + 1 >= 3))`.
 
 - Registers `notifications`, `payments`, and `providerCallbacks` queues.
 - `notification(job)` (`integration.processor.ts:23-24`): marks SENDING,
-  renders template, EMAIL via Gmail (+ optional QR PDF attachment for
+  renders template, EMAIL through the provider-neutral channel using Resend (+ optional unencrypted QR PNG attachment for
   QR_READY), WHATSAPP via WhatsApp channel, then marks SENT/SIMULATED/FAILED.
 - `payment(job)` (`integration.processor.ts:25`): loads payload (inline or
   from `WebhookEvent`), requires `orderId` + `reference`, calls

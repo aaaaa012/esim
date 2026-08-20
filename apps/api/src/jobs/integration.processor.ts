@@ -1,13 +1,15 @@
-import { Injectable, OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, OnModuleInit } from "@nestjs/common";
 import type { Job } from "bullmq";
 import QRCode from "qrcode";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 import { OrdersService } from "../modules/orders/orders.service.js";
 import { ConnectivityService } from "../modules/integration/connectivity.service.js";
 import { PaymentsService } from "../modules/payments/payments.service.js";
-import { GmailChannel } from "../modules/notification/gmail.channel.js";
+import {
+  EMAIL_CHANNEL,
+  type EmailChannel,
+} from "../modules/notification/email.channel.js";
 import { NotificationService } from "../modules/notification/notification.service.js";
-import { QrPdfService } from "../modules/notification/qr-pdf.service.js";
 import {
   renderNotification,
   type NotificationTemplate,
@@ -42,9 +44,8 @@ export class IntegrationProcessor implements OnModuleInit {
     private readonly orders: OrdersService,
     private readonly connectivityService: ConnectivityService,
     private readonly notifications: NotificationService,
-    private readonly gmail: GmailChannel,
+    @Inject(EMAIL_CHANNEL) private readonly email: EmailChannel,
     private readonly whatsapp: WhatsappChannel,
-    private readonly qrPdf: QrPdfService,
     private readonly inventory: InventoryService,
     private readonly resilience: ProductionResilienceService,
     private readonly clerkSync: ClerkSyncService,
@@ -156,9 +157,10 @@ export class IntegrationProcessor implements OnModuleInit {
         const attachment = order
           ? await this.qrAttachment(job, order)
           : undefined;
-        result = await this.gmail.send({
+        result = await this.email.send({
           to: job.data.recipient,
           ...message,
+          idempotencyKey: job.data.notificationId,
           ...(attachment ? { attachment } : {}),
         });
       } else {

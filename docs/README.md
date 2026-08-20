@@ -21,7 +21,7 @@ FROM CODE` rather than guessed.
 | [09-connectivity-transatel.md](./09-connectivity-transatel.md)                               | Transatel connectivity adapter: provisioning, usage, catalog, eligibility, webhooks |
 | [ADR-005-transatel-resilient-provisioning.md](./ADR-005-transatel-resilient-provisioning.md) | Durable Transatel provisioning saga, idempotency, reconciliation, and webhook inbox |
 | [10-inventory.md](./10-inventory.md)                                                         | eSIM inventory lifecycle, batches, reservation, import                              |
-| [11-notifications.md](./11-notifications.md)                                                 | Notification templates, channels, QR PDF, delivery                                  |
+| [11-notifications.md](./11-notifications.md)                                                 | Notification templates, channels, QR delivery                                       |
 | [12-background-jobs.md](./12-background-jobs.md)                                             | BullMQ queues, workers, processors, reconciliation                                  |
 | [13-data-persistence.md](./13-data-persistence.md)                                           | Prisma schema, persistence modes, orders persistence, crypto                        |
 | [14-document-storage.md](./14-document-storage.md)                                           | Private document storage: Cloudinary signed uploads and the local simulator         |

@@ -255,22 +255,19 @@ function QrModal({
         `${API}/customer/orders/${esim.qrOrderId}/activation-qr`,
         { headers: {} },
       );
-      if (!response.ok)
-        throw new Error("The protected QR PDF could not be downloaded.");
+      if (!response.ok) throw new Error("The QR PDF could not be downloaded.");
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
       link.download = "visa-compass-esim.pdf";
       link.click();
       URL.revokeObjectURL(url);
-      setNotice(
-        "Protected QR PDF downloaded. Use the mobile number from your email as its password.",
-      );
+      setNotice("QR PDF downloaded. No password is required.");
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "The protected QR PDF could not be downloaded.",
+          : "The QR PDF could not be downloaded.",
       );
     } finally {
       setBusy("");
@@ -371,7 +368,7 @@ function QrModal({
             <b>Installing on this phone?</b>
             <br />
             Open this dashboard on another screen to scan the QR, or download
-            the protected PDF for later. Never share your QR.
+            the PDF for later. Never share your QR.
           </p>
         </div>
         {error && imageUrl && (
@@ -404,7 +401,7 @@ function QrModal({
             onClick={() => void downloadPdf()}
           >
             {busy === "pdf" ? <LoaderCircle className="spin" /> : <Download />}
-            Download protected PDF
+            Download QR PDF
           </button>
         </div>
       </div>

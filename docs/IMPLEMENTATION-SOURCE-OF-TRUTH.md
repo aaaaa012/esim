@@ -135,8 +135,8 @@ for top-ups.
      a **"Your eSIM is ready"** email is queued.
    - On failure after all retries the order becomes **`PROVISIONING_FAILED`**, an ops alert
      email is queued, and an ops person can press **Retry provisioning**.
-5. **The QR delivery:** the customer gets an email with a **password-protected PDF** of the QR.
-   The email also includes the **eSIM number (MSISDN)**; that MSISDN is the PDF password. They
+5. **The QR delivery:** the customer gets an email with an **unencrypted PNG image** of the QR.
+   No password or MSISDN is required to open the attachment. They
    open the PDF on their phone and type the eSIM number shown in the email, then scan the QR in
    their phone's eSIM settings.
 6. The customer can also see everything under **My eSIMs** in their account: status, the full
@@ -288,7 +288,7 @@ Sidebar (Super Admin only): the **Administration** item appears.
   (paying/reviewing/activating), **Needs action** (draft, needs re-upload, payment failed).
 - **Order detail** — status chip, order number + date, order total, the full event timeline,
   each document with its status, a **"Resume checkout"** banner for incomplete orders, and the
-  **eSIM activation card**: after completion it explains the emailed password-protected QR, and
+  **eSIM activation card**: after completion it explains the emailed QR image, and
   shows the data usage bar; when a replacement document is needed it shows a banner and upload
   buttons.
 - **Notifications** — the notification history for their orders.
@@ -351,9 +351,9 @@ These are **current behaviours** you should consciously accept or change:
 7. **Guest purchases leave no account.** If a guest buys without signing up, their completed
    order is found later only via mobile number (for top-ups) or by the token in that browser.
 
-8. **Notifications need real providers in production** (Gmail OAuth for email, optional
+8. **Notifications need real providers in production** (Resend for email, optional
    WhatsApp). Without them, email delivery is simulated and the customer will **not** receive
-   the QR PDF.
+   the QR attachment.
 
 ---
 

@@ -2,9 +2,11 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
@@ -14,7 +16,10 @@ import {
 } from "@prisma/client";
 import { createClerkClient } from "@clerk/backend";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
-import { GmailChannel } from "../notification/gmail.channel.js";
+import {
+  EMAIL_CHANNEL,
+  type EmailChannel,
+} from "../notification/email.channel.js";
 
 type ClerkUserEvent = {
   type: "user.created" | "user.updated" | "user.deleted";
@@ -38,7 +43,7 @@ export class ClerkSyncService {
   private readonly logger = new Logger(ClerkSyncService.name);
   constructor(
     private readonly prisma: PrismaService,
-    private readonly gmail?: GmailChannel,
+    @Optional() @Inject(EMAIL_CHANNEL) private readonly email?: EmailChannel,
   ) {}
   async sync(event: ClerkUserEvent) {
     if (!this.prisma.enabled) return { persisted: false };
@@ -415,12 +420,13 @@ export class ClerkSyncService {
 
   private async alertIdentityEmergency(message: string) {
     const recipient = process.env.OPS_ALERT_EMAIL;
-    if (recipient && this.gmail) {
+    if (recipient && this.email) {
       try {
-        await this.gmail.send({
+        await this.email.send({
           to: recipient,
           subject: "[Ops Alert] Super Admin identity emergency",
           text: message,
+          idempotencyKey: `identity-emergency-${createHash("sha256").update(message).digest("hex")}`,
         });
       } catch (error) {
         this.logger.error(

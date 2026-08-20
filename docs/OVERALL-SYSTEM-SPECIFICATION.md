@@ -24,7 +24,7 @@ flowchart LR
   API --> K[Khalti payment]
   API --> T[Transatel eSIM]
   API --> CL[Clerk identity]
-  API --> N[Gmail / WhatsApp]
+  API --> N[Resend / WhatsApp]
   API --> S[Cloudinary private documents]
 ```
 
@@ -43,7 +43,7 @@ The API is the central decision point. It validates requests, applies business r
 | Transatel              | Connectivity/eSIM provider.                          | Supplies catalogue, provisioning, lifecycle and usage information.                                    | eSIM fulfilment.                                                     |
 | Clerk                  | Identity provider.                                   | Handles customer/staff sign-in and identity synchronisation. Database roles still decide permissions. | Sign-in and staff access.                                            |
 | Cloudinary             | Private document storage.                            | Supports signed uploads and controlled document reads.                                                | Checkout and document review.                                        |
-| Gmail / WhatsApp       | Notification channels.                               | Delivers order updates. QR-ready email attaches a PNG QR image.                                       | Customers and support.                                               |
+| Resend / WhatsApp      | Notification channels.                               | Delivers order updates. QR-ready email attaches a PNG QR image.                                       | Customers and support.                                               |
 | Redis / BullMQ         | Background-job and shared rate-limit infrastructure. | Makes delayed work reliable across instances.                                                         | Provisioning, callbacks, notifications, reconciliation and webhooks. |
 
 ## 3. Users and roles
@@ -66,7 +66,7 @@ Clerk proves who has signed in. The database is the authority for `CUSTOMER`, `O
 4. **Provide documents.** Passport and ticket are required. VISA is required only where destination configuration says so. Uploads are private and verified. Passport verification compares document/OCR details with the traveller details.
 5. **Make payment.** The customer starts a Khalti payment. The order becomes `PAYMENT_PENDING` until Visa Compass confirms the gateway result.
 6. **Approve and provision.** A verified direct payment moves forward automatically. Replacement-document cases may wait for Operations review. The system reserves inventory and asks Transatel to prepare the eSIM in the background.
-7. **Receive the eSIM.** Once QR activation data exists, the order reaches `QR_READY`. Visa Compass emails the traveller a QR image attachment. An authenticated customer can also download the protected QR image through the API.
+7. **Receive the eSIM.** Once QR activation data exists, the order reaches `QR_READY`. Visa Compass emails the traveller an unencrypted QR image attachment. An authenticated customer can also download an unencrypted QR PDF through the API.
 8. **Install, activate and use.** When Transatel confirms activation, the order becomes `COMPLETED`. The customer can refresh/view usage. Provider expiry, suspension or termination updates subscription and inventory lifecycle.
 
 The customer should not be told an eSIM is ready until it is `QR_READY`. A paid order can legitimately remain in `PROVISIONING` while provider work completes.
@@ -218,7 +218,7 @@ Production requires `ORDER_WORKFLOW_MODE=database-first`. Lifecycle mutations re
 - Passport and ticket are required. VISA requirement comes from destination configuration.
 - Direct payment requires passport verification where the flow calls it. Sensitive information must not go into metadata or logs.
 - Khalti is the only payment provider. Only a verified matching result confirms payment.
-- QR data is delivered once available. Email uses a QR image attachment, not a PDF. An authenticated customer can download the protected QR image.
+- QR data is delivered once available. Email uses an unencrypted QR image attachment, not a PDF. An authenticated customer can download an unencrypted QR PDF.
 - Partner accounts use prepaid NPR paisa. Optimistic locking protects balance changes and partner IDs isolate records.
 - Inventory reservation is atomic. Provider events decide the provider lifecycle state.
 

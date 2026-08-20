@@ -10,11 +10,11 @@ const ITEMS = [
   },
   {
     q: "How do I receive my eSIM after paying?",
-    a: "Once your payment is confirmed, we set up your plan and send your activation QR by email as a protected PDF. If you have an account, you can also find your eSIM under My eSIMs.",
+    a: "Once your payment is confirmed, we set up your plan and send your activation QR by email as an image. If you have an account, you can also find your eSIM under My eSIMs.",
   },
   {
     q: "How do I install the eSIM?",
-    a: "Open the QR PDF and enter the mobile number it requests when prompted. Then scan the QR from your phone\u2019s mobile or cellular settings. Follow your phone manufacturer\u2019s current eSIM installation guidance if the settings look different.",
+    a: "Open the QR image on another screen, then scan it from your phone\u2019s mobile or cellular settings. Follow your phone manufacturer\u2019s current eSIM installation guidance if the settings look different.",
   },
   {
     q: "Which payment methods do you support?",

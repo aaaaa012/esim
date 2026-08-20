@@ -1,7 +1,8 @@
 # 11 — Notifications
 
 Primary sources: `apps/api/src/modules/notification/notification.service.ts`,
-`notification.controller.ts`, `notification.templates.ts`, `gmail.channel.ts`,
+`notification.controller.ts`, `notification.templates.ts`, `email.channel.ts`,
+`resend-email.channel.ts`,
 `whatsapp.channel.ts`, `qr-pdf.service.ts`, and the delivery worker in
 `apps/api/src/jobs/integration.processor.ts`.
 
@@ -22,8 +23,8 @@ type NotificationTemplate =
 `{ subject, text }` (`notification.templates.ts:2-7`):
 
 - `QR_READY` — subject "Your Visa Compass eSIM is ready - {order}"; text tells
-  the customer to open the attached PDF and enter their mobile number to
-  reveal the QR.
+  the customer that the unencrypted QR image is attached and must be kept
+  private.
 - `DOCUMENT_REUPLOAD` — subject "Action required for {order}"; reason appended.
 - `PLAN_EXHAUSTED` — "Your data plan is used up - {order}".
 - `PLAN_EXPIRED` — "Your data plan has expired - {order}"; reason appended.
@@ -31,18 +32,20 @@ type NotificationTemplate =
 
 ## Delivery channels
 
-### Gmail
+### Email (Resend)
 
-`gmail.channel.ts`:
+`email.channel.ts` defines the provider-neutral contract and
+`resend-email.channel.ts` implements it:
 
 - `NOTIFICATION_MODE !== 'live'` → simulated `{ providerMessageId:
-gmail-sim-{ts}, simulated: true }`.
-- Otherwise requires GMAIL client id/secret/refresh token; OAuth refresh via
-  Google token endpoint, then `POST gmail/v1/users/me/messages/send` with a
-  base64url MIME message (`gmail.channel.ts:14-22`).
-- MIME builder supports plain text or multipart with a base64 attachment
-  (`gmail.channel.ts:25-48`).
-- `GMAIL_FROM_ADDRESS` default `me`.
+resend-sim-{ts}, simulated: true }` without contacting Resend.
+- Live delivery requires `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, and a
+  verified-domain `EMAIL_FROM_ADDRESS`; `EMAIL_FROM_NAME` and `EMAIL_REPLY_TO`
+  control presentation and replies.
+- The official Resend SDK sends plain text and optional base64 QR PNG
+  attachments. Notification IDs are Resend idempotency keys for safe retries.
+- Provider errors are sanitized; BullMQ retry exhaustion continues to create
+  an Operations attention case. AWS SES can later implement the same contract.
 
 ### WhatsApp
 
@@ -77,26 +80,25 @@ gmail-sim-{ts}, simulated: true }`.
 
 1. Marks notification `SENDING`.
 2. Renders the template.
-3. EMAIL → `qrAttachment(job)` builds a password-protected PDF when template is
-   `QR_READY` (requires `order.qrPayload` and `order.traveler.mobile`), then
-   `gmail.send({ to, subject, text, attachment? })`.
+3. EMAIL → `qrAttachment(job)` builds an unencrypted PNG when template is
+   `QR_READY` (requires `order.qrPayload`), then calls the injectable
+   `EmailChannel` with the notification ID as its idempotency key.
 4. WHATSAPP → `whatsapp.send({ to, text })`.
 5. Marks `SENT` or `SIMULATED` based on the channel result; on error marks
    `FAILED` and rethrows.
 
-## QR PDF
+## QR attachment and account download
 
 `qr-pdf.service.ts` (`build`):
 
 - Generates a QR PNG from `qrPayload` (`QRCode.toBuffer`, 512px).
 - Builds an A4 PDF via `pdfkit` with:
   - Title "Visa Compass eSIM", order number.
-  - A prompt to open the PDF on a phone and enter the mobile number.
+  - Instructions to scan the QR from another screen.
   - The QR image.
   - Warning: "This QR is sensitive — do not share it."
-- **Password-protected**: both user and owner password = the traveler's
-  mobile; permissions deny copying/modifying/annotating etc.
-  (`qr-pdf.service.ts:10-24`).
+- The authenticated account download is intentionally unencrypted and does not
+  require the MSISDN or any other password.
 
 ## Emitters
 
@@ -126,8 +128,8 @@ Where notifications are triggered:
 
 `AdminService.integrations` reports:
 
-- Email Gmail: HEALTHY only when `NOTIFICATION_MODE === 'live'` and Gmail creds
-  present (`admin.service.ts:183-203`).
+- Email Resend: HEALTHY only when `NOTIFICATION_MODE === 'live'`,
+  `EMAIL_PROVIDER=resend`, and the API key and sender are present.
 - WhatsApp: HEALTHY only when `NOTIFICATION_MODE === 'live'` and
   `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`
   all present (`admin.service.ts:257-269`).

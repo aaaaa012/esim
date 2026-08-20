@@ -137,7 +137,7 @@ Once automatically approved, the system:
 3. When the provider confirms and hands over the **QR code**, the order
    becomes "Completed".
 4. Sends the customer an email: **"Your Visa Compass eSIM is ready"** with the
-   QR code attached as a **password-protected PDF**.
+   QR code attached as an **unencrypted PNG image**.
 
 If the provider is slow or fails, the system **tries again automatically**
 (up to 3 times). If it still fails, the order is flagged for the team to
@@ -150,13 +150,12 @@ error) is recorded so the team can investigate failures precisely.
 
 ### Step 8 — Using the eSIM
 
-The customer opens the emailed PDF on their phone and enters the **mobile
-number they used at checkout** when prompted. The PDF unlocks and reveals the
-QR code, which they scan to activate the data plan at their destination.
+The customer opens the emailed QR image on another screen and scans it from
+their phone's eSIM settings to install the data plan.
 
-- The QR is **not** shown in the customer account area — it is only ever
-  delivered by email in the password-protected PDF, and the PDF password is
-  the customer's own mobile number.
+- The QR is delivered by email as an unencrypted PNG image and is also
+  recoverable by the authenticated customer. It remains sensitive and must not
+  be shared.
 - The customer can still see a timeline of every step of their order.
 
 ### Step 9 — Usage (bonus)
@@ -190,7 +189,7 @@ surfaced to customers later.
 | **Telecom provider (Transatel)**  | The company that actually turns on the eSIM in the destination network.                                                                                                                   |
 | **Wallets (Khalti)**              | Collect the money in NPR.                                                                                                                                                                 |
 | **Document storage (Cloudinary)** | Holds passport/ticket files privately, with short-lived access links.                                                                                                                     |
-| **Email (Gmail) + WhatsApp**      | Send order updates. The activation QR is delivered by email as a **password-protected PDF** (password = the customer's mobile number).                                                    |
+| **Email (Resend) + WhatsApp**     | Send order updates. The activation QR is delivered by email as an **unencrypted PNG image** and must be kept private.                                                                    |
 | **Background jobs (Redis)**       | A "to-do list" of tasks (activate this eSIM, verify this payment, send this email, refresh this usage). If a task fails it retries automatically.                                         |
 | **The audit trail**               | An unchangeable diary of every important action (who invited whom, who approved what, who changed a price).                                                                               |
 
@@ -248,7 +247,7 @@ agencies, etc.) sell Visa Compass eSIMs inside their own systems:
 | Payments                    | Khalti adapter + local simulator                                                                       |
 | Connectivity                | Transatel adapter (OCS preload, inventory, catalog, SIM management, webhooks)                          |
 | Document storage            | Cloudinary signed authenticated uploads                                                                |
-| Notifications               | Gmail API (OAuth refresh) + WhatsApp Business Cloud API                                                |
+| Notifications               | Resend API + WhatsApp Business Cloud API                                                               |
 | Security                    | helmet, CORS allow-list, rate limiting, AES-256-GCM at rest, HMAC webhook signatures, idempotency keys |
 
 ---

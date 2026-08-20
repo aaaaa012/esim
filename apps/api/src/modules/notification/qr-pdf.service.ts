@@ -7,7 +7,6 @@ export class QrPdfService {
   async build(input: {
     qrPayload: string;
     orderNumber: string;
-    password: string;
   }): Promise<Buffer> {
     const png = await QRCode.toBuffer(input.qrPayload, {
       width: 512,
@@ -17,17 +16,6 @@ export class QrPdfService {
       const doc = new PDFDocument({
         size: "A4",
         margin: 48,
-        userPassword: input.password,
-        ownerPassword: input.password,
-        permissions: {
-          printing: "lowResolution",
-          modifying: false,
-          copying: false,
-          annotating: false,
-          fillingForms: false,
-          contentAccessibility: false,
-          documentAssembly: false,
-        },
       });
       const chunks: Buffer[] = [];
       doc.on("data", (chunk) => chunks.push(chunk));
@@ -39,7 +27,7 @@ export class QrPdfService {
       doc.fontSize(12).text(`Order: ${input.orderNumber}`, { align: "center" });
       doc.moveDown(0.5);
       doc.text(
-        "Open this PDF on your phone and enter the eSIM number (MSISDN) you received in your secure email when prompted.",
+        "Open this PDF on another screen, then scan the QR code from your phone's mobile or cellular settings.",
         { align: "center" },
       );
       doc.moveDown(1.5);

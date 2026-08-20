@@ -31,6 +31,7 @@ type Notification = {
 type Health = {
   queue: string;
   mode: string;
+  provider: string;
   channels: { email: string; whatsapp: string };
   operational: boolean;
 };
@@ -86,7 +87,7 @@ export default function NotificationsClient() {
     <>
       {health && (
         <div
-          className={`mb-6 grid gap-3 rounded-xl border p-4 sm:grid-cols-4 ${health.operational ? "bg-card" : "border-destructive/30 bg-destructive/5"}`}
+          className={`mb-6 grid gap-3 rounded-xl border p-4 sm:grid-cols-5 ${health.operational ? "bg-card" : "border-destructive/30 bg-destructive/5"}`}
         >
           <div>
             <p className="text-xs text-muted-foreground">Delivery</p>
@@ -108,8 +109,12 @@ export default function NotificationsClient() {
               {humane(health.channels.email)}
             </p>
           </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Email provider</p>
+            <p className="mt-1 text-sm font-medium">{health.provider}</p>
+          </div>
           {!health.operational && (
-            <p className="sm:col-span-4 text-sm text-destructive">
+            <p className="sm:col-span-5 text-sm text-destructive">
               Automatic sending needs to be configured before failed messages
               can be retried. Please ask a technical team member to set up email
               sending.

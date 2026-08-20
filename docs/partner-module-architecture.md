@@ -166,7 +166,7 @@ The (queued or local) provisioning job calls our connectivity provider (`AurigaM
 `TransatelProvider`). On success it stores the activation `qrPayload`, moves the order to
 **`QR_READY`**, and assigns the profile. **`QR_READY` is the commercial fulfillment milestone** — the
 partner may now deliver the eSIM. `COMPLETED` is set only when the provider confirms activation.
-Customers/operations can later resend or download the password-protected QR.
+Customers/operations can later resend the QR image or download an unencrypted QR PDF.
 
 ### Step 5 — Partner reads result
 

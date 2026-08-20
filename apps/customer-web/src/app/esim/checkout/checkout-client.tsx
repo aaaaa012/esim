@@ -1081,9 +1081,9 @@ export default function CheckoutClient({
                     <b>Your activation QR has been sent</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Install your eSIM using the QR emailed to you as a
-                      password-protected PDF, then connect to the network once
-                      to activate it. Your order will complete automatically.
+                      Install your eSIM using the QR image emailed to you, then
+                      connect to the network once to activate it. Your order
+                      will complete automatically.
                     </p>
                     {isSignedIn === true && (
                       <>
@@ -1105,9 +1105,9 @@ export default function CheckoutClient({
                     <b>Your eSIM is ready</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Your activation QR was emailed to you as a
-                      password-protected PDF. Open it on your phone and enter
-                      the mobile number shown in your email to reveal the QR.
+                      Your activation QR was emailed to you as an image. Open it
+                      on another screen and scan it from your phone&apos;s eSIM
+                      settings.
                     </p>
                     {isSignedIn === true && (
                       <>
@@ -1175,8 +1175,8 @@ export default function CheckoutClient({
                     <b>Payment verified. Activating your eSIM</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Your eSIM is being activated automatically. Your QR will
-                      be emailed to you as a password-protected PDF shortly.
+                      Your eSIM is being activated automatically. Your QR image
+                      will be emailed to you shortly.
                     </p>
                     {isSignedIn === true && (
                       <Link className="button" href="/account/esims">

@@ -47,7 +47,8 @@ import { AurigaMockProvider } from "./modules/integration/auriga-mock.provider.j
 import { TransatelProvider } from "./modules/integration/transatel.provider.js";
 import { NotificationController } from "./modules/notification/notification.controller.js";
 import { NotificationService } from "./modules/notification/notification.service.js";
-import { GmailChannel } from "./modules/notification/gmail.channel.js";
+import { EMAIL_CHANNEL } from "./modules/notification/email.channel.js";
+import { ResendEmailChannel } from "./modules/notification/resend-email.channel.js";
 import { WhatsappChannel } from "./modules/notification/whatsapp.channel.js";
 import { QrPdfService } from "./modules/notification/qr-pdf.service.js";
 import { IntegrationProcessor } from "./jobs/integration.processor.js";
@@ -133,7 +134,8 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     ClerkSyncService,
     PartnerAuthGuard,
     NotificationService,
-    GmailChannel,
+    ResendEmailChannel,
+    { provide: EMAIL_CHANNEL, useExisting: ResendEmailChannel },
     WhatsappChannel,
     QrPdfService,
     CustomerEsimsService,

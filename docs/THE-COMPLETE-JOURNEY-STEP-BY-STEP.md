@@ -152,7 +152,7 @@ Behind the scenes, in order:
    the eSIM on the customer's phone.
 4. Mark the order **Completed**.
 5. **Email the customer: "Your Visa Compass eSIM is ready"**, with the QR attached
-   as a **password-protected PDF**.
+   as an **unencrypted PNG image**.
 
 **Step 10. The customer installs the eSIM.**
 They open the emailed PDF on their phone, enter the **mobile number they used at

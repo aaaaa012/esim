@@ -19,7 +19,7 @@ money and real customers live.
 | **Khalti** (live)     | Taking real card / wallet payment for eSIMs             | ▢ Needed   |
 | **Cloudinary** keys   | Secure storage of passport photos                       | ▢ Needed   |
 | **Transatel** (live)  | The real SIM / data provider that delivers the eSIM     | ▢ Needed   |
-| **Gmail** OAuth       | Sending order / alert emails to customers & ops         | ▢ Needed   |
+| **Resend** API key    | Sending order / alert emails to customers & ops         | ▢ Needed   |
 | **WhatsApp Business** | Sending order / status messages to customers            | ▢ Needed   |
 | **Super Admin** email | The admin who approves plans, SIM batches, refunds      | ▢ Needed   |
 | **Partner API keys**  | Any outside partner that sells on our behalf (optional) | ▢ Optional |

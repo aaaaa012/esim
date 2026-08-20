@@ -8,7 +8,7 @@ point at the exact source so you can verify any claim.
 > Two portals (customer + operations) talk to one backend (the API) which talks to
 > five outside services: **Clerk** (who you are), **Khalti** (payments), **Transatel**
 > (the actual mobile-network eSIMs), **Cloudinary** (secure document storage) and
-> **Gmail / WhatsApp** (messages). The product sells international travel eSIM data
+> **Resend / WhatsApp** (messages). The product sells international travel eSIM data
 > plans in Nepali Rupees (NPR).
 
 ---
@@ -26,7 +26,7 @@ point at the exact source so you can verify any claim.
 | **Khalti**               | External                   | Takes customer money.                                                                                                   |
 | **Transatel**            | External                   | Actually provisions the eSIM on the mobile network and reports usage.                                                   |
 | **Cloudinary**           | External                   | Holds uploaded passport/ticket scans privately.                                                                         |
-| **Gmail / WhatsApp**     | External                   | Deliver eSIM QR PDFs and status messages.                                                                               |
+| **Resend / WhatsApp**    | External                   | Deliver eSIM QR images and status messages.                                                                             |
 
 ---
 
@@ -129,11 +129,10 @@ does the calling; the server checks who you are on every request.
     becomes `ASSIGNED` and the order moves to `COMPLETED`.
     → `OrdersService.processProvisioning`, `TransatelProvider.provision`
 
-11. **The QR arrives by email.** A background job renders a PDF containing the QR and
-    emails it via Gmail. The PDF is **password protected** — the password is the mobile
-    number the customer gave. The QR is _the credential that installs the eSIM_, so the
-    email template warns the customer not to share it.
-    → `apps/api/src/modules/notification/qr-pdf.service.ts`, `gmail.channel.ts`
+11. **The QR arrives by email.** A background job renders the QR as an unencrypted
+    PNG image and emails it through Resend. The QR is _the credential that installs
+    the eSIM_, so the email template warns the customer not to share it.
+    → `apps/api/src/jobs/integration.processor.ts`, `resend-email.channel.ts`
 
 12. **Watch usage.** `GET .../usage` shows used MB / total MB. This comes fresh from
     Transatel's balance API, cached per subscription and refreshed by a background job.
@@ -197,7 +196,7 @@ _per number_ and _per IP_ (see Security).
 
 If found, checkout is pre-filled: it remembers the mobile, skips traveler+documents
 (`step 4` = payment directly), and when the order is created the server pulls the email
-from the prior completed order so the new QR PDF can be emailed.
+from the prior completed order so the QR image can be emailed.
 
 ### Country change (the subtle one)
 
@@ -505,7 +504,7 @@ Beyond all ops abilities, super admin gets `admin/*` endpoints (all MFA-gated):
   (columns: countryISO2, name, providerPlanId, dataAllowance, validityDays, costprice,
   sellingprice; validated row-by-row, capped at 2,000 rows).
   → `apps/api/src/modules/admin/admin.service.ts`
-- **Integrations** — view configuration health for Gmail/Khalti/Transatel/Cloudinary/
+- **Integrations** — view configuration health for Resend/Khalti/Transatel/Cloudinary/
   WhatsApp; trigger Transatel **catalog sync** (pull products → create/update plans) and
   **webhook registration**; eligibility checks.
 - **Users** — list all users; change account type (CUSTOMER → OPERATIONS/SUPER_ADMIN, with
@@ -550,7 +549,7 @@ Two run-modes: with `REDIS_URL` set → real **BullMQ** queues; blank → everyt
 | `provisioning`       | Call Transatel to activate the eSIM (3 attempts, exponential backoff).                                                                    |
 | `payments`           | Process a payment callback/webhook (re-verify with the gateway).                                                                          |
 | `provider-callbacks` | Turn a Transatel webhook into an order/inventory update.                                                                                  |
-| `notifications`      | Send email/WhatsApp (QR PDF, re-upload, plan exhausted/expired).                                                                          |
+| `notifications`      | Send email/WhatsApp (QR image, re-upload, plan exhausted/expired).                                                                        |
 | `reconciliation`     | Every ~15 min: refresh usage for active subscriptions; mark plans EXPIRED when the date passes or data runs out, then email the customer. |
 
 Every job that touches money/activation is **idempotent** (event id, subscription id, or
@@ -632,7 +631,7 @@ integration calls are recorded.
 | eSIM activation | Needs Transatel **test** credentials; without them orders end in PROVISIONING_FAILED | Transatel live                                              |
 | Inventory       | 20 mock eSIMs auto-seeded (non-prod only)                                            | Imported by ops via CSV/Excel                               |
 | Documents       | Local "simulator" signed upload                                                      | Cloudinary authenticated upload                             |
-| Email/WhatsApp  | `NOTIFICATION_MODE=simulator` (no real send)                                         | Gmail OAuth / WhatsApp Cloud API                            |
+| Email/WhatsApp  | `NOTIFICATION_MODE=simulator` (no real send)                                         | Resend / WhatsApp Cloud API                                 |
 | Jobs            | In-process "fake" queue                                                              | BullMQ + Redis                                              |
 | Persistence     | In-memory order map (lost on restart)                                                | CockroachDB/Postgres via Prisma (`PERSISTENCE_MODE=prisma`) |
 

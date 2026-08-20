@@ -33,7 +33,7 @@ const iOS_STEPS: Step[] = [
   {
     icon: QrCode,
     title: "Scan the QR",
-    body: "Open the password-protected QR PDF and scan it with your camera. Enter the MSISDN when prompted.",
+    body: "Open the QR image or PDF on another screen and scan it with your camera.",
   },
   {
     icon: CheckCircle2,
@@ -56,7 +56,7 @@ const ANDROID_STEPS: Step[] = [
   {
     icon: QrCode,
     title: "Scan the QR",
-    body: "Open the password-protected QR PDF and point your camera at it. Use your MSISDN when asked.",
+    body: "Open the QR image or PDF on another screen and point your camera at it.",
   },
   {
     icon: Wifi,
@@ -109,8 +109,7 @@ export default function InstallGuide({
           <span>
             <b>Installing on this phone?</b>
             <small>
-              Open the QR on another screen, or download the protected PDF
-              first.
+              Open the QR on another screen, or download the PDF first.
             </small>
           </span>
         </div>
@@ -154,8 +153,7 @@ export default function InstallGuide({
       </ol>
       <div className="install-note">
         <Download size={16} />
-        You&apos;ll find the password (MSISDN) in your QR email — enter it when
-        the PDF asks for one.
+        Your QR does not require a password. Keep it private and never share it.
       </div>
     </section>
   );

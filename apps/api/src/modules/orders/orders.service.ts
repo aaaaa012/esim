@@ -1878,7 +1878,7 @@ export class OrdersService implements OnModuleInit {
    * Re-delivers the activation QR email for an order whose customer never
    * received the original notification. When an owner id is provided the
    * caller can only resend for their own order. Reuses the same delivery
-   * pipeline as the original QR_READY notification (password-protected PDF).
+   * pipeline as the original QR_READY notification (unencrypted QR image).
    */
   async resendQr(id: string, ownerId?: string) {
     await this.refreshOne(id, true);
@@ -1919,13 +1919,14 @@ export class OrdersService implements OnModuleInit {
       reason: "Installation QR resend queued",
     });
     await this.persistence.save(order);
-    this.logger.log(`QR resend queued for order ${order.orderNumber} (${order.id})`);
+    this.logger.log(
+      `QR resend queued for order ${order.orderNumber} (${order.id})`,
+    );
     return ownerId ? this.redact(order) : this.expand(order);
   }
   /**
-   * Builds the same password-protected QR PDF emailed at QR_READY so an
-   * authenticated owner can download it in-account when they did not receive
-   * the email. The MSISDN is the PDF password, matching the email flow.
+   * Builds an unencrypted QR PDF so an authenticated owner can download the
+   * same activation QR in-account when they did not receive the email.
    */
   async activationQr(id: string, ownerId?: string) {
     const order = this.get(id, ownerId ?? undefined);
@@ -1941,17 +1942,9 @@ export class OrdersService implements OnModuleInit {
       );
     if (!order.qrPayload)
       throw new BadRequestException("Order has no activation QR");
-    const inventory = await this.inventory.inventoryForOrder(order.id);
-    const msisdn =
-      inventory?.msisdn ?? order.traveler?.mobile ?? order.topUpMobile;
-    if (!msisdn)
-      throw new BadRequestException(
-        "eSIM number is required to open the QR document",
-      );
     const bytes = await this.qrPdf.build({
       qrPayload: order.qrPayload,
       orderNumber: order.orderNumber,
-      password: msisdn,
     });
     return {
       filename: `${order.orderNumber}-esim.pdf`,

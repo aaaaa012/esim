@@ -140,7 +140,7 @@ review screen still exists, but only for exceptions.
 3. When the telecom confirms and hands over the **QR code**, the order is marked
    **Completed**.
 4. Emails the customer: **"Your Visa Compass eSIM is ready"** with the QR as a
-   **password-protected PDF.**
+   **unencrypted PNG image.**
 
 **If things go wrong:** the system **tries again automatically** up to 3 times. If it
 still fails, it flags the order for staff and tells the customer a friendly
@@ -244,7 +244,7 @@ secret key and a ready API:
 | **Telecom company (Transatel)** | The company that actually turns on the eSIM in the destination country.                                                                |
 | **Wallets (Khalti)**            | Collect the money in NPR, and return it on refunds.                                                                                    |
 | **Document storage**            | Holds passports/tickets privately with short-lived links.                                                                              |
-| **Email + WhatsApp**            | Send order updates; the activation QR arrives by email as a password-protected PDF.                                                    |
+| **Email + WhatsApp**            | Send order updates; the activation QR arrives by email as an unencrypted PNG image.                                                   |
 | **Background jobs**             | A to-do list the machine works through on its own (activate now, verify now, email now, refresh usage now). Fails retry automatically. |
 | **Audit trail**                 | An unchangeable diary of every important action.                                                                                       |
 | **Guest checkout**              | Lets people buy without signing up; their order is guarded by a secret "token" so only their own browser can continue it.              |

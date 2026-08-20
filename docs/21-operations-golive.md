@@ -199,7 +199,7 @@ Add `AS OF SYSTEM TIME '-10s'` to a repeated-schedule point-in-time profile.
 - [ ] Apply migrations to a real CockroachDB: `pnpm --filter api prisma:migrate`.
 - [ ] Set `NODE_ENV=production`, `TRUST_PROXY`, `REDIS_URL`, `OPS_ALERT_EMAIL`.
 - [ ] Configure real secrets: `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`,
-      `BOOTSTRAP_SUPER_ADMIN_TOKEN`, Khalti, Transatel, Cloudinary, Gmail.
+      `BOOTSTRAP_SUPER_ADMIN_TOKEN`, Khalti, Transatel, Cloudinary, Resend.
 - [ ] Set `STAFF_EMAIL_DOMAIN` (default `visacompassnepal.com`) — staff accounts are
       pre-provisioned by a Super Admin at this domain; there is no public staff sign-up.
 - [ ] Point `/metrics` at a Prometheus scrape and add the failure alert rules.

@@ -81,5 +81,5 @@ With default `.env.example` (no Cloudinary), the checkout flow works as:
 
 - Uploads are `authenticated` delivery type — not public.
 - Signed read URLs expire in 300 s.
-- The QR payload in notifications is protected by a PDF password
+- The QR payload remains encrypted at rest, but notification attachments and authenticated account downloads are intentionally unencrypted
   (`qr-pdf.service.ts:10-24`, see `docs/11-notifications.md`).

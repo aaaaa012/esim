@@ -77,7 +77,7 @@ Source files under `apps/api/src`:
   - `integration/` — `connectivity.service.ts`, `connectivity-provider.ts`,
     `transatel.provider.ts`
   - `notification/` — `notification.service.ts`, `notification.controller.ts`,
-    `notification.templates.ts`, `gmail.channel.ts`, `whatsapp.channel.ts`,
+    `notification.templates.ts`, `email.channel.ts`, `resend-email.channel.ts`, `whatsapp.channel.ts`,
     `qr-pdf.service.ts`
   - `webhooks/` — `webhooks.controller.ts`
 - `observability/` — `health.controller.ts`

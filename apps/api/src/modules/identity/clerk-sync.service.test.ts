@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { UserRoleName, UserStatus } from "@prisma/client";
 import { ClerkSyncService } from "./clerk-sync.service.js";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
+import type { EmailChannel } from "../notification/email.channel.js";
 
 function prismaStub(overrides: Record<string, unknown> = {}) {
   const user = {
@@ -48,6 +49,37 @@ const createdEvent = (clerkId: string, email: string) => ({
     ],
     primary_email_address_id: "ea-1",
   },
+});
+
+describe("ClerkSyncService emergency email", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("uses the provider-neutral email channel with a stable idempotency key", async () => {
+    vi.stubEnv("OPS_ALERT_EMAIL", "ops@example.com");
+    const email = {
+      send: vi.fn().mockResolvedValue({
+        providerMessageId: "email-1",
+        simulated: false,
+      }),
+    } as EmailChannel;
+    const service = new ClerkSyncService(prismaStub(), email);
+
+    await (
+      service as unknown as {
+        alertIdentityEmergency(message: string): Promise<void>;
+      }
+    ).alertIdentityEmergency("Last super admin was deleted");
+
+    expect(email.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "ops@example.com",
+        subject: "[Ops Alert] Super Admin identity emergency",
+        idempotencyKey: expect.stringMatching(
+          /^identity-emergency-[a-f0-9]{64}$/,
+        ),
+      }),
+    );
+  });
 });
 
 describe("ClerkSyncService re-registration recovery", () => {
