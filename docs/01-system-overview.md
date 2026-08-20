@@ -11,12 +11,12 @@ Source of truth: `README.md` (repository root), `apps/api/src/app.module.ts`,
 
 ## Workspaces
 
-| Workspace | Tech | Purpose | Local URL |
-| --- | --- | --- | --- |
-| `apps/api` | NestJS, Prisma (CockroachDB), BullMQ | Business API | `http://localhost:4000` |
-| `apps/customer-web` | Next.js App Router | Customer portal | `http://localhost:3000` |
-| `apps/ops-web` | Next.js App Router | Operations/admin portal | `http://localhost:3001` |
-| `packages/shared` | TypeScript | Shared contracts, schemas, error codes | internal |
+| Workspace           | Tech                                 | Purpose                                | Local URL               |
+| ------------------- | ------------------------------------ | -------------------------------------- | ----------------------- |
+| `apps/api`          | NestJS, Prisma (CockroachDB), BullMQ | Business API                           | `http://localhost:4000` |
+| `apps/customer-web` | Next.js App Router                   | Customer portal                        | `http://localhost:3000` |
+| `apps/ops-web`      | Next.js App Router                   | Operations/admin portal                | `http://localhost:3001` |
+| `packages/shared`   | TypeScript                           | Shared contracts, schemas, error codes | internal                |
 
 Source: `README.md` "Applications" table.
 
@@ -41,6 +41,7 @@ there are no feature modules. Controllers registered at `app.module.ts:56-71`,
 providers at `app.module.ts:72-98`.
 
 Controllers:
+
 - `HealthController` — `observability/health.controller.ts`
 - `AuthController` — `modules/identity/auth.controller.ts`
 - `CatalogController` — `modules/catalog/catalog.controller.ts`
@@ -55,6 +56,7 @@ Controllers:
 - `NotificationController` — `modules/notification/notification.controller.ts`
 
 Key services:
+
 - `OrdersService` — in-memory order store with Prisma-backed persistence
 - `OrdersPersistenceService` — DB projection of orders
 - `InventoryService` — eSIM inventory
@@ -89,6 +91,7 @@ reconciliation `reconciliation.service.ts:70`).
 ### Simulated integrations
 
 With default `.env.example` values, the system runs with:
+
 - Payment simulator gateway (no Khalti credentials)
 - Local document-storage simulator (no Cloudinary)
 - Simulated notifications (no Gmail/WhatsApp)

@@ -1,5 +1,5 @@
-import IntegrationEventsClient from './integration-events-client';
-import { PageHeader } from '@/components/page-header';
+import IntegrationEventsClient from "./integration-events-client";
+import { PageHeader } from "@/components/page-header";
 export default function IntegrationEvents() {
   return (
     <>

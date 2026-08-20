@@ -151,7 +151,9 @@ export class PartnerAdminService {
         data: {
           ...(input.name ? { name: input.name.trim() } : {}),
           ...(input.status ? { status: input.status } : {}),
-          ...(input.integrationType ? { integrationType: input.integrationType } : {}),
+          ...(input.integrationType
+            ? { integrationType: input.integrationType }
+            : {}),
           allowedSettlementMethods: [PartnerSettlementMethod.PARTNER_ACCOUNT],
           ...(input.rateLimitPerMinute !== undefined
             ? { rateLimitPerMinute: input.rateLimitPerMinute }
@@ -347,7 +349,10 @@ export class PartnerAdminService {
           version: { increment: 1 },
         },
       });
-      if (updated.count !== 1) throw new ConflictException("Partner account was changed by another request; retry the adjustment");
+      if (updated.count !== 1)
+        throw new ConflictException(
+          "Partner account was changed by another request; retry the adjustment",
+        );
       const ledger = await tx.partnerLedgerEntry.create({
         data: {
           partnerId,
@@ -360,7 +365,8 @@ export class PartnerAdminService {
           reference: input.reference,
           metadata: {
             reason: input.reason,
-            source: input.amountPaisa > 0 ? "OFFLINE_SETTLEMENT" : "ADMIN_ADJUSTMENT",
+            source:
+              input.amountPaisa > 0 ? "OFFLINE_SETTLEMENT" : "ADMIN_ADJUSTMENT",
           },
         },
       });
@@ -379,39 +385,102 @@ export class PartnerAdminService {
     });
   }
 
-  ledger(partnerId: string, input: { from?: string; to?: string; type?: PartnerLedgerEntryType; q?: string; limit?: number } = {}) {
+  ledger(
+    partnerId: string,
+    input: {
+      from?: string;
+      to?: string;
+      type?: PartnerLedgerEntryType;
+      q?: string;
+      limit?: number;
+    } = {},
+  ) {
     return this.prisma.partnerLedgerEntry.findMany({
       where: {
         partnerId,
-        ...(input.from || input.to ? { createdAt: { ...(input.from ? { gte: new Date(input.from) } : {}), ...(input.to ? { lte: new Date(input.to) } : {}) } } : {}),
+        ...(input.from || input.to
+          ? {
+              createdAt: {
+                ...(input.from ? { gte: new Date(input.from) } : {}),
+                ...(input.to ? { lte: new Date(input.to) } : {}),
+              },
+            }
+          : {}),
         ...(input.type ? { type: input.type } : {}),
-        ...(input.q ? { OR: [
-          { reference: { contains: input.q, mode: "insensitive" } },
-          { order: { is: { OR: [
-            { orderNumber: { contains: input.q, mode: "insensitive" } },
-            { externalOrderId: { contains: input.q, mode: "insensitive" } },
-          ] } } },
-        ] } : {}),
+        ...(input.q
+          ? {
+              OR: [
+                { reference: { contains: input.q, mode: "insensitive" } },
+                {
+                  order: {
+                    is: {
+                      OR: [
+                        {
+                          orderNumber: {
+                            contains: input.q,
+                            mode: "insensitive",
+                          },
+                        },
+                        {
+                          externalOrderId: {
+                            contains: input.q,
+                            mode: "insensitive",
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            }
+          : {}),
       },
-      include: { order: { select: { id: true, orderNumber: true, externalOrderId: true } } },
+      include: {
+        order: {
+          select: { id: true, orderNumber: true, externalOrderId: true },
+        },
+      },
       orderBy: { createdAt: "desc" },
       take: Math.min(1000, Math.max(1, input.limit ?? 500)),
     });
   }
 
-  async orders(partnerId: string, input: { from?: string; to?: string; status?: OrderStatus; q?: string; limit?: number } = {}) {
+  async orders(
+    partnerId: string,
+    input: {
+      from?: string;
+      to?: string;
+      status?: OrderStatus;
+      q?: string;
+      limit?: number;
+    } = {},
+  ) {
     await this.requirePartner(partnerId);
     return this.prisma.order.findMany({
       where: {
         partnerId,
-        ...(input.from || input.to ? { createdAt: { ...(input.from ? { gte: new Date(input.from) } : {}), ...(input.to ? { lte: new Date(input.to) } : {}) } } : {}),
+        ...(input.from || input.to
+          ? {
+              createdAt: {
+                ...(input.from ? { gte: new Date(input.from) } : {}),
+                ...(input.to ? { lte: new Date(input.to) } : {}),
+              },
+            }
+          : {}),
         ...(input.status ? { status: input.status } : {}),
-        ...(input.q ? { OR: [
-          { orderNumber: { contains: input.q, mode: "insensitive" } },
-          { externalOrderId: { contains: input.q, mode: "insensitive" } },
-        ] } : {}),
+        ...(input.q
+          ? {
+              OR: [
+                { orderNumber: { contains: input.q, mode: "insensitive" } },
+                { externalOrderId: { contains: input.q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
       },
-      include: { plan: { include: { country: true } }, traveler: { select: { firstName: true, surname: true, email: true } } },
+      include: {
+        plan: { include: { country: true } },
+        traveler: { select: { firstName: true, surname: true, email: true } },
+      },
       orderBy: { createdAt: "desc" },
       take: Math.min(1000, Math.max(1, input.limit ?? 500)),
     });
@@ -419,16 +488,46 @@ export class PartnerAdminService {
 
   async summary(partnerId: string, from?: string, to?: string) {
     await this.requirePartner(partnerId);
-    const createdAt = from || to ? { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } : undefined;
+    const createdAt =
+      from || to
+        ? {
+            ...(from ? { gte: new Date(from) } : {}),
+            ...(to ? { lte: new Date(to) } : {}),
+          }
+        : undefined;
     const [account, orders, ledger] = await Promise.all([
       this.prisma.partnerAccount.findUnique({ where: { partnerId } }),
-      this.prisma.order.findMany({ where: { partnerId, ...(createdAt ? { createdAt } : {}) }, select: { status: true, totalAmount: true, channel: true } }),
-      this.prisma.partnerLedgerEntry.findMany({ where: { partnerId, ...(createdAt ? { createdAt } : {}) }, select: { type: true, amountPaisa: true } }),
+      this.prisma.order.findMany({
+        where: { partnerId, ...(createdAt ? { createdAt } : {}) },
+        select: { status: true, totalAmount: true, channel: true },
+      }),
+      this.prisma.partnerLedgerEntry.findMany({
+        where: { partnerId, ...(createdAt ? { createdAt } : {}) },
+        select: { type: true, amountPaisa: true },
+      }),
     ]);
-    const byStatus = orders.reduce<Record<string, number>>((result, order) => ({ ...result, [order.status]: (result[order.status] ?? 0) + 1 }), {});
-    const byChannel = orders.reduce<Record<string, number>>((result, order) => ({ ...result, [order.channel]: (result[order.channel] ?? 0) + 1 }), {});
-    const totalOrderValuePaisa = orders.reduce((sum, order) => sum + Math.round(Number(order.totalAmount) * 100), 0);
-    const sum = (types: PartnerLedgerEntryType[]) => ledger.filter((entry) => types.includes(entry.type)).reduce((total, entry) => total + entry.amountPaisa, 0);
+    const byStatus = orders.reduce<Record<string, number>>(
+      (result, order) => ({
+        ...result,
+        [order.status]: (result[order.status] ?? 0) + 1,
+      }),
+      {},
+    );
+    const byChannel = orders.reduce<Record<string, number>>(
+      (result, order) => ({
+        ...result,
+        [order.channel]: (result[order.channel] ?? 0) + 1,
+      }),
+      {},
+    );
+    const totalOrderValuePaisa = orders.reduce(
+      (sum, order) => sum + Math.round(Number(order.totalAmount) * 100),
+      0,
+    );
+    const sum = (types: PartnerLedgerEntryType[]) =>
+      ledger
+        .filter((entry) => types.includes(entry.type))
+        .reduce((total, entry) => total + entry.amountPaisa, 0);
     return {
       currency: "NPR",
       currentBalancePaisa: account?.balancePaisa ?? 0,
@@ -438,7 +537,9 @@ export class PartnerAdminService {
       fulfilledOrders: (byStatus.QR_READY ?? 0) + (byStatus.COMPLETED ?? 0),
       failedOrders: byStatus.PROVISIONING_FAILED ?? 0,
       totalOrderValuePaisa,
-      averageOrderValuePaisa: orders.length ? Math.round(totalOrderValuePaisa / orders.length) : 0,
+      averageOrderValuePaisa: orders.length
+        ? Math.round(totalOrderValuePaisa / orders.length)
+        : 0,
       totalCreditedPaisa: sum([PartnerLedgerEntryType.CREDIT]),
       totalDebitedPaisa: sum([PartnerLedgerEntryType.DEBIT]),
       totalRefundedPaisa: sum([PartnerLedgerEntryType.REFUND]),
@@ -543,7 +644,8 @@ export class PartnerAdminService {
       where: { id: deliveryId, event: { partnerId } },
       select: { id: true, status: true },
     });
-    if (!delivery) throw new NotFoundException("Partner webhook delivery not found");
+    if (!delivery)
+      throw new NotFoundException("Partner webhook delivery not found");
     await this.audit(
       this.prisma,
       actorClerkId,
@@ -612,7 +714,10 @@ export class PartnerAdminService {
               version: { increment: 1 },
             },
           });
-          if (credited.count !== 1) throw new ConflictException("Partner account was changed by another request; retry the refund decision");
+          if (credited.count !== 1)
+            throw new ConflictException(
+              "Partner account was changed by another request; retry the refund decision",
+            );
           await tx.partnerLedgerEntry.create({
             data: {
               partnerId: refund.partnerId,
@@ -637,9 +742,36 @@ export class PartnerAdminService {
             reason: "Partner refund approved",
           },
         });
-        const endpoints = await tx.partnerWebhookEndpoint.findMany({ where: { partnerId: refund.partnerId, active: true } });
-        const eligible = endpoints.filter((endpoint) => { const types = Array.isArray(endpoint.eventTypes) ? endpoint.eventTypes.filter((value): value is string => typeof value === "string") : []; return types.includes("*") || types.includes("order.refunded"); });
-        await tx.partnerEvent.create({ data: { partnerId: refund.partnerId, orderId: refund.orderId, type: "order.refunded", resourceId: refund.orderId, correlationId: randomUUID(), payload: { orderId: refund.orderId, externalOrderId: refund.order.externalOrderId, status: OrderStatus.REFUNDED, fulfillmentStatus: "NOT_READY", refundRequestId: refund.id }, deliveries: { create: eligible.map((endpoint) => ({ endpointId: endpoint.id })) } } });
+        const endpoints = await tx.partnerWebhookEndpoint.findMany({
+          where: { partnerId: refund.partnerId, active: true },
+        });
+        const eligible = endpoints.filter((endpoint) => {
+          const types = Array.isArray(endpoint.eventTypes)
+            ? endpoint.eventTypes.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [];
+          return types.includes("*") || types.includes("order.refunded");
+        });
+        await tx.partnerEvent.create({
+          data: {
+            partnerId: refund.partnerId,
+            orderId: refund.orderId,
+            type: "order.refunded",
+            resourceId: refund.orderId,
+            correlationId: randomUUID(),
+            payload: {
+              orderId: refund.orderId,
+              externalOrderId: refund.order.externalOrderId,
+              status: OrderStatus.REFUNDED,
+              fulfillmentStatus: "NOT_READY",
+              refundRequestId: refund.id,
+            },
+            deliveries: {
+              create: eligible.map((endpoint) => ({ endpointId: endpoint.id })),
+            },
+          },
+        });
       }
       await this.audit(
         tx,
@@ -660,9 +792,9 @@ export class PartnerAdminService {
     });
   }
 
-  private sanitizePartner<T extends { credentials?: Array<Record<string, unknown>> }>(
-    partner: T,
-  ) {
+  private sanitizePartner<
+    T extends { credentials?: Array<Record<string, unknown>> },
+  >(partner: T) {
     return {
       ...partner,
       ...(partner.credentials

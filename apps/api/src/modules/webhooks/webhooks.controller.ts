@@ -1,84 +1,197 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, Param, Post, Query, RawBodyRequest, Req, UseGuards } from '@nestjs/common';
-import { UserRole } from '@visa-compass/shared';
-import { AuthGuard, type AuthenticatedRequest, requireRole } from '../../common/auth.guard.js';
-import { AccountGuard,AccountTypes } from '../../common/auth.guard.js';
-import { UserRoleName } from '@prisma/client';
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { Request } from 'express';
-import { Webhook } from 'svix';
-import { PrismaService } from '../../infrastructure/prisma.service.js';
-import { QueueService } from '../../jobs/queue.service.js';
-import { ReconciliationService } from '../../jobs/reconciliation.service.js';
-import { QUEUES } from '../../jobs/queues.js';
-import { ClerkSyncService } from '../identity/clerk-sync.service.js';
-import { paymentSimulatorSecret } from '../../common/payment-simulator-secret.js';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  RawBodyRequest,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
+import { UserRole } from "@visa-compass/shared";
+import {
+  AuthGuard,
+  type AuthenticatedRequest,
+  requireRole,
+} from "../../common/auth.guard.js";
+import { AccountGuard, AccountTypes } from "../../common/auth.guard.js";
+import { UserRoleName } from "@prisma/client";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import type { Request } from "express";
+import { Webhook } from "svix";
+import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { QueueService } from "../../jobs/queue.service.js";
+import { ReconciliationService } from "../../jobs/reconciliation.service.js";
+import { QUEUES } from "../../jobs/queues.js";
+import { paymentSimulatorSecret } from "../../common/payment-simulator-secret.js";
+import { ClerkSyncService } from "../identity/clerk-sync.service.js";
 
-@Controller('webhooks')
+@Controller("webhooks")
 export class WebhooksController {
   private readonly accepted = new Set<string>();
-  constructor(private readonly prisma: PrismaService, private readonly queues: QueueService, private readonly clerkSync: ClerkSyncService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly queues: QueueService,
+    _clerkSync?: ClerkSyncService,
+  ) {}
 
-  @Post('clerk')
+  @Post("clerk")
   @HttpCode(202)
-  async clerk(@Body() body: unknown, @Headers() headers: Record<string, string>, @Req() request: { rawBody?: Buffer }) {
+  async clerk(
+    @Body() body: unknown,
+    @Headers() headers: Record<string, string>,
+    @Req() request: { rawBody?: Buffer },
+  ) {
     if (!process.env.CLERK_WEBHOOK_SECRET) {
-      if (process.env.NODE_ENV === 'production') throw new BadRequestException('Clerk webhook is not configured');
+      if (process.env.NODE_ENV === "production")
+        throw new BadRequestException("Clerk webhook is not configured");
       return { accepted: true, simulated: true };
     }
-    const event = new Webhook(process.env.CLERK_WEBHOOK_SECRET).verify(this.rawPayload(body, request.rawBody), {
-      'svix-id': headers['svix-id'] ?? '',
-      'svix-timestamp': headers['svix-timestamp'] ?? '',
-      'svix-signature': headers['svix-signature'] ?? '',
-    }) as { type: string; data: { id?: string } };
+    const event = new Webhook(process.env.CLERK_WEBHOOK_SECRET).verify(
+      this.rawPayload(body, request.rawBody),
+      {
+        "svix-id": headers["svix-id"] ?? "",
+        "svix-timestamp": headers["svix-timestamp"] ?? "",
+        "svix-signature": headers["svix-signature"] ?? "",
+      },
+    ) as { type: string; data: { id?: string } };
     // Clerk delivers organization/session events to the same endpoint. They
     // are validly signed but not identity synchronization work.
-    if (!event.type.startsWith('user.')) return { accepted: true, eventType: event.type, ignored: true };
-    const result = await this.clerkSync.sync(event as never);
-    return { accepted: true, eventType: event.type, userId: event.data.id, ...result };
+    if (!event.type.startsWith("user."))
+      return { accepted: true, eventType: event.type, ignored: true };
+    const eventId = headers["svix-id"];
+    if (!eventId) throw new BadRequestException("Clerk event id is required");
+    const existing = await this.webhookState("clerk", eventId);
+    if (existing?.processedAt) return { accepted: true, duplicate: true };
+    if (!existing)
+      await this.persistWebhook(
+        "clerk",
+        eventId,
+        event as unknown as object,
+        true,
+      );
+    await this.queues.add(
+      QUEUES.identityCallbacks,
+      "clerk-callback",
+      {
+        provider: "clerk",
+        eventId,
+        payload: event as unknown as Record<string, unknown>,
+      },
+      `clerk-${eventId}`,
+    );
+    return {
+      accepted: true,
+      queued: true,
+      eventType: event.type,
+      userId: event.data.id,
+    };
   }
 
-  @Post('payments/:provider')
+  @Post("payments/:provider")
   @HttpCode(202)
-  async payment(@Param('provider') provider: string, @Body() body: { eventId?: string; orderId?: string; reference?: string; pidx?: string }, @Req() request: { rawBody?: Buffer }, @Headers('x-visa-signature') signature?: string) {
+  async payment(
+    @Param("provider") provider: string,
+    @Body()
+    body: {
+      eventId?: string;
+      orderId?: string;
+      reference?: string;
+      pidx?: string;
+    },
+    @Req() request: { rawBody?: Buffer },
+    @Headers("x-visa-signature") signature?: string,
+  ) {
     const eventId = body.eventId;
-    if (!eventId) throw new BadRequestException('eventId is required');
-    if (typeof eventId !== 'string' || eventId.length < 8 || eventId.length > 256) throw new BadRequestException('eventId is invalid');
-    this.verifyPaymentSignature(this.rawPayload(body, request.rawBody), signature);
-    if (this.accepted.has(`${provider}:${eventId}`) || await this.webhookExists(provider, eventId)) return { accepted: true, duplicate: true };
-    this.remember(`${provider}:${eventId}`);
+    if (!eventId) throw new BadRequestException("eventId is required");
+    if (
+      typeof eventId !== "string" ||
+      eventId.length < 8 ||
+      eventId.length > 256
+    )
+      throw new BadRequestException("eventId is invalid");
+    this.verifyPaymentSignature(
+      this.rawPayload(body, request.rawBody),
+      signature,
+    );
+    const existing = await this.webhookState(provider, eventId);
+    if (existing?.processedAt) return { accepted: true, duplicate: true };
     const reference = body.reference ?? body.pidx;
     let orderId = body.orderId;
     if (!orderId && reference && this.prisma.enabled) {
-      orderId = (await this.prisma.payment.findUnique({ where: { paymentReference: reference }, select: { orderId: true } }))?.orderId;
+      orderId = (
+        await this.prisma.payment.findUnique({
+          where: { paymentReference: reference },
+          select: { orderId: true },
+        })
+      )?.orderId;
     }
-    const payload = { ...body, ...(reference ? { reference } : {}), ...(orderId ? { orderId } : {}) };
-    await this.persistWebhook(provider, eventId, payload, true);
-    await this.queues.add(QUEUES.payments, 'payment-callback', { provider, eventId, payload }, `${provider}-${eventId}`);
+    const payload = {
+      ...body,
+      ...(reference ? { reference } : {}),
+      ...(orderId ? { orderId } : {}),
+    };
+    if (!existing) await this.persistWebhook(provider, eventId, payload, true);
+    // Persisted-but-unprocessed duplicates are deliberately re-enqueued. This
+    // closes the database-commit/Redis-enqueue failure window.
+    await this.queues.add(
+      QUEUES.payments,
+      "payment-callback",
+      { provider, eventId, payload },
+      `${provider}-${eventId}`,
+    );
+    this.remember(`${provider}:${eventId}`);
     return { accepted: true, queued: true };
   }
 
-  @Post('connectivity/:provider')
+  @Post("connectivity/:provider")
   @HttpCode(202)
-  async connectivity(@Param('provider') provider: string, @Body() body: { eventId?: string; header?: { eventId?: string } }, @Headers() headers: Record<string, string>, @Req() request: RawBodyRequest<Request>) {
+  async connectivity(
+    @Param("provider") provider: string,
+    @Body() body: { eventId?: string; header?: { eventId?: string } },
+    @Headers() headers: Record<string, string>,
+    @Req() request: RawBodyRequest<Request>,
+  ) {
     const source = provider.toLowerCase();
-    if (source !== 'transatel') throw new BadRequestException(`Unsupported connectivity provider: ${provider}`);
+    if (source !== "transatel")
+      throw new BadRequestException(
+        `Unsupported connectivity provider: ${provider}`,
+      );
     const eventId = body.eventId ?? body.header?.eventId;
-    if (!eventId) throw new BadRequestException('eventId is required');
-    if (typeof eventId !== 'string' || eventId.length < 8 || eventId.length > 256) throw new BadRequestException('eventId is invalid');
-    const signature = headers['x-tsl-signature-256'] ?? headers['x-visa-signature'];
+    if (!eventId) throw new BadRequestException("eventId is required");
+    if (
+      typeof eventId !== "string" ||
+      eventId.length < 8 ||
+      eventId.length > 256
+    )
+      throw new BadRequestException("eventId is invalid");
+    const signature =
+      headers["x-tsl-signature-256"] ?? headers["x-visa-signature"];
     if (signature) {
-      if (!request.rawBody) throw new BadRequestException('Raw webhook body is unavailable');
+      if (!request.rawBody)
+        throw new BadRequestException("Raw webhook body is unavailable");
       this.verifyTransatelSignature(request.rawBody, signature);
-    }
-    else if (process.env.NODE_ENV === 'production') throw new BadRequestException('Transatel webhook signature is required');
+    } else if (process.env.NODE_ENV === "production")
+      throw new BadRequestException("Transatel webhook signature is required");
     const key = `${source}:${eventId}`;
     const existing = await this.webhookState(source, eventId);
-    if (existing?.deadLetteredAt) return { accepted: true, duplicate: true, deadLettered: true };
+    if (existing?.deadLetteredAt)
+      return { accepted: true, duplicate: true, deadLettered: true };
     if (existing?.processedAt) return { accepted: true, duplicate: true };
-    if (!existing) await this.persistWebhook(source, eventId, body, Boolean(signature));
+    if (!existing)
+      await this.persistWebhook(source, eventId, body, Boolean(signature));
     // Re-enqueue persisted-but-unprocessed duplicates. This closes the failure
     // window where the database insert succeeds but Redis is temporarily down.
-    await this.queues.add(QUEUES.providerCallbacks, 'connectivity-callback', { provider: source, eventId }, key);
+    await this.queues.add(
+      QUEUES.providerCallbacks,
+      "connectivity-callback",
+      { provider: source, eventId },
+      key,
+    );
     this.remember(key);
     return { accepted: true, queued: true };
   }
@@ -89,65 +202,245 @@ export class WebhooksController {
     if (this.accepted.size > 20_000) this.accepted.clear();
   }
 
-  private async persistWebhook(source: string, eventId: string, payload: object, signatureValid: boolean) {
+  private async persistWebhook(
+    source: string,
+    eventId: string,
+    payload: object,
+    signatureValid: boolean,
+  ) {
     if (!this.prisma.enabled) return;
-    await this.prisma.webhookEvent.upsert({ where: { source_eventId: { source, eventId } }, update: {}, create: { source, eventId, payload, signatureValid } });
+    await this.prisma.webhookEvent.upsert({
+      where: { source_eventId: { source, eventId } },
+      update: {},
+      create: { source, eventId, payload, signatureValid },
+    });
   }
 
-  private async webhookExists(source: string, eventId: string) { if (!this.prisma.enabled) return false; return Boolean(await this.prisma.webhookEvent.findUnique({ where: { source_eventId: { source, eventId } }, select: { id: true } })); }
-  private async webhookState(source: string, eventId: string) { if (!this.prisma.enabled) return null; return this.prisma.webhookEvent.findUnique({ where: { source_eventId: { source, eventId } }, select: { processedAt: true, deadLetteredAt: true } }); }
+  private async webhookExists(source: string, eventId: string) {
+    if (!this.prisma.enabled) return false;
+    return Boolean(
+      await this.prisma.webhookEvent.findUnique({
+        where: { source_eventId: { source, eventId } },
+        select: { id: true },
+      }),
+    );
+  }
+  private async webhookState(source: string, eventId: string) {
+    if (!this.prisma.enabled) return null;
+    return this.prisma.webhookEvent.findUnique({
+      where: { source_eventId: { source, eventId } },
+      select: { processedAt: true, deadLetteredAt: true },
+    });
+  }
 
   private rawPayload(body: unknown, rawBody?: Buffer): string {
-    if (rawBody) return rawBody.toString('utf8');
-    if (process.env.NODE_ENV === 'production') throw new BadRequestException('Webhook raw body is unavailable');
+    if (rawBody) return rawBody.toString("utf8");
+    if (process.env.NODE_ENV === "production")
+      throw new BadRequestException("Webhook raw body is unavailable");
     return JSON.stringify(body);
   }
 
   private verifyPaymentSignature(payload: string, signature?: string) {
-    if (!signature) throw new BadRequestException('Payment webhook signature is required');
-    const secret = process.env.PAYMENT_WEBHOOK_SECRET ?? (process.env.NODE_ENV === 'production' ? undefined : paymentSimulatorSecret());
-    if (!secret) throw new BadRequestException('Payment webhook is not configured');
-    const raw = signature.startsWith('sha256=') ? signature.slice('sha256='.length) : signature;
-    const expected = createHmac('sha256', secret).update(payload).digest('hex');
-    const a = Buffer.from(expected); const b = Buffer.from(raw);
-    if (a.length !== b.length || !timingSafeEqual(a, b)) throw new BadRequestException('Invalid payment webhook signature');
+    if (!signature)
+      throw new BadRequestException("Payment webhook signature is required");
+    const secret =
+      process.env.PAYMENT_WEBHOOK_SECRET ??
+      (process.env.NODE_ENV === "production"
+        ? undefined
+        : paymentSimulatorSecret());
+    if (!secret)
+      throw new BadRequestException("Payment webhook is not configured");
+    const raw = signature.startsWith("sha256=")
+      ? signature.slice("sha256=".length)
+      : signature;
+    const expected = createHmac("sha256", secret).update(payload).digest("hex");
+    const a = Buffer.from(expected);
+    const b = Buffer.from(raw);
+    if (a.length !== b.length || !timingSafeEqual(a, b))
+      throw new BadRequestException("Invalid payment webhook signature");
   }
-  private verifyTransatelSignature(payload:Buffer,signature:string){const secret=process.env.TRANSATEL_WEBHOOK_SECRET;if(!secret)throw new BadRequestException('Transatel webhook is not configured');const expected=`sha256=${createHmac('sha256',secret).update(payload).digest('hex')}`;const a=Buffer.from(expected);const b=Buffer.from(signature);if(a.length!==b.length||!timingSafeEqual(a,b))throw new BadRequestException('Invalid Transatel webhook signature')}
+  private verifyTransatelSignature(payload: Buffer, signature: string) {
+    const secret = process.env.TRANSATEL_WEBHOOK_SECRET;
+    if (!secret)
+      throw new BadRequestException("Transatel webhook is not configured");
+    const expected = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
+    const a = Buffer.from(expected);
+    const b = Buffer.from(signature);
+    if (a.length !== b.length || !timingSafeEqual(a, b))
+      throw new BadRequestException("Invalid Transatel webhook signature");
+  }
 }
 
-@Controller('operations/integration-events')
-@UseGuards(AuthGuard,AccountGuard)
-@AccountTypes(UserRoleName.OPERATIONS,UserRoleName.SUPER_ADMIN)
+@Controller("operations/integration-events")
+@UseGuards(AuthGuard, AccountGuard)
+@AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
 export class OperationsIntegrationEventsController {
-  constructor(private readonly prisma:PrismaService,private readonly queues:QueueService){}
-  @Get() async list(@Req() request:AuthenticatedRequest){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);if(!this.prisma.enabled)return [];return this.prisma.webhookEvent.findMany({where:{NOT:{source:{startsWith:'idempotency:'}}},select:{id:true,source:true,eventId:true,signatureValid:true,processedAt:true,processingStartedAt:true,attemptCount:true,nextAttemptAt:true,deadLetteredAt:true,errorMessage:true,createdAt:true},orderBy:{createdAt:'desc'},take:200})}
-  @Post(':id/replay') async replay(@Param('id') id:string,@Req() request:AuthenticatedRequest){
-    requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);
-    if(!this.prisma.enabled)throw new BadRequestException('Webhook replay requires database persistence');
-    const event=await this.prisma.webhookEvent.findUnique({where:{id},select:{id:true,source:true,eventId:true,payload:true}});
-    if(!event)throw new BadRequestException('Webhook event not found');
-    const source=event.source.toLowerCase();
-    const queue=source==='transatel'?QUEUES.providerCallbacks:source==='khalti'?QUEUES.payments:null;
-    if(!queue)throw new BadRequestException(`Webhook replay is not supported for ${event.source}`);
-    await this.prisma.webhookEvent.update({where:{id},data:{processedAt:null,processingStartedAt:null,deadLetteredAt:null,errorMessage:null,nextAttemptAt:new Date()}});
-    await this.queues.add(queue,source==='transatel'?'connectivity-callback':'payment-callback',{provider:source,eventId:event.eventId,payload:event.payload as Record<string,unknown>},`replay-${source}-${event.eventId}-${Date.now()}`);
-    return {id,eventId:event.eventId,source,status:'QUEUED'};
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly queues: QueueService,
+  ) {}
+  @Get() async list(@Req() request: AuthenticatedRequest) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    if (!this.prisma.enabled) return [];
+    return this.prisma.webhookEvent.findMany({
+      where: { NOT: { source: { startsWith: "idempotency:" } } },
+      select: {
+        id: true,
+        source: true,
+        eventId: true,
+        signatureValid: true,
+        processedAt: true,
+        processingStartedAt: true,
+        attemptCount: true,
+        nextAttemptAt: true,
+        deadLetteredAt: true,
+        errorMessage: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+  }
+  @Post(":id/replay") async replay(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    if (!this.prisma.enabled)
+      throw new BadRequestException(
+        "Webhook replay requires database persistence",
+      );
+    const event = await this.prisma.webhookEvent.findUnique({
+      where: { id },
+      select: { id: true, source: true, eventId: true, payload: true },
+    });
+    if (!event) throw new BadRequestException("Webhook event not found");
+    const source = event.source.toLowerCase();
+    const queue =
+      source === "transatel"
+        ? QUEUES.providerCallbacks
+        : source === "khalti"
+          ? QUEUES.payments
+          : null;
+    if (!queue)
+      throw new BadRequestException(
+        `Webhook replay is not supported for ${event.source}`,
+      );
+    await this.prisma.webhookEvent.update({
+      where: { id },
+      data: {
+        processedAt: null,
+        processingStartedAt: null,
+        deadLetteredAt: null,
+        errorMessage: null,
+        nextAttemptAt: new Date(),
+      },
+    });
+    await this.queues.add(
+      queue,
+      source === "transatel" ? "connectivity-callback" : "payment-callback",
+      {
+        provider: source,
+        eventId: event.eventId,
+        payload: event.payload as Record<string, unknown>,
+      },
+      `replay-${source}-${event.eventId}-${Date.now()}`,
+    );
+    return { id, eventId: event.eventId, source, status: "QUEUED" };
   }
 }
 
-@Controller('operations/integration-logs')
-@UseGuards(AuthGuard,AccountGuard)
-@AccountTypes(UserRoleName.OPERATIONS,UserRoleName.SUPER_ADMIN)
+@Controller("operations/integration-logs")
+@UseGuards(AuthGuard, AccountGuard)
+@AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
 export class OperationsIntegrationLogsController {
-  constructor(private readonly prisma:PrismaService){}
-  @Get() async list(@Req() request:AuthenticatedRequest, @Query('operation') operation?:string){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);if(!this.prisma.enabled)return [];return this.prisma.integrationLog.findMany({where:operation?{operation}:{},select:{id:true,operation:true,method:true,endpoint:true,status:true,durationMs:true,errorCode:true,errorMessage:true,createdAt:true},orderBy:{createdAt:'desc'},take:200})}
+  constructor(private readonly prisma: PrismaService) {}
+  @Get() async list(
+    @Req() request: AuthenticatedRequest,
+    @Query("operation") operation?: string,
+  ) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    if (!this.prisma.enabled) return [];
+    return this.prisma.integrationLog.findMany({
+      where: operation ? { operation } : {},
+      select: {
+        id: true,
+        operation: true,
+        method: true,
+        endpoint: true,
+        status: true,
+        durationMs: true,
+        errorCode: true,
+        errorMessage: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+  }
 }
 
-@Controller('operations/provisioning-operations')
-@UseGuards(AuthGuard,AccountGuard)
-@AccountTypes(UserRoleName.OPERATIONS,UserRoleName.SUPER_ADMIN)
+@Controller("operations/provisioning-operations")
+@UseGuards(AuthGuard, AccountGuard)
+@AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
 export class OperationsProvisioningOperationsController {
-  constructor(private readonly prisma:PrismaService,private readonly reconciliation:ReconciliationService){}
-  @Get() async list(@Req() request:AuthenticatedRequest,@Query('state') state?:string){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);if(!this.prisma.enabled)return [];const allowed=['CREATED','SUBMITTING','ACCEPTED','WAITING_FOR_QR','QR_READY','ACTIVATED','RECONCILE_REQUIRED','REJECTED','MANUAL_REVIEW','CANCELLED'];const selected=state&&allowed.includes(state)?state as never:undefined;return this.prisma.provisioningOperation.findMany({where:selected?{state:selected}:{},select:{id:true,orderId:true,provider:true,state:true,idempotencyKey:true,iccid:true,providerProductId:true,providerOrderId:true,providerSubscriptionId:true,attemptCount:true,lastErrorCategory:true,lastErrorMessage:true,submittedAt:true,acceptedAt:true,nextReconcileAt:true,reconcileDeadlineAt:true,completedAt:true,createdAt:true,updatedAt:true,order:{select:{orderNumber:true,status:true,orderType:true}}},orderBy:{updatedAt:'desc'},take:200})}
-  @Post(':id/reconcile') async reconcile(@Param('id') id:string,@Req() request:AuthenticatedRequest){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);return this.reconciliation.reconcileProvisioningOperationNow(id)}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reconciliation: ReconciliationService,
+  ) {}
+  @Get() async list(
+    @Req() request: AuthenticatedRequest,
+    @Query("state") state?: string,
+  ) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    if (!this.prisma.enabled) return [];
+    const allowed = [
+      "CREATED",
+      "SUBMITTING",
+      "ACCEPTED",
+      "WAITING_FOR_QR",
+      "QR_READY",
+      "ACTIVATED",
+      "RECONCILE_REQUIRED",
+      "REJECTED",
+      "MANUAL_REVIEW",
+      "CANCELLED",
+    ];
+    const selected =
+      state && allowed.includes(state) ? (state as never) : undefined;
+    return this.prisma.provisioningOperation.findMany({
+      where: selected ? { state: selected } : {},
+      select: {
+        id: true,
+        orderId: true,
+        provider: true,
+        state: true,
+        idempotencyKey: true,
+        iccid: true,
+        providerProductId: true,
+        providerOrderId: true,
+        providerSubscriptionId: true,
+        attemptCount: true,
+        lastErrorCategory: true,
+        lastErrorMessage: true,
+        submittedAt: true,
+        acceptedAt: true,
+        nextReconcileAt: true,
+        reconcileDeadlineAt: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        order: { select: { orderNumber: true, status: true, orderType: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+    });
+  }
+  @Post(":id/reconcile") async reconcile(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.reconciliation.reconcileProvisioningOperationNow(id);
+  }
 }

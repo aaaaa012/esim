@@ -47,7 +47,14 @@ describe("NotificationService queue-disabled delivery guard", () => {
     vi.stubEnv("GMAIL_SENDER", "sender@example.com");
     const service = new NotificationService(memoryPrisma(), queueStub(true));
 
-    expect(service.health()).toEqual(expect.objectContaining({ queue: "READY", mode: "LIVE", operational: true, channels: expect.objectContaining({ email: "CONFIGURED" }) }));
+    expect(service.health()).toEqual(
+      expect.objectContaining({
+        queue: "READY",
+        mode: "LIVE",
+        operational: true,
+        channels: expect.objectContaining({ email: "CONFIGURED" }),
+      }),
+    );
   });
 
   it("throws ServiceUnavailableException in production when delivery cannot be queued", async () => {

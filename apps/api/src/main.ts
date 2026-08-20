@@ -1,18 +1,18 @@
-import 'reflect-metadata';
-import { ValidationPipe } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
-import type { NestExpressApplication } from '@nestjs/platform-express';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import type { NextFunction, Request, Response } from 'express';
-import helmet from 'helmet';
-import { AppModule } from './app.module.js';
-import { ApiExceptionFilter } from './common/api-exception.filter.js';
-import { CorrelationInterceptor } from './common/correlation.interceptor.js';
-import { IdempotencyInterceptor } from './common/idempotency.interceptor.js';
-import { LoggingInterceptor } from './common/logging.interceptor.js';
-import { RateLimitGuard } from './common/rate-limit.guard.js';
-import { MetricsService } from './observability/metrics.service.js';
-import { PrismaService } from './infrastructure/prisma.service.js';
+import "reflect-metadata";
+import { ValidationPipe } from "@nestjs/common";
+import { NestFactory } from "@nestjs/core";
+import type { NestExpressApplication } from "@nestjs/platform-express";
+import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
+import type { NextFunction, Request, Response } from "express";
+import helmet from "helmet";
+import { AppModule } from "./app.module.js";
+import { ApiExceptionFilter } from "./common/api-exception.filter.js";
+import { CorrelationInterceptor } from "./common/correlation.interceptor.js";
+import { IdempotencyInterceptor } from "./common/idempotency.interceptor.js";
+import { LoggingInterceptor } from "./common/logging.interceptor.js";
+import { RateLimitGuard } from "./common/rate-limit.guard.js";
+import { MetricsService } from "./observability/metrics.service.js";
+import { PrismaService } from "./infrastructure/prisma.service.js";
 
 const BOOT_DB_RETRIES = Number(process.env.BOOT_DB_RETRIES ?? 12);
 const BOOT_DB_RETRY_BASE_MS = Number(process.env.BOOT_DB_RETRY_BASE_MS ?? 1500);
@@ -25,10 +25,9 @@ function isDbUnreachable(err: unknown): boolean {
     error?: { code?: string };
   };
   const candidate = anyErr?.code ?? anyErr?.errorCode ?? anyErr?.error?.code;
-  const message = anyErr?.message ?? '';
+  const message = anyErr?.message ?? "";
   return (
-    candidate === 'P1001' ||
-    /Can't reach database server|P1001/i.test(message)
+    candidate === "P1001" || /Can't reach database server|P1001/i.test(message)
   );
 }
 
@@ -58,55 +57,73 @@ async function bootOnce() {
     rawBody: true,
   });
   app.enableShutdownHooks();
-  app.use(helmet({ referrerPolicy: { policy: 'no-referrer' } }));
-  app.enableCors({ origin: [process.env.CUSTOMER_WEB_URL ?? 'http://localhost:3000', process.env.OPS_WEB_URL ?? 'http://localhost:3001'], credentials: true });
-  app.set('trust proxy', trustProxySetting());
+  app.use(helmet({ referrerPolicy: { policy: "no-referrer" } }));
+  app.enableCors({
+    origin: [
+      process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000",
+      process.env.OPS_WEB_URL ?? "http://localhost:3001",
+    ],
+    credentials: true,
+  });
+  app.set("trust proxy", trustProxySetting());
 
-  const bodyLimit = process.env.BODY_LIMIT ?? '5mb';
-  app.useBodyParser('json', { limit: bodyLimit });
-  app.useBodyParser('urlencoded', { limit: bodyLimit, extended: true });
+  const bodyLimit = process.env.BODY_LIMIT ?? "5mb";
+  app.useBodyParser("json", { limit: bodyLimit });
+  app.useBodyParser("urlencoded", { limit: bodyLimit, extended: true });
 
   // Authenticated and personal data must never be cached by shared caches/proxies.
   app.use((_req: Request, res: Response, next: NextFunction) => {
-    res.setHeader('Cache-Control', 'no-store, private');
+    res.setHeader("Cache-Control", "no-store, private");
     next();
   });
 
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix("api/v1");
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalFilters(new ApiExceptionFilter());
   app.useGlobalGuards(app.get(RateLimitGuard));
-  app.useGlobalInterceptors(new CorrelationInterceptor(), new LoggingInterceptor(app.get(MetricsService)), new IdempotencyInterceptor(app.get(PrismaService)));
+  app.useGlobalInterceptors(
+    new CorrelationInterceptor(),
+    new LoggingInterceptor(app.get(MetricsService)),
+    new IdempotencyInterceptor(app.get(PrismaService)),
+  );
 
-  if (process.env.SWAGGER_ENABLED === 'true') {
-    const config = new DocumentBuilder().setTitle('Visa Compass eSIM API').setVersion('1.0').addBearerAuth().build();
-    SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, config));
+  if (process.env.SWAGGER_ENABLED === "true") {
+    const config = new DocumentBuilder()
+      .setTitle("Visa Compass eSIM API")
+      .setVersion("1.0")
+      .addBearerAuth()
+      .build();
+    SwaggerModule.setup(
+      "api/docs",
+      app,
+      SwaggerModule.createDocument(app, config),
+    );
 
     const partnerConfig = new DocumentBuilder()
-      .setTitle('Visa Compass Partner API')
+      .setTitle("Visa Compass Partner API")
       .setDescription(
-        'Commercial agency and reseller API. Monetary amounts are integer NPR paisa. Mutations require Idempotency-Key.',
+        "Commercial agency and reseller API. Monetary amounts are integer NPR paisa. Mutations require Idempotency-Key.",
       )
-      .setVersion('1.0')
+      .setVersion("1.0")
       .addBearerAuth(
         {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'vc_partner_<prefix>.<secret>',
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "vc_partner_<prefix>.<secret>",
         },
-        'partner-key',
+        "partner-key",
       )
       .build();
     const partnerDocument = SwaggerModule.createDocument(app, partnerConfig);
     partnerDocument.paths = Object.fromEntries(
       Object.entries(partnerDocument.paths).filter(
         ([path]) =>
-          path.startsWith('/api/v1/partners') ||
-          path.startsWith('/api/v1/partner-checkout'),
+          path.startsWith("/api/v1/partners") ||
+          path.startsWith("/api/v1/partner-checkout"),
       ),
     );
-    SwaggerModule.setup('api/partner-docs', app, partnerDocument, {
-      jsonDocumentUrl: 'api/partner-docs/openapi.json',
+    SwaggerModule.setup("api/partner-docs", app, partnerDocument, {
+      jsonDocumentUrl: "api/partner-docs/openapi.json",
     });
   }
 
@@ -123,8 +140,8 @@ async function bootOnce() {
  */
 function trustProxySetting(): boolean | string | number {
   const value = process.env.TRUST_PROXY?.trim();
-  if (!value || value === '' || value === 'false') return false;
-  if (value === 'true') return true;
+  if (!value || value === "" || value === "false") return false;
+  if (value === "true") return true;
   if (/^\d+$/.test(value)) return Number(value);
   return value;
 }

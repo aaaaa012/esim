@@ -12,7 +12,10 @@ import {
   Prisma,
 } from "@prisma/client";
 import { randomBytes } from "node:crypto";
-import { isRestrictedPlanCountry, RESTRICTED_PLAN_COUNTRY_CODES } from "@visa-compass/shared";
+import {
+  isRestrictedPlanCountry,
+  RESTRICTED_PLAN_COUNTRY_CODES,
+} from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
@@ -28,20 +31,67 @@ export class AdminService {
   ) {}
 
   async documentReviewPolicy() {
-    if (!this.prisma.enabled) return { policy: DocumentReviewPolicy.AUTO_OCR, ocrCheckoutWaitMs: 8000 };
-    const config = await this.prisma.platformConfiguration.upsert({ where: { id: "platform" }, update: {}, create: { id: "platform" } });
-    return { policy: config.documentReviewPolicy, ocrCheckoutWaitMs: config.ocrCheckoutWaitMs, updatedAt: config.updatedAt };
+    if (!this.prisma.enabled)
+      return { policy: DocumentReviewPolicy.AUTO_OCR, ocrCheckoutWaitMs: 8000 };
+    const config = await this.prisma.platformConfiguration.upsert({
+      where: { id: "platform" },
+      update: {},
+      create: { id: "platform" },
+    });
+    return {
+      policy: config.documentReviewPolicy,
+      ocrCheckoutWaitMs: config.ocrCheckoutWaitMs,
+      updatedAt: config.updatedAt,
+    };
   }
 
-  async updateDocumentReviewPolicy(input: { policy: DocumentReviewPolicy; ocrCheckoutWaitMs?: number }, actorClerkId: string) {
-    if (!Object.values(DocumentReviewPolicy).includes(input.policy)) throw new BadRequestException("Invalid document review policy");
+  async updateDocumentReviewPolicy(
+    input: { policy: DocumentReviewPolicy; ocrCheckoutWaitMs?: number },
+    actorClerkId: string,
+  ) {
+    if (!Object.values(DocumentReviewPolicy).includes(input.policy))
+      throw new BadRequestException("Invalid document review policy");
     const waitMs = input.ocrCheckoutWaitMs ?? 8000;
-    if (!Number.isInteger(waitMs) || waitMs < 1000 || waitMs > 30000) throw new BadRequestException("OCR checkout wait must be between 1 and 30 seconds");
+    if (!Number.isInteger(waitMs) || waitMs < 1000 || waitMs > 30000)
+      throw new BadRequestException(
+        "OCR checkout wait must be between 1 and 30 seconds",
+      );
     const actor = await this.actor(actorClerkId);
-    const previous = await this.prisma.platformConfiguration.upsert({ where: { id: "platform" }, update: {}, create: { id: "platform" } });
-    const updated = await this.prisma.platformConfiguration.update({ where: { id: "platform" }, data: { documentReviewPolicy: input.policy, ocrCheckoutWaitMs: waitMs, updatedById: actor?.id ?? null } });
-    await this.prisma.auditLog.create({ data: { module: "DOCUMENT_RULES", entity: "PlatformConfiguration", entityId: updated.id, action: "DOCUMENT_REVIEW_POLICY_CHANGED", ...(actor ? { performedById: actor.id } : {}), previousValue: { policy: previous.documentReviewPolicy, ocrCheckoutWaitMs: previous.ocrCheckoutWaitMs }, newValue: { policy: updated.documentReviewPolicy, ocrCheckoutWaitMs: updated.ocrCheckoutWaitMs } } });
-    return { policy: updated.documentReviewPolicy, ocrCheckoutWaitMs: updated.ocrCheckoutWaitMs, updatedAt: updated.updatedAt };
+    const previous = await this.prisma.platformConfiguration.upsert({
+      where: { id: "platform" },
+      update: {},
+      create: { id: "platform" },
+    });
+    const updated = await this.prisma.platformConfiguration.update({
+      where: { id: "platform" },
+      data: {
+        documentReviewPolicy: input.policy,
+        ocrCheckoutWaitMs: waitMs,
+        updatedById: actor?.id ?? null,
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        module: "DOCUMENT_RULES",
+        entity: "PlatformConfiguration",
+        entityId: updated.id,
+        action: "DOCUMENT_REVIEW_POLICY_CHANGED",
+        ...(actor ? { performedById: actor.id } : {}),
+        previousValue: {
+          policy: previous.documentReviewPolicy,
+          ocrCheckoutWaitMs: previous.ocrCheckoutWaitMs,
+        },
+        newValue: {
+          policy: updated.documentReviewPolicy,
+          ocrCheckoutWaitMs: updated.ocrCheckoutWaitMs,
+        },
+      },
+    });
+    return {
+      policy: updated.documentReviewPolicy,
+      ocrCheckoutWaitMs: updated.ocrCheckoutWaitMs,
+      updatedAt: updated.updatedAt,
+    };
   }
 
   async plans() {
@@ -71,33 +121,76 @@ export class AdminService {
       );
   }
 
-  async planPage(input: { q?: string; status?: PlanStatus; limit?: number; offset?: number }) {
-    if (!this.prisma.enabled) return { items: [], total: 0, limit: 50, offset: 0 };
-    const limit = Math.min(100, Math.max(1, Number.isFinite(input.limit) ? input.limit! : 50));
-    const offset = Math.max(0, Number.isFinite(input.offset) ? input.offset! : 0);
+  async planPage(input: {
+    q?: string;
+    status?: PlanStatus;
+    limit?: number;
+    offset?: number;
+  }) {
+    if (!this.prisma.enabled)
+      return { items: [], total: 0, limit: 50, offset: 0 };
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.isFinite(input.limit) ? input.limit! : 50),
+    );
+    const offset = Math.max(
+      0,
+      Number.isFinite(input.offset) ? input.offset! : 0,
+    );
     const query = input.q?.trim();
     const where: Prisma.PlanWhereInput = {
       country: { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } },
       ...(input.status ? { status: input.status } : {}),
-      ...(query ? { OR: [
-        { name: { contains: query, mode: "insensitive" } },
-        { providerPlanId: { contains: query, mode: "insensitive" } },
-        { country: { name: { contains: query, mode: "insensitive" } } },
-        { country: { isoCode: { equals: query.toUpperCase() } } },
-      ] } : {}),
+      ...(query
+        ? {
+            OR: [
+              { name: { contains: query, mode: "insensitive" } },
+              { providerPlanId: { contains: query, mode: "insensitive" } },
+              { country: { name: { contains: query, mode: "insensitive" } } },
+              { country: { isoCode: { equals: query.toUpperCase() } } },
+            ],
+          }
+        : {}),
     };
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.plan.findMany({
         where,
-        select: { id: true, name: true, dataAllowance: true, validityDays: true, sellingPrice: true, costPrice: true, currency: true, popular: true, status: true, country: { select: { isoCode: true, name: true } } },
-        orderBy: [{ country: { name: "asc" } }, { sellingPrice: "asc" }, { id: "asc" }],
+        select: {
+          id: true,
+          name: true,
+          dataAllowance: true,
+          validityDays: true,
+          sellingPrice: true,
+          costPrice: true,
+          currency: true,
+          popular: true,
+          status: true,
+          country: { select: { isoCode: true, name: true } },
+        },
+        orderBy: [
+          { country: { name: "asc" } },
+          { sellingPrice: "asc" },
+          { id: "asc" },
+        ],
         take: limit,
         skip: offset,
       }),
       this.prisma.plan.count({ where }),
     ]);
     return {
-      items: rows.map((plan) => ({ id: plan.id, name: plan.name, countryCode: plan.country.isoCode, countryName: plan.country.name, dataAllowance: plan.dataAllowance, validityDays: plan.validityDays, sellingPriceNpr: Number(plan.sellingPrice), costPriceNpr: Number(plan.costPrice), currency: plan.currency, popular: plan.popular, status: plan.status })),
+      items: rows.map((plan) => ({
+        id: plan.id,
+        name: plan.name,
+        countryCode: plan.country.isoCode,
+        countryName: plan.country.name,
+        dataAllowance: plan.dataAllowance,
+        validityDays: plan.validityDays,
+        sellingPriceNpr: Number(plan.sellingPrice),
+        costPriceNpr: Number(plan.costPrice),
+        currency: plan.currency,
+        popular: plan.popular,
+        status: plan.status,
+      })),
       total,
       limit,
       offset,
@@ -136,14 +229,27 @@ export class AdminService {
    * audited.
    */
   async approvePlan(id: string, actorClerkId: string) {
-    if (!this.prisma.enabled) throw new BadRequestException("Database persistence is required");
-    const plan = await this.prisma.plan.findUnique({ where: { id }, include: { country: true } });
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    const plan = await this.prisma.plan.findUnique({
+      where: { id },
+      include: { country: true },
+    });
     if (!plan) throw new NotFoundException("Plan not found");
-    if (plan.status !== PlanStatus.DRAFT) throw new BadRequestException(`Plan is ${plan.status.toLowerCase()}; only draft plans can be approved`);
-    if (isRestrictedPlanCountry(plan.country.isoCode)) throw new BadRequestException(`Plans for destination country ${plan.country.isoCode} are not supported`);
+    if (plan.status !== PlanStatus.DRAFT)
+      throw new BadRequestException(
+        `Plan is ${plan.status.toLowerCase()}; only draft plans can be approved`,
+      );
+    if (isRestrictedPlanCountry(plan.country.isoCode))
+      throw new BadRequestException(
+        `Plans for destination country ${plan.country.isoCode} are not supported`,
+      );
     const actor = await this.actor(actorClerkId);
     await this.prisma.$transaction(async (tx) => {
-      await tx.plan.update({ where: { id }, data: { status: PlanStatus.ACTIVE } });
+      await tx.plan.update({
+        where: { id },
+        data: { status: PlanStatus.ACTIVE },
+      });
       await tx.auditLog.create({
         data: {
           module: "PLAN_ADMIN",
@@ -160,13 +266,20 @@ export class AdminService {
   }
 
   async rejectPlan(id: string, actorClerkId: string, reason?: string) {
-    if (!this.prisma.enabled) throw new BadRequestException("Database persistence is required");
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
     const plan = await this.prisma.plan.findUnique({ where: { id } });
     if (!plan) throw new NotFoundException("Plan not found");
-    if (plan.status === PlanStatus.ACTIVE) throw new BadRequestException("An active plan cannot be rejected; disable it instead");
+    if (plan.status === PlanStatus.ACTIVE)
+      throw new BadRequestException(
+        "An active plan cannot be rejected; disable it instead",
+      );
     const actor = await this.actor(actorClerkId);
     await this.prisma.$transaction(async (tx) => {
-      await tx.plan.update({ where: { id }, data: { status: PlanStatus.ARCHIVED } });
+      await tx.plan.update({
+        where: { id },
+        data: { status: PlanStatus.ARCHIVED },
+      });
       await tx.auditLog.create({
         data: {
           module: "PLAN_ADMIN",
@@ -175,7 +288,10 @@ export class AdminService {
           action: "PLAN_REJECTED",
           ...(actor ? { performedById: actor.id } : {}),
           previousValue: { status: plan.status },
-          newValue: { status: PlanStatus.ARCHIVED, ...(reason?.trim() ? { reason: reason.trim() } : {}) },
+          newValue: {
+            status: PlanStatus.ARCHIVED,
+            ...(reason?.trim() ? { reason: reason.trim() } : {}),
+          },
         },
       });
     });
@@ -184,13 +300,19 @@ export class AdminService {
 
   private async actor(actorClerkId: string) {
     try {
-      return await this.prisma.user.findUnique({ where: { clerkId: actorClerkId } });
+      return await this.prisma.user.findUnique({
+        where: { clerkId: actorClerkId },
+      });
     } catch {
       return null;
     }
   }
 
-  async importPlansFromTabular(content: string, fileName?: string, actorClerkId?: string) {
+  async importPlansFromTabular(
+    content: string,
+    fileName?: string,
+    actorClerkId?: string,
+  ) {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
     const actor = actorClerkId ? await this.actor(actorClerkId) : null;
@@ -202,7 +324,15 @@ export class AdminService {
         : PlanStatus.DRAFT;
     const { records, errors } = await tabularToRecords(
       content,
-      ["countryiso2", "name", "providerplanid", "dataallowance", "validitydays", "costprice", "sellingprice"],
+      [
+        "countryiso2",
+        "name",
+        "providerplanid",
+        "dataallowance",
+        "validitydays",
+        "costprice",
+        "sellingprice",
+      ],
       fileName ? { fileName, maxRows: 2000 } : { maxRows: 2000 },
     );
     if (errors.length) throw new BadRequestException(errors.join("; "));
@@ -222,7 +352,10 @@ export class AdminService {
       const rawCost = (row.costprice ?? "").toString().trim();
       const parsedCost = rawCost ? Number(rawCost) : NaN;
       // costPrice is optional; when omitted it defaults to the selling price.
-      const costPrice = Number.isFinite(parsedCost) && parsedCost >= 0 ? parsedCost : sellingPrice;
+      const costPrice =
+        Number.isFinite(parsedCost) && parsedCost >= 0
+          ? parsedCost
+          : sellingPrice;
       const currency = (row.currency ?? "NPR").trim().toUpperCase();
       const popular =
         (row.popular ?? "").toLowerCase() === "true" ||
@@ -238,14 +371,59 @@ export class AdminService {
         .split(/[|;]/)
         .map((value) => value.trim())
         .filter(Boolean);
-      if (!/^[A-Z]{2}$/.test(countryIso2)) { rowErrors.push(`Line ${line}: invalid countryIso2 '${countryIso2 || '(empty)'}'`); continue; }
-      if (isRestrictedPlanCountry(countryIso2)) { rowErrors.push(`Line ${line}: destination country '${countryIso2}' is not supported`); continue; }
-      if (!name) { rowErrors.push(`Line ${line}: name is required`); continue; }
-      if (!providerPlanId) { rowErrors.push(`Line ${line}: providerPlanId is required`); continue; }
-      if (!dataAllowance) { rowErrors.push(`Line ${line}: dataAllowance is required`); continue; }
-      if (validityDays === null || !Number.isInteger(validityDays) || validityDays < 1 || validityDays > 3650) { rowErrors.push(`Line ${line}: validityDays must be a whole number between 1 and 3650`); continue; }
-      if (!Number.isFinite(costPrice) || costPrice < 0 || costPrice > 9999999999.99) { rowErrors.push(`Line ${line}: costPrice must be a non-negative number`); continue; }
-      if (!Number.isFinite(sellingPrice) || sellingPrice < 0 || sellingPrice > 9999999999.99) { rowErrors.push(`Line ${line}: sellingPrice must be a non-negative number`); continue; }
+      if (!/^[A-Z]{2}$/.test(countryIso2)) {
+        rowErrors.push(
+          `Line ${line}: invalid countryIso2 '${countryIso2 || "(empty)"}'`,
+        );
+        continue;
+      }
+      if (isRestrictedPlanCountry(countryIso2)) {
+        rowErrors.push(
+          `Line ${line}: destination country '${countryIso2}' is not supported`,
+        );
+        continue;
+      }
+      if (!name) {
+        rowErrors.push(`Line ${line}: name is required`);
+        continue;
+      }
+      if (!providerPlanId) {
+        rowErrors.push(`Line ${line}: providerPlanId is required`);
+        continue;
+      }
+      if (!dataAllowance) {
+        rowErrors.push(`Line ${line}: dataAllowance is required`);
+        continue;
+      }
+      if (
+        validityDays === null ||
+        !Number.isInteger(validityDays) ||
+        validityDays < 1 ||
+        validityDays > 3650
+      ) {
+        rowErrors.push(
+          `Line ${line}: validityDays must be a whole number between 1 and 3650`,
+        );
+        continue;
+      }
+      if (
+        !Number.isFinite(costPrice) ||
+        costPrice < 0 ||
+        costPrice > 9999999999.99
+      ) {
+        rowErrors.push(`Line ${line}: costPrice must be a non-negative number`);
+        continue;
+      }
+      if (
+        !Number.isFinite(sellingPrice) ||
+        sellingPrice < 0 ||
+        sellingPrice > 9999999999.99
+      ) {
+        rowErrors.push(
+          `Line ${line}: sellingPrice must be a non-negative number`,
+        );
+        continue;
+      }
       try {
         const country = await this.prisma.country.upsert({
           where: { isoCode: countryIso2 },
@@ -282,12 +460,11 @@ export class AdminService {
           coverage,
         };
         if (existing) {
-          const effectiveStatus =
-            (row.status ?? "").trim().toUpperCase()
-              ? status
-              : existing.status === PlanStatus.ACTIVE
-                ? PlanStatus.ACTIVE
-                : status;
+          const effectiveStatus = (row.status ?? "").trim().toUpperCase()
+            ? status
+            : existing.status === PlanStatus.ACTIVE
+              ? PlanStatus.ACTIVE
+              : status;
           await this.prisma.plan.update({
             where: { id: existing.id },
             data: { ...data, status: effectiveStatus },
@@ -319,7 +496,12 @@ export class AdminService {
           entityId: `import-${Date.now()}`,
           action: "PLANS_IMPORTED",
           ...(actor ? { performedById: actor.id } : {}),
-          newValue: { imported, updated, skipped: rowErrors.length, fileName: fileName ?? null },
+          newValue: {
+            imported,
+            updated,
+            skipped: rowErrors.length,
+            fileName: fileName ?? null,
+          },
         },
       });
     }
@@ -343,7 +525,8 @@ export class AdminService {
     const amount = Number(match[1]);
     if (!Number.isInteger(amount) || amount < 1) return null;
     const unit = (match[2] ?? "day").toLowerCase();
-    if (unit === "month" || unit === "months" || unit === "mo") return amount * 30;
+    if (unit === "month" || unit === "months" || unit === "mo")
+      return amount * 30;
     return amount;
   }
 
@@ -462,7 +645,10 @@ export class AdminService {
         status: "HEALTHY",
         checkedAt: new Date().toISOString(),
         message: `${diagnostic.message} Environment: ${diagnostic.environment}.`,
-        diagnostic: { environment: diagnostic.environment, providerStatus: diagnostic.providerStatus },
+        diagnostic: {
+          environment: diagnostic.environment,
+          providerStatus: diagnostic.providerStatus,
+        },
       };
     }
     return {
@@ -500,7 +686,9 @@ export class AdminService {
    */
   async exportTransatelCatalog(cos?: string) {
     this.requireTransatel();
-    const { rows, skipped } = await this.connectivity.catalogReport(cos?.trim() || undefined);
+    const { rows, skipped } = await this.connectivity.catalogReport(
+      cos?.trim() || undefined,
+    );
     const columns = [
       "countryiso2",
       "countryname",
@@ -552,18 +740,61 @@ export class AdminService {
     return this.connectivity.checkEligibility(planId, msisdn);
   }
 
-  async users(input: { q?: string; accountType?: UserRoleName; status?: UserStatus; limit?: number; offset?: number } = {}) {
-    if (!this.prisma.enabled) return { items: [], total: 0, limit: 50, offset: 0 };
+  async users(
+    input: {
+      q?: string;
+      accountType?: UserRoleName;
+      status?: UserStatus;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) {
+    if (!this.prisma.enabled)
+      return { items: [], total: 0, limit: 50, offset: 0 };
     const limit = Math.min(200, Math.max(1, input.limit ?? 50));
     const offset = Math.max(0, input.offset ?? 0);
-    const where = { ...(input.q?.trim() ? { OR: [{ email: { contains: input.q.trim(), mode: "insensitive" as const } }, { clerkId: { contains: input.q.trim(), mode: "insensitive" as const } }, { customer: { is: { customerCode: { contains: input.q.trim(), mode: "insensitive" as const } } } }] } : {}), ...(input.accountType ? { accountType: input.accountType } : {}), ...(input.status ? { status: input.status } : {}) };
-    const [users, total] = await Promise.all([this.prisma.user.findMany({
-      where,
-      include: { roles: { include: { role: true } }, customer: true },
-      orderBy: { createdAt: "desc" },
-      take: limit,
-      skip: offset,
-    }), this.prisma.user.count({ where })]);
+    const where = {
+      ...(input.q?.trim()
+        ? {
+            OR: [
+              {
+                email: {
+                  contains: input.q.trim(),
+                  mode: "insensitive" as const,
+                },
+              },
+              {
+                clerkId: {
+                  contains: input.q.trim(),
+                  mode: "insensitive" as const,
+                },
+              },
+              {
+                customer: {
+                  is: {
+                    customerCode: {
+                      contains: input.q.trim(),
+                      mode: "insensitive" as const,
+                    },
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+      ...(input.accountType ? { accountType: input.accountType } : {}),
+      ...(input.status ? { status: input.status } : {}),
+    };
+    const [users, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        include: { roles: { include: { role: true } }, customer: true },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        skip: offset,
+      }),
+      this.prisma.user.count({ where }),
+    ]);
     const items = users.map((user) => ({
       id: user.id,
       clerkId: user.clerkId,
@@ -768,7 +999,9 @@ export class AdminService {
         },
       });
     });
-    return (await this.users({ limit: 200 })).items.find((item) => item.id === userId);
+    return (await this.users({ limit: 200 })).items.find(
+      (item) => item.id === userId,
+    );
   }
   async changeStatus(userId: string, status: UserStatus, actorClerkId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });

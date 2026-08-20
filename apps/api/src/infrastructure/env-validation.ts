@@ -10,7 +10,9 @@ import { z } from "zod";
  * hard-requires every secret that other code paths treat as mandatory.
  */
 const baseSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "staging", "production"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "test", "staging", "production"])
+    .default("development"),
   API_PUBLIC_URL: z.string().url().optional(),
   CUSTOMER_WEB_URL: z.string().url().optional(),
   OPS_WEB_URL: z.string().url().optional(),
@@ -43,13 +45,31 @@ const baseSchema = z.object({
   CLERK_PUBLISHABLE_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),
   CLERK_WEBHOOK_SECRET: z.string().optional(),
-  ORDER_WORKFLOW_MODE: z.enum(["single-instance"]).optional(),
+  ORDER_WORKFLOW_MODE: z.enum(["single-instance", "database-first"]).optional(),
 });
 
 const productionSchema = baseSchema.extend({
-  API_PUBLIC_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
-  CUSTOMER_WEB_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
-  OPS_WEB_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
+  API_PUBLIC_URL: z
+    .string()
+    .url()
+    .refine(
+      (url) => !url.includes("localhost") && !url.includes("127.0.0.1"),
+      "must not use localhost in production",
+    ),
+  CUSTOMER_WEB_URL: z
+    .string()
+    .url()
+    .refine(
+      (url) => !url.includes("localhost") && !url.includes("127.0.0.1"),
+      "must not use localhost in production",
+    ),
+  OPS_WEB_URL: z
+    .string()
+    .url()
+    .refine(
+      (url) => !url.includes("localhost") && !url.includes("127.0.0.1"),
+      "must not use localhost in production",
+    ),
   DATABASE_URL: z.string().min(1),
   PERSISTENCE_MODE: z.literal("prisma"),
   REDIS_URL: z.string().min(1),
@@ -83,10 +103,12 @@ const productionSchema = baseSchema.extend({
   // Order state and per-order locks are not yet distributed. Refuse an
   // accidental multi-replica production rollout rather than risking payment
   // races and cross-pod order divergence.
-  ORDER_WORKFLOW_MODE: z.literal("single-instance"),
+  ORDER_WORKFLOW_MODE: z.literal("database-first"),
 });
 
-export function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
+export function validateEnv(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
   if (config.NODE_ENV === "production") {
     return productionSchema.safeParse(config).success
       ? config
@@ -103,12 +125,20 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
     );
   }
   if (config.REDIS_URL && !(`${config.REDIS_URL}`.length > 1)) {
-    throw new Error("REDIS_URL is set but empty. Refusing to boot with an unusable queue.");
+    throw new Error(
+      "REDIS_URL is set but empty. Refusing to boot with an unusable queue.",
+    );
   }
   return config;
 }
 
-function failWith(result: { error?: { issues?: Array<{ path: Array<PropertyKey>; message: string }> } }): never {
-  const detail = result.error?.issues?.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
-  throw new Error(`Environment configuration is invalid: ${detail ?? "unknown"}`);
+function failWith(result: {
+  error?: { issues?: Array<{ path: Array<PropertyKey>; message: string }> };
+}): never {
+  const detail = result.error?.issues
+    ?.map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+    .join("; ");
+  throw new Error(
+    `Environment configuration is invalid: ${detail ?? "unknown"}`,
+  );
 }

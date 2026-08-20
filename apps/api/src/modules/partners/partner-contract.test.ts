@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { completeCreateSchema, uploadSessionSchema } from "./partners.controller.js";
+import {
+  completeCreateSchema,
+  uploadSessionSchema,
+} from "./partners.controller.js";
 
 const traveler = {
   title: "MR",
@@ -52,17 +55,27 @@ describe("simplified partner order contract", () => {
   });
 
   it("rejects the former direct traveler and document order contract", () => {
-    expect(completeCreateSchema.safeParse({
-      externalOrderId: "agency-order-old",
-      externalCustomerId: "customer-91",
-      planId: "f17d6006-69fe-42ed-9ec8-47777f7569f1",
-      traveler,
-      documents: [
-        { type: "PASSPORT", uploadId: "00000000-0000-4000-8000-000000000001" },
-        { type: "TICKET", uploadId: "00000000-0000-4000-8000-000000000002" },
-      ],
-      consent: { compatibilityAccepted: true, termsAccepted: true, privacyAccepted: true, acceptedAt: "2026-08-08T00:00:00.000Z" },
-    }).success).toBe(false);
+    expect(
+      completeCreateSchema.safeParse({
+        externalOrderId: "agency-order-old",
+        externalCustomerId: "customer-91",
+        planId: "f17d6006-69fe-42ed-9ec8-47777f7569f1",
+        traveler,
+        documents: [
+          {
+            type: "PASSPORT",
+            uploadId: "00000000-0000-4000-8000-000000000001",
+          },
+          { type: "TICKET", uploadId: "00000000-0000-4000-8000-000000000002" },
+        ],
+        consent: {
+          compatibilityAccepted: true,
+          termsAccepted: true,
+          privacyAccepted: true,
+          acceptedAt: "2026-08-08T00:00:00.000Z",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("requires hosted payment provider and redirect URL", () => {

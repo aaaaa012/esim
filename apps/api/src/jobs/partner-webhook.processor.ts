@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
 import { PartnerWebhookDeliveryStatus } from "@prisma/client";
 import type { Job } from "bullmq";
 import { createHmac } from "node:crypto";
@@ -11,7 +16,11 @@ import { QUEUES } from "./queues.js";
 
 type DeliveryJob = { deliveryId: string };
 
-export function signPartnerWebhook(secret: string, timestamp: string, rawBody: string) {
+export function signPartnerWebhook(
+  secret: string,
+  timestamp: string,
+  rawBody: string,
+) {
   return createHmac("sha256", secret)
     .update(`${timestamp}.${rawBody}`)
     .digest("hex");
@@ -43,7 +52,9 @@ export async function assertSafeWebhookUrl(url: string): Promise<void> {
   }
   let addresses: string[];
   try {
-    addresses = (await lookup(host, { all: true })).map((entry) => addressOf(entry));
+    addresses = (await lookup(host, { all: true })).map((entry) =>
+      addressOf(entry),
+    );
   } catch {
     throw new Error("Webhook URL host cannot be resolved");
   }
@@ -57,9 +68,16 @@ function addressOf(entry: string | { address: string }): string {
 function assertSafeIp(version: number, address: string): void {
   const v4 = version === 4 || address.toLowerCase().startsWith("::ffff:");
   if (v4) {
-    const groups = address.toLowerCase().replace(/^::ffff:/, "").split(".").map(Number);
+    const groups = address
+      .toLowerCase()
+      .replace(/^::ffff:/, "")
+      .split(".")
+      .map(Number);
     if (groups.length !== 4) throw new Error("Webhook URL host is not allowed");
-    const a = groups[0] ?? 0, b = groups[1] ?? 0, c = groups[2] ?? 0, d = groups[3] ?? 0;
+    const a = groups[0] ?? 0,
+      b = groups[1] ?? 0,
+      c = groups[2] ?? 0,
+      d = groups[3] ?? 0;
     const privateIp =
       a === 0 ||
       a === 10 ||
@@ -85,7 +103,8 @@ function assertSafeIp(version: number, address: string): void {
     lower.startsWith("::ffff:127") ||
     lower.startsWith("::ffff:10.") ||
     lower.startsWith("::ffff:192.168") ||
-    (lower.startsWith("::ffff:172.") && /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(lower));
+    (lower.startsWith("::ffff:172.") &&
+      /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(lower));
   if (privateV6) throw new Error("Webhook URL resolves to a private host");
 }
 
@@ -101,6 +120,7 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    if (process.env.PROCESS_ROLE === "api") return;
     this.queues.registerWorker(QUEUES.partnerWebhooks, (job) =>
       this.deliver(job as Job<DeliveryJob>),
     );
@@ -114,7 +134,11 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
     if (this.queues.enabled)
       this.reconciliationTimer = setInterval(() => {
         void this.enqueuePendingAsLeader().catch((error: unknown) =>
-          this.logger.error(error instanceof Error ? error.message : "Webhook reconciliation failed"),
+          this.logger.error(
+            error instanceof Error
+              ? error.message
+              : "Webhook reconciliation failed",
+          ),
         );
       }, 30_000);
   }
@@ -124,8 +148,15 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
   }
 
   private async enqueuePendingAsLeader() {
-    const result = await this.queues.withDistributedLock('partner-webhook-reconciliation', 25_000, () => this.enqueuePending());
-    if (!result.acquired) this.logger.debug('Skipped partner webhook reconciliation; another replica holds the lease');
+    const result = await this.queues.withDistributedLock(
+      "partner-webhook-reconciliation",
+      25_000,
+      () => this.enqueuePending(),
+    );
+    if (!result.acquired)
+      this.logger.debug(
+        "Skipped partner webhook reconciliation; another replica holds the lease",
+      );
     return result.value;
   }
 
@@ -207,11 +238,11 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
           "vc-webhook-signature": `v1=${signature}`,
         },
         body,
-        redirect: 'manual',
+        redirect: "manual",
         signal: AbortSignal.timeout(10_000),
       });
       if (response.status >= 300 && response.status < 400)
-        throw new Error('Partner endpoint redirects are not allowed');
+        throw new Error("Partner endpoint redirects are not allowed");
       if (!response.ok)
         throw new Error(`Partner endpoint returned HTTP ${response.status}`);
       await this.prisma.partnerWebhookDelivery.update({

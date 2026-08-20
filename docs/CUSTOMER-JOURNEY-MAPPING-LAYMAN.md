@@ -1,8 +1,8 @@
 # Visa Compass — Whole System in Plain English (Journey Map)
 
-*Read this if you are not a developer. It walks through everything a customer (and
+_Read this if you are not a developer. It walks through everything a customer (and
 staff, and partners) does, what the system does next, and why. It is ordered like a
-story, so you can trace one order from "hello" to "my data ran out."*
+story, so you can trace one order from "hello" to "my data ran out."_
 
 ---
 
@@ -134,6 +134,7 @@ review screen still exists, but only for exceptions.
 ### Step 8 – Activation (the magic part)
 
 **System does:**
+
 1. Reserves **one physical eSIM** from the company's stock (each profile is used once).
 2. Asks the **telecom company (Transatel)** to switch that eSIM on for the plan.
 3. When the telecom confirms and hands over the **QR code**, the order is marked
@@ -143,7 +144,7 @@ review screen still exists, but only for exceptions.
 
 **If things go wrong:** the system **tries again automatically** up to 3 times. If it
 still fails, it flags the order for staff and tells the customer a friendly
-*"our team is reviewing it and will contact you"* — never scary technical text.
+_"our team is reviewing it and will contact you"_ — never scary technical text.
 
 **Behind the scenes:** activation is a background chore; it doesn't freeze the
 website. Every attempt (what was sent, what came back, the error) is logged so staff
@@ -173,7 +174,7 @@ used and how much is left, and keeps that fresh.
 
 **System does (automatic chore):** when your **data is all used up** or your **time
 has elapsed**, it marks that eSIM **expired** and emails you a friendly notice —
-*"your data plan was fully consumed"* or *"your data plan has expired."*
+_"your data plan was fully consumed"_ or _"your data plan has expired."_
 
 **You do:** head back to the site, type your number into the top-up box, and grab a
 new plan (Step 2). That new purchase is tagged **TOP-UP**.
@@ -185,7 +186,7 @@ new plan (Step 2). That new purchase is tagged **TOP-UP**.
 **When:** if a paid order later can't be delivered (e.g. activation kept failing) and
 the team decides to reverse it, or a customer cancels after paying.
 
-**System does:** staff clicks **"Refund order"**, the order moves to *refunding*, the
+**System does:** staff clicks **"Refund order"**, the order moves to _refunding_, the
 system asks the wallet to return the money, and the order is marked **refunded**. Every
 step is tracked.
 
@@ -193,19 +194,19 @@ step is tracked.
 
 ## PART 2 — What the business / staff team can do (ops website)
 
-| Area | What the team can do |
-| --- | --- |
-| **Dashboard** | See at once: orders awaiting review, orders waiting on the customer for a new document, activation failures, and how many completed today. |
-| **Order list & detail** | Search orders, open any order, see the full picture **including sensitive internal details staff need but customers never see.** See a **FIRST PURCHASE vs TOP-UP** badge and the top-up number. Click the customer's uploaded documents to preview or approve them. |
-| **Review** | Because payment gives auto-approval, staff review is for **exceptions only**: approve a replacement document a customer re-uploaded, and retry a failed activation. |
-| **Refund / cancel** | Reverse a paid order or cancel a stuck draft — with a reason, and it's audited. |
-| **Payment cleanup** | One button to "expire stale payments" — clears orders whose payment windows ran out. |
-| **Find a subscriber** | Type a mobile number to see its current plan and route future sales as TOP-UP. |
-| **Inventory** | See how many eSIMs are available / reserved / assigned / activated; get a low-stock warning; upload stock from a spreadsheet (up to 5,000 at a time). |
-| **Plan & price control** | Edit prices, mark popular, enable/disable plans, and import/update the whole catalogue from a spreadsheet — changes go live to customers immediately. |
-| **Integrations** | One screen showing whether every partner is connected (Khalti, the telecom, email, WhatsApp, storage), test each one, pull the telecom catalogue, and check if a number is eligible for a plan. |
-| **Team & access** | Invite staff (by email), give them Operations or Admin roles, disable people, and read the full audit log. |
-| **Observability** | A log of every call to the telecom company (and every message the telecom sends back) with success/failure, so problems are diagnosed in minutes, not hours. |
+| Area                     | What the team can do                                                                                                                                                                                                                                                 |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dashboard**            | See at once: orders awaiting review, orders waiting on the customer for a new document, activation failures, and how many completed today.                                                                                                                           |
+| **Order list & detail**  | Search orders, open any order, see the full picture **including sensitive internal details staff need but customers never see.** See a **FIRST PURCHASE vs TOP-UP** badge and the top-up number. Click the customer's uploaded documents to preview or approve them. |
+| **Review**               | Because payment gives auto-approval, staff review is for **exceptions only**: approve a replacement document a customer re-uploaded, and retry a failed activation.                                                                                                  |
+| **Refund / cancel**      | Reverse a paid order or cancel a stuck draft — with a reason, and it's audited.                                                                                                                                                                                      |
+| **Payment cleanup**      | One button to "expire stale payments" — clears orders whose payment windows ran out.                                                                                                                                                                                 |
+| **Find a subscriber**    | Type a mobile number to see its current plan and route future sales as TOP-UP.                                                                                                                                                                                       |
+| **Inventory**            | See how many eSIMs are available / reserved / assigned / activated; get a low-stock warning; upload stock from a spreadsheet (up to 5,000 at a time).                                                                                                                |
+| **Plan & price control** | Edit prices, mark popular, enable/disable plans, and import/update the whole catalogue from a spreadsheet — changes go live to customers immediately.                                                                                                                |
+| **Integrations**         | One screen showing whether every partner is connected (Khalti, the telecom, email, WhatsApp, storage), test each one, pull the telecom catalogue, and check if a number is eligible for a plan.                                                                      |
+| **Team & access**        | Invite staff (by email), give them Operations or Admin roles, disable people, and read the full audit log.                                                                                                                                                           |
+| **Observability**        | A log of every call to the telecom company (and every message the telecom sends back) with success/failure, so problems are diagnosed in minutes, not hours.                                                                                                         |
 
 ---
 
@@ -236,17 +237,17 @@ secret key and a ready API:
 
 ## Part 5 – The parts behind the scenes (in one glance)
 
-| Component | Plain-English role |
-| --- | --- |
-| **Sign-in (Clerk)** | Handles logins/passwords/MFA. Customer and staff are **separate** — staff can never act as a customer and vice versa. |
-| **Database** | The single source of truth for everything: customers, orders, documents, payments, stock, subscriptions, audit log. |
-| **Telecom company (Transatel)** | The company that actually turns on the eSIM in the destination country. |
-| **Wallets (Khalti)** | Collect the money in NPR, and return it on refunds. |
-| **Document storage** | Holds passports/tickets privately with short-lived links. |
-| **Email + WhatsApp** | Send order updates; the activation QR arrives by email as a password-protected PDF. |
-| **Background jobs** | A to-do list the machine works through on its own (activate now, verify now, email now, refresh usage now). Fails retry automatically. |
-| **Audit trail** | An unchangeable diary of every important action. |
-| **Guest checkout** | Lets people buy without signing up; their order is guarded by a secret "token" so only their own browser can continue it. |
+| Component                       | Plain-English role                                                                                                                     |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Sign-in (Clerk)**             | Handles logins/passwords/MFA. Customer and staff are **separate** — staff can never act as a customer and vice versa.                  |
+| **Database**                    | The single source of truth for everything: customers, orders, documents, payments, stock, subscriptions, audit log.                    |
+| **Telecom company (Transatel)** | The company that actually turns on the eSIM in the destination country.                                                                |
+| **Wallets (Khalti)**            | Collect the money in NPR, and return it on refunds.                                                                                    |
+| **Document storage**            | Holds passports/tickets privately with short-lived links.                                                                              |
+| **Email + WhatsApp**            | Send order updates; the activation QR arrives by email as a password-protected PDF.                                                    |
+| **Background jobs**             | A to-do list the machine works through on its own (activate now, verify now, email now, refresh usage now). Fails retry automatically. |
+| **Audit trail**                 | An unchangeable diary of every important action.                                                                                       |
+| **Guest checkout**              | Lets people buy without signing up; their order is guarded by a secret "token" so only their own browser can continue it.              |
 
 ---
 
@@ -270,7 +271,7 @@ secret key and a ready API:
 - The newest **database changes are written but not applied** to a real database.
 - **Live credentials** for the telecom company, wallets, email and WhatsApp have not
   been smoke-tested — until they are, the dashboard shows these as
-  *"configuration required"* and the features run in **simulator mode** (play money,
+  _"configuration required"_ and the features run in **simulator mode** (play money,
   fake email). This is normal and expected for a development-stage system.
 - Some backgrounds chores run on a single server in memory; for production on many
   servers, a shared database and message queue should be enabled (both are already

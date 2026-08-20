@@ -1,7 +1,8 @@
 /** Uppercases and strips every non-alphanumeric character so OCR noise like
  *  spaces, dashes and slashes cannot break comparison. Defined locally to keep
  *  this module dependency-free (the service imports from here). */
-const normalizeText = (value: string) => value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+const normalizeText = (value: string) =>
+  value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
 /**
  * ICAO 9303 machine-readable zone (TD3 passport) parser with check-digit
@@ -45,9 +46,9 @@ export type ParsedMrz = {
 
 /** ICAO character values: A-Z -> 10..35, 0-9 -> 0..9, '<' -> 0. */
 export const mrzCharValue = (char: string): number => {
-  if (char === '<') return 0;
-  if (char >= '0' && char <= '9') return char.charCodeAt(0) - 48;
-  if (char >= 'A' && char <= 'Z') return char.charCodeAt(0) - 55;
+  if (char === "<") return 0;
+  if (char >= "0" && char <= "9") return char.charCodeAt(0) - 48;
+  if (char >= "A" && char <= "Z") return char.charCodeAt(0) - 55;
   return 0;
 };
 
@@ -58,12 +59,13 @@ export const mrzCheckDigit = (field: string): number => {
   for (let i = 0; i < field.length; i += 1) {
     const char = field[i];
     const weight = weights[i % 3];
-    if (char !== undefined && weight !== undefined) sum += mrzCharValue(char) * weight;
+    if (char !== undefined && weight !== undefined)
+      sum += mrzCharValue(char) * weight;
   }
   return sum % 10;
 };
 
-const MRZ_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<';
+const MRZ_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
 
 /** Converts an MRZ YYMMDD field to an ISO YYYY-MM-DD date (0-50 -> 20xx). */
 export const mrzDateToIso = (value: string): string | null => {
@@ -81,14 +83,19 @@ export const mrzDateToIso = (value: string): string | null => {
  *  field's check digit validate. The raw value and each returned candidate are
  *  all plausible readings; the caller picks among them using the value it
  *  expects (the traveller-entered passport number). */
-export const correctMrzField = (value: string, checkDigit: string): string[] => {
+export const correctMrzField = (
+  value: string,
+  checkDigit: string,
+): string[] => {
   if (value.length < 2 || !/^\d$/.test(checkDigit)) return [];
   const target = Number(checkDigit);
   const candidates = new Set<string>();
   for (let i = 0; i < value.length; i += 1) {
     const original = value[i];
     if (original === undefined) continue;
-    const lookalike = CONFUSABLES[original] ?? Object.keys(CONFUSABLES).find((k) => CONFUSABLES[k] === original);
+    const lookalike =
+      CONFUSABLES[original] ??
+      Object.keys(CONFUSABLES).find((k) => CONFUSABLES[k] === original);
     if (!lookalike) continue;
     const trial = value.slice(0, i) + lookalike + value.slice(i + 1);
     if (mrzCheckDigit(trial) === target) candidates.add(trial);
@@ -96,22 +103,29 @@ export const correctMrzField = (value: string, checkDigit: string): string[] => 
   return [...candidates];
 };
 
-const isMrzLine = (line: string) => line.length === 44 && /^[A-Z0-9<]+$/.test(line);
+const isMrzLine = (line: string) =>
+  line.length === 44 && /^[A-Z0-9<]+$/.test(line);
 
 /** The TD3 line 2 is the one that carries the check digits we can validate.
  *  It is far more reliable than line 1, which OCR often mangles (the name
  *  zone's '<' filler gets read as stray letters). Returns the line 2 raw text
  *  plus the neighbouring line 1 when a clean one exists. */
-export const extractMrz = (ocrText: string): { line1?: string; line2: string } | null => {
+export const extractMrz = (
+  ocrText: string,
+): { line1?: string; line2: string } | null => {
   const lines = ocrText
     .split(/\r?\n/)
-    .map((line) => line.replace(/[^A-Z0-9<]/g, ''))
+    .map((line) => line.replace(/[^A-Z0-9<]/g, ""))
     .filter(isMrzLine);
-  const index = lines.findIndex((line) => line[9] !== undefined && /^\d$/.test(line[9]));
+  const index = lines.findIndex(
+    (line) => line[9] !== undefined && /^\d$/.test(line[9]),
+  );
   if (index < 0) return null;
   const line2 = lines[index] as string;
   const neighbour = lines[index - 1];
-  return neighbour && isMrzLine(neighbour) ? { line1: neighbour, line2 } : { line2 };
+  return neighbour && isMrzLine(neighbour)
+    ? { line1: neighbour, line2 }
+    : { line2 };
 };
 
 /** Parses a TD3 passport MRZ. Returns null when no line 2 is present. Names
@@ -122,21 +136,40 @@ export const parseMrz = (ocrText: string): ParsedMrz | null => {
   const { line1, line2 } = extracted;
   if (line2.length !== 44) return null;
 
-  const field = (start: number, length: number, checkDigitAt?: number): MrzField => {
+  const field = (
+    start: number,
+    length: number,
+    checkDigitAt?: number,
+  ): MrzField => {
     const value = line2.slice(start - 1, start - 1 + length);
-    const checkDigitRaw = checkDigitAt !== undefined ? line2[checkDigitAt - 1] : undefined;
-    const checkDigit = checkDigitRaw !== undefined && /^\d$/.test(checkDigitRaw) ? checkDigitRaw : '';
-    const rawValid = checkDigit !== '' && mrzCheckDigit(value) === Number(checkDigit);
-    const corrections = rawValid ? undefined : correctMrzField(value, checkDigit);
-    return { value, checkDigit, valid: rawValid, ...(corrections && corrections.length ? { corrections } : {}) };
+    const checkDigitRaw =
+      checkDigitAt !== undefined ? line2[checkDigitAt - 1] : undefined;
+    const checkDigit =
+      checkDigitRaw !== undefined && /^\d$/.test(checkDigitRaw)
+        ? checkDigitRaw
+        : "";
+    const rawValid =
+      checkDigit !== "" && mrzCheckDigit(value) === Number(checkDigit);
+    const corrections = rawValid
+      ? undefined
+      : correctMrzField(value, checkDigit);
+    return {
+      value,
+      checkDigit,
+      valid: rawValid,
+      ...(corrections && corrections.length ? { corrections } : {}),
+    };
   };
 
   const splitName = (zone: string): { surname: string; givenNames: string } => {
-    const separator = zone.indexOf('<<');
-    if (separator < 0) return { surname: zone, givenNames: '' };
+    const separator = zone.indexOf("<<");
+    if (separator < 0) return { surname: zone, givenNames: "" };
     return {
-      surname: zone.slice(0, separator).replace(/</g, '').trim(),
-      givenNames: zone.slice(separator + 2).replace(/</g, '').trim(),
+      surname: zone.slice(0, separator).replace(/</g, "").trim(),
+      givenNames: zone
+        .slice(separator + 2)
+        .replace(/</g, "")
+        .trim(),
     };
   };
 
@@ -144,34 +177,47 @@ export const parseMrz = (ocrText: string): ParsedMrz | null => {
   const passportNumber = field(1, 9, 10);
   const dateOfBirth = field(14, 6, 20);
   const expiryDate = field(22, 6, 28);
-  const compositeValid = line2[43] !== undefined && /^\d$/.test(line2[43]) && mrzCheckDigit(line2.slice(0, 43)) === Number(line2[43]);
+  const compositeValid =
+    line2[43] !== undefined &&
+    /^\d$/.test(line2[43]) &&
+    mrzCheckDigit(line2.slice(0, 43)) === Number(line2[43]);
 
   return {
-    line1: line1 ?? '',
+    line1: line1 ?? "",
     line2,
     documentType,
     issuingCountry: line1 ? line1.slice(2, 5) : line2.slice(11, 14),
-    ...(line1 ? splitName(line1.slice(5)) : { surname: '', givenNames: '' }),
+    ...(line1 ? splitName(line1.slice(5)) : { surname: "", givenNames: "" }),
     passportNumber,
     nationality: line2.slice(10, 13),
     dateOfBirth,
-    sex: line2[20] ?? '',
+    sex: line2[20] ?? "",
     expiryDate,
-    personalNumber: line2.slice(28, 42).replace(/</g, ''),
-    valid: compositeValid && passportNumber.valid && dateOfBirth.valid && expiryDate.valid,
+    personalNumber: line2.slice(28, 42).replace(/</g, ""),
+    valid:
+      compositeValid &&
+      passportNumber.valid &&
+      dateOfBirth.valid &&
+      expiryDate.valid,
   };
 };
 
 /** Confusable characters Tesseract commonly swaps on low-resolution scans.
  *  Maps both the OCR text and the entered value to one canonical form before
  *  comparison, so a single glyph mis-read no longer breaks the match. */
-export const CONFUSABLES: Record<string, string> = { O: '0', I: '1', S: '5', B: '8', Z: '2' };
+export const CONFUSABLES: Record<string, string> = {
+  O: "0",
+  I: "1",
+  S: "5",
+  B: "8",
+  Z: "2",
+};
 
 export const confusableNormalize = (value: string) =>
   normalizeText(value)
-    .split('')
+    .split("")
     .map((char) => CONFUSABLES[char] ?? char)
-    .join('');
+    .join("");
 
 /** Levenshtein distance; used as a tolerance for a single OCR character error
  *  after confusable normalization. */

@@ -16,6 +16,7 @@ Primary sources: `apps/api/prisma/schema.prisma`,
 - DB: CockroachDB (`schema.prisma:7`, `provider = "cockroachdb"`).
 
 When disabled, services degrade:
+
 - Orders: in-memory `Map` (`orders.service.ts:29`), persistence calls are
   no-ops.
 - Notifications: in-memory map (`notification.service.ts:12`).
@@ -29,6 +30,7 @@ When disabled, services degrade:
 `apps/api/prisma/schema.prisma` (full model list):
 
 **Identity & staff**
+
 - `User` (`schema.prisma:113-126`) — clerkId unique, email unique, status,
   accountType, roles, customer.
 - `StaffInvitation` (`:127-142`) — email, accountType, status
@@ -37,6 +39,7 @@ When disabled, services degrade:
 - `Role` / `UserRole` (`:143-154`) — RBAC join.
 
 **Commerce**
+
 - `Customer` (`:155-171`) — customerCode unique, source
   (WEBSITE/PARTNER/KHALTI), email unique, status, consents.
 - `Country` (`:172-178`), `Plan` (`:179-195`) — plan unique on
@@ -54,6 +57,7 @@ When disabled, services degrade:
 - `CustomerConsent` (`:411-420`) — type, version, ip, userAgent.
 
 **eSIM**
+
 - `InventoryBatch` (`:283-291`), `EsimInventory` (`:292-312`) — iccid unique,
   eid unique, status, assignedOrderId unique, activationCodeEncrypted,
   smDpAddress, provider refs, activatedAt, expiresAt, version.
@@ -63,6 +67,7 @@ When disabled, services degrade:
   usage fields.
 
 **Audit / events / integrations**
+
 - `OrderReview` (`:338-348`), `OrderEvent` (`:349-360`),
   `ProvisioningAttempt` (`:361-374`) — requestSnapshot/responseSnapshot/
   errorCode.

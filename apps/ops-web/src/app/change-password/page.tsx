@@ -35,7 +35,9 @@ export default function ChangePasswordPage() {
   return (
     <section className="mx-auto w-full max-w-3xl space-y-6 rounded-xl border bg-card p-6 shadow-card sm:p-8">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Set a new password</h1>
+        <h1 className="text-xl font-semibold tracking-tight">
+          Set a new password
+        </h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Your account was provisioned with a temporary password. Set a strong
           new password below, then continue to the console.

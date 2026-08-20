@@ -1,5 +1,5 @@
-import NotificationsClient from './notifications-client';
-import { PageHeader } from '@/components/page-header';
+import NotificationsClient from "./notifications-client";
+import { PageHeader } from "@/components/page-header";
 export default function NotificationsPage() {
   return (
     <>

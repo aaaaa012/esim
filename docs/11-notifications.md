@@ -11,8 +11,11 @@ Primary sources: `apps/api/src/modules/notification/notification.service.ts`,
 
 ```ts
 type NotificationTemplate =
-  | 'ORDER_STATUS' | 'QR_READY' | 'DOCUMENT_REUPLOAD'
-  | 'PLAN_EXHAUSTED' | 'PLAN_EXPIRED';
+  | "ORDER_STATUS"
+  | "QR_READY"
+  | "DOCUMENT_REUPLOAD"
+  | "PLAN_EXHAUSTED"
+  | "PLAN_EXPIRED";
 ```
 
 `renderNotification(template, { orderNumber, reason? })` returns
@@ -33,7 +36,7 @@ type NotificationTemplate =
 `gmail.channel.ts`:
 
 - `NOTIFICATION_MODE !== 'live'` → simulated `{ providerMessageId:
-  gmail-sim-{ts}, simulated: true }`.
+gmail-sim-{ts}, simulated: true }`.
 - Otherwise requires GMAIL client id/secret/refresh token; OAuth refresh via
   Google token endpoint, then `POST gmail/v1/users/me/messages/send` with a
   base64url MIME message (`gmail.channel.ts:14-22`).
@@ -122,6 +125,7 @@ Where notifications are triggered:
 ## Admin integration status
 
 `AdminService.integrations` reports:
+
 - Email Gmail: HEALTHY only when `NOTIFICATION_MODE === 'live'` and Gmail creds
   present (`admin.service.ts:183-203`).
 - WhatsApp: HEALTHY only when `NOTIFICATION_MODE === 'live'` and

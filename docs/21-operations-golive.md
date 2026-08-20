@@ -31,12 +31,12 @@ Every decision (import, approve, reject) is written to `AuditLog`.
 
 ### Endpoints
 
-| Method | Path | Role | Effect |
-| --- | --- | --- | --- |
-| `POST` | `/api/v1/operations/inventory/batches/:id/approve` | Super Admin | Rows `IMPORTED -> AVAILABLE` |
-| `POST` | `/api/v1/operations/inventory/batches/:id/reject` | Super Admin | Batch `REJECTED`; rows withheld |
-| `POST` | `/api/v1/admin/plans/:id/approve` | Super Admin | Plan `DRAFT -> ACTIVE` |
-| `POST` | `/api/v1/admin/plans/:id/reject` | Super Admin | Plan `DRAFT -> ARCHIVED` |
+| Method | Path                                               | Role        | Effect                          |
+| ------ | -------------------------------------------------- | ----------- | ------------------------------- |
+| `POST` | `/api/v1/operations/inventory/batches/:id/approve` | Super Admin | Rows `IMPORTED -> AVAILABLE`    |
+| `POST` | `/api/v1/operations/inventory/batches/:id/reject`  | Super Admin | Batch `REJECTED`; rows withheld |
+| `POST` | `/api/v1/admin/plans/:id/approve`                  | Super Admin | Plan `DRAFT -> ACTIVE`          |
+| `POST` | `/api/v1/admin/plans/:id/reject`                   | Super Admin | Plan `DRAFT -> ARCHIVED`        |
 
 The inventory overview now reports `counts.pending` (rows still in `IMPORTED`)
 and each batch's `status`. The ops portal Inventory page lists pending batches
@@ -108,7 +108,7 @@ Correlate across components with the existing `correlationId` added by
 `GET /health/live` always returns `{status:"ok"}` (process is up).
 
 `GET /health/ready` now actually checks the backing stores instead of only
-reporting whether Redis is *configured*:
+reporting whether Redis is _configured_:
 
 - DB: `SELECT 1` (when persistence is enabled) — `up` / `down`.
 - Redis: a short-lived `ioredis` `PING` when `REDIS_URL` is set — `up` /

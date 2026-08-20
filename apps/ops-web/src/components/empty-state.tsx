@@ -36,7 +36,9 @@ export function EmptyState({
       <div className="space-y-1">
         <p className="text-sm font-medium">{loading ? "Loading…" : title}</p>
         {description && !loading && (
-          <p className="max-w-sm text-sm text-muted-foreground">{description}</p>
+          <p className="max-w-sm text-sm text-muted-foreground">
+            {description}
+          </p>
         )}
       </div>
       {children}

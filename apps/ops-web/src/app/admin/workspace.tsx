@@ -28,8 +28,20 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/spinner";
@@ -121,7 +133,8 @@ const fileToTabularContent = async (file: File): Promise<string> => {
     const buffer = await file.arrayBuffer();
     let binary = "";
     const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    for (let i = 0; i < bytes.length; i++)
+      binary += String.fromCharCode(bytes[i]!);
     return btoa(binary);
   }
   return file.text();
@@ -152,7 +165,9 @@ export default function AdminWorkspace() {
   const [userStatusFilter, setUserStatusFilter] = useState("ALL");
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteType, setInviteType] = useState<"OPERATIONS" | "SUPER_ADMIN">("OPERATIONS");
+  const [inviteType, setInviteType] = useState<"OPERATIONS" | "SUPER_ADMIN">(
+    "OPERATIONS",
+  );
   const [partners, setPartners] = useState<Partner[]>([]);
   const [partnerCode, setPartnerCode] = useState("");
   const [partnerName, setPartnerName] = useState("");
@@ -161,7 +176,9 @@ export default function AdminWorkspace() {
     apiKey: string;
   } | null>(null);
   const [partnerBalance, setPartnerBalance] = useState("");
-  const [partnerType, setPartnerType] = useState<"API" | "CHECKOUT_LINK">("API");
+  const [partnerType, setPartnerType] = useState<"API" | "CHECKOUT_LINK">(
+    "API",
+  );
   const [hostedLinkFor, setHostedLinkFor] = useState<Partner | null>(null);
   const [hostedLinkPlanId, setHostedLinkPlanId] = useState("");
   const [hostedLinkMobile, setHostedLinkMobile] = useState("");
@@ -201,7 +218,7 @@ export default function AdminWorkspace() {
   const load = () =>
     Promise.all([
       request<Integration[]>("/admin/integrations"),
-      request<{items:User[]}>("/admin/users?limit=200"),
+      request<{ items: User[] }>("/admin/users?limit=200"),
       request<Invitation[]>("/admin/staff-invitations"),
       request<Partner[]>("/admin/partners"),
     ])
@@ -218,13 +235,20 @@ export default function AdminWorkspace() {
   const loadPlans = async (page = planPage, query = planQuery) => {
     setPlanLoading(true);
     try {
-      const params = new URLSearchParams({ limit: String(planPageSize), offset: String((page - 1) * planPageSize) });
+      const params = new URLSearchParams({
+        limit: String(planPageSize),
+        offset: String((page - 1) * planPageSize),
+      });
       if (query.trim()) params.set("q", query.trim());
-      const value = await request<{ items: Plan[]; total: number }>(`/admin/plans/page?${params}`);
+      const value = await request<{ items: Plan[]; total: number }>(
+        `/admin/plans/page?${params}`,
+      );
       setPlans(value.items);
       setPlanTotal(value.total);
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Plans could not be loaded");
+      toast.error(
+        cause instanceof Error ? cause.message : "Plans could not be loaded",
+      );
     } finally {
       setPlanLoading(false);
     }
@@ -234,9 +258,18 @@ export default function AdminWorkspace() {
     return () => clearTimeout(timer);
   }, [planPage, planQuery]);
   useEffect(() => {
-    const timer=setTimeout(()=>{const params=new URLSearchParams({limit:"200"});if(userQuery.trim())params.set("q",userQuery.trim());if(userTypeFilter!=="ALL")params.set("accountType",userTypeFilter);if(userStatusFilter!=="ALL")params.set("status",userStatusFilter);void authFetch(`${API}/admin/users?${params}`,{headers}).then(r=>r.json()).then(v=>setUsers(v.data?.items??[])).catch(()=>undefined)},300);
-    return()=>clearTimeout(timer);
-  },[authFetch,userQuery,userTypeFilter,userStatusFilter]);
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams({ limit: "200" });
+      if (userQuery.trim()) params.set("q", userQuery.trim());
+      if (userTypeFilter !== "ALL") params.set("accountType", userTypeFilter);
+      if (userStatusFilter !== "ALL") params.set("status", userStatusFilter);
+      void authFetch(`${API}/admin/users?${params}`, { headers })
+        .then((r) => r.json())
+        .then((v) => setUsers(v.data?.items ?? []))
+        .catch(() => undefined);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [authFetch, userQuery, userTypeFilter, userStatusFilter]);
   const savePlan = async (plan: Plan) => {
     setBusy(plan.id);
     try {
@@ -248,7 +281,9 @@ export default function AdminWorkspace() {
           status: plan.status,
         }),
       });
-      setPlans((v) => v.map((item) => (item.id === updated.id ? updated : item)));
+      setPlans((v) =>
+        v.map((item) => (item.id === updated.id ? updated : item)),
+      );
       toast.success(`${updated.name} saved`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
@@ -263,10 +298,14 @@ export default function AdminWorkspace() {
         `/admin/plans/${plan.id}/${approve ? "approve" : "reject"}`,
         {
           method: "POST",
-          body: JSON.stringify({ reason: approve ? undefined : "Rejected by Super Admin" }),
+          body: JSON.stringify({
+            reason: approve ? undefined : "Rejected by Super Admin",
+          }),
         },
       );
-      setPlans((v) => v.map((item) => (item.id === updated.id ? updated : item)));
+      setPlans((v) =>
+        v.map((item) => (item.id === updated.id ? updated : item)),
+      );
       toast.success(
         approve
           ? `${updated.name} approved and now visible to customers`
@@ -298,7 +337,8 @@ export default function AdminWorkspace() {
       toast.success(
         `Imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} row(s)`,
       );
-      if (result.errors?.length) toast.error(result.errors.slice(0, 5).join(" · "));
+      if (result.errors?.length)
+        toast.error(result.errors.slice(0, 5).join(" · "));
       setPlanCsvFile(null);
       await loadPlans(1, "");
       setPlanPage(1);
@@ -312,11 +352,15 @@ export default function AdminWorkspace() {
   const downloadCatalog = async () => {
     setCatalogBusy(true);
     try {
-      const result = await request<{ fileName: string; csv: string; count: number; skipped: number }>(
-        "/admin/integrations/transatel/catalog-export",
-        { method: "POST" },
-      );
-      const blob = new Blob(["\uFEFF" + result.csv], { type: "text/csv;charset=utf-8" });
+      const result = await request<{
+        fileName: string;
+        csv: string;
+        count: number;
+        skipped: number;
+      }>("/admin/integrations/transatel/catalog-export", { method: "POST" });
+      const blob = new Blob(["\uFEFF" + result.csv], {
+        type: "text/csv;charset=utf-8",
+      });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -337,9 +381,12 @@ export default function AdminWorkspace() {
   const test = async (item: Integration) => {
     setBusy(item.id);
     try {
-      const result = await request<{ message: string }>(`/admin/integrations/${item.id}/test`, {
-        method: "POST",
-      });
+      const result = await request<{ message: string }>(
+        `/admin/integrations/${item.id}/test`,
+        {
+          method: "POST",
+        },
+      );
       toast.success(result.message);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Test failed");
@@ -350,11 +397,14 @@ export default function AdminWorkspace() {
   const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
     setBusy(`transatel:${action}`);
     try {
-      await request(
-        `/admin/integrations/transatel/${action}`,
-        { method: "POST" },
+      await request(`/admin/integrations/transatel/${action}`, {
+        method: "POST",
+      });
+      toast.success(
+        action === "sync-catalog"
+          ? "Plans synced with the network provider"
+          : "Automatic notifications set up",
       );
-      toast.success(action === "sync-catalog" ? "Plans synced with the network provider" : "Automatic notifications set up");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
     } finally {
@@ -396,7 +446,9 @@ export default function AdminWorkspace() {
         method: "PATCH",
         body: JSON.stringify({ status: user.status }),
       });
-      setUsers((v) => v.map((item) => (item.id === updated.id ? updated : item)));
+      setUsers((v) =>
+        v.map((item) => (item.id === updated.id ? updated : item)),
+      );
       toast.success(`Account updated for ${user.email}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Account update failed");
@@ -425,12 +477,17 @@ export default function AdminWorkspace() {
       await load();
       toast.success("Partner created in pending state");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Partner creation failed");
+      toast.error(
+        error instanceof Error ? error.message : "Partner creation failed",
+      );
     } finally {
       setBusy("");
     }
   };
-  const changePartnerStatus = async (partner: Partner, status: Partner["status"]) => {
+  const changePartnerStatus = async (
+    partner: Partner,
+    status: Partner["status"],
+  ) => {
     if (["SUSPENDED", "DISABLED"].includes(status)) {
       const ok = window.confirm(
         status === "SUSPENDED"
@@ -448,7 +505,9 @@ export default function AdminWorkspace() {
       await load();
       toast.success(`${partner.name} is now ${status.toLowerCase()}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Partner update failed");
+      toast.error(
+        error instanceof Error ? error.message : "Partner update failed",
+      );
     } finally {
       setBusy("");
     }
@@ -456,25 +515,28 @@ export default function AdminWorkspace() {
   const issuePartnerKey = async (partner: Partner) => {
     setBusy(`key-${partner.id}`);
     try {
-      const result = await request<{ apiKey: string }>(`/admin/partners/${partner.id}/credentials`, {
-        method: "POST",
-        body: JSON.stringify({
-          name: `Key ${partner.credentials.length + 1}`,
-          scopes:
-            partner.integrationType === "CHECKOUT_LINK"
-              ? ["catalog:read", "checkout:write", "orders:read"]
-              : [
-                  "catalog:read",
-                  "checkout:write",
-                  "orders:read",
-                  "orders:write",
-                  "documents:write",
-                  "refunds:write",
-                  "usage:read",
-                  "esims:read",
-                ],
-        }),
-      });
+      const result = await request<{ apiKey: string }>(
+        `/admin/partners/${partner.id}/credentials`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: `Key ${partner.credentials.length + 1}`,
+            scopes:
+              partner.integrationType === "CHECKOUT_LINK"
+                ? ["catalog:read", "checkout:write", "orders:read"]
+                : [
+                    "catalog:read",
+                    "checkout:write",
+                    "orders:read",
+                    "orders:write",
+                    "documents:write",
+                    "refunds:write",
+                    "usage:read",
+                    "esims:read",
+                  ],
+          }),
+        },
+      );
       setIssuedPartnerKey({ partnerName: partner.name, apiKey: result.apiKey });
       let copied = false;
       try {
@@ -490,21 +552,30 @@ export default function AdminWorkspace() {
           : "New API key issued. Copy the visible value before dismissing it.",
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Credential creation failed");
+      toast.error(
+        error instanceof Error ? error.message : "Credential creation failed",
+      );
     } finally {
       setBusy("");
     }
   };
   const revokePartnerKey = async (partner: Partner, credentialId: string) => {
-    const ok = window.confirm(`Revoke this access key for ${partner.name}? This cannot be undone and the partner will lose access immediately.`);
+    const ok = window.confirm(
+      `Revoke this access key for ${partner.name}? This cannot be undone and the partner will lose access immediately.`,
+    );
     if (!ok) return;
     setBusy(`revoke-${credentialId}`);
     try {
-      await request(`/admin/partners/${partner.id}/credentials/${credentialId}`, { method: "DELETE" });
+      await request(
+        `/admin/partners/${partner.id}/credentials/${credentialId}`,
+        { method: "DELETE" },
+      );
       await load();
       toast.success(`Access key revoked for ${partner.name}.`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Credential revocation failed");
+      toast.error(
+        error instanceof Error ? error.message : "Credential revocation failed",
+      );
     } finally {
       setBusy("");
     }
@@ -516,28 +587,37 @@ export default function AdminWorkspace() {
     }
     setHostedLinkBusy(true);
     try {
-      const result = await request<{ checkoutUrl: string; orderType?: string; topUp?: { mobile?: string; status?: string } }>(
-        `/admin/partners/${hostedLinkFor.id}/hosted-checkout-sessions`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            planId: hostedLinkPlanId,
-            externalOrderId: `vc-portal-${Date.now()}`,
-            externalCustomerId: `portal-customer-${Date.now()}`,
-            ...(hostedLinkMobile.trim() ? { topUpMobile: hostedLinkMobile.trim() } : {}),
-          }),
-        },
-      );
+      const result = await request<{
+        checkoutUrl: string;
+        orderType?: string;
+        topUp?: { mobile?: string; status?: string };
+      }>(`/admin/partners/${hostedLinkFor.id}/hosted-checkout-sessions`, {
+        method: "POST",
+        body: JSON.stringify({
+          planId: hostedLinkPlanId,
+          externalOrderId: `vc-portal-${Date.now()}`,
+          externalCustomerId: `portal-customer-${Date.now()}`,
+          ...(hostedLinkMobile.trim()
+            ? { topUpMobile: hostedLinkMobile.trim() }
+            : {}),
+        }),
+      });
       setHostedLinkResult({
         partnerName: hostedLinkFor.name,
         checkoutUrl: result.checkoutUrl,
         ...(result.orderType ? { orderType: result.orderType } : {}),
         ...(result.topUp?.mobile ? { topUpMobile: result.topUp.mobile } : {}),
-        ...(result.topUp?.status === "UNAVAILABLE" ? { topUpStatus: "UNAVAILABLE" } : result.topUp?.status === "BOUND" ? { topUpStatus: "BOUND" } : {}),
+        ...(result.topUp?.status === "UNAVAILABLE"
+          ? { topUpStatus: "UNAVAILABLE" }
+          : result.topUp?.status === "BOUND"
+            ? { topUpStatus: "BOUND" }
+            : {}),
       });
       toast.success("Checkout link generated");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Link generation failed");
+      toast.error(
+        error instanceof Error ? error.message : "Link generation failed",
+      );
     } finally {
       setHostedLinkBusy(false);
     }
@@ -575,7 +655,12 @@ export default function AdminWorkspace() {
       if (!sameCountry) {
         setLookupState({
           status: "error",
-          subscriber: { countryCode: sub.countryCode, countryName: sub.countryName, currentPlan: sub.currentPlan?.name, hasActiveEsim: sub.hasActiveEsim },
+          subscriber: {
+            countryCode: sub.countryCode,
+            countryName: sub.countryName,
+            currentPlan: sub.currentPlan?.name,
+            hasActiveEsim: sub.hasActiveEsim,
+          },
           planCountryCode: plan?.countryCode,
           message: `Subscriber's existing plan is in ${sub.countryName} (${sub.countryCode}), which does not match the selected plan (${plan?.countryCode ?? "?"}). A top-up requires the same country — this will be a new purchase.`,
         });
@@ -583,11 +668,17 @@ export default function AdminWorkspace() {
       }
       setLookupState({
         status: "ok",
-        subscriber: { countryCode: sub.countryCode, countryName: sub.countryName, currentPlan: sub.currentPlan?.name, hasActiveEsim: sub.hasActiveEsim },
+        subscriber: {
+          countryCode: sub.countryCode,
+          countryName: sub.countryName,
+          currentPlan: sub.currentPlan?.name,
+          hasActiveEsim: sub.hasActiveEsim,
+        },
         planCountryCode: plan?.countryCode,
-        message: sub.hasActiveEsim === false
-          ? "Subscriber found, but no active eSIM was detected. Confirm this is the correct number."
-          : undefined,
+        message:
+          sub.hasActiveEsim === false
+            ? "Subscriber found, but no active eSIM was detected. Confirm this is the correct number."
+            : undefined,
       });
     } catch (error) {
       setLookupState({
@@ -607,7 +698,12 @@ export default function AdminWorkspace() {
       return;
     }
     const action = adjustType === "credit" ? "add" : "deduct";
-    if (!window.confirm(`${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} to/from ${adjustFor.name}'s balance? This changes their available credit.`)) return;
+    if (
+      !window.confirm(
+        `${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} to/from ${adjustFor.name}'s balance? This changes their available credit.`,
+      )
+    )
+      return;
     setAdjustBusy(true);
     try {
       const amountPaisa =
@@ -621,7 +717,9 @@ export default function AdminWorkspace() {
           reason: `Balance ${adjustType} via portal`,
         }),
       });
-      toast.success(`Balance ${adjustType === "credit" ? "credited" : "debited"}`);
+      toast.success(
+        `Balance ${adjustType === "credit" ? "credited" : "debited"}`,
+      );
       setAdjustFor(null);
       setAdjustAmountNpr("");
       setAdjustReference("");
@@ -643,10 +741,16 @@ export default function AdminWorkspace() {
         "/admin/integrations/transatel/eligibility",
         {
           method: "POST",
-          body: JSON.stringify({ planId: eligibilityPlanId, msisdn: eligibilityMsisdn }),
+          body: JSON.stringify({
+            planId: eligibilityPlanId,
+            msisdn: eligibilityMsisdn,
+          }),
         },
       );
-      toast.success(JSON.stringify(result, null, 2).slice(0, 400) || "Eligibility check complete");
+      toast.success(
+        JSON.stringify(result, null, 2).slice(0, 400) ||
+          "Eligibility check complete",
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Eligibility check failed");
     } finally {
@@ -658,7 +762,9 @@ export default function AdminWorkspace() {
     try {
       setLogs(await request<IntegrationLog[]>("/operations/integration-logs"));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not load integration logs");
+      toast.error(
+        e instanceof Error ? e.message : "Could not load integration logs",
+      );
     } finally {
       setLogsBusy(false);
     }
@@ -684,7 +790,15 @@ export default function AdminWorkspace() {
       />
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="mb-6 flex h-10 w-full justify-start overflow-x-auto rounded-lg bg-transparent p-0">
-          {["Plans", "Integrations", "Document Rules", "Inventory Settings", "Users", "Partners", "System Config"].map((item) => (
+          {[
+            "Plans",
+            "Integrations",
+            "Document Rules",
+            "Inventory Settings",
+            "Users",
+            "Partners",
+            "System Config",
+          ].map((item) => (
             <TabsTrigger
               key={item}
               value={item}
@@ -698,7 +812,7 @@ export default function AdminWorkspace() {
           ))}
         </TabsList>
 
-        {(planTabVisible) && (
+        {planTabVisible && (
           <TabsContent value={planTabVisible ? tab : ""} className="mt-0">
             <Panel
               title="Plan catalogue"
@@ -710,20 +824,30 @@ export default function AdminWorkspace() {
                     onClick={() => void downloadCatalog()}
                     disabled={catalogBusy}
                   >
-                    {catalogBusy ? <Spinner /> : <Download className="size-4" />}
+                    {catalogBusy ? (
+                      <Spinner />
+                    ) : (
+                      <Download className="size-4" />
+                    )}
                     Download catalog
                   </Button>
                   <Input
                     type="file"
                     accept=".csv,.xlsx,.xls,text/csv"
-                    onChange={(e) => setPlanCsvFile(e.target.files?.[0] ?? null)}
+                    onChange={(e) =>
+                      setPlanCsvFile(e.target.files?.[0] ?? null)
+                    }
                     className="h-9 w-64 text-xs"
                   />
                   <Button
                     onClick={() => void importPlanCsv()}
                     disabled={planCsvBusy || !planCsvFile}
                   >
-                    {planCsvBusy ? <Spinner className="text-primary-foreground" /> : <Upload className="size-4" />}
+                    {planCsvBusy ? (
+                      <Spinner className="text-primary-foreground" />
+                    ) : (
+                      <Upload className="size-4" />
+                    )}
                     Upload CSV
                   </Button>
                 </div>
@@ -733,12 +857,17 @@ export default function AdminWorkspace() {
               <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <SearchInput
                   value={planQuery}
-                  onChange={(value) => { setPlanQuery(value); setPlanPage(1); }}
+                  onChange={(value) => {
+                    setPlanQuery(value);
+                    setPlanPage(1);
+                  }}
                   placeholder="Search country, plan, or provider ID"
                   className="w-full sm:max-w-sm"
                 />
                 <p className="text-xs text-muted-foreground tabular-nums">
-                  {planLoading ? "Loading plans..." : `${planTotal.toLocaleString()} plans`}
+                  {planLoading
+                    ? "Loading plans..."
+                    : `${planTotal.toLocaleString()} plans`}
                 </p>
               </div>
               <Table>
@@ -755,7 +884,15 @@ export default function AdminWorkspace() {
                 </TableHeader>
                 <TableBody>
                   {planLoading && plans.length === 0 ? (
-                    <TableRow><TableCell colSpan={7}><EmptyState loading><span className="text-sm text-muted-foreground">Loading plan prices...</span></EmptyState></TableCell></TableRow>
+                    <TableRow>
+                      <TableCell colSpan={7}>
+                        <EmptyState loading>
+                          <span className="text-sm text-muted-foreground">
+                            Loading plan prices...
+                          </span>
+                        </EmptyState>
+                      </TableCell>
+                    </TableRow>
                   ) : null}
                   {plans.map((plan) => (
                     <TableRow key={plan.id}>
@@ -763,12 +900,16 @@ export default function AdminWorkspace() {
                         <p className="font-medium">
                           {plan.countryCode} · {plan.name}
                         </p>
-                        <p className="text-xs text-muted-foreground">{plan.countryName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {plan.countryName}
+                        </p>
                       </TableCell>
                       <TableCell>
                         {plan.dataAllowance} · {plan.validityDays} days
                       </TableCell>
-                      <TableCell className="tabular-nums">NPR {plan.costPriceNpr.toLocaleString()}</TableCell>
+                      <TableCell className="tabular-nums">
+                        NPR {plan.costPriceNpr.toLocaleString()}
+                      </TableCell>
                       <TableCell>
                         <Input
                           type="number"
@@ -778,7 +919,10 @@ export default function AdminWorkspace() {
                             setPlans((v) =>
                               v.map((item) =>
                                 item.id === plan.id
-                                  ? { ...item, sellingPriceNpr: Number(e.target.value) }
+                                  ? {
+                                      ...item,
+                                      sellingPriceNpr: Number(e.target.value),
+                                    }
                                   : item,
                               ),
                             )
@@ -815,7 +959,9 @@ export default function AdminWorkspace() {
                           onCheckedChange={() =>
                             setPlans((v) =>
                               v.map((item) =>
-                                item.id === plan.id ? { ...item, popular: !item.popular } : item,
+                                item.id === plan.id
+                                  ? { ...item, popular: !item.popular }
+                                  : item,
                               ),
                             )
                           }
@@ -831,7 +977,11 @@ export default function AdminWorkspace() {
                                 disabled={busy === `${plan.id}:approve`}
                                 onClick={() => void reviewPlan(plan, true)}
                               >
-                                {busy === `${plan.id}:approve` ? <Spinner className="text-success-foreground" /> : <CheckCircle2 className="size-4" />}
+                                {busy === `${plan.id}:approve` ? (
+                                  <Spinner className="text-success-foreground" />
+                                ) : (
+                                  <CheckCircle2 className="size-4" />
+                                )}
                                 Approve
                               </Button>
                               <Button
@@ -852,7 +1002,11 @@ export default function AdminWorkspace() {
                             disabled={busy === plan.id}
                             onClick={() => savePlan(plan)}
                           >
-                            {busy === plan.id ? <Spinner /> : <Save className="size-4" />}
+                            {busy === plan.id ? (
+                              <Spinner />
+                            ) : (
+                              <Save className="size-4" />
+                            )}
                             Save
                           </Button>
                         </div>
@@ -861,7 +1015,12 @@ export default function AdminWorkspace() {
                   ))}
                 </TableBody>
               </Table>
-              <PaginationBar page={planPage} pageSize={planPageSize} total={planTotal} onPageChange={setPlanPage} />
+              <PaginationBar
+                page={planPage}
+                pageSize={planPageSize}
+                total={planTotal}
+                onPageChange={setPlanPage}
+              />
             </Panel>
           </TabsContent>
         )}
@@ -870,7 +1029,10 @@ export default function AdminWorkspace() {
           <TabsContent value="Integrations" className="mt-0 space-y-6">
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {integrations.map((item) => (
-                <div key={item.id} className="rounded-xl border bg-card p-5 shadow-card">
+                <div
+                  key={item.id}
+                  className="rounded-xl border bg-card p-5 shadow-card"
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <span className="flex size-10 items-center justify-center rounded-lg bg-success-soft text-success-foreground">
@@ -883,14 +1045,21 @@ export default function AdminWorkspace() {
                         </p>
                       </div>
                     </div>
-                    <StatusBadge label={item.status} tone={item.status === "HEALTHY" ? "success" : "warning"} />
+                    <StatusBadge
+                      label={item.status}
+                      tone={item.status === "HEALTHY" ? "success" : "warning"}
+                    />
                   </div>
                   <Separator className="my-4" />
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">
-                      {item.enabled ? "Configured and enabled" : "Needs configuration"}
+                      {item.enabled
+                        ? "Configured and enabled"
+                        : "Needs configuration"}
                     </span>
-                    <span className="text-xs text-muted-foreground">Credentials are kept secure and never shown here.</span>
+                    <span className="text-xs text-muted-foreground">
+                      Credentials are kept secure and never shown here.
+                    </span>
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
                     Last checked: {new Date(item.checkedAt).toLocaleString()}
@@ -908,8 +1077,17 @@ export default function AdminWorkspace() {
                       <Pencil className="size-4" />
                       Credential guidance
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => test(item)} disabled={busy === item.id}>
-                      {busy === item.id ? <Spinner /> : <FlaskConical className="size-4" />}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => test(item)}
+                      disabled={busy === item.id}
+                    >
+                      {busy === item.id ? (
+                        <Spinner />
+                      ) : (
+                        <FlaskConical className="size-4" />
+                      )}
                       Test
                     </Button>
                     {item.id === "transatel" && (
@@ -920,7 +1098,11 @@ export default function AdminWorkspace() {
                           onClick={() => transatelAction("sync-catalog")}
                           disabled={busy === "transatel:sync-catalog"}
                         >
-                          {busy === "transatel:sync-catalog" ? <Spinner /> : <RefreshCcw className="size-4" />}
+                          {busy === "transatel:sync-catalog" ? (
+                            <Spinner />
+                          ) : (
+                            <RefreshCcw className="size-4" />
+                          )}
                           Sync catalog
                         </Button>
                         <Button
@@ -929,7 +1111,11 @@ export default function AdminWorkspace() {
                           onClick={() => transatelAction("ensure-webhook")}
                           disabled={busy === "transatel:ensure-webhook"}
                         >
-                          {busy === "transatel:ensure-webhook" ? <Spinner /> : <Pencil className="size-4" />}
+                          {busy === "transatel:ensure-webhook" ? (
+                            <Spinner />
+                          ) : (
+                            <Pencil className="size-4" />
+                          )}
                           Register webhook
                         </Button>
                       </>
@@ -940,11 +1126,15 @@ export default function AdminWorkspace() {
                       <div>
                         <p className="text-sm font-medium">Eligibility check</p>
                         <p className="text-xs text-muted-foreground">
-                          Confirm a plan works for a subscriber's mobile number before approval.
+                          Confirm a plan works for a subscriber's mobile number
+                          before approval.
                         </p>
                       </div>
                       <div className="flex flex-col gap-2 sm:flex-row">
-                        <Select value={eligibilityPlanId} onValueChange={setEligibilityPlanId}>
+                        <Select
+                          value={eligibilityPlanId}
+                          onValueChange={setEligibilityPlanId}
+                        >
                           <SelectTrigger className="w-full sm:w-auto">
                             <SelectValue placeholder="Select plan…" />
                           </SelectTrigger>
@@ -959,7 +1149,9 @@ export default function AdminWorkspace() {
                         <Input
                           placeholder="Mobile number, e.g. 97798…"
                           value={eligibilityMsisdn}
-                          onChange={(event) => setEligibilityMsisdn(event.target.value)}
+                          onChange={(event) =>
+                            setEligibilityMsisdn(event.target.value)
+                          }
                           className="w-full sm:w-auto sm:flex-1"
                         />
                         <Button
@@ -967,7 +1159,11 @@ export default function AdminWorkspace() {
                           disabled={busy === "transatel:eligibility"}
                           onClick={() => void checkEligibility()}
                         >
-                          {busy === "transatel:eligibility" ? <Spinner /> : <Settings2 className="size-4" />}
+                          {busy === "transatel:eligibility" ? (
+                            <Spinner />
+                          ) : (
+                            <Settings2 className="size-4" />
+                          )}
                           Check
                         </Button>
                       </div>
@@ -981,7 +1177,12 @@ export default function AdminWorkspace() {
               title="Integration call log"
               description="Outbound integration requests and outcomes (most recent 200)."
               actions={
-                <Button variant="outline" size="sm" onClick={() => void loadLogs()} disabled={logsBusy}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void loadLogs()}
+                  disabled={logsBusy}
+                >
                   {logsBusy ? <Spinner /> : <History className="size-4" />}
                   Refresh
                 </Button>
@@ -1008,14 +1209,23 @@ export default function AdminWorkspace() {
                         <TableCell className="text-muted-foreground">
                           {new Date(log.createdAt).toLocaleString()}
                         </TableCell>
-                        <TableCell className="font-medium">{log.operation}</TableCell>
+                        <TableCell className="font-medium">
+                          {log.operation}
+                        </TableCell>
                         <TableCell>
                           <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
                             {log.method} {log.endpoint}
                           </code>
                         </TableCell>
                         <TableCell>
-                          <StatusBadge label={String(log.status)} tone={log.status >= 200 && log.status < 400 ? "success" : "warning"} />
+                          <StatusBadge
+                            label={String(log.status)}
+                            tone={
+                              log.status >= 200 && log.status < 400
+                                ? "success"
+                                : "warning"
+                            }
+                          />
                         </TableCell>
                         <TableCell className="tabular-nums">
                           {log.durationMs != null ? `${log.durationMs}ms` : "—"}
@@ -1045,14 +1255,46 @@ export default function AdminWorkspace() {
               noPadding
             >
               <div className="flex flex-wrap gap-2 border-b p-4">
-                <Input className="w-full sm:w-72" placeholder="Search email, ID or customer code…" value={userQuery} onChange={(event)=>setUserQuery(event.target.value)} />
-                <Select value={userTypeFilter} onValueChange={setUserTypeFilter}><SelectTrigger className="w-44"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="ALL">All account types</SelectItem><SelectItem value="CUSTOMER">CUSTOMER</SelectItem><SelectItem value="OPERATIONS">OPERATIONS</SelectItem><SelectItem value="SUPER_ADMIN">SUPER ADMIN</SelectItem></SelectContent></Select>
-                <Select value={userStatusFilter} onValueChange={setUserStatusFilter}><SelectTrigger className="w-40"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="ALL">All statuses</SelectItem><SelectItem value="ACTIVE">ACTIVE</SelectItem><SelectItem value="DISABLED">DISABLED</SelectItem></SelectContent></Select>
+                <Input
+                  className="w-full sm:w-72"
+                  placeholder="Search email, ID or customer code…"
+                  value={userQuery}
+                  onChange={(event) => setUserQuery(event.target.value)}
+                />
+                <Select
+                  value={userTypeFilter}
+                  onValueChange={setUserTypeFilter}
+                >
+                  <SelectTrigger className="w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All account types</SelectItem>
+                    <SelectItem value="CUSTOMER">CUSTOMER</SelectItem>
+                    <SelectItem value="OPERATIONS">OPERATIONS</SelectItem>
+                    <SelectItem value="SUPER_ADMIN">SUPER ADMIN</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={userStatusFilter}
+                  onValueChange={setUserStatusFilter}
+                >
+                  <SelectTrigger className="w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All statuses</SelectItem>
+                    <SelectItem value="ACTIVE">ACTIVE</SelectItem>
+                    <SelectItem value="DISABLED">DISABLED</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="flex flex-col gap-3 border-b p-6 sm:flex-row sm:items-end">
                 <div className="grid w-full gap-3 sm:grid-cols-[1fr_auto_auto]">
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Staff email</Label>
+                    <Label className="text-xs text-muted-foreground">
+                      Staff email
+                    </Label>
                     <Input
                       type="email"
                       placeholder="staff@company.com"
@@ -1061,8 +1303,15 @@ export default function AdminWorkspace() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Role</Label>
-                    <Select value={inviteType} onValueChange={(value) => setInviteType(value as typeof inviteType)}>
+                    <Label className="text-xs text-muted-foreground">
+                      Role
+                    </Label>
+                    <Select
+                      value={inviteType}
+                      onValueChange={(value) =>
+                        setInviteType(value as typeof inviteType)
+                      }
+                    >
                       <SelectTrigger className="w-full sm:w-40">
                         <SelectValue />
                       </SelectTrigger>
@@ -1077,12 +1326,17 @@ export default function AdminWorkspace() {
                     disabled={!inviteEmail || busy === "invite"}
                     onClick={() => void inviteStaff()}
                   >
-                    {busy === "invite" ? <Spinner className="text-primary-foreground" /> : <ShieldCheck className="size-4" />}
+                    {busy === "invite" ? (
+                      <Spinner className="text-primary-foreground" />
+                    ) : (
+                      <ShieldCheck className="size-4" />
+                    )}
                     Invite staff
                   </Button>
                 </div>
               </div>
-              {invitations.filter((item) => item.status === "PENDING").length > 0 && (
+              {invitations.filter((item) => item.status === "PENDING").length >
+                0 && (
                 <div className="space-y-2 p-6">
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Pending invitations
@@ -1121,7 +1375,9 @@ export default function AdminWorkspace() {
                     <TableRow key={user.id}>
                       <TableCell>
                         <p className="font-medium">{user.email}</p>
-                        <p className="text-xs text-muted-foreground">{user.clerkId}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {user.clerkId}
+                        </p>
                       </TableCell>
                       <TableCell>
                         <Select
@@ -1129,7 +1385,9 @@ export default function AdminWorkspace() {
                           onValueChange={(value) =>
                             setUsers((values) =>
                               values.map((item) =>
-                                item.id === user.id ? { ...item, status: value as User["status"] } : item,
+                                item.id === user.id
+                                  ? { ...item, status: value as User["status"] }
+                                  : item,
                               ),
                             )
                           }
@@ -1151,7 +1409,12 @@ export default function AdminWorkspace() {
                           onValueChange={(value) =>
                             setUsers((values) =>
                               values.map((item) =>
-                                item.id === user.id ? { ...item, accountType: value as User["accountType"] } : item,
+                                item.id === user.id
+                                  ? {
+                                      ...item,
+                                      accountType: value as User["accountType"],
+                                    }
+                                  : item,
                               ),
                             )
                           }
@@ -1161,8 +1424,12 @@ export default function AdminWorkspace() {
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="CUSTOMER">CUSTOMER</SelectItem>
-                            <SelectItem value="OPERATIONS">OPERATIONS</SelectItem>
-                            <SelectItem value="SUPER_ADMIN">SUPER_ADMIN</SelectItem>
+                            <SelectItem value="OPERATIONS">
+                              OPERATIONS
+                            </SelectItem>
+                            <SelectItem value="SUPER_ADMIN">
+                              SUPER_ADMIN
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                       </TableCell>
@@ -1173,7 +1440,11 @@ export default function AdminWorkspace() {
                           disabled={busy === user.id}
                           onClick={() => void saveUser(user)}
                         >
-                          {busy === user.id ? <Spinner /> : <Save className="size-4" />}
+                          {busy === user.id ? (
+                            <Spinner />
+                          ) : (
+                            <Save className="size-4" />
+                          )}
                           Apply
                         </Button>
                       </TableCell>
@@ -1200,7 +1471,9 @@ export default function AdminWorkspace() {
               <div className="flex flex-col gap-3 border-b p-6 sm:flex-row sm:items-end">
                 <div className="grid w-full gap-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Partner code</Label>
+                    <Label className="text-xs text-muted-foreground">
+                      Partner code
+                    </Label>
                     <Input
                       placeholder="agency-code"
                       value={partnerCode}
@@ -1208,7 +1481,9 @@ export default function AdminWorkspace() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Legal/display name</Label>
+                    <Label className="text-xs text-muted-foreground">
+                      Legal/display name
+                    </Label>
                     <Input
                       placeholder="Agency name"
                       value={partnerName}
@@ -1216,36 +1491,52 @@ export default function AdminWorkspace() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Starting balance (NPR)</Label>
+                    <Label className="text-xs text-muted-foreground">
+                      Starting balance (NPR)
+                    </Label>
                     <Input
                       type="number"
                       min="0"
                       placeholder="0"
                       value={partnerBalance}
-                      onChange={(event) => setPartnerBalance(event.target.value)}
+                      onChange={(event) =>
+                        setPartnerBalance(event.target.value)
+                      }
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Partner type</Label>
+                    <Label className="text-xs text-muted-foreground">
+                      Partner type
+                    </Label>
                     <Select
                       value={partnerType}
-                      onValueChange={(value) => setPartnerType(value as "API" | "CHECKOUT_LINK")}
+                      onValueChange={(value) =>
+                        setPartnerType(value as "API" | "CHECKOUT_LINK")
+                      }
                     >
                       <SelectTrigger className="w-40">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="API">API</SelectItem>
-                        <SelectItem value="CHECKOUT_LINK">Checkout link</SelectItem>
+                        <SelectItem value="CHECKOUT_LINK">
+                          Checkout link
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <Button
                     className="self-end"
-                    disabled={!partnerCode || !partnerName || busy === "partner-create"}
+                    disabled={
+                      !partnerCode || !partnerName || busy === "partner-create"
+                    }
                     onClick={() => void createPartner()}
                   >
-                    {busy === "partner-create" ? <Spinner className="text-primary-foreground" /> : <Building2 className="size-4" />}
+                    {busy === "partner-create" ? (
+                      <Spinner className="text-primary-foreground" />
+                    ) : (
+                      <Building2 className="size-4" />
+                    )}
                     Create partner
                   </Button>
                 </div>
@@ -1269,14 +1560,21 @@ export default function AdminWorkspace() {
                           {partner.code} · {partner.rateLimitPerMinute}/min
                         </p>
                         <span className="mt-1 inline-block rounded bg-muted px-1.5 py-0.5 text-[11px] uppercase tracking-wide">
-                          {partner.integrationType === "CHECKOUT_LINK" ? "Checkout link" : "API"}
+                          {partner.integrationType === "CHECKOUT_LINK"
+                            ? "Checkout link"
+                            : "API"}
                         </span>
                       </TableCell>
                       <TableCell>
                         <p className="font-medium tabular-nums">
-                          NPR {((partner.account?.balancePaisa ?? 0) / 100).toLocaleString()}
+                          NPR{" "}
+                          {(
+                            (partner.account?.balancePaisa ?? 0) / 100
+                          ).toLocaleString()}
                         </p>
-                        <p className="text-xs text-muted-foreground">Prepaid available balance</p>
+                        <p className="text-xs text-muted-foreground">
+                          Prepaid available balance
+                        </p>
                       </TableCell>
                       <TableCell>
                         <StatusBadge label={partner.status} />
@@ -1284,19 +1582,31 @@ export default function AdminWorkspace() {
                       <TableCell>
                         <p>{partner._count.orders} orders</p>
                         <p className="text-xs text-muted-foreground">
-                          {partner.credentials.filter((key) => key.status === "ACTIVE").length} active credential(s)
+                          {
+                            partner.credentials.filter(
+                              (key) => key.status === "ACTIVE",
+                            ).length
+                          }{" "}
+                          active credential(s)
                         </p>
                       </TableCell>
                       <TableCell className="text-right">
                         <Button asChild variant="outline" size="sm">
-                          <Link href={`/admin/partners/${partner.id}`}>Open workspace</Link>
+                          <Link href={`/admin/partners/${partner.id}`}>
+                            Open workspace
+                          </Link>
                         </Button>
                       </TableCell>
                       <TableCell>
                         <Select
                           disabled={busy === partner.id}
                           value={partner.status}
-                          onValueChange={(value) => void changePartnerStatus(partner, value as Partner["status"])}
+                          onValueChange={(value) =>
+                            void changePartnerStatus(
+                              partner,
+                              value as Partner["status"],
+                            )
+                          }
                         >
                           <SelectTrigger className="w-32">
                             <SelectValue />
@@ -1318,7 +1628,11 @@ export default function AdminWorkspace() {
                               disabled={busy === `key-${partner.id}`}
                               onClick={() => void issuePartnerKey(partner)}
                             >
-                              {busy === `key-${partner.id}` ? <Spinner /> : <KeyRound className="size-4" />}
+                              {busy === `key-${partner.id}` ? (
+                                <Spinner />
+                              ) : (
+                                <KeyRound className="size-4" />
+                              )}
                               Issue key
                             </Button>
                           )}
@@ -1328,7 +1642,13 @@ export default function AdminWorkspace() {
                                 size="sm"
                                 variant="outline"
                                 disabled={busy === `link-${partner.id}`}
-                                onClick={() => { setHostedLinkPlanId(""); setHostedLinkMobile(""); setHostedLinkResult(null); setLookupState(null); setHostedLinkFor(partner); }}
+                                onClick={() => {
+                                  setHostedLinkPlanId("");
+                                  setHostedLinkMobile("");
+                                  setHostedLinkResult(null);
+                                  setLookupState(null);
+                                  setHostedLinkFor(partner);
+                                }}
                               >
                                 <Link2 className="size-4" />
                                 Checkout link
@@ -1338,7 +1658,12 @@ export default function AdminWorkspace() {
                               size="sm"
                               variant="outline"
                               disabled={busy === `adjust-${partner.id}`}
-                              onClick={() => { setAdjustType("credit"); setAdjustAmountNpr(""); setAdjustReference(""); setAdjustFor(partner); }}
+                              onClick={() => {
+                                setAdjustType("credit");
+                                setAdjustAmountNpr("");
+                                setAdjustReference("");
+                                setAdjustFor(partner);
+                              }}
                             >
                               <Wallet className="size-4" />
                               Adjust balance
@@ -1347,7 +1672,13 @@ export default function AdminWorkspace() {
                           {partner.integrationType === "API" && (
                             <>
                               <span className="text-xs text-muted-foreground">
-                                {partner.credentials.filter((creditKey) => creditKey.status === "ACTIVE").length} active
+                                {
+                                  partner.credentials.filter(
+                                    (creditKey) =>
+                                      creditKey.status === "ACTIVE",
+                                  ).length
+                                }{" "}
+                                active
                               </span>
                               {partner.credentials
                                 .filter((key) => key.status === "ACTIVE")
@@ -1356,7 +1687,9 @@ export default function AdminWorkspace() {
                                     key={key.id}
                                     className="text-xs text-destructive underline-offset-2 hover:underline disabled:opacity-50"
                                     disabled={busy === `revoke-${key.id}`}
-                                    onClick={() => void revokePartnerKey(partner, key.id)}
+                                    onClick={() =>
+                                      void revokePartnerKey(partner, key.id)
+                                    }
                                   >
                                     Revoke {key.keyPrefix}
                                   </button>
@@ -1369,19 +1702,31 @@ export default function AdminWorkspace() {
                   ))}
                 </TableBody>
               </Table>
-              <Dialog open={!!hostedLinkFor} onOpenChange={(open) => { if (!open) setHostedLinkFor(null); }}>
+              <Dialog
+                open={!!hostedLinkFor}
+                onOpenChange={(open) => {
+                  if (!open) setHostedLinkFor(null);
+                }}
+              >
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Generate checkout link</DialogTitle>
                     <DialogDescription>
-                      Create a hosted no-code checkout link for {hostedLinkFor?.name}. Share it with the traveler; no API required.
+                      Create a hosted no-code checkout link for{" "}
+                      {hostedLinkFor?.name}. Share it with the traveler; no API
+                      required.
                     </DialogDescription>
                   </DialogHeader>
                   {!hostedLinkResult ? (
                     <div className="space-y-4 pt-1">
                       <div className="space-y-1.5">
-                        <Label className="text-xs text-muted-foreground">Plan</Label>
-                        <Select value={hostedLinkPlanId} onValueChange={setHostedLinkPlanId}>
+                        <Label className="text-xs text-muted-foreground">
+                          Plan
+                        </Label>
+                        <Select
+                          value={hostedLinkPlanId}
+                          onValueChange={setHostedLinkPlanId}
+                        >
                           <SelectTrigger>
                             <SelectValue placeholder="Choose a plan" />
                           </SelectTrigger>
@@ -1390,7 +1735,8 @@ export default function AdminWorkspace() {
                               .filter((plan) => plan.status === "ACTIVE")
                               .map((plan) => (
                                 <SelectItem key={plan.id} value={plan.id}>
-                                  {plan.countryName} · {plan.name} · NPR {plan.sellingPriceNpr.toLocaleString()}
+                                  {plan.countryName} · {plan.name} · NPR{" "}
+                                  {plan.sellingPriceNpr.toLocaleString()}
                                 </SelectItem>
                               ))}
                           </SelectContent>
@@ -1411,7 +1757,8 @@ export default function AdminWorkspace() {
                         />
                         {lookupState && lookupState.status === "checking" && (
                           <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Spinner className="size-3" /> Checking for an existing eSIM…
+                            <Spinner className="size-3" /> Checking for an
+                            existing eSIM…
                           </p>
                         )}
                         {lookupState && lookupState.status === "ok" && (
@@ -1421,12 +1768,18 @@ export default function AdminWorkspace() {
                             </p>
                             {lookupState.subscriber?.countryName && (
                               <p className="text-muted-foreground">
-                                Existing eSIM: {lookupState.subscriber.countryName} ({lookupState.subscriber.countryCode})
-                                {lookupState.subscriber.currentPlan ? ` · ${lookupState.subscriber.currentPlan}` : ""}
+                                Existing eSIM:{" "}
+                                {lookupState.subscriber.countryName} (
+                                {lookupState.subscriber.countryCode})
+                                {lookupState.subscriber.currentPlan
+                                  ? ` · ${lookupState.subscriber.currentPlan}`
+                                  : ""}
                               </p>
                             )}
                             {lookupState.message && (
-                              <p className="text-amber-600">{lookupState.message}</p>
+                              <p className="text-amber-600">
+                                {lookupState.message}
+                              </p>
                             )}
                           </div>
                         )}
@@ -1437,41 +1790,65 @@ export default function AdminWorkspace() {
                             </p>
                             {lookupState.subscriber?.countryName && (
                               <p className="text-muted-foreground">
-                                Existing plan: {lookupState.subscriber.countryName} ({lookupState.subscriber.countryCode})
-                                {lookupState.subscriber.currentPlan ? ` · ${lookupState.subscriber.currentPlan}` : ""} — selected plan is ({lookupState.planCountryCode ?? "?"})
+                                Existing plan:{" "}
+                                {lookupState.subscriber.countryName} (
+                                {lookupState.subscriber.countryCode})
+                                {lookupState.subscriber.currentPlan
+                                  ? ` · ${lookupState.subscriber.currentPlan}`
+                                  : ""}{" "}
+                                — selected plan is (
+                                {lookupState.planCountryCode ?? "?"})
                               </p>
                             )}
                           </div>
                         )}
                       </div>
                       <div className="flex justify-end gap-2">
-                        <Button variant="outline" onClick={() => setHostedLinkFor(null)}>Cancel</Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => setHostedLinkFor(null)}
+                        >
+                          Cancel
+                        </Button>
                         <Button
                           disabled={!hostedLinkPlanId || hostedLinkBusy}
                           onClick={() => void generateCheckoutLink()}
                         >
-                          {hostedLinkBusy ? <Spinner className="size-4" /> : <Link2 className="size-4" />}
+                          {hostedLinkBusy ? (
+                            <Spinner className="size-4" />
+                          ) : (
+                            <Link2 className="size-4" />
+                          )}
                           Generate
                         </Button>
                       </div>
                     </div>
                   ) : (
                     <div className="space-y-3 pt-1">
-                      <p className="text-sm font-medium">Checkout link for {hostedLinkResult.partnerName}</p>
+                      <p className="text-sm font-medium">
+                        Checkout link for {hostedLinkResult.partnerName}
+                      </p>
                       {hostedLinkResult.orderType === "TOPUP" ? (
                         <p className="rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary">
-                          Top-up link — will attach to eSIM for {hostedLinkResult.topUpMobile}. The traveler only sees 2 steps.
+                          Top-up link — will attach to eSIM for{" "}
+                          {hostedLinkResult.topUpMobile}. The traveler only sees
+                          2 steps.
                         </p>
                       ) : (
                         <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-                          New-purchase link — the traveler will complete all checkout steps.
-                          {hostedLinkResult.topUpMobile ? " Note: mobile did not match an existing eSIM, so this is a new purchase." : ""}
+                          New-purchase link — the traveler will complete all
+                          checkout steps.
+                          {hostedLinkResult.topUpMobile
+                            ? " Note: mobile did not match an existing eSIM, so this is a new purchase."
+                            : ""}
                         </p>
                       )}
                       {hostedLinkResult.topUpStatus === "UNAVAILABLE" && (
                         <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700">
-                          {hostedLinkResult.topUpMobile} matched a subscriber but no active eSIM could be bound — this
-                          link will be processed as a new purchase, not a top-up. Proceed only if that is intended.
+                          {hostedLinkResult.topUpMobile} matched a subscriber
+                          but no active eSIM could be bound — this link will be
+                          processed as a new purchase, not a top-up. Proceed
+                          only if that is intended.
                         </p>
                       )}
                       <code className="block break-all rounded-lg bg-muted px-3 py-2 text-xs">
@@ -1483,10 +1860,14 @@ export default function AdminWorkspace() {
                           variant="outline"
                           onClick={async () => {
                             try {
-                              await navigator.clipboard.writeText(hostedLinkResult.checkoutUrl);
+                              await navigator.clipboard.writeText(
+                                hostedLinkResult.checkoutUrl,
+                              );
                               toast.success("Checkout link copied.");
                             } catch {
-                              toast.error("Clipboard permission denied. Copy it manually.");
+                              toast.error(
+                                "Clipboard permission denied. Copy it manually.",
+                              );
                             }
                           }}
                         >
@@ -1495,7 +1876,10 @@ export default function AdminWorkspace() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => { setHostedLinkFor(null); setHostedLinkResult(null); }}
+                          onClick={() => {
+                            setHostedLinkFor(null);
+                            setHostedLinkResult(null);
+                          }}
                         >
                           Done
                         </Button>
@@ -1504,7 +1888,12 @@ export default function AdminWorkspace() {
                   )}
                 </DialogContent>
               </Dialog>
-              <Dialog open={!!adjustFor} onOpenChange={(open) => { if (!open) setAdjustFor(null); }}>
+              <Dialog
+                open={!!adjustFor}
+                onOpenChange={(open) => {
+                  if (!open) setAdjustFor(null);
+                }}
+              >
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Adjust balance</DialogTitle>
@@ -1514,39 +1903,70 @@ export default function AdminWorkspace() {
                   </DialogHeader>
                   <div className="space-y-4 pt-1">
                     <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">Type</Label>
-                      <Select value={adjustType} onValueChange={(value) => setAdjustType(value as "credit" | "debit")}>
+                      <Label className="text-xs text-muted-foreground">
+                        Type
+                      </Label>
+                      <Select
+                        value={adjustType}
+                        onValueChange={(value) =>
+                          setAdjustType(value as "credit" | "debit")
+                        }
+                      >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="credit">Credit (top up)</SelectItem>
-                          <SelectItem value="debit">Debit (withdraw)</SelectItem>
+                          <SelectItem value="credit">
+                            Credit (top up)
+                          </SelectItem>
+                          <SelectItem value="debit">
+                            Debit (withdraw)
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">Amount (NPR)</Label>
+                      <Label className="text-xs text-muted-foreground">
+                        Amount (NPR)
+                      </Label>
                       <Input
                         type="number"
                         min="0"
                         placeholder="1000"
                         value={adjustAmountNpr}
-                        onChange={(event) => setAdjustAmountNpr(event.target.value)}
+                        onChange={(event) =>
+                          setAdjustAmountNpr(event.target.value)
+                        }
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">Reference</Label>
+                      <Label className="text-xs text-muted-foreground">
+                        Reference
+                      </Label>
                       <Input
                         placeholder="Top-up voucher"
                         value={adjustReference}
-                        onChange={(event) => setAdjustReference(event.target.value)}
+                        onChange={(event) =>
+                          setAdjustReference(event.target.value)
+                        }
                       />
                     </div>
                     <div className="flex justify-end gap-2">
-                      <Button variant="outline" onClick={() => setAdjustFor(null)}>Cancel</Button>
-                      <Button disabled={!adjustAmountNpr || adjustBusy} onClick={() => void applyAdjustment()}>
-                        {adjustBusy ? <Spinner className="size-4" /> : <Wallet className="size-4" />}
+                      <Button
+                        variant="outline"
+                        onClick={() => setAdjustFor(null)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        disabled={!adjustAmountNpr || adjustBusy}
+                        onClick={() => void applyAdjustment()}
+                      >
+                        {adjustBusy ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          <Wallet className="size-4" />
+                        )}
                         Apply
                       </Button>
                     </div>
@@ -1557,7 +1977,9 @@ export default function AdminWorkspace() {
           </TabsContent>
         )}
 
-        {["Document Rules", "Inventory Settings", "System Config"].includes(tab) && (
+        {["Document Rules", "Inventory Settings", "System Config"].includes(
+          tab,
+        ) && (
           <TabsContent value={tab} className="mt-0">
             <ConfigPanel tab={tab} request={request} />
           </TabsContent>
@@ -1572,16 +1994,23 @@ function ConfigPanel({
   request,
 }: {
   tab: string;
-  request: <T,>(path: string, init?: RequestInit) => Promise<T>;
+  request: <T>(path: string, init?: RequestInit) => Promise<T>;
 }) {
   type InventoryOverview = {
-    counts: { available: number; reserved: number; assigned: number; activated: number };
+    counts: {
+      available: number;
+      reserved: number;
+      assigned: number;
+      activated: number;
+    };
     lowStockThreshold: number;
     lowStock: boolean;
   };
   const [inventory, setInventory] = useState<InventoryOverview | null>(null);
   const [systemConfig, setSystemConfig] = useState<Record<string, string>>({});
-  const [documentPolicy, setDocumentPolicy] = useState<"AUTO_OCR" | "MANUAL_REVIEW" | null>(null);
+  const [documentPolicy, setDocumentPolicy] = useState<
+    "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW" | null
+  >(null);
   const [error, setError] = useState("");
   const [topupMobile, setTopupMobile] = useState("");
   const [topupResult, setTopupResult] = useState<null | {
@@ -1598,14 +2027,22 @@ function ConfigPanel({
   useEffect(() => {
     if (tab === "Document Rules") {
       setError("");
-      request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" }>("/admin/document-review-policy")
+      request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW" }>(
+        "/admin/document-review-policy",
+      )
         .then((value) => setDocumentPolicy(value.policy))
-        .catch((e) => setError(e instanceof Error ? e.message : "Document policy unavailable"));
+        .catch((e) =>
+          setError(
+            e instanceof Error ? e.message : "Document policy unavailable",
+          ),
+        );
     } else if (tab === "Inventory Settings") {
       setError("");
       request<InventoryOverview>("/operations/inventory")
         .then(setInventory)
-        .catch((e) => setError(e instanceof Error ? e.message : "Inventory unavailable"));
+        .catch((e) =>
+          setError(e instanceof Error ? e.message : "Inventory unavailable"),
+        );
     } else if (tab === "System Config") {
       setError("");
       request<Integration[]>("/admin/integrations")
@@ -1614,40 +2051,80 @@ function ConfigPanel({
           for (const item of items) map[item.name] = item.status;
           setSystemConfig(map);
         })
-        .catch((e) => setError(e instanceof Error ? e.message : "System config unavailable"));
+        .catch((e) =>
+          setError(
+            e instanceof Error ? e.message : "System config unavailable",
+          ),
+        );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
   const rows: { label: string; value: string | number; ok?: boolean }[] =
     tab === "Document Rules"
       ? [
-          { label: "Passport", value: "Required and verified for every purchase" },
-          { label: "Travel ticket", value: "Required for records; review never pauses paid fulfillment" },
+          {
+            label: "Passport",
+            value: "Required and verified for every purchase",
+          },
+          {
+            label: "Travel ticket",
+            value: "Required for records; review never pauses paid fulfillment",
+          },
           { label: "Supported formats", value: "JPEG, PNG, or PDF" },
           { label: "Maximum file size", value: "10 MB" },
-          { label: "Review", value: documentPolicy === "MANUAL_REVIEW" ? "Manual review (non-blocking)" : documentPolicy === "AUTO_OCR" ? "OCR with 8-second checkout wait and manual failover" : "Loading…" },
+          {
+            label: "Review",
+            value:
+              documentPolicy === "MANUAL_REVIEW"
+                ? "Manual review (non-blocking)"
+                : documentPolicy === "NO_REVIEW"
+                  ? "Records only; verification skipped"
+                  : documentPolicy === "AUTO_OCR"
+                    ? "OCR with 8-second checkout wait and manual failover"
+                    : "Loading…",
+          },
         ]
       : tab === "Inventory Settings"
         ? inventory
           ? [
-              { label: "Available profiles", value: inventory.counts.available },
+              {
+                label: "Available profiles",
+                value: inventory.counts.available,
+              },
               { label: "Reserved", value: inventory.counts.reserved },
               { label: "Assigned", value: inventory.counts.assigned },
               { label: "Activated", value: inventory.counts.activated },
-              { label: "Low-stock threshold", value: inventory.lowStockThreshold },
-              { label: "Inventory status", value: inventory.lowStock ? "LOW STOCK" : "Healthy", ok: !inventory.lowStock },
+              {
+                label: "Low-stock threshold",
+                value: inventory.lowStockThreshold,
+              },
+              {
+                label: "Inventory status",
+                value: inventory.lowStock ? "LOW STOCK" : "Healthy",
+                ok: !inventory.lowStock,
+              },
             ]
           : []
         : [
             { label: "Default purchase country", value: "Nepal (NP)" },
             { label: "Default currency", value: "NPR" },
             { label: "Subscriber language", value: "English" },
-            { label: "Connectivity provider", value: systemConfig["Transatel Connectivity"] ?? "—" },
-            { label: "Payment gateway (Khalti)", value: systemConfig["Khalti Payment Gateway"] ?? "—" },
+            {
+              label: "Connectivity provider",
+              value: systemConfig["Transatel Connectivity"] ?? "—",
+            },
+            {
+              label: "Payment gateway (Khalti)",
+              value: systemConfig["Khalti Payment Gateway"] ?? "—",
+            },
           ];
 
   return (
-    <Panel title={tab} description="Live platform defaults and enforced business rules." bodyClassName="p-0">
+    <Panel
+      title={tab}
+      description="Live platform defaults and enforced business rules."
+      bodyClassName="p-0"
+    >
       {error ? (
         <div className="m-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {error}
@@ -1655,15 +2132,91 @@ function ConfigPanel({
       ) : null}
       {tab === "Document Rules" && documentPolicy ? (
         <div className="flex flex-wrap items-center gap-3 border-b px-6 py-4">
-          <Button variant={documentPolicy === "AUTO_OCR" ? "default" : "outline"} disabled={Boolean(busy)} onClick={() => { setBusy("policy"); request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" }>("/admin/document-review-policy", { method: "PATCH", body: JSON.stringify({ policy: "AUTO_OCR", ocrCheckoutWaitMs: 8000 }) }).then((value) => setDocumentPolicy(value.policy)).catch((e) => setError(e instanceof Error ? e.message : "Update failed")).finally(() => setBusy("")); }}>Automatic OCR</Button>
-          <Button variant={documentPolicy === "MANUAL_REVIEW" ? "default" : "outline"} disabled={Boolean(busy)} onClick={() => { setBusy("policy"); request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" }>("/admin/document-review-policy", { method: "PATCH", body: JSON.stringify({ policy: "MANUAL_REVIEW", ocrCheckoutWaitMs: 8000 }) }).then((value) => setDocumentPolicy(value.policy)).catch((e) => setError(e instanceof Error ? e.message : "Update failed")).finally(() => setBusy("")); }}>Manual review</Button>
-          <p className="text-xs text-muted-foreground">Only this global policy changes OCR behavior. Neither mode pauses provisioning after payment.</p>
+          <Button
+            variant={documentPolicy === "AUTO_OCR" ? "default" : "outline"}
+            disabled={Boolean(busy)}
+            onClick={() => {
+              setBusy("policy");
+              request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW" }>(
+                "/admin/document-review-policy",
+                {
+                  method: "PATCH",
+                  body: JSON.stringify({
+                    policy: "AUTO_OCR",
+                    ocrCheckoutWaitMs: 8000,
+                  }),
+                },
+              )
+                .then((value) => setDocumentPolicy(value.policy))
+                .catch((e) =>
+                  setError(e instanceof Error ? e.message : "Update failed"),
+                )
+                .finally(() => setBusy(""));
+            }}
+          >
+            Automatic OCR
+          </Button>
+          <Button
+            variant={documentPolicy === "MANUAL_REVIEW" ? "default" : "outline"}
+            disabled={Boolean(busy)}
+            onClick={() => {
+              setBusy("policy");
+              request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW" }>(
+                "/admin/document-review-policy",
+                {
+                  method: "PATCH",
+                  body: JSON.stringify({
+                    policy: "MANUAL_REVIEW",
+                    ocrCheckoutWaitMs: 8000,
+                  }),
+                },
+              )
+                .then((value) => setDocumentPolicy(value.policy))
+                .catch((e) =>
+                  setError(e instanceof Error ? e.message : "Update failed"),
+                )
+                .finally(() => setBusy(""));
+            }}
+          >
+            Manual review
+          </Button>
+          <Button
+            variant={documentPolicy === "NO_REVIEW" ? "default" : "outline"}
+            disabled={Boolean(busy)}
+            onClick={() => {
+              setBusy("policy");
+              request<{ policy: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW" }>(
+                "/admin/document-review-policy",
+                {
+                  method: "PATCH",
+                  body: JSON.stringify({
+                    policy: "NO_REVIEW",
+                    ocrCheckoutWaitMs: 8000,
+                  }),
+                },
+              )
+                .then((value) => setDocumentPolicy(value.policy))
+                .catch((e) =>
+                  setError(e instanceof Error ? e.message : "Update failed"),
+                )
+                .finally(() => setBusy(""));
+            }}
+          >
+            No verification
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Only this global policy changes OCR behavior. Neither mode pauses
+            provisioning after payment.
+          </p>
         </div>
       ) : null}
       {rows.length ? (
         <div className="divide-y">
           {rows.map(({ label, value, ok }) => (
-            <div key={label} className="flex items-center justify-between px-6 py-4">
+            <div
+              key={label}
+              className="flex items-center justify-between px-6 py-4"
+            >
               <div>
                 <p className="text-sm font-medium">{label}</p>
                 <p className="text-xs text-muted-foreground">{value}</p>
@@ -1686,7 +2239,9 @@ function ConfigPanel({
         </div>
       ) : (
         <EmptyState loading>
-          <span className="text-sm text-muted-foreground">Loading live data…</span>
+          <span className="text-sm text-muted-foreground">
+            Loading live data…
+          </span>
         </EmptyState>
       )}
       {tab === "System Config" && (
@@ -1717,10 +2272,14 @@ function ConfigPanel({
                       expiresAt?: string;
                     };
                     topUpAvailable?: boolean;
-                  }>(`/operations/topup/lookup?mobile=${encodeURIComponent(topupMobile)}`)
+                  }>(
+                    `/operations/topup/lookup?mobile=${encodeURIComponent(topupMobile)}`,
+                  )
                     .then(setTopupResult)
                     .catch((e) =>
-                      setError(e instanceof Error ? e.message : "Lookup failed"),
+                      setError(
+                        e instanceof Error ? e.message : "Lookup failed",
+                      ),
                     )
                     .finally(() => setBusy(""));
                 }}
@@ -1733,8 +2292,10 @@ function ConfigPanel({
               (topupResult.found && topupResult.subscriber ? (
                 <p className="mt-3 flex items-center gap-2 text-sm text-success-foreground">
                   <CheckCircle2 className="size-4" />
-                  Found {topupResult.subscriber.identity?.firstName} {topupResult.subscriber.identity?.surname} —{" "}
-                  {topupResult.subscriber.currentPlan?.name ?? "active subscriber"}
+                  Found {topupResult.subscriber.identity?.firstName}{" "}
+                  {topupResult.subscriber.identity?.surname} —{" "}
+                  {topupResult.subscriber.currentPlan?.name ??
+                    "active subscriber"}
                   {topupResult.subscriber.expiresAt
                     ? ` · valid until ${new Date(topupResult.subscriber.expiresAt).toLocaleDateString()}`
                     : ""}
@@ -1756,14 +2317,26 @@ function ConfigPanel({
               className="mt-3"
               disabled={Boolean(busy)}
               onClick={() => {
-                if (!window.confirm("Expire all abandoned payments? Customers with a pending-but-unfinished payment will be able to start again.")) return;
+                if (
+                  !window.confirm(
+                    "Expire all abandoned payments? Customers with a pending-but-unfinished payment will be able to start again.",
+                  )
+                )
+                  return;
                 setBusy("sweep");
                 setError("");
-                request<{ expired: number }>("/operations/payments/expire-stale", {
-                  method: "POST",
-                  headers: { "x-idempotency-key": crypto.randomUUID() },
-                })
-                  .then((r) => setSweepResult(`${r.expired} old payment(s) marked as expired`))
+                request<{ expired: number }>(
+                  "/operations/payments/expire-stale",
+                  {
+                    method: "POST",
+                    headers: { "x-idempotency-key": crypto.randomUUID() },
+                  },
+                )
+                  .then((r) =>
+                    setSweepResult(
+                      `${r.expired} old payment(s) marked as expired`,
+                    ),
+                  )
                   .catch((e) =>
                     setError(e instanceof Error ? e.message : "Sweep failed"),
                   )

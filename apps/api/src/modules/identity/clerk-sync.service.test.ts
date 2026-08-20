@@ -75,7 +75,9 @@ describe("ClerkSyncService re-registration recovery", () => {
     );
     const service = new ClerkSyncService(prisma);
 
-    const result = await service.sync(createdEvent("new-clerk-id", "user@example.com"));
+    const result = await service.sync(
+      createdEvent("new-clerk-id", "user@example.com"),
+    );
 
     expect(result.persisted).toBe(true);
     expect(result.accountType).toBe(UserRoleName.CUSTOMER);
@@ -138,7 +140,9 @@ describe("ClerkSyncService re-registration recovery", () => {
     const prisma = prismaStub();
     const service = new ClerkSyncService(prisma);
 
-    const result = await service.sync(createdEvent("brand-new", "fresh@example.com"));
+    const result = await service.sync(
+      createdEvent("brand-new", "fresh@example.com"),
+    );
 
     expect(result.persisted).toBe(true);
     expect(result.accountType).toBe(UserRoleName.CUSTOMER);

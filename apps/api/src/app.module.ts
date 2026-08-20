@@ -60,10 +60,15 @@ import { CustomerEsimsController } from "./modules/esims/customer-esims.controll
 import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
 import { TransatelOperationsController } from "./modules/integration/transatel-operations.controller.js";
 import { TransatelOperationsService } from "./modules/integration/transatel-operations.service.js";
-import { PartnerShowcaseAdminController, PartnerShowcasePublicController } from "./modules/showcase/partner-showcase.controller.js";
+import {
+  PartnerShowcaseAdminController,
+  PartnerShowcasePublicController,
+} from "./modules/showcase/partner-showcase.controller.js";
 import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
 import { ManualRefundsController } from "./modules/payments/manual-refunds.controller.js";
 import { ManualRefundsService } from "./modules/payments/manual-refunds.service.js";
+import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
+import { AttentionController } from "./modules/operations/attention.controller.js";
 
 @Module({
   imports: [
@@ -79,7 +84,7 @@ import { ManualRefundsService } from "./modules/payments/manual-refunds.service.
     AuthController,
     CatalogController,
     OrdersController,
-OperationsController,
+    OperationsController,
     GuestOrdersController,
     InventoryController,
     AdminController,
@@ -97,6 +102,7 @@ OperationsController,
     PartnerShowcaseAdminController,
     PartnerShowcasePublicController,
     ManualRefundsController,
+    AttentionController,
   ],
   providers: [
     AccountGuard,
@@ -134,6 +140,7 @@ OperationsController,
     TransatelOperationsService,
     PartnerShowcaseService,
     ManualRefundsService,
+    ProductionResilienceService,
   ],
 })
 export class AppModule {}

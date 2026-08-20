@@ -9,11 +9,11 @@ docs. Use it to confirm what you want before go-live, then flag anything you wan
 
 ## 1. The three pieces
 
-| Piece | Port | Who uses it | What it does |
-| --- | --- | --- | --- |
-| Customer website (`customer-web`) | 3000 | Everyone, no login needed to browse | Storefront, checkout, "My eSIMs" account |
-| Ops portal (`ops-web`) | 3001 | OPS + Super Admin staff only | Review orders, inventory, admin panel |
-| API (`api`) | 4000 | Both websites + partners + webhooks | All business logic, payments, provisioning |
+| Piece                             | Port | Who uses it                         | What it does                               |
+| --------------------------------- | ---- | ----------------------------------- | ------------------------------------------ |
+| Customer website (`customer-web`) | 3000 | Everyone, no login needed to browse | Storefront, checkout, "My eSIMs" account   |
+| Ops portal (`ops-web`)            | 3001 | OPS + Super Admin staff only        | Review orders, inventory, admin panel      |
+| API (`api`)                       | 4000 | Both websites + partners + webhooks | All business logic, payments, provisioning |
 
 There are **three account types**: `CUSTOMER`, `OPERATIONS`, `SUPER_ADMIN`.
 
@@ -38,8 +38,8 @@ There are **three account types**: `CUSTOMER`, `OPERATIONS`, `SUPER_ADMIN`.
      and on each plan card).
    - A **"Choose your destination"** dropdown (flags included) showing every country that has
      at least one plan.
-   - A **top-up box**: *"Already have a Visa Compass eSIM? Enter your mobile number to see your
-     current plan and recharge it."*
+   - A **top-up box**: _"Already have a Visa Compass eSIM? Enter your mobile number to see your
+     current plan and recharge it."_
    - Plan cards for the chosen destination: name, flag, data amount, validity days, NPR price,
      and a **Choose** button. Only plans with status `ACTIVE` are shown — anything `DRAFT`,
      `DISABLED` or `ARCHIVED` is invisible to customers.
@@ -147,6 +147,7 @@ for top-ups.
    customer (`PLAN_EXPIRED` / `PLAN_EXHAUSTED`).
 
 ### Notes about document verification in this flow
+
 - **Documents are verified at upload time** (the file really landed, is the right size/format)
   and **payment requires that a traveller + passport + ticket already exist**.
 - But in the normal flow **no human checks the photo contents before the eSIM activates**,
@@ -170,13 +171,13 @@ for top-ups.
 
 ## 8. Payments, failures, cancellations, refunds
 
-| Situation | What happens |
-| --- | --- |
+| Situation                                                                | What happens                                                                                                                 |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | Payment window expires (still `PAYMENT_PENDING` past the gateway expiry) | Ops (or the admin panel button) runs **"Expire stale payments"** → order becomes `PAYMENT_FAILED` ("Payment window expired") |
-| Customer abandons payment | Order becomes `PAYMENT_FAILED` with the given reason |
-| Customer cancels a draft / unpaid order | Order becomes `CANCELLED` (also possible from ops portal) |
-| Ops refunds a **paid** order | Khalti refund is called; order moves `REFUND_PENDING → REFUNDED`; payment marked refunded |
-| Payment is still being confirmed after redirect | The checkout page polls the order until it settles (up to ~90 seconds), then shows the result |
+| Customer abandons payment                                                | Order becomes `PAYMENT_FAILED` with the given reason                                                                         |
+| Customer cancels a draft / unpaid order                                  | Order becomes `CANCELLED` (also possible from ops portal)                                                                    |
+| Ops refunds a **paid** order                                             | Khalti refund is called; order moves `REFUND_PENDING → REFUNDED`; payment marked refunded                                    |
+| Payment is still being confirmed after redirect                          | The checkout page polls the order until it settles (up to ~90 seconds), then shows the result                                |
 
 Only orders in `DRAFT`, `PAYMENT_PENDING` or `PAYMENT_FAILED` can be cancelled. Refunds only
 apply to paid, non-refunded orders.
@@ -215,6 +216,7 @@ Sidebar (Super Admin only): the **Administration** item appears.
   sensitive action (who did what).
 
 ### How inventory works (important for ops)
+
 - Imported SIM profiles land in a `PENDING` batch with rows in `IMPORTED` state. **Nothing is
   sellable yet.**
 - A **Super Admin must approve the batch** → rows become `AVAILABLE`. Rejecting leaves them
@@ -268,6 +270,7 @@ Sidebar (Super Admin only): the **Administration** item appears.
    sign-up is treated as a customer identity that cannot access the console.
 
 ### How the very first Super Admin is created
+
 - Set `BOOTSTRAP_SUPER_ADMIN_EMAIL` in the environment. When **no active Super Admin exists
   yet**, the person who registers that exact email automatically becomes Super Admin. (In
   production this also requires `BOOTSTRAP_SUPER_ADMIN_TOKEN` to be set — see §14, it is only
@@ -354,5 +357,5 @@ These are **current behaviours** you should consciously accept or change:
 
 ---
 
-*This document mirrors the code as of go-live. If you change any behaviour, update this file so
-it stays the single source of truth.*
+_This document mirrors the code as of go-live. If you change any behaviour, update this file so
+it stays the single source of truth._

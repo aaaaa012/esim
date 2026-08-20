@@ -65,8 +65,16 @@ describe("partner hosted checkout", () => {
       order: {
         findUnique: vi.fn().mockResolvedValue(
           order([
-            { type: "PASSPORT", privateAssetId: "passport-1", passportVerificationStatus: null },
-            { type: "TICKET", privateAssetId: "ticket-1", passportVerificationStatus: null },
+            {
+              type: "PASSPORT",
+              privateAssetId: "passport-1",
+              passportVerificationStatus: null,
+            },
+            {
+              type: "TICKET",
+              privateAssetId: "ticket-1",
+              passportVerificationStatus: null,
+            },
           ]),
         ),
       },
@@ -87,11 +95,17 @@ describe("partner hosted checkout", () => {
         findUnique: vi.fn().mockResolvedValue(session),
       },
       order: {
-        findUnique: vi.fn().mockResolvedValue(
-          order([
-            { type: "PASSPORT", privateAssetId: "passport-1", passportVerificationStatus: "VERIFIED" },
-          ]),
-        ),
+        findUnique: vi
+          .fn()
+          .mockResolvedValue(
+            order([
+              {
+                type: "PASSPORT",
+                privateAssetId: "passport-1",
+                passportVerificationStatus: "VERIFIED",
+              },
+            ]),
+          ),
       },
     });
     await expect(

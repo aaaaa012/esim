@@ -4,7 +4,20 @@ import { useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal, AlertTriangle, Clock3 } from "lucide-react";
+import {
+  Check,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  FileCheck2,
+  LoaderCircle,
+  LockKeyhole,
+  QrCode,
+  ShieldCheck,
+  Signal,
+  AlertTriangle,
+  Clock3,
+} from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import DatePicker from "./date-picker";
 import {
@@ -35,7 +48,15 @@ type Order = {
     method?: string;
     detail?: string;
   };
-  documentReviewStatus?: "NOT_STARTED" | "OCR_PENDING" | "OCR_BACKGROUND" | "VERIFIED" | "MANUAL_REVIEW" | "REUPLOAD_REQUIRED" | "MANUALLY_APPROVED" | "SKIPPED";
+  documentReviewStatus?:
+    | "NOT_STARTED"
+    | "OCR_PENDING"
+    | "OCR_BACKGROUND"
+    | "VERIFIED"
+    | "MANUAL_REVIEW"
+    | "REUPLOAD_REQUIRED"
+    | "MANUALLY_APPROVED"
+    | "SKIPPED";
   provisioningFailure?: { code: string; message: string };
 };
 type Payment = { reference: string; redirectUrl: string; expiresAt: string };
@@ -102,7 +123,7 @@ export default function CheckoutClient({
 }) {
   const authFetch = useAuthenticatedFetch();
   const { isLoaded, isSignedIn } = useAuth();
-  const tokenKey = (id?: string) => `vc_guest_token_${id || orderId || 'new'}`;
+  const tokenKey = (id?: string) => `vc_guest_token_${id || orderId || "new"}`;
   const readToken = (id?: string) => {
     let t = "";
     try {
@@ -166,15 +187,22 @@ export default function CheckoutClient({
     const makeInit = () => ({
       ...init,
       ...(body !== undefined ? { body } : {}),
-      headers: { "content-type": "application/json", "x-idempotency-key": crypto.randomUUID(), ...init?.headers },
+      headers: {
+        "content-type": "application/json",
+        "x-idempotency-key": crypto.randomUUID(),
+        ...init?.headers,
+      },
     });
     if (currentGuest) toGuest();
     let response = await authFetch(url, makeInit());
     let payload = (await response.json()) as Envelope<T>;
     if (
       !response.ok &&
-      isLoaded && isSignedIn !== true &&
-      ["AUTHENTICATION_REQUIRED", "FORBIDDEN"].includes(payload.error?.code ?? "")
+      isLoaded &&
+      isSignedIn !== true &&
+      ["AUTHENTICATION_REQUIRED", "FORBIDDEN"].includes(
+        payload.error?.code ?? "",
+      )
     ) {
       toGuest();
       setGuest((g) => {
@@ -186,7 +214,12 @@ export default function CheckoutClient({
       payload = (await response.json()) as Envelope<T>;
     }
     if (!response.ok) {
-      const error = new Error(apiErrorMessage(payload.error?.code ?? "", payload.error?.message ?? "Something went wrong")) as Error & { code?: string; status?: number };
+      const error = new Error(
+        apiErrorMessage(
+          payload.error?.code ?? "",
+          payload.error?.message ?? "Something went wrong",
+        ),
+      ) as Error & { code?: string; status?: number };
       if (payload.error?.code) error.code = payload.error.code;
       error.status = response.status;
       throw error;
@@ -199,16 +232,28 @@ export default function CheckoutClient({
     [traveler, setTraveler] = useState(initial);
   const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
-  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof Traveler,string>>>({});
-  const isTopUpIntent = Boolean((mobile || targetEsimId) && targetCountry && previewPlan?.countryCode === targetCountry) && !orderId;
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof Traveler, string>>
+  >({});
+  const isTopUpIntent =
+    Boolean(
+      (mobile || targetEsimId) &&
+      targetCountry &&
+      previewPlan?.countryCode === targetCountry,
+    ) && !orderId;
   useEffect(() => {
     if (!planId || orderId) return;
     let cancelled = false;
     fetch(`${API}/public/plans/${encodeURIComponent(planId)}`)
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("catalog unavailable"))))
+      .then((response) =>
+        response.ok
+          ? response.json()
+          : Promise.reject(new Error("catalog unavailable")),
+      )
       .then((data: Envelope<PlanSummary>) => {
         if (cancelled) return;
-        if (data.data) setPreviewPlan(data.data); else setPlanLoadFailed(true);
+        if (data.data) setPreviewPlan(data.data);
+        else setPlanLoadFailed(true);
       })
       .catch(() => setPlanLoadFailed(true));
     return () => {
@@ -223,7 +268,12 @@ export default function CheckoutClient({
   const [order, setOrder] = useState<Order | null>(null),
     [payment, setPayment] = useState<Payment | null>(null);
   const verifyRunToken = useRef(0);
-  useEffect(() => () => { verifyRunToken.current += 1; }, []);
+  useEffect(
+    () => () => {
+      verifyRunToken.current += 1;
+    },
+    [],
+  );
   const summaryPlan = order?.plan ?? previewPlan;
   const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
   const [provider, setProvider] = useState<PaymentProvider>(
@@ -244,7 +294,14 @@ export default function CheckoutClient({
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
       .then((value) => {
-        if (!["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(value.status))
+        if (
+          ![
+            "DRAFT",
+            "PAYMENT_PENDING",
+            "PAYMENT_FAILED",
+            "PAYMENT_REVIEW_REQUIRED",
+          ].includes(value.status)
+        )
           throw new Error("This order can no longer be resumed from checkout");
         setOrder(value);
         setCompatible(true);
@@ -252,7 +309,11 @@ export default function CheckoutClient({
         if (value.purchaseType === "TOPUP") {
           setStep(4);
           if (value.status === "PAYMENT_PENDING" && value.payment) {
-            setPayment({ reference: value.payment.reference, redirectUrl: "", expiresAt: "" });
+            setPayment({
+              reference: value.payment.reference,
+              redirectUrl: "",
+              expiresAt: "",
+            });
             void verifyPayment(value);
           }
           return;
@@ -283,14 +344,42 @@ export default function CheckoutClient({
       )
       .finally(() => setBusy(false));
   }, [orderId, isLoaded, guestToken]);
-  const VERIFY_DELAYS = [0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000];
+  const VERIFY_DELAYS = [
+    0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000,
+  ];
   const VERIFY_BUDGET_MS = 120_000;
-  const TERMINAL_STATUSES = ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"];
+  const TERMINAL_STATUSES = [
+    "PAYMENT_CONFIRMED",
+    "PAYMENT_REVIEW_REQUIRED",
+    "REVIEW_PENDING",
+    "APPROVED",
+    "PROVISIONING",
+    "QR_READY",
+    "ACTIVATION_ATTENTION",
+    "COMPLETED",
+    "PAYMENT_FAILED",
+    "PROVISIONING_FAILED",
+    "CANCELLED",
+  ];
   const stripReturnParams = () => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
-    if (!["reference", "pidx", "simulated"].some((key) => url.searchParams.has(key))) return;
-    for (const key of ["reference", "pidx", "simulated", "status", "purchase_order_id", "transaction_id", "amount"]) url.searchParams.delete(key);
+    if (
+      !["reference", "pidx", "simulated"].some((key) =>
+        url.searchParams.has(key),
+      )
+    )
+      return;
+    for (const key of [
+      "reference",
+      "pidx",
+      "simulated",
+      "status",
+      "purchase_order_id",
+      "transaction_id",
+      "amount",
+    ])
+      url.searchParams.delete(key);
     window.history.replaceState({}, "", url.toString());
   };
   const verifyPayment = async (initialOrder: Order) => {
@@ -303,7 +392,8 @@ export default function CheckoutClient({
     let attempt = 0;
     while (Date.now() - started < VERIFY_BUDGET_MS) {
       if (verifyRunToken.current !== token) return;
-      const wait = VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
+      const wait =
+        VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
       if (wait > 0) {
         await new Promise((resolve) => setTimeout(resolve, wait));
         if (verifyRunToken.current !== token) return;
@@ -313,10 +403,13 @@ export default function CheckoutClient({
         // Retry the verification lookup itself (not just the order poll):
         // Khalti can report pending/initiated for a few seconds after the
         // wallet redirect, so a single attempt is not enough.
-        const updated = await api<Order>(`/customer/orders/${current.id}/payment/verify`, {
-          method: "POST",
-          body: JSON.stringify({ reference: current.payment?.reference }),
-        });
+        const updated = await api<Order>(
+          `/customer/orders/${current.id}/payment/verify`,
+          {
+            method: "POST",
+            body: JSON.stringify({ reference: current.payment?.reference }),
+          },
+        );
         setOrder(updated);
         current = updated;
         if (TERMINAL_STATUSES.includes(updated.status)) {
@@ -325,8 +418,14 @@ export default function CheckoutClient({
         }
       } catch (cause) {
         const code = (cause as { code?: string })?.code;
-        if (code === "PAYMENT_EXPIRED" || code === "PAYMENT_REFERENCE_MISMATCH" || code === "PAYMENT_NOT_CONFIRMED") {
-          const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(() => current);
+        if (
+          code === "PAYMENT_EXPIRED" ||
+          code === "PAYMENT_REFERENCE_MISMATCH" ||
+          code === "PAYMENT_NOT_CONFIRMED"
+        ) {
+          const refreshed = await api<Order>(
+            `/customer/orders/${current.id}`,
+          ).catch(() => current);
           setOrder(refreshed);
           current = refreshed;
           setVerifying(false);
@@ -334,7 +433,9 @@ export default function CheckoutClient({
         }
         // Transient network/provider errors retry; refresh the order so the
         // UI stays current without treating an unknown error as "pending".
-        const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(() => current);
+        const refreshed = await api<Order>(
+          `/customer/orders/${current.id}`,
+        ).catch(() => current);
         setOrder(refreshed);
         current = refreshed;
         if (TERMINAL_STATUSES.includes(refreshed.status)) {
@@ -343,40 +444,68 @@ export default function CheckoutClient({
         }
       }
     }
-    setOrder(await api<Order>(`/customer/orders/${current.id}`).catch(() => current));
-    setError("Your payment is still being confirmed. Check your eSIMs shortly.");
+    setOrder(
+      await api<Order>(`/customer/orders/${current.id}`).catch(() => current),
+    );
+    setError(
+      "Your payment is still being confirmed. Check your eSIMs shortly.",
+    );
     setVerifying(false);
   };
-  const update = (key: keyof Traveler, value: string) =>
-    { setTraveler((v) => ({ ...v, [key]: value })); setFieldErrors((current) => ({ ...current, [key]: undefined })); };
+  const update = (key: keyof Traveler, value: string) => {
+    setTraveler((v) => ({ ...v, [key]: value }));
+    setFieldErrors((current) => ({ ...current, [key]: undefined }));
+  };
   const verifyPassport = async (): Promise<Order | null> => {
     if (!order || verifyingPassport) return order;
     setVerifyingPassport(true);
     setError("");
     try {
-      let updated = await api<Order>(`/customer/orders/${order.id}/verify-passport`, { method: "POST", body: "{}" });
+      let updated = await api<Order>(
+        `/customer/orders/${order.id}/verify-passport`,
+        { method: "POST", body: "{}" },
+      );
       const deadline = Date.now() + 8_500;
-      while (updated.documentReviewStatus === "OCR_PENDING" && Date.now() < deadline) {
+      while (
+        updated.documentReviewStatus === "OCR_PENDING" &&
+        Date.now() < deadline
+      ) {
         await new Promise((resolve) => setTimeout(resolve, 750));
         updated = await api<Order>(`/customer/orders/${order.id}`);
       }
       if (updated.documentReviewStatus === "OCR_PENDING")
-        updated = await api<Order>(`/customer/orders/${order.id}/verify-passport`, { method: "POST", body: "{}" });
+        updated = await api<Order>(
+          `/customer/orders/${order.id}/verify-passport`,
+          { method: "POST", body: "{}" },
+        );
       setOrder(updated);
       return updated;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "We could not verify your passport");
+      setError(
+        e instanceof Error ? e.message : "We could not verify your passport",
+      );
       return null;
     } finally {
       setVerifyingPassport(false);
     }
   };
   const passportGatePassed = (target: Order | null) =>
-    !target || isTopUp || ["VERIFIED", "MANUAL_REVIEW", "MANUALLY_APPROVED", "SKIPPED", "OCR_BACKGROUND"].includes(target.documentReviewStatus ?? "") || target.passportVerification?.status === "VERIFIED" || target.passportVerification?.status === "SKIPPED";
+    !target ||
+    isTopUp ||
+    [
+      "VERIFIED",
+      "MANUAL_REVIEW",
+      "MANUALLY_APPROVED",
+      "SKIPPED",
+      "OCR_BACKGROUND",
+    ].includes(target.documentReviewStatus ?? "") ||
+    target.passportVerification?.status === "VERIFIED" ||
+    target.passportVerification?.status === "SKIPPED";
   useEffect(() => {
     if (step !== 4 || isTopUp) return;
     if (!order || order.passportVerification) return;
-    if (!order.documents?.some((document) => document.type === "PASSPORT")) return;
+    if (!order.documents?.some((document) => document.type === "PASSPORT"))
+      return;
     void verifyPassport();
   }, [step, order?.id, isTopUp]);
   const run = async (task: () => Promise<void>) => {
@@ -400,19 +529,26 @@ export default function CheckoutClient({
         setStep(order.traveler ? 3 : 2);
         return;
       }
-      if (!isLoaded) throw new Error("Finishing secure sign-in. Please try again in a moment.");
+      if (!isLoaded)
+        throw new Error(
+          "Finishing secure sign-in. Please try again in a moment.",
+        );
       if (!planId) throw new Error("Choose a plan before checkout");
-      if (!compatible && !isTopUpIntent) throw new Error("Confirm device compatibility");
+      if (!compatible && !isTopUpIntent)
+        throw new Error("Confirm device compatibility");
       if (guest) {
-        const created = await api<{ order: Order; token: string }>("/customer/orders", {
-          method: "POST",
-          body: JSON.stringify({
-            planId,
-            compatibilityAccepted: true,
-            mobile: (mobile || traveler.mobile) || undefined,
-            lookupToken: lookupToken || undefined,
-          }),
-        });
+        const created = await api<{ order: Order; token: string }>(
+          "/customer/orders",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              planId,
+              compatibilityAccepted: true,
+              mobile: mobile || traveler.mobile || undefined,
+              lookupToken: lookupToken || undefined,
+            }),
+          },
+        );
         setOrder(created.order);
         storeGuestToken(created.token, created.order.id);
         if (created.order.purchaseType === "TOPUP") {
@@ -427,15 +563,23 @@ export default function CheckoutClient({
         { order: Order; token: string } | Order
       >("/customer/orders", {
         method: "POST",
-        body: JSON.stringify({ planId, compatibilityAccepted: true, ...(targetEsimId ? { targetEsimId } : {}) }),
+        body: JSON.stringify({
+          planId,
+          compatibilityAccepted: true,
+          ...(targetEsimId ? { targetEsimId } : {}),
+        }),
       });
       const isGuestPayload =
-        typeof payload === "object" && payload !== null && "order" in payload && "token" in payload;
+        typeof payload === "object" &&
+        payload !== null &&
+        "order" in payload &&
+        "token" in payload;
       const finalOrder: Order = isGuestPayload
         ? (payload as { order: Order }).order
         : (payload as Order);
       setOrder(finalOrder);
-      if (finalOrder.traveler) setTraveler({ ...initial, ...finalOrder.traveler });
+      if (finalOrder.traveler)
+        setTraveler({ ...initial, ...finalOrder.traveler });
       if (isGuestPayload) {
         storeGuestToken((payload as { token: string }).token, finalOrder.id);
       }
@@ -461,16 +605,29 @@ export default function CheckoutClient({
         ["email", "Email"],
         ["mobile", "Mobile / WhatsApp"],
       ];
-      const nextErrors: Partial<Record<keyof Traveler,string>> = {};
-      for (const [key,label] of required) if (!traveler[key].trim()) nextErrors[key]=`${label} is required`;
-      if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email)) nextErrors.email="Enter a valid email address";
-      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile)) nextErrors.mobile="Enter a valid mobile number";
-      if (traveler.passportNumber && traveler.passportNumber.length < 5) nextErrors.passportNumber="Passport number must be at least 5 characters";
-      if (traveler.dateOfBirth && new Date(traveler.dateOfBirth) >= new Date()) nextErrors.dateOfBirth="Date of birth must be in the past";
-      if (traveler.passportExpiryDate && new Date(traveler.passportExpiryDate) <= new Date()) nextErrors.passportExpiryDate="Passport must not be expired";
+      const nextErrors: Partial<Record<keyof Traveler, string>> = {};
+      for (const [key, label] of required)
+        if (!traveler[key].trim()) nextErrors[key] = `${label} is required`;
+      if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email))
+        nextErrors.email = "Enter a valid email address";
+      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile))
+        nextErrors.mobile = "Enter a valid mobile number";
+      if (traveler.passportNumber && traveler.passportNumber.length < 5)
+        nextErrors.passportNumber =
+          "Passport number must be at least 5 characters";
+      if (traveler.dateOfBirth && new Date(traveler.dateOfBirth) >= new Date())
+        nextErrors.dateOfBirth = "Date of birth must be in the past";
+      if (
+        traveler.passportExpiryDate &&
+        new Date(traveler.passportExpiryDate) <= new Date()
+      )
+        nextErrors.passportExpiryDate = "Passport must not be expired";
       setFieldErrors(nextErrors);
       const firstError = Object.keys(nextErrors)[0];
-      if (firstError) { document.querySelector<HTMLElement>(`[name="${firstError}"]`)?.focus(); throw new Error("Check the highlighted traveller details"); }
+      if (firstError) {
+        document.querySelector<HTMLElement>(`[name="${firstError}"]`)?.focus();
+        throw new Error("Check the highlighted traveller details");
+      }
       if (
         traveler.nationality.length !== 2 ||
         traveler.countryOfResidence.length !== 2
@@ -486,7 +643,8 @@ export default function CheckoutClient({
         body: JSON.stringify(body),
       });
       setOrder((o) =>
-        o && ["FAILED", "PARTIAL"].includes(o.passportVerification?.status ?? "")
+        o &&
+        ["FAILED", "PARTIAL"].includes(o.passportVerification?.status ?? "")
           ? (({ passportVerification: _drop, ...rest }) => rest)(o)
           : o,
       );
@@ -555,8 +713,14 @@ export default function CheckoutClient({
       let target = orderArg ?? order;
       if (target) {
         let verification = target.passportVerification;
-        if (!isTopUp && (verification?.status === "FAILED" || verification?.status === "PARTIAL")) {
-          throw new Error("We couldn't verify your passport against your traveller details. Review your details and re-check your passport before paying.");
+        if (
+          !isTopUp &&
+          (verification?.status === "FAILED" ||
+            verification?.status === "PARTIAL")
+        ) {
+          throw new Error(
+            "We couldn't verify your passport against your traveller details. Review your details and re-check your passport before paying.",
+          );
         }
         if (!isTopUp && !passportGatePassed(target)) {
           const updated = await verifyPassport();
@@ -567,10 +731,13 @@ export default function CheckoutClient({
         if (!isTopUp && !passportGatePassed(target)) {
           throw new Error("Verify your passport before continuing to payment.");
         }
-        const value = await api<Payment>(`/customer/orders/${target.id}/payment`, {
-          method: "POST",
-          body: JSON.stringify({ provider }),
-        });
+        const value = await api<Payment>(
+          `/customer/orders/${target.id}/payment`,
+          {
+            method: "POST",
+            body: JSON.stringify({ provider }),
+          },
+        );
         setPayment(value);
         const external = (url: string) => {
           try {
@@ -591,20 +758,36 @@ export default function CheckoutClient({
           ? `/customer/orders/${order.id}/payment/simulate`
           : `/customer/orders/${order.id}/payment/simulate-complete`;
         setOrder(
-          await api<Order>(
-            endpoint,
-            {
-              method: "POST",
-              body: JSON.stringify({ reference: payment.reference }),
-            },
-          ),
+          await api<Order>(endpoint, {
+            method: "POST",
+            body: JSON.stringify({ reference: payment.reference }),
+          }),
         );
         return;
       }
       void verifyPayment(order);
     });
 
-  if ((!planId && !orderId) || planLoadFailed) return <main className="checkout-page"><div className="checkout-recovery"><QrCode/><h1>We could not load this checkout</h1><p>The plan link may be incomplete or no longer available.</p><div><Link className="button" href="/#plans">Choose a plan</Link>{isSignedIn === true && <Link className="button secondary" href="/account/orders">Order history</Link>}</div></div></main>;
+  if ((!planId && !orderId) || planLoadFailed)
+    return (
+      <main className="checkout-page">
+        <div className="checkout-recovery">
+          <QrCode />
+          <h1>We could not load this checkout</h1>
+          <p>The plan link may be incomplete or no longer available.</p>
+          <div>
+            <Link className="button" href="/#plans">
+              Choose a plan
+            </Link>
+            {isSignedIn === true && (
+              <Link className="button secondary" href="/account/orders">
+                Order history
+              </Link>
+            )}
+          </div>
+        </div>
+      </main>
+    );
   return (
     <main className="checkout-page">
       <div className="checkout-shell">
@@ -629,23 +812,24 @@ export default function CheckoutClient({
         <div className="checkout-layout">
           <section className="checkout-card">
             <div className="step-tabs">
-              {(isTopUp ? ["Payment"] : ["Compatibility", "Traveller", "Documents", "Payment"]).map(
-                (label, index) => (
-                  <div
-                    key={label}
-                    className={
-                      step === index + 1
-                        ? "active"
-                        : step > index + 1
-                          ? "done"
-                          : ""
-                    }
-                  >
-                    <i>{step > index + 1 ? <Check size={13} /> : index + 1}</i>
-                    <span>{label}</span>
-                  </div>
-                ),
-              )}
+              {(isTopUp
+                ? ["Payment"]
+                : ["Compatibility", "Traveller", "Documents", "Payment"]
+              ).map((label, index) => (
+                <div
+                  key={label}
+                  className={
+                    step === index + 1
+                      ? "active"
+                      : step > index + 1
+                        ? "done"
+                        : ""
+                  }
+                >
+                  <i>{step > index + 1 ? <Check size={13} /> : index + 1}</i>
+                  <span>{label}</span>
+                </div>
+              ))}
             </div>
             {error && <div className="form-error">{error}</div>}
             {step === 1 && (
@@ -697,7 +881,8 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="First name" error={fieldErrors.firstName}>
                     <input
-                      name="firstName" autoComplete="given-name"
+                      name="firstName"
+                      autoComplete="given-name"
                       value={traveler.firstName}
                       onChange={(e) => update("firstName", e.target.value)}
                     />
@@ -710,7 +895,8 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="Surname" error={fieldErrors.surname}>
                     <input
-                      name="surname" autoComplete="family-name"
+                      name="surname"
+                      autoComplete="family-name"
                       value={traveler.surname}
                       onChange={(e) => update("surname", e.target.value)}
                     />
@@ -719,12 +905,17 @@ export default function CheckoutClient({
                     <DatePicker
                       name="dateOfBirth"
                       value={traveler.dateOfBirth}
-                      max={new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)}
+                      max={new Date(Date.now() - 86_400_000)
+                        .toISOString()
+                        .slice(0, 10)}
                       placeholder="Choose date of birth"
                       onChange={(value) => update("dateOfBirth", value)}
                     />
                   </Field>
-                  <Field label="Passport number" error={fieldErrors.passportNumber}>
+                  <Field
+                    label="Passport number"
+                    error={fieldErrors.passportNumber}
+                  >
                     <input
                       name="passportNumber"
                       value={traveler.passportNumber}
@@ -733,18 +924,25 @@ export default function CheckoutClient({
                       }
                     />
                   </Field>
-                  <Field label="Passport expiry" error={fieldErrors.passportExpiryDate}>
+                  <Field
+                    label="Passport expiry"
+                    error={fieldErrors.passportExpiryDate}
+                  >
                     <DatePicker
                       name="passportExpiryDate"
                       value={traveler.passportExpiryDate}
-                      min={new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}
+                      min={new Date(Date.now() + 86_400_000)
+                        .toISOString()
+                        .slice(0, 10)}
                       placeholder="Choose passport expiry"
                       onChange={(value) => update("passportExpiryDate", value)}
                     />
                   </Field>
                   <Field label="Nationality" error={fieldErrors.nationality}>
                     <input
-                      name="nationality" placeholder="NP" list="country-codes"
+                      name="nationality"
+                      placeholder="NP"
+                      list="country-codes"
                       maxLength={2}
                       value={traveler.nationality}
                       onChange={(e) =>
@@ -754,14 +952,21 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="City / district" error={fieldErrors.city}>
                     <input
-                      name="city" autoComplete="address-level2"
+                      name="city"
+                      autoComplete="address-level2"
                       value={traveler.city}
                       onChange={(e) => update("city", e.target.value)}
                     />
                   </Field>
-                  <Field label="Country of residence" error={fieldErrors.countryOfResidence}>
+                  <Field
+                    label="Country of residence"
+                    error={fieldErrors.countryOfResidence}
+                  >
                     <input
-                      name="countryOfResidence" placeholder="NP" list="country-codes" autoComplete="country"
+                      name="countryOfResidence"
+                      placeholder="NP"
+                      list="country-codes"
+                      autoComplete="country"
                       maxLength={2}
                       value={traveler.countryOfResidence}
                       onChange={(e) =>
@@ -774,7 +979,8 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="Email" error={fieldErrors.email}>
                     <input
-                      name="email" autoComplete="email"
+                      name="email"
+                      autoComplete="email"
                       type="email"
                       value={traveler.email}
                       onChange={(e) => update("email", e.target.value)}
@@ -782,7 +988,9 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="Mobile / WhatsApp" error={fieldErrors.mobile}>
                     <input
-                      name="mobile" inputMode="tel" autoComplete="tel"
+                      name="mobile"
+                      inputMode="tel"
+                      autoComplete="tel"
                       value={traveler.mobile}
                       onChange={(e) => update("mobile", e.target.value)}
                     />
@@ -796,7 +1004,17 @@ export default function CheckoutClient({
                     />
                   </Field>
                 </div>
-                <datalist id="country-codes"><option value="NP">Nepal</option><option value="IN">India</option><option value="US">United States</option><option value="GB">United Kingdom</option><option value="AU">Australia</option><option value="CA">Canada</option><option value="AE">United Arab Emirates</option><option value="JP">Japan</option><option value="KR">South Korea</option></datalist>
+                <datalist id="country-codes">
+                  <option value="NP">Nepal</option>
+                  <option value="IN">India</option>
+                  <option value="US">United States</option>
+                  <option value="GB">United Kingdom</option>
+                  <option value="AU">Australia</option>
+                  <option value="CA">Canada</option>
+                  <option value="AE">United Arab Emirates</option>
+                  <option value="JP">Japan</option>
+                  <option value="KR">South Korea</option>
+                </datalist>
                 <Nav back={() => setStep(1)} busy={busy} next={saveTraveler} />
               </div>
             )}
@@ -837,33 +1055,45 @@ export default function CheckoutClient({
               <div className="form-section">
                 <h2>
                   {order &&
-                  ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED"].includes(
-                    order.status,
-                  )
+                  [
+                    "PAYMENT_CONFIRMED",
+                    "REVIEW_PENDING",
+                    "APPROVED",
+                    "PROVISIONING",
+                    "QR_READY",
+                    "ACTIVATION_ATTENTION",
+                    "COMPLETED",
+                  ].includes(order.status)
                     ? "Payment verified"
                     : order &&
-                        ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
-                          order.status,
-                        )
+                        [
+                          "PAYMENT_FAILED",
+                          "PROVISIONING_FAILED",
+                          "CANCELLED",
+                        ].includes(order.status)
                       ? "Payment issue"
                       : "Choose payment method"}
                 </h2>
-                {order?.status === "QR_READY" ? (
+                {order &&
+                ["QR_READY", "ACTIVATION_ATTENTION"].includes(order.status) ? (
                   <div className="success-panel">
                     <QrCode size={42} />
                     <b>Your activation QR has been sent</b>
                     <span>{order.orderNumber}</span>
                     <p>
                       Install your eSIM using the QR emailed to you as a
-                      password-protected PDF, then connect to the network once to
-                      activate it. Your order will complete automatically.
+                      password-protected PDF, then connect to the network once
+                      to activate it. Your order will complete automatically.
                     </p>
                     {isSignedIn === true && (
                       <>
                         <Link className="button" href="/account/esims">
                           View my eSIMs
                         </Link>
-                        <Link className="button" href={`/account/esims/${order.id}`}>
+                        <Link
+                          className="button"
+                          href={`/account/esims/${order.id}`}
+                        >
                           Didn&apos;t get the QR? Recover it
                         </Link>
                       </>
@@ -875,19 +1105,41 @@ export default function CheckoutClient({
                     <b>Your eSIM is ready</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Your activation QR was emailed to you as a password-protected
-                      PDF. Open it on your phone and enter the mobile number shown
-                      in your email to reveal the QR.
+                      Your activation QR was emailed to you as a
+                      password-protected PDF. Open it on your phone and enter
+                      the mobile number shown in your email to reveal the QR.
                     </p>
                     {isSignedIn === true && (
                       <>
                         <Link className="button" href="/account/esims">
                           View my eSIMs
                         </Link>
-                        <Link className="button" href={`/account/esims/${order.id}`}>
+                        <Link
+                          className="button"
+                          href={`/account/esims/${order.id}`}
+                        >
                           Didn&apos;t get the QR? Recover it
                         </Link>
                       </>
+                    )}
+                  </div>
+                ) : order?.status === "PAYMENT_REVIEW_REQUIRED" ? (
+                  <div className="info-panel">
+                    <AlertTriangle size={42} />
+                    <b>Your payment needs confirmation</b>
+                    <span>{order.orderNumber}</span>
+                    <p>
+                      We could not get a definitive response from the payment
+                      provider. Your order has not been cancelled or charged
+                      again. Our operations team can safely recheck it.
+                    </p>
+                    {isSignedIn === true && (
+                      <Link
+                        className="button secondary"
+                        href={`/account/esims/${order.id}`}
+                      >
+                        Check status
+                      </Link>
                     )}
                   </div>
                 ) : order && order.status === "PROVISIONING_FAILED" ? (
@@ -895,27 +1147,36 @@ export default function CheckoutClient({
                     <AlertTriangle size={42} />
                     <b>We could not activate your eSIM</b>
                     <span>{order.orderNumber}</span>
-                    <p>{order.provisioningFailure?.message ?? "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}</p>
+                    <p>
+                      {order.provisioningFailure?.message ??
+                        "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}
+                    </p>
                     <Link className="button" href="/#plans">
                       Choose another plan
                     </Link>
                     {isSignedIn === true && (
-                      <Link className="button secondary" href={`/account/esims/${order.id}`}>
+                      <Link
+                        className="button secondary"
+                        href={`/account/esims/${order.id}`}
+                      >
                         Check status
                       </Link>
                     )}
                   </div>
                 ) : order &&
-                  ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(
-                    order.status,
-                  ) ? (
+                  [
+                    "PAYMENT_CONFIRMED",
+                    "REVIEW_PENDING",
+                    "APPROVED",
+                    "PROVISIONING",
+                  ].includes(order.status) ? (
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
                     <b>Payment verified. Activating your eSIM</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Your eSIM is being activated automatically. Your QR will be
-                      emailed to you as a password-protected PDF shortly.
+                      Your eSIM is being activated automatically. Your QR will
+                      be emailed to you as a password-protected PDF shortly.
                     </p>
                     {isSignedIn === true && (
                       <Link className="button" href="/account/esims">
@@ -929,8 +1190,8 @@ export default function CheckoutClient({
                     <b>Checking payment status</b>
                     <span>{order?.orderNumber}</span>
                     <p>
-                      We are checking with Khalti. Your order will only be marked
-                      as paid after the gateway confirms the transaction.
+                      We are checking with Khalti. Your order will only be
+                      marked as paid after the gateway confirms the transaction.
                     </p>
                   </div>
                 ) : (
@@ -939,19 +1200,23 @@ export default function CheckoutClient({
                       <PassportCheck
                         result={order.passportVerification}
                         reviewStatus={order.documentReviewStatus}
-                        {...(order.payment?.status ? { paymentStatus: order.payment.status } : {})}
+                        {...(order.payment?.status
+                          ? { paymentStatus: order.payment.status }
+                          : {})}
                         busy={verifyingPassport}
                         onRecheck={() => void verifyPassport()}
                         onEdit={() => setStep(2)}
                       />
                     )}
                     {order &&
-                      ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
-                        order.status,
-                      ) && (
+                      [
+                        "PAYMENT_FAILED",
+                        "PROVISIONING_FAILED",
+                        "CANCELLED",
+                      ].includes(order.status) && (
                         <p>
-                          Your earlier payment could not be confirmed. You can try
-                          again below.
+                          Your earlier payment could not be confirmed. You can
+                          try again below.
                         </p>
                       )}
                     <p>
@@ -971,12 +1236,24 @@ export default function CheckoutClient({
                           <small>
                             Reference: {payment.reference.slice(0, 14)}...
                           </small>
-                          <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>
+                          <Action
+                            busy={busy}
+                            disabled={
+                              verifyingPassport || !passportGatePassed(order)
+                            }
+                            onClick={complete}
+                          >
                             Simulate verified payment
                           </Action>
                         </div>
                       ) : (
-                        <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>
+                        <Action
+                          busy={busy}
+                          disabled={
+                            verifyingPassport || !passportGatePassed(order)
+                          }
+                          onClick={complete}
+                        >
                           Check payment status
                         </Action>
                       )
@@ -985,7 +1262,13 @@ export default function CheckoutClient({
                         Continue to payment
                       </Action>
                     ) : (
-                      <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={() => void initiate()}>
+                      <Action
+                        busy={busy}
+                        disabled={
+                          verifyingPassport || !passportGatePassed(order)
+                        }
+                        onClick={() => void initiate()}
+                      >
                         Continue to Khalti
                       </Action>
                     )}
@@ -997,13 +1280,19 @@ export default function CheckoutClient({
           <aside className="order-summary">
             <div className="summary-plan">
               <span className="summary-flag">
-                {summaryPlan ? flagEmoji(summaryPlan.countryCode) : <Signal size={22} />}
+                {summaryPlan ? (
+                  flagEmoji(summaryPlan.countryCode)
+                ) : (
+                  <Signal size={22} />
+                )}
               </span>
               <span className="summary-plan-info">
                 <span className="summary-label">Order summary</span>
                 <b>{summaryPlan?.name ?? "Selected eSIM plan"}</b>
                 <small>
-                  {summaryPlan ? `${summaryPlan.countryCode} · ${summaryPlan.dataAllowance}` : "Loaded securely"}
+                  {summaryPlan
+                    ? `${summaryPlan.countryCode} · ${summaryPlan.dataAllowance}`
+                    : "Loaded securely"}
                 </small>
               </span>
             </div>
@@ -1014,12 +1303,21 @@ export default function CheckoutClient({
             <div>
               <small>Data & validity</small>
               <b>
-                {summaryPlan ? `${summaryPlan.dataAllowance} · ${summaryPlan.validityDays} days` : "Loaded securely"}
+                {summaryPlan
+                  ? `${summaryPlan.dataAllowance} · ${summaryPlan.validityDays} days`
+                  : "Loaded securely"}
               </b>
             </div>
             <div className="summary-total">
               <small>Total</small>
-              <b>NPR {(order?.totalAmountNpr ?? summaryPlan?.sellingPriceNpr ?? 0).toLocaleString()}</b>
+              <b>
+                NPR{" "}
+                {(
+                  order?.totalAmountNpr ??
+                  summaryPlan?.sellingPriceNpr ??
+                  0
+                ).toLocaleString()}
+              </b>
             </div>
             <p>
               <LockKeyhole size={14} /> Price is frozen when your order is
@@ -1047,7 +1345,7 @@ function Field({
     <label className={`${full ? "full " : ""}${error ? "field-invalid" : ""}`}>
       {label}
       {children}
-      {error&&<small className="field-error">{error}</small>}
+      {error && <small className="field-error">{error}</small>}
     </label>
   );
 }
@@ -1063,7 +1361,11 @@ function Action({
   disabled?: boolean;
 }) {
   return (
-    <button className="button wide" disabled={busy || disabled} onClick={onClick}>
+    <button
+      className="button wide"
+      disabled={busy || disabled}
+      onClick={onClick}
+    >
       {busy ? (
         <LoaderCircle className="spin" size={18} />
       ) : (
@@ -1100,11 +1402,12 @@ function PassportCheck({
   onEdit?: () => void;
 }) {
   const status = result?.status;
-  const paymentLabel = paymentStatus === "PENDING"
-    ? "Payment awaiting confirmation"
-    : paymentStatus === "FAILED"
-      ? "No confirmed payment"
-      : "Payment not started";
+  const paymentLabel =
+    paymentStatus === "PENDING"
+      ? "Payment awaiting confirmation"
+      : paymentStatus === "FAILED"
+        ? "No confirmed payment"
+        : "Payment not started";
   if (reviewStatus === "OCR_BACKGROUND") {
     return (
       <div className="passport-check background" role="status">
@@ -1112,8 +1415,9 @@ function PassportCheck({
         <span>
           <b>Document check continuing in the background</b>
           <small>
-            You can continue to Khalti now. Verification is separate from payment,
-            and we will contact you only if a clearer document is needed.
+            You can continue to Khalti now. Verification is separate from
+            payment, and we will contact you only if a clearer document is
+            needed.
           </small>
         </span>
         <span className="passport-check-tag">{paymentLabel}</span>
@@ -1146,7 +1450,11 @@ function PassportCheck({
             sharp image of the information page before continuing.
           </small>
         </span>
-        {onEdit && <button className="button secondary" onClick={onEdit}>Replace document</button>}
+        {onEdit && (
+          <button className="button secondary" onClick={onEdit}>
+            Replace document
+          </button>
+        )}
       </div>
     );
   }

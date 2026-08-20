@@ -37,7 +37,9 @@ export function Panel({
               <p className="text-xs text-muted-foreground">{description}</p>
             )}
           </div>
-          {(actions || action) && <div className="flex items-center gap-2">{actions ?? action}</div>}
+          {(actions || action) && (
+            <div className="flex items-center gap-2">{actions ?? action}</div>
+          )}
         </div>
       )}
       <CardContent

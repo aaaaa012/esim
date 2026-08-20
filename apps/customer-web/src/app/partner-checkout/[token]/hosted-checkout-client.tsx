@@ -111,7 +111,9 @@ const api = async <T,>(path: string, init?: RequestInit) => {
   try {
     payload = (await response.json()) as Envelope<T>;
   } catch {
-    throw new Error(`The server returned an invalid response (${response.status}). Please try again.`);
+    throw new Error(
+      `The server returned an invalid response (${response.status}). Please try again.`,
+    );
   }
   if (!payload.data && !payload.error) {
     if (response.ok) return undefined as T;
@@ -127,14 +129,18 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [loadFailed, setLoadFailed] = useState(false);
   const [step, setStep] = useState(1);
   const [traveler, setTraveler] = useState(initial);
-  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof Traveler, string>>>({});
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof Traveler, string>>
+  >({});
   const [files, setFiles] = useState<Record<string, File | undefined>>({});
   const [verification, setVerification] = useState<Verification | null>(null);
   const [consent, setConsent] = useState(false);
   const [compatible, setCompatible] = useState(false);
   const [busy, setBusy] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [verifyingDoc, setVerifyingDoc] = useState<"in-progress" | "done" | "failed" | null>(null);
+  const [verifyingDoc, setVerifyingDoc] = useState<
+    "in-progress" | "done" | "failed" | null
+  >(null);
   const [error, setError] = useState("");
   const [done, setDone] = useState<{ orderNumber: string } | null>(null);
 
@@ -165,7 +171,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         const allUploaded =
           value.order.requiredDocuments.length > 0 &&
           uploaded.length === value.order.requiredDocuments.length;
-        const passport = value.order.documents.find((doc) => doc.type === "PASSPORT");
+        const passport = value.order.documents.find(
+          (doc) => doc.type === "PASSPORT",
+        );
         if (passport?.passportVerificationStatus) {
           setVerification({
             status: passport.passportVerificationStatus,
@@ -173,7 +181,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           });
         }
         if (allUploaded) setStep(4);
-        else if (uploaded.length > 0 || value.order.travelerComplete) setStep(uploaded.length > 0 ? 3 : 2);
+        else if (uploaded.length > 0 || value.order.travelerComplete)
+          setStep(uploaded.length > 0 ? 3 : 2);
         else setStep(1);
       })
       .catch(() => !cancelled && setLoadFailed(true));
@@ -218,22 +227,45 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       const nextErrors: Partial<Record<keyof Traveler, string>> = {};
       for (const [key, label] of required)
         if (!traveler[key].trim()) nextErrors[key] = `${label} is required`;
-      if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email)) nextErrors.email = "Enter a valid email address";
-      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile)) nextErrors.mobile = "Enter a valid mobile number";
-      if (traveler.passportNumber && traveler.passportNumber.length < 5) nextErrors.passportNumber = "Passport number must be at least 5 characters";
-      if (traveler.dateOfBirth && new Date(traveler.dateOfBirth) >= new Date()) nextErrors.dateOfBirth = "Date of birth must be in the past";
-      if (traveler.passportExpiryDate && new Date(traveler.passportExpiryDate) <= new Date()) nextErrors.passportExpiryDate = "Passport must not be expired";
+      if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email))
+        nextErrors.email = "Enter a valid email address";
+      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile))
+        nextErrors.mobile = "Enter a valid mobile number";
+      if (traveler.passportNumber && traveler.passportNumber.length < 5)
+        nextErrors.passportNumber =
+          "Passport number must be at least 5 characters";
+      if (traveler.dateOfBirth && new Date(traveler.dateOfBirth) >= new Date())
+        nextErrors.dateOfBirth = "Date of birth must be in the past";
+      if (
+        traveler.passportExpiryDate &&
+        new Date(traveler.passportExpiryDate) <= new Date()
+      )
+        nextErrors.passportExpiryDate = "Passport must not be expired";
       setFieldErrors(nextErrors);
-      if (Object.keys(nextErrors)[0]) throw new Error("Check the highlighted traveller details");
-      if (traveler.nationality.length !== 2 || traveler.countryOfResidence.length !== 2)
-        throw new Error("Nationality and country of residence must use two-letter codes");
-      const body = Object.fromEntries(Object.entries(traveler).filter(([, v]) => v !== ""));
-      await api(`/partner-checkout/${token}/traveler`, { method: "POST", body: JSON.stringify(body) });
+      if (Object.keys(nextErrors)[0])
+        throw new Error("Check the highlighted traveller details");
+      if (
+        traveler.nationality.length !== 2 ||
+        traveler.countryOfResidence.length !== 2
+      )
+        throw new Error(
+          "Nationality and country of residence must use two-letter codes",
+        );
+      const body = Object.fromEntries(
+        Object.entries(traveler).filter(([, v]) => v !== ""),
+      );
+      await api(`/partner-checkout/${token}/traveler`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
       nextStep();
     });
 
   const runVerification = async (): Promise<boolean> => {
-    const result = await api<Verification>(`/partner-checkout/${token}/verify-passport`, { method: "POST", body: "{}" });
+    const result = await api<Verification>(
+      `/partner-checkout/${token}/verify-passport`,
+      { method: "POST", body: "{}" },
+    );
     setVerification(result);
     const ok = result.status === "VERIFIED" || result.status === "SKIPPED";
     setVerifyingDoc(ok ? "done" : "failed");
@@ -244,7 +276,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             order: {
               ...s.order,
               documents: s.order.documents.map((d) =>
-                d.type === "PASSPORT" ? { ...d, passportVerificationStatus: result.status } : d,
+                d.type === "PASSPORT"
+                  ? { ...d, passportVerificationStatus: result.status }
+                  : d,
               ),
             },
           }
@@ -270,48 +304,82 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     run(async () => {
       setVerifyingDoc("in-progress");
       try {
-        const required = session?.order.requiredDocuments ?? ["PASSPORT", "TICKET"];
-      for (const type of required) {
-        const file = files[type];
-        if (!file) throw new Error(`Upload your ${type === "PASSPORT" ? "passport" : type.toLowerCase()} to continue`);
-        if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} exceeds the 10 MB limit`);
-        const authorization = await api<{ id: string; type: string; status: string; upload: Record<string, unknown> }>(
-          `/partner-checkout/${token}/documents`,
-          { method: "POST", body: JSON.stringify({ type, fileName: file.name }) },
-        );
-        const upload = authorization.upload as {
-          mode: string;
-          endpoint?: string;
-          apiKey?: string;
-          publicId?: string;
-          deliveryType?: string;
-          timestamp?: number;
-          signature?: string;
-          folder?: string;
-        };
-        if (upload.mode === "local-simulator") {
-          await api(`/partner-checkout/${token}/documents/${authorization.id}/confirm`, { method: "POST", body: "{}" });
-          continue;
+        const required = session?.order.requiredDocuments ?? [
+          "PASSPORT",
+          "TICKET",
+        ];
+        for (const type of required) {
+          const file = files[type];
+          if (!file)
+            throw new Error(
+              `Upload your ${type === "PASSPORT" ? "passport" : type.toLowerCase()} to continue`,
+            );
+          if (file.size > 10 * 1024 * 1024)
+            throw new Error(`${file.name} exceeds the 10 MB limit`);
+          const authorization = await api<{
+            id: string;
+            type: string;
+            status: string;
+            upload: Record<string, unknown>;
+          }>(`/partner-checkout/${token}/documents`, {
+            method: "POST",
+            body: JSON.stringify({ type, fileName: file.name }),
+          });
+          const upload = authorization.upload as {
+            mode: string;
+            endpoint?: string;
+            apiKey?: string;
+            publicId?: string;
+            deliveryType?: string;
+            timestamp?: number;
+            signature?: string;
+            folder?: string;
+          };
+          if (upload.mode === "local-simulator") {
+            await api(
+              `/partner-checkout/${token}/documents/${authorization.id}/confirm`,
+              { method: "POST", body: "{}" },
+            );
+            continue;
+          }
+          if (
+            upload.mode !== "cloudinary-signed" ||
+            !upload.endpoint ||
+            !upload.timestamp ||
+            !upload.signature
+          )
+            throw new Error("Private document storage is unavailable");
+          const form = new FormData();
+          form.append("file", file);
+          form.append("api_key", upload.apiKey!);
+          form.append("timestamp", String(upload.timestamp));
+          form.append("signature", upload.signature);
+          form.append("folder", upload.folder!);
+          form.append("public_id", upload.publicId!);
+          form.append("type", upload.deliveryType!);
+          const uploaded = await fetch(upload.endpoint, {
+            method: "POST",
+            body: form,
+          });
+          if (!uploaded.ok) {
+            let bodyText = "";
+            try {
+              bodyText = ((await uploaded.text()) ?? "").slice(0, 200);
+            } catch {
+              /* ignore */
+            }
+            throw new Error(
+              bodyText
+                ? `Upload failed for ${file.name}: ${bodyText}`
+                : `Upload failed for ${file.name}`,
+            );
+          }
+          await api(
+            `/partner-checkout/${token}/documents/${authorization.id}/confirm`,
+            { method: "POST", body: "{}" },
+          );
         }
-        if (upload.mode !== "cloudinary-signed" || !upload.endpoint || !upload.timestamp || !upload.signature)
-          throw new Error("Private document storage is unavailable");
-        const form = new FormData();
-        form.append("file", file);
-        form.append("api_key", upload.apiKey!);
-        form.append("timestamp", String(upload.timestamp));
-        form.append("signature", upload.signature);
-        form.append("folder", upload.folder!);
-        form.append("public_id", upload.publicId!);
-        form.append("type", upload.deliveryType!);
-        const uploaded = await fetch(upload.endpoint, { method: "POST", body: form });
-        if (!uploaded.ok) {
-          let bodyText = "";
-          try { bodyText = (await uploaded.text() ?? "").slice(0, 200); } catch { /* ignore */ }
-          throw new Error(bodyText ? `Upload failed for ${file.name}: ${bodyText}` : `Upload failed for ${file.name}`);
-        }
-        await api(`/partner-checkout/${token}/documents/${authorization.id}/confirm`, { method: "POST", body: "{}" });
-      }
-      if (await runVerification()) setStep(4);
+        if (await runVerification()) setStep(4);
       } catch (e) {
         setVerifyingDoc(null);
         throw e;
@@ -326,11 +394,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
 
   const complete = () =>
     run(async () => {
-      if (!consent) throw new Error("Please confirm that you accept before completing");
-      const result = await api<{ orderId: string; orderNumber: string; status: string }>(
-        `/partner-checkout/${token}/complete`,
-        { method: "POST", body: JSON.stringify({ consentAccepted: true }) },
-      );
+      if (!consent)
+        throw new Error("Please confirm that you accept before completing");
+      const result = await api<{
+        orderId: string;
+        orderNumber: string;
+        status: string;
+      }>(`/partner-checkout/${token}/complete`, {
+        method: "POST",
+        body: JSON.stringify({ consentAccepted: true }),
+      });
       setDone({ orderNumber: result.orderNumber });
     });
 
@@ -340,14 +413,19 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         <div className="checkout-recovery">
           <QrCode />
           <h1>Checkout unavailable</h1>
-          <p>The checkout link is invalid, expired, or has already been completed.</p>
+          <p>
+            The checkout link is invalid, expired, or has already been
+            completed.
+          </p>
         </div>
       </main>
     );
   if (!session && !loadFailed)
     return (
       <main className="checkout-page">
-        <div className="checkout-shell"><div className="form-error">Loading your checkout…</div></div>
+        <div className="checkout-shell">
+          <div className="form-error">Loading your checkout…</div>
+        </div>
       </main>
     );
 
@@ -361,7 +439,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             <div className="hosted-brand">
               {session.partner.brand?.logoUrl && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={session.partner.brand.logoUrl} alt={session.partner.name} className="partner-logo" />
+                <img
+                  src={session.partner.brand.logoUrl}
+                  alt={session.partner.name}
+                  className="partner-logo"
+                />
               )}
               <span className="eyebrow">
                 <LockKeyhole size={13} />
@@ -370,7 +452,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             </div>
           )}
           <h1>Your travel eSIM</h1>
-          <p>Complete your traveller details and documents to activate your {plan.name} eSIM securely.</p>
+          <p>
+            Complete your traveller details and documents to activate your{" "}
+            {plan.name} eSIM securely.
+          </p>
         </div>
         <div className="checkout-progress">
           <span style={{ width: `${step * (100 / 4)}%` }} />
@@ -384,18 +469,26 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   <CheckCircle2 size={42} />
                   <b>Order completed</b>
                   <span>{done.orderNumber}</span>
-                  <p>Your eSIM is being activated automatically. The partner will send your activation QR to you shortly.</p>
+                  <p>
+                    Your eSIM is being activated automatically. The partner will
+                    send your activation QR to you shortly.
+                  </p>
                 </div>
               </div>
             ) : (
               <>
                 <div className="step-tabs">
-                  {(isTopUp ? ["Compatibility", "Review"] : ["Compatibility", "Traveller", "Documents", "Review"]).map((label, index) => {
+                  {(isTopUp
+                    ? ["Compatibility", "Review"]
+                    : ["Compatibility", "Traveller", "Documents", "Review"]
+                  ).map((label, index) => {
                     const value = isTopUp ? (index === 0 ? 1 : 4) : index + 1;
                     return (
                       <div
                         key={label}
-                        className={step === value ? "active" : step > value ? "done" : ""}
+                        className={
+                          step === value ? "active" : step > value ? "done" : ""
+                        }
                       >
                         <i>{step > value ? <Check size={13} /> : value}</i>
                         <span>{label}</span>
@@ -405,121 +498,323 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                 </div>
                 {step === 1 && (
                   <div className="form-section">
-                    <span className="form-icon"><ShieldCheck /></span>
+                    <span className="form-icon">
+                      <ShieldCheck />
+                    </span>
                     <h1>Device compatibility</h1>
-                    <p>Your phone must support eSIM and be carrier-unlocked. Coverage starts after first connection at your destination.</p>
+                    <p>
+                      Your phone must support eSIM and be carrier-unlocked.
+                      Coverage starts after first connection at your
+                      destination.
+                    </p>
                     <label className="confirm-box">
-                      <input type="checkbox" checked={compatible} onChange={(e) => setCompatible(e.target.checked)} />
+                      <input
+                        type="checkbox"
+                        checked={compatible}
+                        onChange={(e) => setCompatible(e.target.checked)}
+                      />
                       <span>
                         <b>I confirm my device is eSIM compatible</b>
-                        <small>Incompatible devices are not eligible for a refund.</small>
+                        <small>
+                          Incompatible devices are not eligible for a refund.
+                        </small>
                       </span>
                     </label>
                     <Nav
                       back={() => {}}
                       backHidden
                       busy={busy}
-                      next={() => run(async () => { if (!compatible) throw new Error("Confirm your device is eSIM compatible first"); setStep(isTopUp ? 4 : 2); })}
+                      next={() =>
+                        run(async () => {
+                          if (!compatible)
+                            throw new Error(
+                              "Confirm your device is eSIM compatible first",
+                            );
+                          setStep(isTopUp ? 4 : 2);
+                        })
+                      }
                     />
                   </div>
                 )}
                 {step === 2 && (
                   <div className="form-section">
-                    <span className="form-icon"><UserRound /></span>
+                    <span className="form-icon">
+                      <UserRound />
+                    </span>
                     <h1>Traveller information</h1>
-                    <p>Enter details exactly as shown on the passport. Use two-letter country codes.</p>
+                    <p>
+                      Enter details exactly as shown on the passport. Use
+                      two-letter country codes.
+                    </p>
                     <div className="form-grid">
                       <Field label="Title">
-                        <select value={traveler.title} onChange={(e) => update("title", e.target.value)}>
-                          <option>MR</option><option>MS</option><option>MRS</option>
+                        <select
+                          value={traveler.title}
+                          onChange={(e) => update("title", e.target.value)}
+                        >
+                          <option>MR</option>
+                          <option>MS</option>
+                          <option>MRS</option>
                         </select>
                       </Field>
                       <Field label="First name" error={fieldErrors.firstName}>
-                        <input name="firstName" value={traveler.firstName} onChange={(e) => update("firstName", e.target.value)} />
+                        <input
+                          name="firstName"
+                          value={traveler.firstName}
+                          onChange={(e) => update("firstName", e.target.value)}
+                        />
                       </Field>
                       <Field label="Middle name (optional)">
-                        <input value={traveler.middleName} onChange={(e) => update("middleName", e.target.value)} />
+                        <input
+                          value={traveler.middleName}
+                          onChange={(e) => update("middleName", e.target.value)}
+                        />
                       </Field>
                       <Field label="Surname" error={fieldErrors.surname}>
-                        <input name="surname" value={traveler.surname} onChange={(e) => update("surname", e.target.value)} />
+                        <input
+                          name="surname"
+                          value={traveler.surname}
+                          onChange={(e) => update("surname", e.target.value)}
+                        />
                       </Field>
-                      <Field label="Date of birth" error={fieldErrors.dateOfBirth}>
-                        <DatePicker name="dateOfBirth" value={traveler.dateOfBirth} max={new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)} placeholder="Choose date of birth" onChange={(value) => update("dateOfBirth", value)} />
+                      <Field
+                        label="Date of birth"
+                        error={fieldErrors.dateOfBirth}
+                      >
+                        <DatePicker
+                          name="dateOfBirth"
+                          value={traveler.dateOfBirth}
+                          max={new Date(Date.now() - 86_400_000)
+                            .toISOString()
+                            .slice(0, 10)}
+                          placeholder="Choose date of birth"
+                          onChange={(value) => update("dateOfBirth", value)}
+                        />
                       </Field>
-                      <Field label="Passport number" error={fieldErrors.passportNumber}>
-                        <input name="passportNumber" value={traveler.passportNumber} onChange={(e) => update("passportNumber", e.target.value.toUpperCase())} />
+                      <Field
+                        label="Passport number"
+                        error={fieldErrors.passportNumber}
+                      >
+                        <input
+                          name="passportNumber"
+                          value={traveler.passportNumber}
+                          onChange={(e) =>
+                            update(
+                              "passportNumber",
+                              e.target.value.toUpperCase(),
+                            )
+                          }
+                        />
                       </Field>
-                      <Field label="Passport expiry" error={fieldErrors.passportExpiryDate}>
-                        <DatePicker name="passportExpiryDate" value={traveler.passportExpiryDate} min={new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)} placeholder="Choose passport expiry" onChange={(value) => update("passportExpiryDate", value)} />
+                      <Field
+                        label="Passport expiry"
+                        error={fieldErrors.passportExpiryDate}
+                      >
+                        <DatePicker
+                          name="passportExpiryDate"
+                          value={traveler.passportExpiryDate}
+                          min={new Date(Date.now() + 86_400_000)
+                            .toISOString()
+                            .slice(0, 10)}
+                          placeholder="Choose passport expiry"
+                          onChange={(value) =>
+                            update("passportExpiryDate", value)
+                          }
+                        />
                       </Field>
-                      <Field label="Nationality" error={fieldErrors.nationality}>
-                        <input name="nationality" placeholder="NP" list="hc-country-codes" maxLength={2} value={traveler.nationality} onChange={(e) => update("nationality", e.target.value.toUpperCase())} />
+                      <Field
+                        label="Nationality"
+                        error={fieldErrors.nationality}
+                      >
+                        <input
+                          name="nationality"
+                          placeholder="NP"
+                          list="hc-country-codes"
+                          maxLength={2}
+                          value={traveler.nationality}
+                          onChange={(e) =>
+                            update("nationality", e.target.value.toUpperCase())
+                          }
+                        />
                       </Field>
                       <Field label="City / district" error={fieldErrors.city}>
-                        <input name="city" value={traveler.city} onChange={(e) => update("city", e.target.value)} />
+                        <input
+                          name="city"
+                          value={traveler.city}
+                          onChange={(e) => update("city", e.target.value)}
+                        />
                       </Field>
-                      <Field label="Country of residence" error={fieldErrors.countryOfResidence}>
-                        <input name="countryOfResidence" placeholder="NP" list="hc-country-codes" maxLength={2} value={traveler.countryOfResidence} onChange={(e) => update("countryOfResidence", e.target.value.toUpperCase())} />
+                      <Field
+                        label="Country of residence"
+                        error={fieldErrors.countryOfResidence}
+                      >
+                        <input
+                          name="countryOfResidence"
+                          placeholder="NP"
+                          list="hc-country-codes"
+                          maxLength={2}
+                          value={traveler.countryOfResidence}
+                          onChange={(e) =>
+                            update(
+                              "countryOfResidence",
+                              e.target.value.toUpperCase(),
+                            )
+                          }
+                        />
                       </Field>
                       <Field label="Email" error={fieldErrors.email}>
-                        <input name="email" type="email" value={traveler.email} onChange={(e) => update("email", e.target.value)} />
+                        <input
+                          name="email"
+                          type="email"
+                          value={traveler.email}
+                          onChange={(e) => update("email", e.target.value)}
+                        />
                       </Field>
-                      <Field label="Mobile / WhatsApp" error={fieldErrors.mobile}>
-                        <input name="mobile" inputMode="tel" value={traveler.mobile} onChange={(e) => update("mobile", e.target.value)} />
+                      <Field
+                        label="Mobile / WhatsApp"
+                        error={fieldErrors.mobile}
+                      >
+                        <input
+                          name="mobile"
+                          inputMode="tel"
+                          value={traveler.mobile}
+                          onChange={(e) => update("mobile", e.target.value)}
+                        />
                       </Field>
                       <Field label="Employer / business (optional)" full>
-                        <input value={traveler.employerOrBusinessName} onChange={(e) => update("employerOrBusinessName", e.target.value)} />
+                        <input
+                          value={traveler.employerOrBusinessName}
+                          onChange={(e) =>
+                            update("employerOrBusinessName", e.target.value)
+                          }
+                        />
                       </Field>
                     </div>
-                    <datalist id="hc-country-codes"><option value="NP">Nepal</option><option value="IN">India</option><option value="US">United States</option><option value="GB">United Kingdom</option><option value="AE">United Arab Emirates</option><option value="JP">Japan</option></datalist>
-                    <Nav back={() => prevStep()} busy={busy} next={saveTraveler} />
+                    <datalist id="hc-country-codes">
+                      <option value="NP">Nepal</option>
+                      <option value="IN">India</option>
+                      <option value="US">United States</option>
+                      <option value="GB">United Kingdom</option>
+                      <option value="AE">United Arab Emirates</option>
+                      <option value="JP">Japan</option>
+                    </datalist>
+                    <Nav
+                      back={() => prevStep()}
+                      busy={busy}
+                      next={saveTraveler}
+                    />
                   </div>
                 )}
                 {step === 3 && (
                   <div className="form-section">
-                    <span className="form-icon"><FileCheck2 /></span>
+                    <span className="form-icon">
+                      <FileCheck2 />
+                    </span>
                     <h2>Travel documents</h2>
-                    <p>PDF, JPG or PNG. Your documents are kept private and verified securely.</p>
+                    <p>
+                      PDF, JPG or PNG. Your documents are kept private and
+                      verified securely.
+                    </p>
                     <div className="upload-list">
                       {session!.order.requiredDocuments.map((type) => (
                         <FileField
                           key={type}
-                          label={type === "PASSPORT" ? "Passport" : type === "TICKET" ? "Travel ticket" : "Visa"}
+                          label={
+                            type === "PASSPORT"
+                              ? "Passport"
+                              : type === "TICKET"
+                                ? "Travel ticket"
+                                : "Visa"
+                          }
                           file={files[type]}
-                          onChange={(v) => setFiles((f) => ({ ...f, [type]: v }))}
+                          onChange={(v) =>
+                            setFiles((f) => ({ ...f, [type]: v }))
+                          }
                         />
                       ))}
                     </div>
-                    <Nav back={() => prevStep()} busy={busy} next={saveDocuments} />
+                    <Nav
+                      back={() => prevStep()}
+                      busy={busy}
+                      next={saveDocuments}
+                    />
                   </div>
                 )}
                 {step === 4 && (
                   <div className="form-section">
-                    {isTopUp ? <h2>Review &amp; confirm data top-up</h2> : <h2>Review &amp; confirm</h2>}
-                    {!isTopUp && (
-                      verification === null && !verifying ? (
-                        <PassportCheck status={undefined} busy={false} onRecheck={() => void verifyPassport()} />
+                    {isTopUp ? (
+                      <h2>Review &amp; confirm data top-up</h2>
+                    ) : (
+                      <h2>Review &amp; confirm</h2>
+                    )}
+                    {!isTopUp &&
+                      (verification === null && !verifying ? (
+                        <PassportCheck
+                          status={undefined}
+                          busy={false}
+                          onRecheck={() => void verifyPassport()}
+                        />
                       ) : verification === null ? (
-                        <PassportCheck status={undefined} busy={verifying} onRecheck={() => void verifyPassport()} />
+                        <PassportCheck
+                          status={undefined}
+                          busy={verifying}
+                          onRecheck={() => void verifyPassport()}
+                        />
                       ) : (
-                        <PassportCheck status={verification.status} busy={false} onRecheck={() => void verifyPassport()} onEdit={() => setStep(2)} />
+                        <PassportCheck
+                          status={verification.status}
+                          busy={false}
+                          onRecheck={() => void verifyPassport()}
+                          onEdit={() => setStep(2)}
+                        />
                       ))}
                     {isTopUp && (
                       <p className="form-note">
-                        This is a data top-up for your existing eSIM. No traveller details or new documents are required.
+                        This is a data top-up for your existing eSIM. No
+                        traveller details or new documents are required.
                       </p>
                     )}
                     <label className="confirm-box">
-                      <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+                      <input
+                        type="checkbox"
+                        checked={consent}
+                        onChange={(e) => setConsent(e.target.checked)}
+                      />
                       <span>
-                        <b>{isTopUp ? "I confirm I want to top up my existing eSIM" : "I confirm the traveller details and documents are correct"}</b>
-                        <small>Your order will be submitted to {session?.partner?.name ?? "the partner"} for activation.</small>
+                        <b>
+                          {isTopUp
+                            ? "I confirm I want to top up my existing eSIM"
+                            : "I confirm the traveller details and documents are correct"}
+                        </b>
+                        <small>
+                          Your order will be submitted to{" "}
+                          {session?.partner?.name ?? "the partner"} for
+                          activation.
+                        </small>
                       </span>
                     </label>
                     <div className="form-actions">
-                      {!isTopUp && <button className="button secondary" onClick={() => setStep(3)}><ChevronLeft size={16} /> Documents</button>}
-                      {isTopUp && <button className="button secondary" onClick={() => setStep(1)}><ChevronLeft size={16} /> Back</button>}
-                      <Action busy={busy} disabled={verifying || !gatePassed || !consent} onClick={complete}>
+                      {!isTopUp && (
+                        <button
+                          className="button secondary"
+                          onClick={() => setStep(3)}
+                        >
+                          <ChevronLeft size={16} /> Documents
+                        </button>
+                      )}
+                      {isTopUp && (
+                        <button
+                          className="button secondary"
+                          onClick={() => setStep(1)}
+                        >
+                          <ChevronLeft size={16} /> Back
+                        </button>
+                      )}
+                      <Action
+                        busy={busy}
+                        disabled={verifying || !gatePassed || !consent}
+                        onClick={complete}
+                      >
                         Complete order
                       </Action>
                     </div>
@@ -530,18 +825,41 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           </section>
           <aside className="order-summary">
             <div className="summary-plan">
-              <span className="summary-flag">{flagEmoji(plan.countryCode) ?? <Signal size={22} />}</span>
+              <span className="summary-flag">
+                {flagEmoji(plan.countryCode) ?? <Signal size={22} />}
+              </span>
               <span className="summary-plan-info">
                 <span className="summary-label">Order summary</span>
                 <b>{plan.name}</b>
-                <small>{plan.countryCode} · {plan.dataAllowance}</small>
+                <small>
+                  {plan.countryCode} · {plan.dataAllowance}
+                </small>
               </span>
             </div>
-            <div><small>Destination</small><b>{plan.countryCode}</b></div>
-            <div><small>Data &amp; validity</small><b>{plan.dataAllowance} · {plan.validityDays} days</b></div>
-            <div className="summary-total"><small>Total</small><b>{session!.order.currency} {(session!.order.amountNpr).toLocaleString()}</b></div>
-            <p><LockKeyhole size={14} /> Price is frozen by your agent.</p>
-            <p><ShieldCheck size={14} /> Your documents are encrypted and verified securely.</p>
+            <div>
+              <small>Destination</small>
+              <b>{plan.countryCode}</b>
+            </div>
+            <div>
+              <small>Data &amp; validity</small>
+              <b>
+                {plan.dataAllowance} · {plan.validityDays} days
+              </b>
+            </div>
+            <div className="summary-total">
+              <small>Total</small>
+              <b>
+                {session!.order.currency}{" "}
+                {session!.order.amountNpr.toLocaleString()}
+              </b>
+            </div>
+            <p>
+              <LockKeyhole size={14} /> Price is frozen by your agent.
+            </p>
+            <p>
+              <ShieldCheck size={14} /> Your documents are encrypted and
+              verified securely.
+            </p>
           </aside>
         </div>
       </div>
@@ -558,17 +876,27 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             setVerifyingDoc(null);
           }}
         >
-          <div className={`verify-modal ${verifyingDoc === "in-progress" ? "checking" : verifyingDoc === "done" ? "done" : "failed"}`}>
+          <div
+            className={`verify-modal ${verifyingDoc === "in-progress" ? "checking" : verifyingDoc === "done" ? "done" : "failed"}`}
+          >
             {verifyingDoc === "in-progress" ? (
               <>
                 <LoaderCircle className="spin verify-modal-icon" size={38} />
                 <b id="verify-modal-title">Verifying your passport</b>
-                <p>We are uploading your documents securely and checking your passport against the traveller details you entered. This usually takes a few seconds…</p>
+                <p>
+                  We are uploading your documents securely and checking your
+                  passport against the traveller details you entered. This
+                  usually takes a few seconds…
+                </p>
               </>
             ) : verifyingDoc === "done" ? (
               <>
                 <CheckCircle2 className="verify-modal-icon" size={38} />
-                <b id="verify-modal-title">{verification?.status === "SKIPPED" ? "Verification skipped" : "Passport verified"}</b>
+                <b id="verify-modal-title">
+                  {verification?.status === "SKIPPED"
+                    ? "Verification skipped"
+                    : "Passport verified"}
+                </b>
                 <p>
                   {verification?.status === "SKIPPED"
                     ? "Document verification is disabled in this environment."
@@ -581,7 +909,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               <>
                 <AlertTriangle className="verify-modal-icon" size={38} />
                 <b id="verify-modal-title">We could not verify your passport</b>
-                <p>Your passport doesn&apos;t match the traveller details you entered. Review your details first, or try a clearer photo of your passport.</p>
+                <p>
+                  Your passport doesn&apos;t match the traveller details you
+                  entered. Review your details first, or try a clearer photo of
+                  your passport.
+                </p>
               </>
             )}
             {verifyingDoc !== "in-progress" && (
@@ -609,7 +941,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     </button>
                   </>
                 ) : (
-                  <button className="button primary" autoFocus onClick={() => setVerifyingDoc(null)}>
+                  <button
+                    className="button primary"
+                    autoFocus
+                    onClick={() => setVerifyingDoc(null)}
+                  >
                     Continue
                   </button>
                 )}
@@ -622,7 +958,17 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   );
 }
 
-function Field({ label, full, error, children }: { label: string; full?: boolean; error?: string | undefined; children: React.ReactNode }) {
+function Field({
+  label,
+  full,
+  error,
+  children,
+}: {
+  label: string;
+  full?: boolean;
+  error?: string | undefined;
+  children: React.ReactNode;
+}) {
   return (
     <label className={`${full ? "full " : ""}${error ? "field-invalid" : ""}`}>
       {label}
@@ -631,60 +977,200 @@ function Field({ label, full, error, children }: { label: string; full?: boolean
     </label>
   );
 }
-function Action({ busy, onClick, children, disabled }: { busy: boolean; onClick: () => void; children: React.ReactNode; disabled?: boolean }) {
+function Action({
+  busy,
+  onClick,
+  children,
+  disabled,
+}: {
+  busy: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
   return (
-    <button className="button wide" disabled={busy || disabled} onClick={onClick}>
-      {busy ? <LoaderCircle className="spin" size={18} /> : <>{children}<ChevronRight size={18} /></>}
+    <button
+      className="button wide"
+      disabled={busy || disabled}
+      onClick={onClick}
+    >
+      {busy ? (
+        <LoaderCircle className="spin" size={18} />
+      ) : (
+        <>
+          {children}
+          <ChevronRight size={18} />
+        </>
+      )}
     </button>
   );
 }
-function Nav({ back, busy, next, backHidden }: { back: () => void; busy: boolean; next: () => void; backHidden?: boolean }) {
+function Nav({
+  back,
+  busy,
+  next,
+  backHidden,
+}: {
+  back: () => void;
+  busy: boolean;
+  next: () => void;
+  backHidden?: boolean;
+}) {
   return (
     <div className="form-actions">
       {!backHidden && (
-        <button className="button secondary" onClick={back}>Back</button>
+        <button className="button secondary" onClick={back}>
+          Back
+        </button>
       )}
-      <Action busy={busy} onClick={next}>Save and continue</Action>
+      <Action busy={busy} onClick={next}>
+        Save and continue
+      </Action>
     </div>
   );
 }
-function PassportCheck({ status, busy, onRecheck, onEdit }: { status: string | undefined; busy: boolean; onRecheck: () => void; onEdit?: () => void }) {
+function PassportCheck({
+  status,
+  busy,
+  onRecheck,
+  onEdit,
+}: {
+  status: string | undefined;
+  busy: boolean;
+  onRecheck: () => void;
+  onEdit?: () => void;
+}) {
   if (status === "VERIFIED")
     return (
-      <div className="passport-check verified"><CheckCircle2 size={20} /><span><b>Passport verified</b><small>Your passport matches your traveller details.</small></span></div>
+      <div className="passport-check verified">
+        <CheckCircle2 size={20} />
+        <span>
+          <b>Passport verified</b>
+          <small>Your passport matches your traveller details.</small>
+        </span>
+      </div>
     );
   if (status === "SKIPPED")
     return (
-      <div className="passport-check skipped"><ShieldCheck size={20} /><span><b>Passport check</b><small>Document verification is disabled in this environment.</small></span></div>
+      <div className="passport-check skipped">
+        <ShieldCheck size={20} />
+        <span>
+          <b>Passport check</b>
+          <small>Document verification is disabled in this environment.</small>
+        </span>
+      </div>
     );
   if (busy)
     return (
-      <div className="passport-check checking"><LoaderCircle className="spin" size={20} /><span><b>Verifying your passport</b><small>Reading the document and comparing it with your traveller details…</small></span></div>
+      <div className="passport-check checking">
+        <LoaderCircle className="spin" size={20} />
+        <span>
+          <b>Verifying your passport</b>
+          <small>
+            Reading the document and comparing it with your traveller details…
+          </small>
+        </span>
+      </div>
     );
   if (status === "PARTIAL")
     return (
-      <div className="passport-check warning"><AlertTriangle size={20} /><span><b>Partial match</b><small>Your passport number matched, but not all details. Check your traveller details or re-check with a clearer photo.</small></span>{onEdit && <button className="button secondary" onClick={onEdit}>Edit traveller details</button>}<button className="button secondary" onClick={onRecheck}>Re-check</button></div>
+      <div className="passport-check warning">
+        <AlertTriangle size={20} />
+        <span>
+          <b>Partial match</b>
+          <small>
+            Your passport number matched, but not all details. Check your
+            traveller details or re-check with a clearer photo.
+          </small>
+        </span>
+        {onEdit && (
+          <button className="button secondary" onClick={onEdit}>
+            Edit traveller details
+          </button>
+        )}
+        <button className="button secondary" onClick={onRecheck}>
+          Re-check
+        </button>
+      </div>
     );
   if (status === "FAILED")
     return (
-      <div className="passport-check failed"><AlertTriangle size={20} /><span><b>Passport doesn&apos;t match</b><small>We couldn&apos;t verify your details from the uploaded passport. Review your traveller details, then re-check.</small></span>{onEdit && <button className="button secondary" onClick={onEdit}>Edit traveller details</button>}<button className="button secondary" onClick={onRecheck}>Re-check</button></div>
+      <div className="passport-check failed">
+        <AlertTriangle size={20} />
+        <span>
+          <b>Passport doesn&apos;t match</b>
+          <small>
+            We couldn&apos;t verify your details from the uploaded passport.
+            Review your traveller details, then re-check.
+          </small>
+        </span>
+        {onEdit && (
+          <button className="button secondary" onClick={onEdit}>
+            Edit traveller details
+          </button>
+        )}
+        <button className="button secondary" onClick={onRecheck}>
+          Re-check
+        </button>
+      </div>
     );
   return (
-    <div className="passport-check"><ShieldCheck size={20} /><span><b>Passport check</b><small>We read your passport and compare it with your traveller details before completion.</small></span>
-      <button className="button secondary" onClick={onRecheck}>Run check</button></div>
+    <div className="passport-check">
+      <ShieldCheck size={20} />
+      <span>
+        <b>Passport check</b>
+        <small>
+          We read your passport and compare it with your traveller details
+          before completion.
+        </small>
+      </span>
+      <button className="button secondary" onClick={onRecheck}>
+        Run check
+      </button>
+    </div>
   );
 }
-function FileField({ label, file, onChange }: { label: string; file: File | undefined; onChange: (file: File | undefined) => void }) {
+function FileField({
+  label,
+  file,
+  onChange,
+}: {
+  label: string;
+  file: File | undefined;
+  onChange: (file: File | undefined) => void;
+}) {
   const captureRef = useRef<HTMLInputElement>(null);
   return (
     <div className="file-field">
       <label className="file-input">
-        <input type="file" accept="application/pdf,image/jpeg,image/png" onChange={(e) => onChange(e.target.files?.[0])} />
-        <span><b>{file?.name ?? label}</b><small>{file ? `${Math.ceil(file.size / 1024)} KB` : "PDF, JPG or PNG"}</small></span>
+        <input
+          type="file"
+          accept="application/pdf,image/jpeg,image/png"
+          onChange={(e) => onChange(e.target.files?.[0])}
+        />
+        <span>
+          <b>{file?.name ?? label}</b>
+          <small>
+            {file ? `${Math.ceil(file.size / 1024)} KB` : "PDF, JPG or PNG"}
+          </small>
+        </span>
         <em>{file ? "Replace" : "Choose file"}</em>
       </label>
-      <input ref={captureRef} type="file" accept="image/jpeg,image/png" capture="environment" style={{ display: "none" }} onChange={(e) => onChange(e.target.files?.[0])} />
-      <button type="button" className="button secondary" onClick={() => captureRef.current?.click()}>Take photo</button>
+      <input
+        ref={captureRef}
+        type="file"
+        accept="image/jpeg,image/png"
+        capture="environment"
+        style={{ display: "none" }}
+        onChange={(e) => onChange(e.target.files?.[0])}
+      />
+      <button
+        type="button"
+        className="button secondary"
+        onClick={() => captureRef.current?.click()}
+      >
+        Take photo
+      </button>
     </div>
   );
 }

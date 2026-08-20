@@ -1,6 +1,6 @@
 # Visa Compass — Partner Module Architecture (internal)
 
-This document explains how the partner integration works *inside our codebase*, based on branch
+This document explains how the partner integration works _inside our codebase_, based on branch
 `API-integratedv1`. It answers three questions:
 
 1. How is it configured on our end (onboarding, our schema, auth, ops tooling)?
@@ -16,16 +16,16 @@ internal/server-side view. Base URL `/api/v1/partners`, Swagger `/api/partner-do
 
 ### 1.1 Where the code lives
 
-| Concern | File |
-|---|---|
-| Public partner routes (`/partners/...`) | `src/modules/partners/partners.controller.ts` |
-| Public partner business logic | `src/modules/partners/partner.service.ts` (~1400 lines) |
-| API-key auth / scopes / rate-limit | `src/modules/partners/partner-auth.guard.ts` |
-| Super Admin routes (`/admin/partners/...`) | `src/modules/partners/partner-admin.controller.ts` |
-| Super Admin business logic | `src/modules/partners/partner-admin.service.ts` |
-| Hosted-checkout (token) flow | `src/modules/partners/partner-checkout.controller.ts` |
-| Outbound signed webhooks | `src/jobs/partner-webhook.processor.ts` |
-| Persistence models | `apps/api/prisma/schema.prisma` (models below `Partner`) |
+| Concern                                    | File                                                     |
+| ------------------------------------------ | -------------------------------------------------------- |
+| Public partner routes (`/partners/...`)    | `src/modules/partners/partners.controller.ts`            |
+| Public partner business logic              | `src/modules/partners/partner.service.ts` (~1400 lines)  |
+| API-key auth / scopes / rate-limit         | `src/modules/partners/partner-auth.guard.ts`             |
+| Super Admin routes (`/admin/partners/...`) | `src/modules/partners/partner-admin.controller.ts`       |
+| Super Admin business logic                 | `src/modules/partners/partner-admin.service.ts`          |
+| Hosted-checkout (token) flow               | `src/modules/partners/partner-checkout.controller.ts`    |
+| Outbound signed webhooks                   | `src/jobs/partner-webhook.processor.ts`                  |
+| Persistence models                         | `apps/api/prisma/schema.prisma` (models below `Partner`) |
 
 All are wired in `src/app.module.ts`: `PartnersController`, `PartnerAdminController`,
 `PartnerCheckoutController` are registered as controllers; `PartnerService`, `PartnerAdminService`,
@@ -103,12 +103,14 @@ Capabilities advert (`GET /partners/capabilities`) reports `settlementMethods: [
 ## 2. End-to-end step-by-step flow
 
 ### Step 0 — Discover
+
 `GET /partners/capabilities` and `GET /partners/plans?country=AE` (scope `catalog:read`).
 Server returns ACTIVE plans + their `sellingPrice` (public catalogue) and required documents
 (`PASSPORT`, `TICKET`). The price used is the **public `Plan.sellingPrice`**, snapshotted later at
 order creation so later catalogue edits can't alter an existing order or its ledger debit.
 
 ### Step 1 — Request upload sessions
+
 `POST /partners/document-upload-sessions` (scope `documents:write`, requires `Idempotency-Key`).
 Body lists `documents[{type,fileName,contentType,sizeBytes}]` for a given `externalOrderId`.
 `createUploadSessions` validates that document types are non-duplicate and safe, then creates
@@ -117,10 +119,12 @@ Body lists `documents[{type,fileName,contentType,sizeBytes}]` for a given `exter
 and format for later verification.
 
 ### Step 2 — Partner uploads bytes
+
 The partner POSTs the raw bytes directly to Cloudinary using the presigned signature. The bytes are
 not proxied through us, but the intent "remembers" the expected size/content-type.
 
 ### Step 3 — Resolve the order (`createCompleteOrder`)
+
 `POST /partners/orders` (scope `orders:write`, `Idempotency-Key`). This is the core of the MVP.
 
 1. **Settlement guard**: if `settlement.method === "HOSTED_PAYMENT"` → `410 HOSTED_PAYMENT_DEPRECATED`
@@ -157,6 +161,7 @@ not proxied through us, but the intent "remembers" the expected size/content-typ
    `retryAfterSeconds` hint — never blocking on provisioning.
 
 ### Step 4 — Provisioning → `QR_READY` → `COMPLETED`
+
 The (queued or local) provisioning job calls our connectivity provider (`AurigaMockProvider` /
 `TransatelProvider`). On success it stores the activation `qrPayload`, moves the order to
 **`QR_READY`**, and assigns the profile. **`QR_READY` is the commercial fulfillment milestone** — the
@@ -164,6 +169,7 @@ partner may now deliver the eSIM. `COMPLETED` is set only when the provider conf
 Customers/operations can later resend or download the password-protected QR.
 
 ### Step 5 — Partner reads result
+
 - `GET /partners/orders`, `GET /partners/orders/:id`, `GET /partners/orders/by-external-id/:id`
   (scope `orders:read`) to poll status.
 - `GET /partners/orders/:id/esim` (scope `esims:read`) to retrieve the activation package — only
@@ -174,6 +180,7 @@ Customers/operations can later resend or download the password-protected QR.
   financial trail.
 
 ### Step 6 — Cancellation & refund
+
 - `POST /partners/orders/:id/cancel` (scope `orders:write`, `Idempotency-Key`) cancels an
   un-provisioned order and **credits the original debit exactly once**.
 - `POST /partners/orders/:id/refund-requests` (scope `refunds:write`) raises a refund request into
@@ -182,6 +189,7 @@ Customers/operations can later resend or download the password-protected QR.
   to `REFUNDED`.
 
 ### Step 7 — Durable webhooks
+
 Every meaningful transition is written as a `PartnerEvent` + `PartnerWebhookDelivery` rows (the
 **outbox**). `PartnerWebhookProcessor.deliver` POSTs the event to the registered endpoint signed with
 an HMAC header `vc-webhook-signature: v1=<...>` (secret derived from the endpoint's
@@ -209,5 +217,5 @@ simulated**, so real outbound delivery should be validated once Redis is on.
 - **Production requires `REDIS_URL`** so provisioning/notification work cannot silently fall back to
   in-process execution.
 
-*Coverage on `API-integratedv1` @ `ec0e90f`; 116 tests pass (16 files), including
-`partner-contract.test.ts` and `partner-prepaid.test.ts`.*
+_Coverage on `API-integratedv1` @ `ec0e90f`; 116 tests pass (16 files), including
+`partner-contract.test.ts` and `partner-prepaid.test.ts`._

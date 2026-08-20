@@ -65,8 +65,10 @@ enum OrderStatus {
   QR_READY
   COMPLETED
   PAYMENT_FAILED
+  PAYMENT_REVIEW_REQUIRED
   CANCELLED
   PROVISIONING_FAILED
+  ACTIVATION_ATTENTION
   REFUND_PENDING
   REFUNDED
 }
@@ -81,6 +83,7 @@ enum PaymentStatus {
   COMPLETED
   FAILED
   CANCELLED
+  REVIEW_REQUIRED
   REFUNDED
 }
 
@@ -99,6 +102,7 @@ enum DocumentStatus {
 
 enum InventoryStatus {
   IMPORTED
+  PENDING_PROVIDER_CHECK
   AVAILABLE
   RESERVED
   ASSIGNED
@@ -123,6 +127,27 @@ enum ReviewDecision {
 enum DocumentReviewPolicy {
   AUTO_OCR
   MANUAL_REVIEW
+  NO_REVIEW
+}
+
+enum OperationalDisposition {
+  RETRY_AUTOMATIC
+  RECONCILE_PROVIDER
+  MANUAL_ACTION
+  REFUND_ELIGIBLE
+  TERMINAL_REJECTION
+}
+
+enum AttentionCaseStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum OutboxStatus {
+  PENDING
+  DISPATCHED
+  FAILED
 }
 
 enum DocumentReviewStatus {
@@ -408,6 +433,7 @@ model Order {
   documentCheckoutReleaseAt    DateTime?
   activationRefetchAttempts   Int                            @default(0)
   lastProvisioningRecoveryAt  DateTime?
+  operationalDisposition      OperationalDisposition?
   traveler                     Traveler?
   documents                    TravelerDocument[]
   payments                     Payment[]
@@ -424,6 +450,8 @@ model Order {
   partnerHostedSessions        PartnerHostedCheckoutSession[]
   partnerRefundRequests        PartnerRefundRequest[]
   partnerEvents                PartnerEvent[]
+  attentionCases               AttentionCase[]
+  outboxMessages               OutboxMessage[]
   createdAt                    DateTime                       @default(now())
   updatedAt                    DateTime                       @updatedAt
   version                      Int                            @default(0)
@@ -633,6 +661,7 @@ model PartnerDocumentUploadIntent {
   consumedAt        DateTime?
   consumedOrderId   String?      @db.Uuid
   verificationStatus String      @default("AWAITING_UPLOAD")
+  uploadVerified     Boolean      @default(false)
   verificationCode   String?
   verificationResult Json?
   verifiedAt          DateTime?
@@ -1020,6 +1049,7 @@ model WebhookEvent {
   createdAt           DateTime  @default(now())
 
   @@unique([source, eventId])
+  @@index([processedAt, deadLetteredAt, nextAttemptAt])
 }
 
 model IntegrationLog {
@@ -1044,9 +1074,76 @@ model Notification {
   order     Order?    @relation(fields: [orderId], references: [id])
   channel   String
   template  String
+  recipient String?
+  orderNumber String?
+  reason    String?
   status    String
   sentAt    DateTime?
+  attemptCount Int       @default(0)
+  nextAttemptAt DateTime?
+  errorMessage String?
   createdAt DateTime  @default(now())
+
+  @@index([status, nextAttemptAt])
+}
+
+model AttentionCase {
+  id                 String              @id @default(uuid()) @db.Uuid
+  dedupeKey          String              @unique
+  category           String
+  status             AttentionCaseStatus @default(OPEN)
+  severity           String              @default("WARNING")
+  orderId            String?             @db.Uuid
+  order              Order?              @relation(fields: [orderId], references: [id])
+  entityType         String
+  entityId           String
+  summary            String
+  detail             String?
+  localState         String?
+  externalState      String?
+  lastSuccessfulStep String?
+  failureCategory    String?
+  retryCount         Int                 @default(0)
+  nextRetryAt        DateTime?
+  availableActions   Json
+  assignedToId       String?             @db.Uuid
+  resolvedById       String?             @db.Uuid
+  resolution         String?
+  resolvedAt         DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([status, category, createdAt])
+  @@index([orderId, status])
+}
+
+model OutboxMessage {
+  id          String       @id @default(uuid()) @db.Uuid
+  dedupeKey   String       @unique
+  topic       String
+  jobName     String
+  payload     Json
+  orderId     String?      @db.Uuid
+  order       Order?       @relation(fields: [orderId], references: [id])
+  status      OutboxStatus @default(PENDING)
+  attemptCount Int         @default(0)
+  nextAttemptAt DateTime   @default(now())
+  dispatchedAt DateTime?
+  errorMessage String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([status, nextAttemptAt])
+}
+
+model WorkerHeartbeat {
+  worker       String   @id
+  instanceId   String
+  status       String   @default("RUNNING")
+  lastSeenAt   DateTime @default(now())
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 model CustomerConsent {

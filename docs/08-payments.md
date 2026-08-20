@@ -11,12 +11,23 @@ Primary sources: `apps/api/src/modules/payments/payments.service.ts`,
 ```ts
 interface PaymentGateway {
   readonly provider: string;
-  initiate(input: { orderId; orderNumber; amountNpr; returnUrl }): Promise<PaymentInitiation>;
+  initiate(input: {
+    orderId;
+    orderNumber;
+    amountNpr;
+    returnUrl;
+  }): Promise<PaymentInitiation>;
   verify(reference, context: PaymentContext): Promise<PaymentVerification>;
   refund?(reference, context, amountNpr): Promise<{ reference }>;
 }
 type PaymentInitiation = { reference; redirectUrl; expiresAt; correlationId? };
-type PaymentVerification = { reference; providerTransactionId?; status; amountNpr; orderId };
+type PaymentVerification = {
+  reference;
+  providerTransactionId?;
+  status;
+  amountNpr;
+  orderId;
+};
 type PaymentContext = { orderId; amountNpr; correlationId? };
 ```
 
@@ -89,8 +100,8 @@ for `simulate` calls (`payments.service.ts:23`).
   `Authorization: Key {KHALTI_SECRET_KEY}`; amount in paisa
   (`amount * 100`); body includes `return_url`, `website_url` (origin of
   return URL), `purchase_order_id`, `purchase_order_name`. Returns `{ pidx,
-  payment_url, expires_at }` → mapped to `{ reference: pidx, redirectUrl,
-  expiresAt }`.
+payment_url, expires_at }` → mapped to `{ reference: pidx, redirectUrl,
+expiresAt }`.
 - `verify` → `POST .../epayment/lookup/` with `{ pidx }`; maps status strings
   case-insensitively: Completed→COMPLETED, Pending/Initiated→PENDING,
   Refunded/Partially Refunded→REFUNDED, Expired→FAILED, "User canceled"→CANCELLED;
@@ -108,8 +119,7 @@ as `ApiException` with code `PAYMENT_PROVIDER_ERROR` (502). The provider's
 `detail` / `error_key` / per-field validation messages and the HTTP status are
 kept in `details` (logged server-side, never serialized to clients).
 
-- Initiate: any non-2xx (401 invalid token, 400 `validation_error`,
-  404) → `PAYMENT_PROVIDER_ERROR` with the parsed error detail; a 2xx body
+- Initiate: any non-2xx (401 invalid token, 400 `validation_error`, 404) → `PAYMENT_PROVIDER_ERROR` with the parsed error detail; a 2xx body
   missing `pidx`/`payment_url` is also rejected as `PAYMENT_PROVIDER_ERROR`.
 - Verify: the body `status` is mapped before any HTTP-status check, so the
   400 outcomes Khalti returns for `Expired` / `User canceled` still resolve to

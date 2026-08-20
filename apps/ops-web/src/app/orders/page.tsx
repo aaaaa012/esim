@@ -1,5 +1,5 @@
-import OrdersClient from './orders-client';
-import { PageHeader } from '@/components/page-header';
+import OrdersClient from "./orders-client";
+import { PageHeader } from "@/components/page-header";
 export default function OrdersPage() {
   return (
     <>

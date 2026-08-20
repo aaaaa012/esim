@@ -24,7 +24,13 @@ import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/empty-state";
 import { FileUploader } from "@/components/file-uploader";
@@ -119,19 +125,35 @@ type Profile = {
     dataAllowance: string;
   } | null;
 };
-const PROFILE_STATUSES = ["AVAILABLE", "IMPORTED", "RESERVED", "ASSIGNED", "ACTIVATED", "EXPIRED", "TERMINATED", "QUARANTINED"];
+const PROFILE_STATUSES = [
+  "AVAILABLE",
+  "IMPORTED",
+  "RESERVED",
+  "ASSIGNED",
+  "ACTIVATED",
+  "EXPIRED",
+  "TERMINATED",
+  "QUARANTINED",
+];
 const fileToTabularContent = async (file: File): Promise<string> => {
   if (/\.xlsx?$/i.test(file.name)) {
     const buffer = await file.arrayBuffer();
     let binary = "";
     const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    for (let i = 0; i < bytes.length; i++)
+      binary += String.fromCharCode(bytes[i]!);
     return btoa(binary);
   }
   return file.text();
 };
 
-function UploadResult({ message, errors }: { message: string; errors: string[] }) {
+function UploadResult({
+  message,
+  errors,
+}: {
+  message: string;
+  errors: string[];
+}) {
   if (!message && !errors.length) return null;
   return (
     <div
@@ -168,7 +190,9 @@ export default function InventoryClient() {
   const [error, setError] = useState("");
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [decision, setDecision] = useState("");
-  const [reconciliationProfiles, setReconciliationProfiles] = useState<InventoryProfile[]>([]);
+  const [reconciliationProfiles, setReconciliationProfiles] = useState<
+    InventoryProfile[]
+  >([]);
   const [reconciling, setReconciling] = useState("");
   const [liveQuery, setLiveQuery] = useState("");
   const [liveSearch, setLiveSearch] = useState("");
@@ -227,14 +251,22 @@ export default function InventoryClient() {
   }, [profilesQuery]);
 
   const load = () => {
-    const liveParams = new URLSearchParams({ limit: "100", assignment: "UNASSIGNED" });
+    const liveParams = new URLSearchParams({
+      limit: "100",
+      assignment: "UNASSIGNED",
+    });
     if (liveSearch) liveParams.set("q", liveSearch);
     void Promise.all([
       authFetch(`${API}/operations/inventory`, { headers: {} }),
-      authFetch(`${API}/operations/inventory/profiles?${liveParams}`, { headers: {} }),
+      authFetch(`${API}/operations/inventory/profiles?${liveParams}`, {
+        headers: {},
+      }),
     ])
       .then(async ([overviewResponse, profilesResponse]) => {
-        const [overviewValue, profilesValue] = await Promise.all([overviewResponse.json(), profilesResponse.json()]);
+        const [overviewValue, profilesValue] = await Promise.all([
+          overviewResponse.json(),
+          profilesResponse.json(),
+        ]);
         if (!overviewResponse.ok) throw new Error(overviewValue.error?.message);
         if (!profilesResponse.ok) throw new Error(profilesValue.error?.message);
         setData(overviewValue.data);
@@ -253,13 +285,23 @@ export default function InventoryClient() {
   const reconcileProfile = async (profile: InventoryProfile) => {
     setReconciling(profile.id);
     try {
-      const response = await authFetch(`${API}/operations/inventory/profiles/${profile.id}/reconcile`, { method: "POST", headers: {} });
+      const response = await authFetch(
+        `${API}/operations/inventory/profiles/${profile.id}/reconcile`,
+        { method: "POST", headers: {} },
+      );
       const value = await response.json();
-      if (!response.ok) throw new Error(value.error?.message ?? "Provider reconciliation failed");
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Provider reconciliation failed",
+        );
       toast.success(`${profile.iccid} checked against Transatel`);
       load();
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Provider reconciliation failed");
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : "Provider reconciliation failed",
+      );
     } finally {
       setReconciling("");
     }
@@ -267,13 +309,23 @@ export default function InventoryClient() {
   const restoreProfile = async (profile: InventoryProfile) => {
     setRestoring(profile.id);
     try {
-      const response = await authFetch(`${API}/operations/inventory/profiles/${profile.id}/restore-availability`, { method: "POST", headers: {} });
+      const response = await authFetch(
+        `${API}/operations/inventory/profiles/${profile.id}/restore-availability`,
+        { method: "POST", headers: {} },
+      );
       const value = await response.json();
-      if (!response.ok) throw new Error(value.error?.message ?? "Availability restoration failed");
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Availability restoration failed",
+        );
       toast.success(`${profile.iccid} restored to available stock`);
       load();
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Availability restoration failed");
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : "Availability restoration failed",
+      );
     } finally {
       setRestoring("");
     }
@@ -361,7 +413,9 @@ export default function InventoryClient() {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          ...(approve ? {} : { body: JSON.stringify({ reason: "Rejected by Super Admin" }) }),
+          ...(approve
+            ? {}
+            : { body: JSON.stringify({ reason: "Rejected by Super Admin" }) }),
         },
       );
       const v = await r.json();
@@ -380,7 +434,11 @@ export default function InventoryClient() {
   };
 
   const loadPlans = () => {
-    const params = new URLSearchParams({ status: "DRAFT", limit: "100", offset: "0" });
+    const params = new URLSearchParams({
+      status: "DRAFT",
+      limit: "100",
+      offset: "0",
+    });
     if (planSearch) params.set("q", planSearch);
     void authFetch(`${API}/admin/plans/page?${params}`, { headers: {} })
       .then(async (r) => {
@@ -402,10 +460,13 @@ export default function InventoryClient() {
   const decidePlan = async (plan: Plan, approve: boolean) => {
     setPlanDecision(plan.id);
     try {
-      const r = await authFetch(`${API}/admin/plans/${plan.id}/${approve ? "approve" : "reject"}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-      });
+      const r = await authFetch(
+        `${API}/admin/plans/${plan.id}/${approve ? "approve" : "reject"}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        },
+      );
       const v = await r.json();
       if (!r.ok) throw new Error(v.error?.message);
       toast.success(
@@ -465,12 +526,21 @@ export default function InventoryClient() {
       label: "Quarantined",
       value: data.counts.quarantined ?? 0,
       icon: <AlertTriangle className="size-4" />,
-      tone: data.counts.quarantined ? ("danger" as const) : ("default" as const),
+      tone: data.counts.quarantined
+        ? ("danger" as const)
+        : ("default" as const),
     },
   ];
   const batchSearch = batchQuery.trim().toLowerCase();
-  const filteredBatches = data.batches.filter((batch) => !batchSearch || batch.batchReference.toLowerCase().includes(batchSearch) || batch.id.toLowerCase().includes(batchSearch));
-  const pendingBatches = filteredBatches.filter((batch) => batch.status === "PENDING");
+  const filteredBatches = data.batches.filter(
+    (batch) =>
+      !batchSearch ||
+      batch.batchReference.toLowerCase().includes(batchSearch) ||
+      batch.id.toLowerCase().includes(batchSearch),
+  );
+  const pendingBatches = filteredBatches.filter(
+    (batch) => batch.status === "PENDING",
+  );
 
   return (
     <>
@@ -518,7 +588,9 @@ export default function InventoryClient() {
             <RefreshCcw className="size-4" />
             Live stock
             {(data.counts.quarantined ?? 0) > 0 && (
-              <span className="ml-1 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">{data.counts.quarantined}</span>
+              <span className="ml-1 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
+                {data.counts.quarantined}
+              </span>
             )}
           </TabsTrigger>
           <TabsTrigger value="approvals" className="gap-1.5">
@@ -541,27 +613,115 @@ export default function InventoryClient() {
         </TabsList>
 
         <TabsContent value="live-stock" className="mt-6">
-          <Panel title="Stock check against the network provider" description="Compares the latest 100 unassigned profiles with the network provider. Profiles that don't match are flagged automatically." actions={<SearchInput value={liveQuery} onChange={setLiveQuery} placeholder="Search ICCID, EID, MSISDN or batch…" className="w-full sm:w-80" />} noPadding>
-            {!reconciliationProfiles.length ? <EmptyState title="No inventory profiles" description="Uploaded profiles will appear here." /> : (
+          <Panel
+            title="Stock check against the network provider"
+            description="Compares the latest 100 unassigned profiles with the network provider. Profiles that don't match are flagged automatically."
+            actions={
+              <SearchInput
+                value={liveQuery}
+                onChange={setLiveQuery}
+                placeholder="Search ICCID, EID, MSISDN or batch…"
+                className="w-full sm:w-80"
+              />
+            }
+            noPadding
+          >
+            {!reconciliationProfiles.length ? (
+              <EmptyState
+                title="No inventory profiles"
+                description="Uploaded profiles will appear here."
+              />
+            ) : (
               <Table>
-                <TableHeader><TableRow><TableHead>eSIM</TableHead><TableHead>Our system</TableHead><TableHead>Network provider</TableHead><TableHead>Last checked</TableHead><TableHead>Issue</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
-                <TableBody>{reconciliationProfiles.map((profile) => (
-                  <TableRow key={profile.id}>
-                    <TableCell><code className="text-xs">{profile.iccid}</code><p className="text-xs text-muted-foreground">{profile.batchReference ?? "—"}</p></TableCell>
-                    <TableCell><StatusBadge label={profile.status} {...(profile.status === "QUARANTINED" ? { tone: "warning" as const } : {})} /></TableCell>
-                    <TableCell><StatusBadge label={profile.providerStatus ?? "NOT CHECKED"} /></TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{profile.lastProviderCheckedAt ? new Date(profile.lastProviderCheckedAt).toLocaleString() : "Never"}</TableCell>
-                    <TableCell className="max-w-64 text-xs text-destructive">{profile.providerCheckError ?? (profile.status === "QUARANTINED" ? `${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale` : "—")}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <Button size="sm" variant="outline" disabled={reconciling === profile.id || restoring === profile.id} onClick={() => void reconcileProfile(profile)}>{reconciling === profile.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Check network</Button>
-                        {isSuperAdmin && profile.status === "QUARANTINED" && ["available", "allocated"].includes(profile.providerStatus?.toLowerCase() ?? "") ? (
-                          <Button size="sm" disabled={restoring === profile.id || reconciling === profile.id} onClick={() => void restoreProfile(profile)}>{restoring === profile.id ? <Spinner /> : <ShieldCheck className="size-3.5" />} Restore availability</Button>
-                        ) : null}
-                      </div>
-                    </TableCell>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>eSIM</TableHead>
+                    <TableHead>Our system</TableHead>
+                    <TableHead>Network provider</TableHead>
+                    <TableHead>Last checked</TableHead>
+                    <TableHead>Issue</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
-                ))}</TableBody>
+                </TableHeader>
+                <TableBody>
+                  {reconciliationProfiles.map((profile) => (
+                    <TableRow key={profile.id}>
+                      <TableCell>
+                        <code className="text-xs">{profile.iccid}</code>
+                        <p className="text-xs text-muted-foreground">
+                          {profile.batchReference ?? "—"}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge
+                          label={profile.status}
+                          {...(profile.status === "QUARANTINED"
+                            ? { tone: "warning" as const }
+                            : {})}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge
+                          label={profile.providerStatus ?? "NOT CHECKED"}
+                        />
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {profile.lastProviderCheckedAt
+                          ? new Date(
+                              profile.lastProviderCheckedAt,
+                            ).toLocaleString()
+                          : "Never"}
+                      </TableCell>
+                      <TableCell className="max-w-64 text-xs text-destructive">
+                        {profile.providerCheckError ??
+                          (profile.status === "QUARANTINED"
+                            ? `${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`
+                            : "—")}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                              reconciling === profile.id ||
+                              restoring === profile.id
+                            }
+                            onClick={() => void reconcileProfile(profile)}
+                          >
+                            {reconciling === profile.id ? (
+                              <Spinner />
+                            ) : (
+                              <RefreshCcw className="size-3.5" />
+                            )}{" "}
+                            Check network
+                          </Button>
+                          {isSuperAdmin &&
+                          profile.status === "QUARANTINED" &&
+                          ["available", "allocated"].includes(
+                            profile.providerStatus?.toLowerCase() ?? "",
+                          ) ? (
+                            <Button
+                              size="sm"
+                              disabled={
+                                restoring === profile.id ||
+                                reconciling === profile.id
+                              }
+                              onClick={() => void restoreProfile(profile)}
+                            >
+                              {restoring === profile.id ? (
+                                <Spinner />
+                              ) : (
+                                <ShieldCheck className="size-3.5" />
+                              )}{" "}
+                              Restore availability
+                            </Button>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
               </Table>
             )}
           </Panel>
@@ -602,8 +762,15 @@ export default function InventoryClient() {
                   <p className="text-xs text-muted-foreground">
                     Uploads are checked automatically before being added.
                   </p>
-                  <Button onClick={() => void submitProfiles()} disabled={profileBusy || !profileFile}>
-                    {profileBusy ? <Spinner className="text-primary-foreground" /> : <FileUp className="size-4" />}
+                  <Button
+                    onClick={() => void submitProfiles()}
+                    disabled={profileBusy || !profileFile}
+                  >
+                    {profileBusy ? (
+                      <Spinner className="text-primary-foreground" />
+                    ) : (
+                      <FileUp className="size-4" />
+                    )}
                     Upload profiles
                   </Button>
                 </div>
@@ -634,8 +801,15 @@ export default function InventoryClient() {
                   <p className="text-xs text-muted-foreground">
                     Uploaded packages appear under Pending approvals.
                   </p>
-                  <Button onClick={() => void submitPackages()} disabled={packageBusy || !packageFile}>
-                    {packageBusy ? <Spinner className="text-primary-foreground" /> : <Globe2 className="size-4" />}
+                  <Button
+                    onClick={() => void submitPackages()}
+                    disabled={packageBusy || !packageFile}
+                  >
+                    {packageBusy ? (
+                      <Spinner className="text-primary-foreground" />
+                    ) : (
+                      <Globe2 className="size-4" />
+                    )}
                     Upload packages
                   </Button>
                 </div>
@@ -648,7 +822,14 @@ export default function InventoryClient() {
           <Panel
             title="Profile batches awaiting approval"
             description="Super Admin must approve every upload before it becomes sellable."
-            actions={<SearchInput value={batchQuery} onChange={setBatchQuery} placeholder="Search batch reference or ID…" className="w-full sm:w-72" />}
+            actions={
+              <SearchInput
+                value={batchQuery}
+                onChange={setBatchQuery}
+                placeholder="Search batch reference or ID…"
+                className="w-full sm:w-72"
+              />
+            }
             noPadding
           >
             {pendingBatches.length === 0 ? (
@@ -671,7 +852,9 @@ export default function InventoryClient() {
                     <TableRow key={batch.id}>
                       <TableCell>
                         <p className="font-medium">{batch.batchReference}</p>
-                        <p className="text-xs text-muted-foreground">{batch.id}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {batch.id}
+                        </p>
                       </TableCell>
                       <TableCell>{batch.importedCount}</TableCell>
                       <TableCell className="text-muted-foreground">
@@ -685,7 +868,12 @@ export default function InventoryClient() {
                               variant="success"
                               disabled={decision === batch.id}
                               onClick={() => {
-                                if (window.confirm(`Approve this batch of ${batch.importedCount} profile(s)? They will become available for sale.`)) void decide(batch, true);
+                                if (
+                                  window.confirm(
+                                    `Approve this batch of ${batch.importedCount} profile(s)? They will become available for sale.`,
+                                  )
+                                )
+                                  void decide(batch, true);
                               }}
                             >
                               {decision === batch.id ? (
@@ -701,7 +889,12 @@ export default function InventoryClient() {
                               className="text-destructive hover:bg-destructive/10"
                               disabled={decision === batch.id}
                               onClick={() => {
-                                if (window.confirm("Reject this batch? It will not be made available for sale.")) void decide(batch, false);
+                                if (
+                                  window.confirm(
+                                    "Reject this batch? It will not be made available for sale.",
+                                  )
+                                )
+                                  void decide(batch, false);
                               }}
                             >
                               <XCircle className="size-4" />
@@ -709,7 +902,10 @@ export default function InventoryClient() {
                             </Button>
                           </div>
                         ) : (
-                          <StatusBadge label="Awaiting Super Admin" tone="warning">
+                          <StatusBadge
+                            label="Awaiting Super Admin"
+                            tone="warning"
+                          >
                             <ShieldCheck className="size-3" />
                           </StatusBadge>
                         )}
@@ -726,7 +922,14 @@ export default function InventoryClient() {
           <Panel
             title="Packages awaiting approval"
             description="Uploaded packages are DRAFT; approval releases them for sale."
-            actions={<SearchInput value={planQuery} onChange={setPlanQuery} placeholder="Search package or country…" className="w-full sm:w-72" />}
+            actions={
+              <SearchInput
+                value={planQuery}
+                onChange={setPlanQuery}
+                placeholder="Search package or country…"
+                className="w-full sm:w-72"
+              />
+            }
             noPadding
           >
             {draftPlans.length === 0 ? (
@@ -750,10 +953,13 @@ export default function InventoryClient() {
                     <TableRow key={plan.id}>
                       <TableCell>
                         <p className="font-medium">{plan.name}</p>
-                        <p className="text-xs text-muted-foreground">{plan.id}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {plan.id}
+                        </p>
                       </TableCell>
                       <TableCell>
-                        <span className="font-medium">{plan.countryCode}</span> · {plan.countryName}
+                        <span className="font-medium">{plan.countryCode}</span>{" "}
+                        · {plan.countryName}
                       </TableCell>
                       <TableCell>
                         {plan.dataAllowance} / {plan.validityDays} days
@@ -767,7 +973,12 @@ export default function InventoryClient() {
                               variant="success"
                               disabled={planDecision === plan.id}
                               onClick={() => {
-                                if (window.confirm(`Publish "${plan.name}"? It will become available for sale.`)) void decidePlan(plan, true);
+                                if (
+                                  window.confirm(
+                                    `Publish "${plan.name}"? It will become available for sale.`,
+                                  )
+                                )
+                                  void decidePlan(plan, true);
                               }}
                             >
                               {planDecision === plan.id ? (
@@ -783,7 +994,12 @@ export default function InventoryClient() {
                               className="text-destructive hover:bg-destructive/10"
                               disabled={planDecision === plan.id}
                               onClick={() => {
-                                if (window.confirm(`Reject "${plan.name}"? It will not be published.`)) void decidePlan(plan, false);
+                                if (
+                                  window.confirm(
+                                    `Reject "${plan.name}"? It will not be published.`,
+                                  )
+                                )
+                                  void decidePlan(plan, false);
                               }}
                             >
                               <XCircle className="size-4" />
@@ -791,7 +1007,10 @@ export default function InventoryClient() {
                             </Button>
                           </div>
                         ) : (
-                          <StatusBadge label="Awaiting Super Admin" tone="warning">
+                          <StatusBadge
+                            label="Awaiting Super Admin"
+                            tone="warning"
+                          >
                             <ShieldCheck className="size-3" />
                           </StatusBadge>
                         )}
@@ -808,11 +1027,25 @@ export default function InventoryClient() {
           <Panel
             title="Batch history"
             description="Traceability for every profile upload."
-            actions={<SearchInput value={batchQuery} onChange={setBatchQuery} placeholder="Search batch reference or ID…" className="w-full sm:w-72" />}
+            actions={
+              <SearchInput
+                value={batchQuery}
+                onChange={setBatchQuery}
+                placeholder="Search batch reference or ID…"
+                className="w-full sm:w-72"
+              />
+            }
             noPadding
           >
             {filteredBatches.length === 0 ? (
-              <EmptyState title="No batches found" description={batchSearch ? `No batch matches “${batchQuery.trim()}”.` : "Uploaded batches will appear here."} />
+              <EmptyState
+                title="No batches found"
+                description={
+                  batchSearch
+                    ? `No batch matches “${batchQuery.trim()}”.`
+                    : "Uploaded batches will appear here."
+                }
+              />
             ) : (
               <Table>
                 <TableHeader>
@@ -856,7 +1089,8 @@ export default function InventoryClient() {
               <div>
                 <h3 className="font-semibold">eSIM profiles</h3>
                 <p className="text-sm text-muted-foreground">
-                  {profilesTotal.toLocaleString()} profiles · search identifiers, orders, batches, or customers
+                  {profilesTotal.toLocaleString()} profiles · search
+                  identifiers, orders, batches, or customers
                 </p>
               </div>
               <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(20rem,28rem)_14rem]">
@@ -866,13 +1100,23 @@ export default function InventoryClient() {
                   placeholder="Search ICCID, MSISDN, order or customer…"
                   className="w-full"
                 />
-                <Select value={profilesStatus} onValueChange={(v) => { setProfilesPage(1); setProfilesStatus(v); }}>
+                <Select
+                  value={profilesStatus}
+                  onValueChange={(v) => {
+                    setProfilesPage(1);
+                    setProfilesStatus(v);
+                  }}
+                >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ALL">All statuses</SelectItem>
-                    {PROFILE_STATUSES.map((s) => <SelectItem key={s} value={s}>{humane(s)}</SelectItem>)}
+                    {PROFILE_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {humane(s)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -883,10 +1127,14 @@ export default function InventoryClient() {
               </div>
             ) : profiles.length === 0 ? (
               <EmptyState
-                            icon={<Boxes className="size-6" />}
-                            title="No profiles"
-                            description={profilesSearch ? `No eSIM profiles match “${profilesSearch}”.` : "No eSIM profiles match the selected filters."}
-                          />
+                icon={<Boxes className="size-6" />}
+                title="No profiles"
+                description={
+                  profilesSearch
+                    ? `No eSIM profiles match “${profilesSearch}”.`
+                    : "No eSIM profiles match the selected filters."
+                }
+              />
             ) : (
               <div className="overflow-x-auto">
                 <Table>
@@ -905,38 +1153,63 @@ export default function InventoryClient() {
                       <TableRow key={p.id}>
                         <TableCell>
                           <div className="font-mono text-xs">{p.iccid}</div>
-                          {p.msisdn && <div className="text-xs text-muted-foreground">{p.msisdn}</div>}
+                          {p.msisdn && (
+                            <div className="text-xs text-muted-foreground">
+                              {p.msisdn}
+                            </div>
+                          )}
                           {p.order ? (
                             <div className="flex items-center gap-1 text-xs text-emerald-600">
                               <Link2 className="size-3" />
                               Assigned to {p.order.customerCode}
                             </div>
                           ) : (
-                            <div className="text-xs text-muted-foreground">Unassigned</div>
+                            <div className="text-xs text-muted-foreground">
+                              Unassigned
+                            </div>
                           )}
                         </TableCell>
                         <TableCell>
                           {p.status === "ACTIVATED" ? (
-                            <Badge className="bg-emerald-500/15 text-emerald-600"><CheckCircle2 className="size-3" /> {humane('ACTIVATED')}</Badge>
+                            <Badge className="bg-emerald-500/15 text-emerald-600">
+                              <CheckCircle2 className="size-3" />{" "}
+                              {humane("ACTIVATED")}
+                            </Badge>
                           ) : p.status === "AVAILABLE" ? (
-                            <Badge className="bg-sky-500/15 text-sky-600">{humane(p.status)}</Badge>
+                            <Badge className="bg-sky-500/15 text-sky-600">
+                              {humane(p.status)}
+                            </Badge>
                           ) : (
                             <StatusBadge label={p.status} />
                           )}
                         </TableCell>
-                        <TableCell className="font-mono text-xs">{p.eid}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {p.eid}
+                        </TableCell>
                         <TableCell>
                           {p.order ? (
-                            <span className="text-xs font-medium">{p.order.orderNumber}</span>
+                            <span className="text-xs font-medium">
+                              {p.order.orderNumber}
+                            </span>
                           ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <span className="text-xs text-muted-foreground">
+                              —
+                            </span>
                           )}
                         </TableCell>
                         <TableCell>
-                          <span className="text-xs">{p.batchReference ?? "—"}</span>
-                          {p.batchReference && <div className="text-[11px] text-muted-foreground">{p.batchStatus}</div>}
+                          <span className="text-xs">
+                            {p.batchReference ?? "—"}
+                          </span>
+                          {p.batchReference && (
+                            <div className="text-[11px] text-muted-foreground">
+                              {p.batchStatus}
+                            </div>
+                          )}
                         </TableCell>
-                        <TableCell className="text-right text-xs">{p.smDpAddress ?? "—"}</TableCell>
+                        <TableCell className="text-right text-xs">
+                          {p.smDpAddress ?? "—"}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

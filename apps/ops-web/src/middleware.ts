@@ -18,17 +18,22 @@ export default clerkMiddleware(async (auth, request) => {
   const session = await auth();
   if (!session?.userId) {
     const signInUrl = new URL("/sign-in", request.url);
-    signInUrl.searchParams.set("redirect_url", request.nextUrl.pathname + request.nextUrl.search);
+    signInUrl.searchParams.set(
+      "redirect_url",
+      request.nextUrl.pathname + request.nextUrl.search,
+    );
     return NextResponse.redirect(signInUrl);
   }
   const token = await session.getToken();
-  if (!token) return NextResponse.redirect(new URL("/access-error", request.url));
+  if (!token)
+    return NextResponse.redirect(new URL("/access-error", request.url));
   try {
     const response = await fetch(`${API}/auth/me`, {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store",
     });
-    if (!response.ok) return NextResponse.redirect(new URL("/access-error", request.url));
+    if (!response.ok)
+      return NextResponse.redirect(new URL("/access-error", request.url));
     const envelope = (await response.json()) as {
       data: {
         accountType: string;
@@ -39,15 +44,9 @@ export default clerkMiddleware(async (auth, request) => {
     };
     if (!["OPERATIONS", "SUPER_ADMIN"].includes(envelope.data.accountType))
       return NextResponse.redirect(new URL("/access-error", request.url));
-    if (
-      isAdmin(request) &&
-      envelope.data.accountType !== "SUPER_ADMIN"
-    )
+    if (isAdmin(request) && envelope.data.accountType !== "SUPER_ADMIN")
       return NextResponse.redirect(new URL("/access-error", request.url));
-    if (
-      envelope.data.mustChangePassword &&
-      !isChangePassword(request)
-    )
+    if (envelope.data.mustChangePassword && !isChangePassword(request))
       return NextResponse.redirect(new URL("/change-password", request.url));
     if (
       envelope.data.mfaRequired &&

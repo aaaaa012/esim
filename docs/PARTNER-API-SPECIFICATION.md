@@ -35,16 +35,16 @@ is ready.
 
 ## 2. URLs, content type, and response envelope
 
-| Item | Value |
-| --- | --- |
-| API base | `<api-base-url>/api/v1` |
-| Partner API prefix | `/partners` |
-| Hosted checkout API prefix | `/partner-checkout` |
-| Content type | `application/json` for API requests and responses |
-| Character encoding | UTF-8 |
-| Money | integer `amountPaisa` values; 100 paisa = NPR 1 |
-| Time | ISO 8601 UTC timestamps, for example `2026-08-13T08:30:00.000Z` |
-| IDs | UUID strings unless a field says otherwise |
+| Item                       | Value                                                           |
+| -------------------------- | --------------------------------------------------------------- |
+| API base                   | `<api-base-url>/api/v1`                                         |
+| Partner API prefix         | `/partners`                                                     |
+| Hosted checkout API prefix | `/partner-checkout`                                             |
+| Content type               | `application/json` for API requests and responses               |
+| Character encoding         | UTF-8                                                           |
+| Money                      | integer `amountPaisa` values; 100 paisa = NPR 1                 |
+| Time                       | ISO 8601 UTC timestamps, for example `2026-08-13T08:30:00.000Z` |
+| IDs                        | UUID strings unless a field says otherwise                      |
 
 All successful controller responses are wrapped:
 
@@ -102,28 +102,28 @@ make mutations.
 
 Credentials receive only the scopes needed for their integration.
 
-| Scope | Allows |
-| --- | --- |
-| `catalog:read` | capabilities and plan catalogue |
-| `documents:write` | document-upload session creation |
-| `orders:read` | order, order-list, event, account, and ledger reads |
-| `orders:write` | complete orders, cancellations, and notification requests |
-| `checkout:write` | hosted-checkout session creation |
-| `esims:read` | QR/activation package retrieval |
-| `refunds:write` | refund-request submission |
-| `usage:read` | usage retrieval after activation |
+| Scope             | Allows                                                    |
+| ----------------- | --------------------------------------------------------- |
+| `catalog:read`    | capabilities and plan catalogue                           |
+| `documents:write` | document-upload session creation                          |
+| `orders:read`     | order, order-list, event, account, and ledger reads       |
+| `orders:write`    | complete orders, cancellations, and notification requests |
+| `checkout:write`  | hosted-checkout session creation                          |
+| `esims:read`      | QR/activation package retrieval                           |
+| `refunds:write`   | refund-request submission                                 |
+| `usage:read`      | usage retrieval after activation                          |
 
 An absent required scope returns HTTP `403` with
 `PARTNER_SCOPE_FORBIDDEN`.
 
 ### 3.3 Standard headers
 
-| Header | Required | Purpose |
-| --- | --- | --- |
-| `Authorization` | yes, `/partners` only | Partner bearer credential |
-| `Content-Type: application/json` | for JSON POSTs | Request format |
-| `x-correlation-id` | optional | Your trace ID. Visa Compass returns it, or creates a UUID when omitted. |
-| `x-idempotency-key` | strongly required for every mutation | Deduplicates a repeated mutation. See below. |
+| Header                           | Required                             | Purpose                                                                 |
+| -------------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
+| `Authorization`                  | yes, `/partners` only                | Partner bearer credential                                               |
+| `Content-Type: application/json` | for JSON POSTs                       | Request format                                                          |
+| `x-correlation-id`               | optional                             | Your trace ID. Visa Compass returns it, or creates a UUID when omitted. |
+| `x-idempotency-key`              | strongly required for every mutation | Deduplicates a repeated mutation. See below.                            |
 
 The current implementation reads the header name **`x-idempotency-key`**.
 The header is 8–200 characters. Reusing the same key on the same HTTP method
@@ -138,10 +138,10 @@ through retries.
 
 Every authenticated Partner API response also includes:
 
-| Response header | Meaning |
-| --- | --- |
-| `x-correlation-id` | Request correlation ID; provide it to support. |
-| `x-ratelimit-limit` | Partner's allowed requests per minute. |
+| Response header         | Meaning                                          |
+| ----------------------- | ------------------------------------------------ |
+| `x-correlation-id`      | Request correlation ID; provide it to support.   |
+| `x-ratelimit-limit`     | Partner's allowed requests per minute.           |
 | `x-ratelimit-remaining` | Remaining requests in the current minute window. |
 
 Exceeding the partner-specific limit returns HTTP `429`, code
@@ -175,22 +175,22 @@ traveller. The traveller completes the public hosted-checkout endpoints.
 
 Used by complete API orders and hosted-checkout traveller updates.
 
-| Field | Required | Rules | Description |
-| --- | --- | --- | --- |
-| `title` | yes | `MR`, `MS`, or `MRS` | Traveller title. |
-| `firstName` | yes | trimmed, 1–80 chars | Given name. |
-| `middleName` | no | trimmed, max 80 chars | Middle name. |
-| `surname` | yes | trimmed, 1–80 chars | Family name. |
-| `dateOfBirth` | yes | `YYYY-MM-DD`, must be in the past | Date of birth. |
-| `nationality` | yes | exactly 2 chars | Country code. |
-| `city` | yes | trimmed, 1–100 chars | City. |
-| `countryOfResidence` | yes | exactly 2 chars | Country code. |
-| `employerOrBusinessName` | no | trimmed, max 160 chars | Employer/business name. |
-| `email` | yes | valid email | Delivery/contact email. |
-| `mobile` | yes | 7–20 chars; digits, spaces, hyphens, optional leading `+` | Delivery/contact mobile. |
-| `passportNumber` | yes | 5–30 chars; letters, numbers, hyphen | Passport number. |
-| `passportExpiryDate` | yes | `YYYY-MM-DD`, future date | Passport expiry date. |
-| `pointOfSaleCode` | no | trimmed, max 40 chars | Partner point-of-sale reference. |
+| Field                    | Required | Rules                                                     | Description                      |
+| ------------------------ | -------- | --------------------------------------------------------- | -------------------------------- |
+| `title`                  | yes      | `MR`, `MS`, or `MRS`                                      | Traveller title.                 |
+| `firstName`              | yes      | trimmed, 1–80 chars                                       | Given name.                      |
+| `middleName`             | no       | trimmed, max 80 chars                                     | Middle name.                     |
+| `surname`                | yes      | trimmed, 1–80 chars                                       | Family name.                     |
+| `dateOfBirth`            | yes      | `YYYY-MM-DD`, must be in the past                         | Date of birth.                   |
+| `nationality`            | yes      | exactly 2 chars                                           | Country code.                    |
+| `city`                   | yes      | trimmed, 1–100 chars                                      | City.                            |
+| `countryOfResidence`     | yes      | exactly 2 chars                                           | Country code.                    |
+| `employerOrBusinessName` | no       | trimmed, max 160 chars                                    | Employer/business name.          |
+| `email`                  | yes      | valid email                                               | Delivery/contact email.          |
+| `mobile`                 | yes      | 7–20 chars; digits, spaces, hyphens, optional leading `+` | Delivery/contact mobile.         |
+| `passportNumber`         | yes      | 5–30 chars; letters, numbers, hyphen                      | Passport number.                 |
+| `passportExpiryDate`     | yes      | `YYYY-MM-DD`, future date                                 | Passport expiry date.            |
+| `pointOfSaleCode`        | no       | trimmed, max 40 chars                                     | Partner point-of-sale reference. |
 
 Visa Compass encrypts sensitive traveller/passport data at rest. Do not put
 passport data in `metadata`, URLs, or logs.
@@ -219,17 +219,17 @@ page size is 25, maximum is 100.
 
 ### 5.4 Order status and fulfilment status
 
-| Order status | Meaning for partners |
-| --- | --- |
-| `DRAFT` | Hosted checkout created but traveller has not completed it. |
-| `APPROVED` | Funds accepted; handoff to provisioning is pending/starting. |
-| `PROVISIONING` | Provider/inventory provisioning is in progress. |
-| `QR_READY` | eSIM activation package is ready to retrieve and deliver. |
-| `COMPLETED` | Provider confirmed activation. |
-| `PROVISIONING_FAILED` | Provisioning failed and needs operational handling. |
-| `CANCELLED` | Cancelled before provisioning; prepaid balance is refunded when applicable. |
-| `REFUND_PENDING` | Partner refund request awaits Operations decision. |
-| `REFUNDED` | Operations approved the refund and credited the prepaid account. |
+| Order status          | Meaning for partners                                                        |
+| --------------------- | --------------------------------------------------------------------------- |
+| `DRAFT`               | Hosted checkout created but traveller has not completed it.                 |
+| `APPROVED`            | Funds accepted; handoff to provisioning is pending/starting.                |
+| `PROVISIONING`        | Provider/inventory provisioning is in progress.                             |
+| `QR_READY`            | eSIM activation package is ready to retrieve and deliver.                   |
+| `COMPLETED`           | Provider confirmed activation.                                              |
+| `PROVISIONING_FAILED` | Provisioning failed and needs operational handling.                         |
+| `CANCELLED`           | Cancelled before provisioning; prepaid balance is refunded when applicable. |
+| `REFUND_PENDING`      | Partner refund request awaits Operations decision.                          |
+| `REFUNDED`            | Operations approved the refund and credited the prepaid account.            |
 
 The response field `fulfillmentStatus` is derived as follows: `PENDING` for
 `APPROVED`/`PROVISIONING`; `READY` for `QR_READY`; `ACTIVATED` for
@@ -273,9 +273,9 @@ exposed to partners.
 **Scope:** `catalog:read`  
 **Purpose:** lists active plans in active countries available to partners.
 
-| Query field | Required | Rules | Description |
-| --- | --- | --- | --- |
-| `country` | no | country value is upper-cased by the API | Filter by destination ISO code. |
+| Query field | Required | Rules                                   | Description                     |
+| ----------- | -------- | --------------------------------------- | ------------------------------- |
+| `country`   | no       | country value is upper-cased by the API | Filter by destination ISO code. |
 
 **Success data item:**
 
@@ -329,14 +329,14 @@ complete API order.
 }
 ```
 
-| Request field | Required | Description |
-| --- | --- | --- |
-| `externalOrderId` | yes | Partner's unique order reference, 1–120 chars. It binds upload intents to the later order. |
-| `documents` | yes | 1–3 documents with unique `type` values. |
-| `documents[].type` | yes | `PASSPORT`, `TICKET`, or `VISA`. |
-| `documents[].fileName` | yes | Original filename, 1–180 chars. |
-| `documents[].contentType` | yes | `application/pdf`, `image/jpeg`, or `image/png`. |
-| `documents[].sizeBytes` | yes | Exact client-declared file size, 1–10 MiB. |
+| Request field             | Required | Description                                                                                |
+| ------------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `externalOrderId`         | yes      | Partner's unique order reference, 1–120 chars. It binds upload intents to the later order. |
+| `documents`               | yes      | 1–3 documents with unique `type` values.                                                   |
+| `documents[].type`        | yes      | `PASSPORT`, `TICKET`, or `VISA`.                                                           |
+| `documents[].fileName`    | yes      | Original filename, 1–180 chars.                                                            |
+| `documents[].contentType` | yes      | `application/pdf`, `image/jpeg`, or `image/png`.                                           |
+| `documents[].sizeBytes`   | yes      | Exact client-declared file size, 1–10 MiB.                                                 |
 
 **Success data:**
 
@@ -401,19 +401,19 @@ asynchronous provisioning.
 }
 ```
 
-| Field | Required | Rules and meaning |
-| --- | --- | --- |
-| `externalOrderId` | yes | Unique per partner; 1–120 chars. A duplicate returns `409`. |
-| `externalCustomerId` | yes | Partner customer reference; 1–120 chars. Visa Compass maps it to a partner-scoped customer. |
-| `planId` | yes | Active plan UUID from `GET /plans`. |
-| `settlement` | no | Defaults to `{ "method": "PARTNER_ACCOUNT" }`. `HOSTED_PAYMENT` is accepted by request schema but rejected by business logic as deprecated. |
-| `traveler` | yes | Full traveller object in section 5.1. |
-| `documents` | yes | 2–3 distinct `{type, uploadId}` values. Must include all plan-required types and use unexpired intents created for this `externalOrderId`. |
-| `consent.compatibilityAccepted` | yes | Must be `true`. |
-| `consent.termsAccepted` | yes | Must be `true`. |
-| `consent.privacyAccepted` | yes | Must be `true`. |
-| `consent.acceptedAt` | yes | ISO 8601 date-time. |
-| `metadata` | no | String-to-string map; each value max 500 chars. Do not place secrets or sensitive personal data here. |
+| Field                           | Required | Rules and meaning                                                                                                                           |
+| ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `externalOrderId`               | yes      | Unique per partner; 1–120 chars. A duplicate returns `409`.                                                                                 |
+| `externalCustomerId`            | yes      | Partner customer reference; 1–120 chars. Visa Compass maps it to a partner-scoped customer.                                                 |
+| `planId`                        | yes      | Active plan UUID from `GET /plans`.                                                                                                         |
+| `settlement`                    | no       | Defaults to `{ "method": "PARTNER_ACCOUNT" }`. `HOSTED_PAYMENT` is accepted by request schema but rejected by business logic as deprecated. |
+| `traveler`                      | yes      | Full traveller object in section 5.1.                                                                                                       |
+| `documents`                     | yes      | 2–3 distinct `{type, uploadId}` values. Must include all plan-required types and use unexpired intents created for this `externalOrderId`.  |
+| `consent.compatibilityAccepted` | yes      | Must be `true`.                                                                                                                             |
+| `consent.termsAccepted`         | yes      | Must be `true`.                                                                                                                             |
+| `consent.privacyAccepted`       | yes      | Must be `true`.                                                                                                                             |
+| `consent.acceptedAt`            | yes      | ISO 8601 date-time.                                                                                                                         |
+| `metadata`                      | no       | String-to-string map; each value max 500 chars. Do not place secrets or sensitive personal data here.                                       |
 
 The API verifies each uploaded asset before it creates the order. The asset's
 actual size and file format must match the upload declaration.
@@ -431,12 +431,12 @@ Key business errors include `PLAN_UNAVAILABLE`, `DOCUMENT_REQUIRED`,
 **Scope:** `orders:read`  
 **Purpose:** lists only the authenticated partner's orders, newest first.
 
-| Query field | Required | Rules |
-| --- | --- | --- |
-| `cursor` | no | Cursor returned by a previous page. |
-| `status` | no | Any implemented order status enum. |
-| `externalOrderId` | no | Exact partner external-order reference, max 120 chars. |
-| `limit` | no | Integer 1–100; default 25. |
+| Query field       | Required | Rules                                                  |
+| ----------------- | -------- | ------------------------------------------------------ |
+| `cursor`          | no       | Cursor returned by a previous page.                    |
+| `status`          | no       | Any implemented order status enum.                     |
+| `externalOrderId` | no       | Exact partner external-order reference, max 120 chars. |
+| `limit`           | no       | Integer 1–100; default 25.                             |
 
 **Success data:** `{ "items": [<normalized order>], "nextCursor": "... or null" }`.
 
@@ -473,14 +473,14 @@ partner's order returns HTTP `404` with code `PARTNER_ORDER_NOT_FOUND`.
 }
 ```
 
-| Field | Description |
-| --- | --- |
-| `iccid` | eSIM profile serial. |
-| `msisdn` | Assigned mobile number, when available. |
-| `smDpAddress` | SM-DP+ address, when available. |
+| Field            | Description                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| `iccid`          | eSIM profile serial.                                                                                          |
+| `msisdn`         | Assigned mobile number, when available.                                                                       |
+| `smDpAddress`    | SM-DP+ address, when available.                                                                               |
 | `activationCode` | Sensitive LPA activation payload. Show only to the entitled traveller over a protected channel. Never log it. |
-| `activatedAt` | Provider-confirmed activation time, when available. |
-| `expiresAt` | Subscription or inventory expiry time, when available. |
+| `activatedAt`    | Provider-confirmed activation time, when available.                                                           |
+| `expiresAt`      | Subscription or inventory expiry time, when available.                                                        |
 
 Before `QR_READY`, this returns HTTP `409` with code `PARTNER_ORDER_NOT_READY`.
 Do not expect activation data in list, account, ledger, webhook, or standard
@@ -531,31 +531,31 @@ metrics.
 
 **Success data fields:**
 
-| Field | Description |
-| --- | --- |
-| `currency` | Always `NPR`. |
-| `balancePaisa`, `availableBalancePaisa` | Current account balance in paisa. |
-| `totalDebitsPaisa`, `totalCreditsPaisa`, `totalRefundedPaisa`, `totalAdjustedPaisa` | Aggregate ledger totals. |
-| `ordersCreated` | Number of partner orders. |
-| `ordersByStatus` | Count keyed by order status. |
-| `fulfilledOrders`, `failedOrders` | Derived aggregate counts. |
-| `totalOrderValuePaisa`, `averageOrderValuePaisa` | Aggregate commercial value. |
-| `updatedAt` | Partner account update time. |
+| Field                                                                               | Description                       |
+| ----------------------------------------------------------------------------------- | --------------------------------- |
+| `currency`                                                                          | Always `NPR`.                     |
+| `balancePaisa`, `availableBalancePaisa`                                             | Current account balance in paisa. |
+| `totalDebitsPaisa`, `totalCreditsPaisa`, `totalRefundedPaisa`, `totalAdjustedPaisa` | Aggregate ledger totals.          |
+| `ordersCreated`                                                                     | Number of partner orders.         |
+| `ordersByStatus`                                                                    | Count keyed by order status.      |
+| `fulfilledOrders`, `failedOrders`                                                   | Derived aggregate counts.         |
+| `totalOrderValuePaisa`, `averageOrderValuePaisa`                                    | Aggregate commercial value.       |
+| `updatedAt`                                                                         | Partner account update time.      |
 
 ### 6.11 `GET /partners/ledger`
 
 **Scope:** `orders:read`  
 **Purpose:** lists ledger entries for reconciliation.
 
-| Query field | Required | Rules |
-| --- | --- | --- |
-| `cursor` | no | Page cursor. |
-| `from`, `to` | no | ISO 8601 date-times; inclusive range. |
-| `externalOrderId` | no | Exact external order ID. |
-| `orderNumber` | no | Exact Visa Compass order number. |
-| `reference` | no | Case-insensitive contains search. |
-| `type` | no | `CREDIT`, `DEBIT`, `REFUND`, or `ADJUSTMENT`. |
-| `limit` | no | Integer 1–100; default 25. |
+| Query field       | Required | Rules                                         |
+| ----------------- | -------- | --------------------------------------------- |
+| `cursor`          | no       | Page cursor.                                  |
+| `from`, `to`      | no       | ISO 8601 date-times; inclusive range.         |
+| `externalOrderId` | no       | Exact external order ID.                      |
+| `orderNumber`     | no       | Exact Visa Compass order number.              |
+| `reference`       | no       | Case-insensitive contains search.             |
+| `type`            | no       | `CREDIT`, `DEBIT`, `REFUND`, or `ADJUSTMENT`. |
+| `limit`           | no       | Integer 1–100; default 25.                    |
 
 **Success data item:**
 
@@ -619,9 +619,9 @@ contact.
 { "channel": "EMAIL", "template": "QR_READY" }
 ```
 
-| Field | Allowed values | Meaning |
-| --- | --- | --- |
-| `channel` | `EMAIL`, `WHATSAPP` | Delivery channel. |
+| Field      | Allowed values                                  | Meaning           |
+| ---------- | ----------------------------------------------- | ----------------- |
+| `channel`  | `EMAIL`, `WHATSAPP`                             | Delivery channel. |
 | `template` | `ORDER_STATUS`, `QR_READY`, `DOCUMENT_REUPLOAD` | Message template. |
 
 The order must have a traveller. The response is the notification queue result;
@@ -644,12 +644,12 @@ link. The partner itself must be configured with integration type
 }
 ```
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `planId` | yes | Active plan UUID. |
-| `externalOrderId` | yes | Unique 1–120 char partner reference. |
-| `externalCustomerId` | yes | 1–120 char partner customer reference. |
-| `topUpMobile` | no | Existing subscriber mobile, 1–20 chars. Used only to attempt top-up binding. |
+| Field                | Required | Description                                                                  |
+| -------------------- | -------- | ---------------------------------------------------------------------------- |
+| `planId`             | yes      | Active plan UUID.                                                            |
+| `externalOrderId`    | yes      | Unique 1–120 char partner reference.                                         |
+| `externalCustomerId` | yes      | 1–120 char partner customer reference.                                       |
+| `topUpMobile`        | no       | Existing subscriber mobile, 1–20 chars. Used only to attempt top-up binding. |
 
 **Success data:**
 
@@ -698,7 +698,9 @@ this shape inside `data`:
   "travelerComplete": true,
   "documents": [{ "id": "...", "type": "PASSPORT", "status": "PENDING" }],
   "refund": null,
-  "timeline": [{ "from": "APPROVED", "to": "PROVISIONING", "reason": null, "at": "..." }],
+  "timeline": [
+    { "from": "APPROVED", "to": "PROVISIONING", "reason": null, "at": "..." }
+  ],
   "fulfillmentStatus": "PENDING",
   "links": {
     "order": "/api/v1/partners/orders/a7b2dd01-b5a8-4dd3-a4cb-497e362bc012",
@@ -728,15 +730,15 @@ All paths are relative to `<api-base-url>/api/v1/partner-checkout/{token}`.
 The token must be 32–100 URL-safe characters, unexpired, and unconsumed.
 Invalid, expired, or consumed tokens return `404 Hosted checkout not found`.
 
-| Method and path suffix | Purpose | Body |
-| --- | --- | --- |
-| `GET /` | Read partner branding, plan, order status, document summary, and required document types. | none |
-| `GET /documents` | Read document summary for a draft checkout. | none |
-| `POST /traveler` | Upsert traveller details. | Traveller object from section 5.1. |
-| `POST /documents` | Create a private upload instruction. | `{ "type": "PASSPORT", "fileName": "passport.pdf" }` |
-| `POST /documents/{documentId}/confirm` | Verify that the private asset was uploaded. | none |
-| `POST /verify-passport` | Runs passport OCR/field verification against saved traveller data. | none |
-| `POST /complete` | Completes checkout, debits partner balance, consumes token, and starts provisioning. | `{ "consentAccepted": true }` |
+| Method and path suffix                 | Purpose                                                                                   | Body                                                 |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `GET /`                                | Read partner branding, plan, order status, document summary, and required document types. | none                                                 |
+| `GET /documents`                       | Read document summary for a draft checkout.                                               | none                                                 |
+| `POST /traveler`                       | Upsert traveller details.                                                                 | Traveller object from section 5.1.                   |
+| `POST /documents`                      | Create a private upload instruction.                                                      | `{ "type": "PASSPORT", "fileName": "passport.pdf" }` |
+| `POST /documents/{documentId}/confirm` | Verify that the private asset was uploaded.                                               | none                                                 |
+| `POST /verify-passport`                | Runs passport OCR/field verification against saved traveller data.                        | none                                                 |
+| `POST /complete`                       | Completes checkout, debits partner balance, consumes token, and starts provisioning.      | `{ "consentAccepted": true }`                        |
 
 For an `INITIAL_PURCHASE`, completion requires a traveller, every
 destination-required document, uploaded/verified assets, and a passport
@@ -756,13 +758,13 @@ Partner API.
 
 Each active eligible subscription receives an HTTP `POST` with:
 
-| Header | Value |
-| --- | --- |
-| `content-type` | `application/json` |
-| `user-agent` | `VisaCompass-Partner-Webhooks/1.0` |
-| `vc-event-id` | Partner event UUID; use for deduplication. |
-| `vc-webhook-timestamp` | Unix epoch seconds as a string. |
-| `vc-webhook-signature` | `v1=<hex-hmac>` |
+| Header                 | Value                                      |
+| ---------------------- | ------------------------------------------ |
+| `content-type`         | `application/json`                         |
+| `user-agent`           | `VisaCompass-Partner-Webhooks/1.0`         |
+| `vc-event-id`          | Partner event UUID; use for deduplication. |
+| `vc-webhook-timestamp` | Unix epoch seconds as a string.            |
+| `vc-webhook-signature` | `v1=<hex-hmac>`                            |
 
 Body:
 
@@ -803,12 +805,12 @@ attempts with exponential retry scheduling; afterward the delivery status is
 
 Implemented event types produced by partner order/refund workflows include:
 
-| Event | When created |
-| --- | --- |
-| `order.accepted` | Complete API order accepted and funded. |
-| `order.cancelled` | Eligible partner order cancelled. |
-| `refund.requested` | Partner submitted a refund request. |
-| `order.refunded` | Operations approved a refund. |
+| Event              | When created                            |
+| ------------------ | --------------------------------------- |
+| `order.accepted`   | Complete API order accepted and funded. |
+| `order.cancelled`  | Eligible partner order cancelled.       |
+| `refund.requested` | Partner submitted a refund request.     |
+| `order.refunded`   | Operations approved a refund.           |
 
 Subscribe with `*` to receive every emitted event, or subscribe to exact event
 names. Event payloads are event-specific; use the order/events endpoint to
@@ -816,23 +818,23 @@ reconcile state and never infer QR credentials from a webhook.
 
 ## 10. Error and retry reference
 
-| HTTP | Code / condition | Meaning and partner action |
-| --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Invalid/missing field. Correct the request using `details`. |
-| 400 | `PLAN_UNAVAILABLE` | Plan is no longer active/available; refresh catalogue. |
-| 400 | `DOCUMENT_REQUIRED` | Required destination document type missing. |
-| 400 | `UPLOAD_NOT_VERIFIED` | Upload intent is missing, belongs to another partner/order, consumed, or asset declaration did not match. Create a new upload session and upload again. |
-| 400 | `UPLOAD_EXPIRED` | Upload intent exceeded 15 minutes. Create a new session. |
-| 400 | `PASSPORT_REQUIRED` / `PASSPORT_VERIFICATION_REQUIRED` | Hosted checkout needs passport upload/verification before initial-purchase completion. |
-| 400 | `INTEGRATION_TYPE_FORBIDDEN` | Partner is not approved for checkout links; contact Visa Compass Operations. |
-| 400 | `HOSTED_PAYMENT_DEPRECATED` | Do not use hosted payment; use prepaid `PARTNER_ACCOUNT`. |
-| 401 | `PARTNER_UNAUTHORIZED` | Missing, malformed, expired, revoked, or invalid partner key. Rotate/check credential. |
-| 403 | `PARTNER_SCOPE_FORBIDDEN` | Credential lacks endpoint scope. |
-| 403 | `PARTNER_SUSPENDED` | Partner is suspended; mutations are blocked. |
-| 404 | `PARTNER_ORDER_NOT_FOUND` / `PARTNER_DOCUMENT_NOT_FOUND` / `PARTNER_NOT_FOUND` | Order/document/partner not found or not owned by this partner. Hosted tokens also intentionally return `HOSTED_CHECKOUT_NOT_FOUND`. |
-| 409 | `EXTERNAL_ORDER_ID_EXISTS` / `UPLOAD_ALREADY_CONSUMED` / `PARTNER_ORDER_NOT_READY` / `ORDER_CONFLICT` / `PARTNER_BALANCE_CONFLICT` / `IDEMPOTENCY_CONFLICT` | Duplicate external order ID, reused upload, activation requested too early, concurrent change, or idempotency replay mismatch. Fetch current order and decide whether to retry. |
-| 429 | `PARTNER_RATE_LIMITED` | Per-minute partner limit exceeded. Back off until the next window; inspect rate-limit headers. |
-| 5xx | `UNEXPECTED` | Internal failure; retry only safe/idempotent work with the same `x-idempotency-key`, and provide correlation ID to support. |
+| HTTP | Code / condition                                                                                                                                            | Meaning and partner action                                                                                                                                                      |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `VALIDATION_ERROR`                                                                                                                                          | Invalid/missing field. Correct the request using `details`.                                                                                                                     |
+| 400  | `PLAN_UNAVAILABLE`                                                                                                                                          | Plan is no longer active/available; refresh catalogue.                                                                                                                          |
+| 400  | `DOCUMENT_REQUIRED`                                                                                                                                         | Required destination document type missing.                                                                                                                                     |
+| 400  | `UPLOAD_NOT_VERIFIED`                                                                                                                                       | Upload intent is missing, belongs to another partner/order, consumed, or asset declaration did not match. Create a new upload session and upload again.                         |
+| 400  | `UPLOAD_EXPIRED`                                                                                                                                            | Upload intent exceeded 15 minutes. Create a new session.                                                                                                                        |
+| 400  | `PASSPORT_REQUIRED` / `PASSPORT_VERIFICATION_REQUIRED`                                                                                                      | Hosted checkout needs passport upload/verification before initial-purchase completion.                                                                                          |
+| 400  | `INTEGRATION_TYPE_FORBIDDEN`                                                                                                                                | Partner is not approved for checkout links; contact Visa Compass Operations.                                                                                                    |
+| 400  | `HOSTED_PAYMENT_DEPRECATED`                                                                                                                                 | Do not use hosted payment; use prepaid `PARTNER_ACCOUNT`.                                                                                                                       |
+| 401  | `PARTNER_UNAUTHORIZED`                                                                                                                                      | Missing, malformed, expired, revoked, or invalid partner key. Rotate/check credential.                                                                                          |
+| 403  | `PARTNER_SCOPE_FORBIDDEN`                                                                                                                                   | Credential lacks endpoint scope.                                                                                                                                                |
+| 403  | `PARTNER_SUSPENDED`                                                                                                                                         | Partner is suspended; mutations are blocked.                                                                                                                                    |
+| 404  | `PARTNER_ORDER_NOT_FOUND` / `PARTNER_DOCUMENT_NOT_FOUND` / `PARTNER_NOT_FOUND`                                                                              | Order/document/partner not found or not owned by this partner. Hosted tokens also intentionally return `HOSTED_CHECKOUT_NOT_FOUND`.                                             |
+| 409  | `EXTERNAL_ORDER_ID_EXISTS` / `UPLOAD_ALREADY_CONSUMED` / `PARTNER_ORDER_NOT_READY` / `ORDER_CONFLICT` / `PARTNER_BALANCE_CONFLICT` / `IDEMPOTENCY_CONFLICT` | Duplicate external order ID, reused upload, activation requested too early, concurrent change, or idempotency replay mismatch. Fetch current order and decide whether to retry. |
+| 429  | `PARTNER_RATE_LIMITED`                                                                                                                                      | Per-minute partner limit exceeded. Back off until the next window; inspect rate-limit headers.                                                                                  |
+| 5xx  | `UNEXPECTED`                                                                                                                                                | Internal failure; retry only safe/idempotent work with the same `x-idempotency-key`, and provide correlation ID to support.                                                     |
 
 Other implemented stable business codes may be returned by shared services,
 including `INSUFFICIENT_PARTNER_BALANCE`, `INVENTORY_UNAVAILABLE`,
@@ -844,15 +846,15 @@ codes. Do not retry insufficient-balance errors until the account is credited.
 The following routes are retained only for backward compatibility and return
 `Deprecation: true` headers. New integrations must not use them.
 
-| Route | Current behavior | Replacement |
-| --- | --- | --- |
-| `POST /partners/quotes` | HTTP 410 `QUOTES_DEPRECATED` | `POST /partners/orders` complete order. |
-| Quote-shaped `POST /partners/orders` | HTTP 410 `LEGACY_PARTNER_ORDER_DEPRECATED` | Complete order with `planId`, traveller, documents, consent. |
-| `POST /partners/orders/{id}/traveler` | Deprecated legacy flow | Include traveller in complete order. |
-| `POST /partners/orders/{id}/documents` | Deprecated legacy flow | `POST /partners/document-upload-sessions`. |
-| `POST /partners/orders/{id}/documents/{documentId}/confirm` | Deprecated legacy flow | Use document-upload sessions plus complete order. |
-| `POST /partners/orders/{id}/hosted-checkout-session` | HTTP 410 `HOSTED_PAYMENT_DEPRECATED` | `POST /partners/hosted-checkout-sessions`. |
-| `POST /partners/orders/{id}/payment-session` | HTTP 410 `HOSTED_PAYMENT_DEPRECATED` | Prepaid partner account; no Visa Compass hosted payment. |
+| Route                                                       | Current behavior                           | Replacement                                                  |
+| ----------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------ |
+| `POST /partners/quotes`                                     | HTTP 410 `QUOTES_DEPRECATED`               | `POST /partners/orders` complete order.                      |
+| Quote-shaped `POST /partners/orders`                        | HTTP 410 `LEGACY_PARTNER_ORDER_DEPRECATED` | Complete order with `planId`, traveller, documents, consent. |
+| `POST /partners/orders/{id}/traveler`                       | Deprecated legacy flow                     | Include traveller in complete order.                         |
+| `POST /partners/orders/{id}/documents`                      | Deprecated legacy flow                     | `POST /partners/document-upload-sessions`.                   |
+| `POST /partners/orders/{id}/documents/{documentId}/confirm` | Deprecated legacy flow                     | Use document-upload sessions plus complete order.            |
+| `POST /partners/orders/{id}/hosted-checkout-session`        | HTTP 410 `HOSTED_PAYMENT_DEPRECATED`       | `POST /partners/hosted-checkout-sessions`.                   |
+| `POST /partners/orders/{id}/payment-session`                | HTTP 410 `HOSTED_PAYMENT_DEPRECATED`       | Prepaid partner account; no Visa Compass hosted payment.     |
 
 ## 12. Integration checklist
 
@@ -885,31 +887,31 @@ This is the complete external operation list. Every URL is relative to
 `<api-base-url>/api/v1`; successful responses wrap the listed result in the
 section 2 envelope.
 
-| # | Method | URL | Authentication / scope | Idempotency | Success `data` | Main non-2xx cases |
-| ---: | --- | --- | --- | --- | --- | --- |
-| 1 | GET | `/partners/capabilities` | Bearer; `catalog:read` | no | `Capabilities` | 401, 403, 429 |
-| 2 | GET | `/partners/plans` | Bearer; `catalog:read` | no | `Plan[]` | 400, 401, 403, 429 |
-| 3 | POST | `/partners/document-upload-sessions` | Bearer; `documents:write` | recommended | `UploadSessionBatch` | 400, 401, 403, 429, 503 |
-| 4 | POST | `/partners/orders` | Bearer; `orders:write` | strongly required | `PartnerOrder` | 400, 401, 403, 409, 410, 429, 5xx |
-| 5 | GET | `/partners/orders` | Bearer; `orders:read` | no | `Page<PartnerOrder>` | 400, 401, 403, 429 |
-| 6 | GET | `/partners/orders/{id}` | Bearer; `orders:read` | no | `PartnerOrder` | 401, 403, 404, 429 |
-| 7 | GET | `/partners/orders/by-external-id/{externalOrderId}` | Bearer; `orders:read` | no | `PartnerOrder` | 401, 403, 404, 429 |
-| 8 | GET | `/partners/orders/{id}/esim` | Bearer; `esims:read` | no | `ActivationPackage` | 401, 403, 404, 409, 429 |
-| 9 | GET | `/partners/orders/{id}/events` | Bearer; `orders:read` | no | `PartnerEvent[]` | 401, 403, 404, 429 |
-| 10 | GET | `/partners/orders/{id}/usage` | Bearer; `usage:read` | no | provider usage object | 400, 401, 403, 404, 429, provider error |
-| 11 | GET | `/partners/account` | Bearer; `orders:read` | no | `PartnerAccountSummary` | 401, 403, 429 |
-| 12 | GET | `/partners/ledger` | Bearer; `orders:read` | no | `Page<LedgerEntry>` | 400, 401, 403, 429 |
-| 13 | POST | `/partners/orders/{id}/cancel` | Bearer; `orders:write` | strongly required | `PartnerOrder` | 400, 401, 403, 404, 409, 429 |
-| 14 | POST | `/partners/orders/{id}/refund-requests` | Bearer; `refunds:write` | strongly required | `RefundRequest` | 400, 401, 403, 404, 409, 429 |
-| 15 | POST | `/partners/orders/{id}/notifications` | Bearer; `orders:write` | strongly required | notification queue result | 400, 401, 403, 404, 429 |
-| 16 | POST | `/partners/hosted-checkout-sessions` | Bearer; `checkout:write` | strongly required | `HostedCheckoutSession` | 400, 401, 403, 409, 429 |
-| 17 | GET | `/partner-checkout/{token}` | opaque URL token | no | `HostedCheckoutView` | 404 |
-| 18 | GET | `/partner-checkout/{token}/documents` | opaque URL token | no | `{documents: HostedDocument[]}` | 400, 404 |
-| 19 | POST | `/partner-checkout/{token}/traveler` | opaque URL token | no | `HostedCheckoutView` | 400, 404, 409 |
-| 20 | POST | `/partner-checkout/{token}/documents` | opaque URL token | no | `HostedDocumentUpload` | 400, 404, 409, 503 |
-| 21 | POST | `/partner-checkout/{token}/documents/{documentId}/confirm` | opaque URL token | no | `DocumentConfirmation` | 400, 404, 503 |
-| 22 | POST | `/partner-checkout/{token}/verify-passport` | opaque URL token | no | passport-verification result | 400, 404, 5xx |
-| 23 | POST | `/partner-checkout/{token}/complete` | opaque URL token | no | `HostedCheckoutCompletion` | 400, 404, 409 |
+|   # | Method | URL                                                        | Authentication / scope    | Idempotency       | Success `data`                  | Main non-2xx cases                      |
+| --: | ------ | ---------------------------------------------------------- | ------------------------- | ----------------- | ------------------------------- | --------------------------------------- |
+|   1 | GET    | `/partners/capabilities`                                   | Bearer; `catalog:read`    | no                | `Capabilities`                  | 401, 403, 429                           |
+|   2 | GET    | `/partners/plans`                                          | Bearer; `catalog:read`    | no                | `Plan[]`                        | 400, 401, 403, 429                      |
+|   3 | POST   | `/partners/document-upload-sessions`                       | Bearer; `documents:write` | recommended       | `UploadSessionBatch`            | 400, 401, 403, 429, 503                 |
+|   4 | POST   | `/partners/orders`                                         | Bearer; `orders:write`    | strongly required | `PartnerOrder`                  | 400, 401, 403, 409, 410, 429, 5xx       |
+|   5 | GET    | `/partners/orders`                                         | Bearer; `orders:read`     | no                | `Page<PartnerOrder>`            | 400, 401, 403, 429                      |
+|   6 | GET    | `/partners/orders/{id}`                                    | Bearer; `orders:read`     | no                | `PartnerOrder`                  | 401, 403, 404, 429                      |
+|   7 | GET    | `/partners/orders/by-external-id/{externalOrderId}`        | Bearer; `orders:read`     | no                | `PartnerOrder`                  | 401, 403, 404, 429                      |
+|   8 | GET    | `/partners/orders/{id}/esim`                               | Bearer; `esims:read`      | no                | `ActivationPackage`             | 401, 403, 404, 409, 429                 |
+|   9 | GET    | `/partners/orders/{id}/events`                             | Bearer; `orders:read`     | no                | `PartnerEvent[]`                | 401, 403, 404, 429                      |
+|  10 | GET    | `/partners/orders/{id}/usage`                              | Bearer; `usage:read`      | no                | provider usage object           | 400, 401, 403, 404, 429, provider error |
+|  11 | GET    | `/partners/account`                                        | Bearer; `orders:read`     | no                | `PartnerAccountSummary`         | 401, 403, 429                           |
+|  12 | GET    | `/partners/ledger`                                         | Bearer; `orders:read`     | no                | `Page<LedgerEntry>`             | 400, 401, 403, 429                      |
+|  13 | POST   | `/partners/orders/{id}/cancel`                             | Bearer; `orders:write`    | strongly required | `PartnerOrder`                  | 400, 401, 403, 404, 409, 429            |
+|  14 | POST   | `/partners/orders/{id}/refund-requests`                    | Bearer; `refunds:write`   | strongly required | `RefundRequest`                 | 400, 401, 403, 404, 409, 429            |
+|  15 | POST   | `/partners/orders/{id}/notifications`                      | Bearer; `orders:write`    | strongly required | notification queue result       | 400, 401, 403, 404, 429                 |
+|  16 | POST   | `/partners/hosted-checkout-sessions`                       | Bearer; `checkout:write`  | strongly required | `HostedCheckoutSession`         | 400, 401, 403, 409, 429                 |
+|  17 | GET    | `/partner-checkout/{token}`                                | opaque URL token          | no                | `HostedCheckoutView`            | 404                                     |
+|  18 | GET    | `/partner-checkout/{token}/documents`                      | opaque URL token          | no                | `{documents: HostedDocument[]}` | 400, 404                                |
+|  19 | POST   | `/partner-checkout/{token}/traveler`                       | opaque URL token          | no                | `HostedCheckoutView`            | 400, 404, 409                           |
+|  20 | POST   | `/partner-checkout/{token}/documents`                      | opaque URL token          | no                | `HostedDocumentUpload`          | 400, 404, 409, 503                      |
+|  21 | POST   | `/partner-checkout/{token}/documents/{documentId}/confirm` | opaque URL token          | no                | `DocumentConfirmation`          | 400, 404, 503                           |
+|  22 | POST   | `/partner-checkout/{token}/verify-passport`                | opaque URL token          | no                | passport-verification result    | 400, 404, 5xx                           |
+|  23 | POST   | `/partner-checkout/{token}/complete`                       | opaque URL token          | no                | `HostedCheckoutCompletion`      | 400, 404, 409                           |
 
 The public hosted routes are meant for the Visa Compass checkout page. Partners
 normally call only row 16 and send `checkoutUrl` to their traveller. The token
@@ -923,52 +925,52 @@ All objects are contained in `data` unless stated otherwise.
 
 ### `Capabilities`
 
-| Field | JSON type | Values / meaning |
-| --- | --- | --- |
-| `apiVersion` | string | Current value `v1`. |
-| `currency` | string | `NPR`. |
-| `settlementMethods` | string array | Current value `["PARTNER_ACCOUNT"]`. |
-| `payments` | array | Current value `[]`; hosted Visa Compass payment is unavailable. |
-| `notifications` | string array | `EMAIL`, `WHATSAPP`. |
-| `connectivity` | object | `{available:boolean}`. Reports whether eSIM fulfilment is reachable; provider identity and health internals are not exposed. |
-| `idempotencyRequiredForMutations` | boolean | Current value `true`. |
-| `outboundWebhooks` | boolean | Current value `true`. |
+| Field                             | JSON type    | Values / meaning                                                                                                             |
+| --------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `apiVersion`                      | string       | Current value `v1`.                                                                                                          |
+| `currency`                        | string       | `NPR`.                                                                                                                       |
+| `settlementMethods`               | string array | Current value `["PARTNER_ACCOUNT"]`.                                                                                         |
+| `payments`                        | array        | Current value `[]`; hosted Visa Compass payment is unavailable.                                                              |
+| `notifications`                   | string array | `EMAIL`, `WHATSAPP`.                                                                                                         |
+| `connectivity`                    | object       | `{available:boolean}`. Reports whether eSIM fulfilment is reachable; provider identity and health internals are not exposed. |
+| `idempotencyRequiredForMutations` | boolean      | Current value `true`.                                                                                                        |
+| `outboundWebhooks`                | boolean      | Current value `true`.                                                                                                        |
 
 ### `Plan`
 
-| Field | JSON type | Description |
-| --- | --- | --- |
-| `id` | UUID string | Use as `planId`. |
-| `countryCode`, `countryName` | string | Plan destination. |
-| `name`, `dataAllowance` | string | Display values. |
-| `validityDays` | integer | Validity in days. |
-| `coverage` | string array | Catalogue/provider coverage locations. |
-| `destination` | object | `{countryCode:string,countryName:string}`. |
-| `price` | object | `{amountPaisa:integer,currency:"NPR"}`. |
-| `requiredDocuments` | string array | Subset of `PASSPORT`, `TICKET`, `VISA`. |
-| `availability` | string | Current value `AVAILABLE`. |
-| `compatibilityDisclaimer`, `refundSummary` | string | Safe partner-display statements. |
-| `updatedAt` | ISO date-time string | Catalogue update time. |
-| `currency` | string | `NPR`. |
+| Field                                      | JSON type            | Description                                |
+| ------------------------------------------ | -------------------- | ------------------------------------------ |
+| `id`                                       | UUID string          | Use as `planId`.                           |
+| `countryCode`, `countryName`               | string               | Plan destination.                          |
+| `name`, `dataAllowance`                    | string               | Display values.                            |
+| `validityDays`                             | integer              | Validity in days.                          |
+| `coverage`                                 | string array         | Catalogue/provider coverage locations.     |
+| `destination`                              | object               | `{countryCode:string,countryName:string}`. |
+| `price`                                    | object               | `{amountPaisa:integer,currency:"NPR"}`.    |
+| `requiredDocuments`                        | string array         | Subset of `PASSPORT`, `TICKET`, `VISA`.    |
+| `availability`                             | string               | Current value `AVAILABLE`.                 |
+| `compatibilityDisclaimer`, `refundSummary` | string               | Safe partner-display statements.           |
+| `updatedAt`                                | ISO date-time string | Catalogue update time.                     |
+| `currency`                                 | string               | `NPR`.                                     |
 
 ### `UploadSessionBatch`
 
-| Field | JSON type | Description |
-| --- | --- | --- |
-| `externalOrderId` | string | Input partner reference. |
-| `documents` | array | One result per requested document. |
-| `documents[].uploadId` | UUID string | Required later in complete order `documents[].uploadId`. |
-| `documents[].type` | `DocumentType` | Requested type. |
-| `documents[].fileName` | string | Declared original name. |
-| `documents[].expiresAt` | ISO date-time | Upload intent expiration (15 minutes). |
-| `documents[].upload.mode` | string | `cloudinary-signed` or non-production `local-simulator`. |
-| `documents[].upload.endpoint` | URL string, optional | Storage upload endpoint. |
-| `documents[].upload.cloudName`, `apiKey`, `publicId` | string, optional | Cloudinary upload inputs. |
-| `documents[].upload.deliveryType` | string, optional | `authenticated` when Cloudinary signed. |
-| `documents[].upload.timestamp` | integer | Unix seconds for signature. |
-| `documents[].upload.signature` | string | Provider upload signature. |
-| `documents[].upload.folder` | string | Private storage folder. |
-| `documents[].upload.expiresInSeconds` | integer | Instruction TTL, currently 900. |
+| Field                                                | JSON type            | Description                                              |
+| ---------------------------------------------------- | -------------------- | -------------------------------------------------------- |
+| `externalOrderId`                                    | string               | Input partner reference.                                 |
+| `documents`                                          | array                | One result per requested document.                       |
+| `documents[].uploadId`                               | UUID string          | Required later in complete order `documents[].uploadId`. |
+| `documents[].type`                                   | `DocumentType`       | Requested type.                                          |
+| `documents[].fileName`                               | string               | Declared original name.                                  |
+| `documents[].expiresAt`                              | ISO date-time        | Upload intent expiration (15 minutes).                   |
+| `documents[].upload.mode`                            | string               | `cloudinary-signed` or non-production `local-simulator`. |
+| `documents[].upload.endpoint`                        | URL string, optional | Storage upload endpoint.                                 |
+| `documents[].upload.cloudName`, `apiKey`, `publicId` | string, optional     | Cloudinary upload inputs.                                |
+| `documents[].upload.deliveryType`                    | string, optional     | `authenticated` when Cloudinary signed.                  |
+| `documents[].upload.timestamp`                       | integer              | Unix seconds for signature.                              |
+| `documents[].upload.signature`                       | string               | Provider upload signature.                               |
+| `documents[].upload.folder`                          | string               | Private storage folder.                                  |
+| `documents[].upload.expiresInSeconds`                | integer              | Instruction TTL, currently 900.                          |
 
 Upload to the returned endpoint with the returned fields unchanged. In signed
 Cloudinary mode include `type=authenticated`; do not alter public ID, folder,
@@ -977,113 +979,113 @@ accepting an API order.
 
 ### `PartnerOrder`
 
-| Field | JSON type | Description / possible values |
-| --- | --- | --- |
-| `id` | UUID string | Visa Compass order ID. |
-| `orderNumber` | string | Human-readable Visa Compass reference. |
-| `externalOrderId` | string or null | Partner reference. |
-| `status` | `OrderStatus` | Full enum in section 16. |
-| `settlementMethod` | string or null | Supported working value `PARTNER_ACCOUNT`. |
-| `metadata` | object or null | Partner-supplied request data echoed back; do not treat undisclosed keys as fixed schema. |
-| `currency` | string | `NPR`. |
-| `totalAmountPaisa` | integer | Captured charged price in paisa. |
-| `plan` | object | `{id,countryCode,name,dataAllowance,validityDays}`. |
-| `travelerComplete` | boolean | Whether traveller record exists. |
-| `documents` | array | Each `{id:UUID,type:DocumentType,status:DocumentStatus}`. |
-| `refund` | object/null | Latest partner refund request if any. |
-| `timeline` | array | `{from:OrderStatus|null,to:OrderStatus,reason:string|null,at:ISO date-time}`. |
-| `fulfillmentStatus` | string | `PENDING`, `READY`, `ACTIVATED`, `FAILED`, `NOT_READY`. |
-| `links` | object | Relative `order`, `events`, and `esim` paths. |
-| `esimDetailsAvailable` | boolean | True only for `QR_READY`/`COMPLETED`. |
-| `createdAt`, `updatedAt` | ISO date-time | Audit timestamps. |
+| Field                    | JSON type      | Description / possible values                                                             |
+| ------------------------ | -------------- | ----------------------------------------------------------------------------------------- |
+| `id`                     | UUID string    | Visa Compass order ID.                                                                    |
+| `orderNumber`            | string         | Human-readable Visa Compass reference.                                                    |
+| `externalOrderId`        | string or null | Partner reference.                                                                        |
+| `status`                 | `OrderStatus`  | Full enum in section 16.                                                                  |
+| `settlementMethod`       | string or null | Supported working value `PARTNER_ACCOUNT`.                                                |
+| `metadata`               | object or null | Partner-supplied request data echoed back; do not treat undisclosed keys as fixed schema. |
+| `currency`               | string         | `NPR`.                                                                                    |
+| `totalAmountPaisa`       | integer        | Captured charged price in paisa.                                                          |
+| `plan`                   | object         | `{id,countryCode,name,dataAllowance,validityDays}`.                                       |
+| `travelerComplete`       | boolean        | Whether traveller record exists.                                                          |
+| `documents`              | array          | Each `{id:UUID,type:DocumentType,status:DocumentStatus}`.                                 |
+| `refund`                 | object/null    | Latest partner refund request if any.                                                     |
+| `timeline`               | array          | `{from:OrderStatus                                                                        | null,to:OrderStatus,reason:string | null,at:ISO date-time}`. |
+| `fulfillmentStatus`      | string         | `PENDING`, `READY`, `ACTIVATED`, `FAILED`, `NOT_READY`.                                   |
+| `links`                  | object         | Relative `order`, `events`, and `esim` paths.                                             |
+| `esimDetailsAvailable`   | boolean        | True only for `QR_READY`/`COMPLETED`.                                                     |
+| `createdAt`, `updatedAt` | ISO date-time  | Audit timestamps.                                                                         |
 
 ### Other response objects
 
-| Object | Exact fields |
-| --- | --- |
-| `ActivationPackage` | `orderId`, `externalOrderId`, `status`, `fulfillmentStatus`, `iccid`, `msisdn`, `smDpAddress`, `activationCode`, `activatedAt`, `expiresAt`. Values except identifiers/status may be null when provider has not supplied them. `activationCode` is sensitive. |
-| `PartnerEvent` | `id`, `type`, `version`, `resourceId`, `correlationId`, `payload`, `occurredAt`. |
-| `Page<PartnerOrder>` | `{items: PartnerOrder[], nextCursor: string|null}`. |
-| `LedgerEntry` | `id`, `type`, `amountPaisa`, `balanceAfterPaisa`, `currency`, `reference`, `order`, `createdAt`; `order` is `{id,externalOrderId,orderNumber}` or null. |
-| `PartnerAccountSummary` | `currency`, `balancePaisa`, `availableBalancePaisa`, `totalDebitsPaisa`, `totalCreditsPaisa`, `totalRefundedPaisa`, `totalAdjustedPaisa`, `ordersCreated`, `ordersByStatus`, `fulfilledOrders`, `failedOrders`, `totalOrderValuePaisa`, `averageOrderValuePaisa`, `updatedAt`. |
-| `RefundRequest` | `id`, `partnerId`, `orderId`, `amountPaisa`, `reason`, `status`, `decidedById`, `decidedAt`, `createdAt`, `updatedAt`. |
-| `HostedCheckoutSession` | `sessionId`, `token`, `checkoutUrl`, `orderId`, `externalOrderId`, `expiresAt`, `orderType`, optional `topUp`. `orderType` is `TOPUP` or `INITIAL_PURCHASE`; optional `topUp.status` is `BOUND` or `UNAVAILABLE`. |
-| `HostedCheckoutView` | `sessionId`, `expiresAt`, `partner:{name,slug,brand}`, `order:{id,orderNumber,orderType,status,amountPaisa,amountNpr,currency,plan,travelerComplete,documents,requiredDocuments}`. |
-| `HostedDocumentUpload` | `id`, `type`, `status`, `upload` (same instruction shape as upload session). |
-| `DocumentConfirmation` | `id`, `type`, `status`, `uploadVerified:true`. |
-| `HostedCheckoutCompletion` | `orderId`, `orderNumber`, `status`. |
+| Object                     | Exact fields                                                                                                                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ActivationPackage`        | `orderId`, `externalOrderId`, `status`, `fulfillmentStatus`, `iccid`, `msisdn`, `smDpAddress`, `activationCode`, `activatedAt`, `expiresAt`. Values except identifiers/status may be null when provider has not supplied them. `activationCode` is sensitive.                  |
+| `PartnerEvent`             | `id`, `type`, `version`, `resourceId`, `correlationId`, `payload`, `occurredAt`.                                                                                                                                                                                               |
+| `Page<PartnerOrder>`       | `{items: PartnerOrder[], nextCursor: string                                                                                                                                                                                                                                    | null}`. |
+| `LedgerEntry`              | `id`, `type`, `amountPaisa`, `balanceAfterPaisa`, `currency`, `reference`, `order`, `createdAt`; `order` is `{id,externalOrderId,orderNumber}` or null.                                                                                                                        |
+| `PartnerAccountSummary`    | `currency`, `balancePaisa`, `availableBalancePaisa`, `totalDebitsPaisa`, `totalCreditsPaisa`, `totalRefundedPaisa`, `totalAdjustedPaisa`, `ordersCreated`, `ordersByStatus`, `fulfilledOrders`, `failedOrders`, `totalOrderValuePaisa`, `averageOrderValuePaisa`, `updatedAt`. |
+| `RefundRequest`            | `id`, `partnerId`, `orderId`, `amountPaisa`, `reason`, `status`, `decidedById`, `decidedAt`, `createdAt`, `updatedAt`.                                                                                                                                                         |
+| `HostedCheckoutSession`    | `sessionId`, `token`, `checkoutUrl`, `orderId`, `externalOrderId`, `expiresAt`, `orderType`, optional `topUp`. `orderType` is `TOPUP` or `INITIAL_PURCHASE`; optional `topUp.status` is `BOUND` or `UNAVAILABLE`.                                                              |
+| `HostedCheckoutView`       | `sessionId`, `expiresAt`, `partner:{name,slug,brand}`, `order:{id,orderNumber,orderType,status,amountPaisa,amountNpr,currency,plan,travelerComplete,documents,requiredDocuments}`.                                                                                             |
+| `HostedDocumentUpload`     | `id`, `type`, `status`, `upload` (same instruction shape as upload session).                                                                                                                                                                                                   |
+| `DocumentConfirmation`     | `id`, `type`, `status`, `uploadVerified:true`.                                                                                                                                                                                                                                 |
+| `HostedCheckoutCompletion` | `orderId`, `orderNumber`, `status`.                                                                                                                                                                                                                                            |
 
 ## 16. Complete enum, parameter, and validation reference
 
 ### 16.1 Enumerations
 
-| Enum | Every possible value |
-| --- | --- |
-| `OrderStatus` | `DRAFT`, `PAYMENT_PENDING`, `PAYMENT_CONFIRMED`, `REVIEW_PENDING`, `AWAITING_CUSTOMER`, `APPROVED`, `PROVISIONING`, `QR_READY`, `COMPLETED`, `PAYMENT_FAILED`, `CANCELLED`, `PROVISIONING_FAILED`, `REFUND_PENDING`, `REFUNDED` |
-| `DocumentType` | `PASSPORT`, `TICKET`, `VISA` |
-| `DocumentStatus` | `PENDING`, `APPROVED`, `REJECTED`, `REUPLOAD_REQUIRED` |
-| Traveller `title` | `MR`, `MS`, `MRS` |
-| Settlement request `method` | `PARTNER_ACCOUNT`, `HOSTED_PAYMENT` (the latter is rejected as deprecated) |
-| Partner integration type | `API`, `CHECKOUT_LINK` (Operations-configured) |
-| Notification `channel` | `EMAIL`, `WHATSAPP` |
-| Notification `template` | `ORDER_STATUS`, `QR_READY`, `DOCUMENT_REUPLOAD` |
-| Ledger query `type` | `CREDIT`, `DEBIT`, `REFUND`, `ADJUSTMENT` |
-| Refund `status` | `REQUESTED`, `APPROVED`, `REJECTED`, `PROCESSING`, `COMPLETED`, `FAILED` |
-| Webhook delivery status | `PENDING`, `DELIVERED`, `RETRYING`, `FAILED` |
+| Enum                        | Every possible value                                                                                                                                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OrderStatus`               | `DRAFT`, `PAYMENT_PENDING`, `PAYMENT_CONFIRMED`, `REVIEW_PENDING`, `AWAITING_CUSTOMER`, `APPROVED`, `PROVISIONING`, `QR_READY`, `COMPLETED`, `PAYMENT_FAILED`, `CANCELLED`, `PROVISIONING_FAILED`, `REFUND_PENDING`, `REFUNDED` |
+| `DocumentType`              | `PASSPORT`, `TICKET`, `VISA`                                                                                                                                                                                                    |
+| `DocumentStatus`            | `PENDING`, `APPROVED`, `REJECTED`, `REUPLOAD_REQUIRED`                                                                                                                                                                          |
+| Traveller `title`           | `MR`, `MS`, `MRS`                                                                                                                                                                                                               |
+| Settlement request `method` | `PARTNER_ACCOUNT`, `HOSTED_PAYMENT` (the latter is rejected as deprecated)                                                                                                                                                      |
+| Partner integration type    | `API`, `CHECKOUT_LINK` (Operations-configured)                                                                                                                                                                                  |
+| Notification `channel`      | `EMAIL`, `WHATSAPP`                                                                                                                                                                                                             |
+| Notification `template`     | `ORDER_STATUS`, `QR_READY`, `DOCUMENT_REUPLOAD`                                                                                                                                                                                 |
+| Ledger query `type`         | `CREDIT`, `DEBIT`, `REFUND`, `ADJUSTMENT`                                                                                                                                                                                       |
+| Refund `status`             | `REQUESTED`, `APPROVED`, `REJECTED`, `PROCESSING`, `COMPLETED`, `FAILED`                                                                                                                                                        |
+| Webhook delivery status     | `PENDING`, `DELIVERED`, `RETRYING`, `FAILED`                                                                                                                                                                                    |
 
 ### 16.2 Request fields, types, and limits
 
-| Endpoint / field | Required | JSON type | Exact accepted constraint |
-| --- | ---: | --- | --- |
-| `GET /plans.country` | no | string | API upper-cases it; use destination ISO code. |
-| Complete / hosted `externalOrderId` | yes | string | Trimmed, min 1, max 120; unique per partner. |
-| Complete / hosted `externalCustomerId` | yes | string | Trimmed, min 1, max 120. |
-| Complete / hosted `planId` | yes | string | UUID of active catalogue plan. |
-| Complete `settlement` | no | object | Defaults to `{method:"PARTNER_ACCOUNT"}`. |
-| `settlement.method` | if settlement | string enum | Values listed above; only `PARTNER_ACCOUNT` is operational. |
-| `documents` for complete order | yes | array | 2–3 items; all `type` values unique. |
-| Upload-session `documents` | yes | array | 1–3 items; all `type` values unique. |
-| `documents[].type` | yes | string enum | `PASSPORT`, `TICKET`, `VISA`. |
-| `documents[].uploadId` | complete only | string | UUID from an unexpired, unconsumed upload session for same partner/external order. |
-| `documents[].fileName` | upload session/hosted | string | Trimmed, min 1, max 180. |
-| `documents[].contentType` | upload session | string enum | `application/pdf`, `image/jpeg`, `image/png`. |
-| `documents[].sizeBytes` | upload session | integer | Min 1, max 10,485,760; must equal actual uploaded bytes in production storage. |
-| `traveler` | complete and hosted traveller post | object | All required fields below. |
-| `traveler.title` | yes | string enum | `MR`, `MS`, `MRS`. |
-| `traveler.firstName`, `surname` | yes | string | Trimmed, min 1, max 80 each. |
-| `traveler.middleName` | no | string | Trimmed, max 80. |
-| `traveler.dateOfBirth` | yes | string | `YYYY-MM-DD`, strictly in the past. |
-| `traveler.nationality`, `countryOfResidence` | yes | string | Exactly 2 characters. |
-| `traveler.city` | yes | string | Trimmed, min 1, max 100. |
-| `traveler.employerOrBusinessName` | no | string | Trimmed, max 160. |
-| `traveler.email` | yes | string | Valid email. |
-| `traveler.mobile` | yes | string | Trimmed, 7–20 chars; `+` optional, then digits/spaces/hyphens only. |
-| `traveler.passportNumber` | yes | string | Trimmed, 5–30; letters, digits, hyphen only. |
-| `traveler.passportExpiryDate` | yes | string | `YYYY-MM-DD`, strictly future date. |
-| `traveler.pointOfSaleCode` | no | string | Trimmed, max 40. |
-| `consent.compatibilityAccepted`, `termsAccepted`, `privacyAccepted` | yes | boolean | Each must literally be `true`. |
-| `consent.acceptedAt` | yes | string | ISO 8601 date-time. |
-| `metadata` values | no | object string map | Every value is string max 500. Never put PII/secrets here. |
-| Hosted `topUpMobile` | no | string | Trimmed, min 1, max 20. |
-| Cancel/refund `reason` | yes | string | Trimmed, min 3, max 1,000. |
-| Notification body | yes | object | Exact `channel` and `template` enums above. |
-| Hosted complete `consentAccepted` | yes | boolean | Must literally be `true`. |
-| List/ledger `limit` | no | integer or integer string | 1–100, default 25. |
-| List/ledger `cursor` | no | string | UUID-form opaque cursor returned by preceding page. |
-| Ledger `from`, `to` | no | string | ISO 8601 date-time. |
-| `x-idempotency-key` | mutations | string | Current implementation accepts 8–200 characters. |
+| Endpoint / field                                                    |                           Required | JSON type                 | Exact accepted constraint                                                          |
+| ------------------------------------------------------------------- | ---------------------------------: | ------------------------- | ---------------------------------------------------------------------------------- |
+| `GET /plans.country`                                                |                                 no | string                    | API upper-cases it; use destination ISO code.                                      |
+| Complete / hosted `externalOrderId`                                 |                                yes | string                    | Trimmed, min 1, max 120; unique per partner.                                       |
+| Complete / hosted `externalCustomerId`                              |                                yes | string                    | Trimmed, min 1, max 120.                                                           |
+| Complete / hosted `planId`                                          |                                yes | string                    | UUID of active catalogue plan.                                                     |
+| Complete `settlement`                                               |                                 no | object                    | Defaults to `{method:"PARTNER_ACCOUNT"}`.                                          |
+| `settlement.method`                                                 |                      if settlement | string enum               | Values listed above; only `PARTNER_ACCOUNT` is operational.                        |
+| `documents` for complete order                                      |                                yes | array                     | 2–3 items; all `type` values unique.                                               |
+| Upload-session `documents`                                          |                                yes | array                     | 1–3 items; all `type` values unique.                                               |
+| `documents[].type`                                                  |                                yes | string enum               | `PASSPORT`, `TICKET`, `VISA`.                                                      |
+| `documents[].uploadId`                                              |                      complete only | string                    | UUID from an unexpired, unconsumed upload session for same partner/external order. |
+| `documents[].fileName`                                              |              upload session/hosted | string                    | Trimmed, min 1, max 180.                                                           |
+| `documents[].contentType`                                           |                     upload session | string enum               | `application/pdf`, `image/jpeg`, `image/png`.                                      |
+| `documents[].sizeBytes`                                             |                     upload session | integer                   | Min 1, max 10,485,760; must equal actual uploaded bytes in production storage.     |
+| `traveler`                                                          | complete and hosted traveller post | object                    | All required fields below.                                                         |
+| `traveler.title`                                                    |                                yes | string enum               | `MR`, `MS`, `MRS`.                                                                 |
+| `traveler.firstName`, `surname`                                     |                                yes | string                    | Trimmed, min 1, max 80 each.                                                       |
+| `traveler.middleName`                                               |                                 no | string                    | Trimmed, max 80.                                                                   |
+| `traveler.dateOfBirth`                                              |                                yes | string                    | `YYYY-MM-DD`, strictly in the past.                                                |
+| `traveler.nationality`, `countryOfResidence`                        |                                yes | string                    | Exactly 2 characters.                                                              |
+| `traveler.city`                                                     |                                yes | string                    | Trimmed, min 1, max 100.                                                           |
+| `traveler.employerOrBusinessName`                                   |                                 no | string                    | Trimmed, max 160.                                                                  |
+| `traveler.email`                                                    |                                yes | string                    | Valid email.                                                                       |
+| `traveler.mobile`                                                   |                                yes | string                    | Trimmed, 7–20 chars; `+` optional, then digits/spaces/hyphens only.                |
+| `traveler.passportNumber`                                           |                                yes | string                    | Trimmed, 5–30; letters, digits, hyphen only.                                       |
+| `traveler.passportExpiryDate`                                       |                                yes | string                    | `YYYY-MM-DD`, strictly future date.                                                |
+| `traveler.pointOfSaleCode`                                          |                                 no | string                    | Trimmed, max 40.                                                                   |
+| `consent.compatibilityAccepted`, `termsAccepted`, `privacyAccepted` |                                yes | boolean                   | Each must literally be `true`.                                                     |
+| `consent.acceptedAt`                                                |                                yes | string                    | ISO 8601 date-time.                                                                |
+| `metadata` values                                                   |                                 no | object string map         | Every value is string max 500. Never put PII/secrets here.                         |
+| Hosted `topUpMobile`                                                |                                 no | string                    | Trimmed, min 1, max 20.                                                            |
+| Cancel/refund `reason`                                              |                                yes | string                    | Trimmed, min 3, max 1,000.                                                         |
+| Notification body                                                   |                                yes | object                    | Exact `channel` and `template` enums above.                                        |
+| Hosted complete `consentAccepted`                                   |                                yes | boolean                   | Must literally be `true`.                                                          |
+| List/ledger `limit`                                                 |                                 no | integer or integer string | 1–100, default 25.                                                                 |
+| List/ledger `cursor`                                                |                                 no | string                    | UUID-form opaque cursor returned by preceding page.                                |
+| Ledger `from`, `to`                                                 |                                 no | string                    | ISO 8601 date-time.                                                                |
+| `x-idempotency-key`                                                 |                          mutations | string                    | Current implementation accepts 8–200 characters.                                   |
 
 ### 16.3 State-specific operation rules
 
-| Operation | Allowed order statuses | Result if status is not allowed |
-| --- | --- | --- |
-| Retrieve activation package | `QR_READY`, `COMPLETED` | 409: `PARTNER_ORDER_NOT_READY` — `Activation details are available once the eSIM is ready to use`. |
-| Retrieve usage | `COMPLETED` only | 400: `PARTNER_USAGE_UNAVAILABLE` — `Usage details are available once the eSIM is active`. |
-| Cancel | `DRAFT`, `PAYMENT_PENDING`, `AWAITING_CUSTOMER`, `REVIEW_PENDING`, `APPROVED` | 400: `PARTNER_ORDER_INVALID_STATE` — `Order cannot be changed in its current state`. |
-| Request refund | `PAYMENT_CONFIRMED`, `REVIEW_PENDING`, `APPROVED`, `PROVISIONING_FAILED`, `COMPLETED` | 400: `PARTNER_ORDER_INVALID_STATE` — `Order cannot be changed in its current state`. |
-| Hosted set traveller | `DRAFT` | 400: `PARTNER_ORDER_INVALID_STATE` — `Order cannot be changed in its current state`. |
-| Hosted add document | `DRAFT`, `AWAITING_CUSTOMER` | 400: `PARTNER_ORDER_INVALID_STATE` — `Order cannot be changed in its current state`. |
-| Hosted complete | `DRAFT` only | 400: `HOSTED_CHECKOUT_COMPLETED` — `Hosted checkout is already completed`. |
+| Operation                   | Allowed order statuses                                                                | Result if status is not allowed                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Retrieve activation package | `QR_READY`, `COMPLETED`                                                               | 409: `PARTNER_ORDER_NOT_READY` — `Activation details are available once the eSIM is ready to use`. |
+| Retrieve usage              | `COMPLETED` only                                                                      | 400: `PARTNER_USAGE_UNAVAILABLE` — `Usage details are available once the eSIM is active`.          |
+| Cancel                      | `DRAFT`, `PAYMENT_PENDING`, `AWAITING_CUSTOMER`, `REVIEW_PENDING`, `APPROVED`         | 400: `PARTNER_ORDER_INVALID_STATE` — `Order cannot be changed in its current state`.               |
+| Request refund              | `PAYMENT_CONFIRMED`, `REVIEW_PENDING`, `APPROVED`, `PROVISIONING_FAILED`, `COMPLETED` | 400: `PARTNER_ORDER_INVALID_STATE` — `Order cannot be changed in its current state`.               |
+| Hosted set traveller        | `DRAFT`                                                                               | 400: `PARTNER_ORDER_INVALID_STATE` — `Order cannot be changed in its current state`.               |
+| Hosted add document         | `DRAFT`, `AWAITING_CUSTOMER`                                                          | 400: `PARTNER_ORDER_INVALID_STATE` — `Order cannot be changed in its current state`.               |
+| Hosted complete             | `DRAFT` only                                                                          | 400: `HOSTED_CHECKOUT_COMPLETED` — `Hosted checkout is already completed`.                         |
 
 ## 17. Complete partner-visible error/code/message contract
 
@@ -1093,61 +1095,61 @@ framework exceptions (e.g. unsupported method, unhandled storage/validation of
 non-business fields) fall back to `HTTP_<n>`. The table lists the current
 contract.
 
-| HTTP | `error.code` | Exact current `error.message` | When it occurs | Required client behavior |
-| ---: | --- | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | `<field>: <Zod validation message>` | Any field/range/enum/date validation failure. | Read `details`, correct request, create a new idempotency key only if this is a new corrected business request. |
-| 400 | `PLAN_UNAVAILABLE` | `Plan is unavailable` | Plan absent, inactive, or destination disabled. | Refresh catalogue. |
-| 400 | `DOCUMENT_REQUIRED` | `Required documents missing: <comma-separated types>` | Direct order lacks plan-required type. | Upload every missing type. |
-| 400 | `DOCUMENT_REQUIRED` | `Required document missing: <type>` | Hosted initial purchase lacks required stored document. | Upload/confirm named type. |
-| 400 | `UPLOAD_NOT_VERIFIED` | `One or more document uploads are unavailable` | Intent missing/wrong partner/order/consumed. | Create new sessions and upload again. |
-| 400 | `UPLOAD_NOT_VERIFIED` | `Document upload type does not match` | Submitted document type differs from intent. | Correct mapping. |
-| 400 | `UPLOAD_NOT_VERIFIED` | `Uploaded document does not match its declaration` | Actual storage size/format mismatches declaration. | Recreate correct upload intent and upload again. |
-| 400 | `UPLOAD_EXPIRED` | `One or more document uploads have expired` | 15-minute intent expired. | Create new upload session. |
-| 400 | `INSUFFICIENT_PARTNER_BALANCE` | `Partner prepaid balance is insufficient` | Balance lower than charged plan price. | Credit account; do not blind retry. |
-| 400 | `INTEGRATION_TYPE_FORBIDDEN` | `This partner is not approved for hosted checkout links` | API partner calls hosted-session operation. | Ask Operations to configure `CHECKOUT_LINK`. |
-| 400 | `PASSPORT_REQUIRED` | `Upload a passport before verification` | Hosted verify called without passport. | Upload passport. |
-| 400 | `TRAVELER_REQUIRED` | `Traveller details are required before verification` | Hosted verify called before traveller exists. | Save traveller first. |
-| 400 | `PASSPORT_VERIFICATION_REQUIRED` | `Passport verification is required before completion` | Hosted initial purchase has no `VERIFIED`/`SKIPPED` passport verdict. | Verify/re-upload/correct traveller data. |
-| 400 | `HOSTED_CHECKOUT_COMPLETED` | `Hosted checkout is already completed` | Complete called after draft state. | Treat token as no longer usable; retrieve order. |
-| 400 | `PARTNER_TRAVELER_REQUIRED` | `Traveller details are required` | Hosted initial purchase completed without traveller. | Submit traveller. |
-| 400 | `PARTNER_ORDER_INVALID_STATE` | `Order cannot be changed in its current state` | Mutation violates table in 16.3. | Fetch order; do not retry unless state changes legitimately. |
-| 400 | `PARTNER_USAGE_UNAVAILABLE` | `Usage details are available once the eSIM is active` | Usage read before completed. | Poll/webhook until completed. |
-| 400 | `PARTNER_TRAVELER_REQUIRED` | `Traveller contact details are required` | Notification request without traveller. | Ensure traveller exists. |
-| 400 | `PARTNER_DOCUMENT_INVALID` | `Document must be a PDF, JPG or PNG up to 10 MB` | Stored document invalid. | Upload a valid file. |
-| 400 | `PARTNER_DOCUMENT_INVALID` | `Document upload could not be verified` | Storage verification failed. | Retry after upload completion or create a new upload session. |
-| 400 | `INVALID_IDEMPOTENCY_KEY` | `Invalid idempotency key` | Key length outside 8–200. | Generate valid key. |
-| 401 | `PARTNER_UNAUTHORIZED` | `Your API key is invalid.` / `Your API key is invalid or has expired.` | Missing, malformed, revoked, expired, or incorrect bearer key. | Correct header/credential. |
-| 401 | `PARTNER_UNAUTHORIZED` | `Authentication is temporarily unavailable. Please try again shortly.` | Partner persistence unavailable. | Retry later; contact support. |
-| 403 | `PARTNER_SCOPE_FORBIDDEN` | `Your API key is not allowed to use this endpoint. Contact support to request access.` | Credential lacks endpoint scope. | Ask Operations for credential scope. |
-| 403 | `PARTNER_SUSPENDED` | `Your partner account is suspended. Contact support for help.` | Suspended partner makes non-GET call. | Contact Operations. |
-| 404 | `PARTNER_ORDER_NOT_FOUND` | `Order not found` | Order missing or belongs to another partner. | Verify order/credential. |
-| 404 | `PARTNER_ACTIVATION_UNAVAILABLE` | `Activation details are not available yet` | Eligible order has no eSIM record. | Contact Operations with correlation ID. |
-| 404 | `PARTNER_DOCUMENT_NOT_FOUND` | `Document not found` | Hosted/legacy document missing/not owned. | Reload state. |
-| 404 | `HOSTED_CHECKOUT_NOT_FOUND` | `Hosted checkout not found` | Token malformed, expired, consumed, invalid, or session order missing. | Create new hosted session. |
-| 404 | `PARTNER_NOT_FOUND` | `Partner not found` | Authenticated partner record missing or inactive. | Contact Operations. |
-| 409 | `EXTERNAL_ORDER_ID_EXISTS` | `External order ID already exists` | Partner reused external order reference. | GET by external ID. |
-| 409 | `UPLOAD_ALREADY_CONSUMED` | `Document upload was already consumed` | Upload session reused/raced. | Never reuse upload IDs. |
-| 409 | `PARTNER_ORDER_NOT_READY` | `Activation details are available once the eSIM is ready to use` | eSIM endpoint too early. | Poll status. |
-| 409 | `ORDER_CONFLICT` | `Order was changed; reload and retry` / `Order was changed by another request; reload and retry` | Concurrency conflict. | GET current order then decide. |
-| 409 | `PARTNER_BALANCE_CONFLICT` | `Partner balance changed; retry` | Concurrent account change. | GET account; retry safely. |
-| 409 | `IDEMPOTENCY_CONFLICT` | `Idempotency key was already used with a different request` | Same key, different JSON body. | Use original request/key or new key. |
-| 409 | `IDEMPOTENCY_CONFLICT` | `Idempotent request is still being processed; retry shortly` | Duplicate still running. | Retry same request/key shortly. |
-| 410 | `QUOTES_DEPRECATED` | `Quote creation is deprecated; place a complete order directly` | Deprecated quote endpoint. | Use complete order. |
-| 410 | `LEGACY_PARTNER_ORDER_DEPRECATED` | `Quote-based partner orders are disabled; submit a complete order using planId` | Quote-shaped create body. | Use current complete payload. |
-| 410 | `HOSTED_PAYMENT_DEPRECATED` | Hosted-payment endpoint message explaining prepaid account requirement. | Hosted payment/`HOSTED_PAYMENT` request. | Collect customer payment yourself; use prepaid account. |
-| 429 | `PARTNER_RATE_LIMITED` | `Partner rate limit exceeded` | Partner per-minute quota exceeded. | Back off; use returned rate headers. |
-| 429 | `RATE_LIMITED` | `Too many requests. Please wait a moment and try again.` | Global rate guard. | Exponential backoff. |
-| 503 | `HTTP_503` | `Private document storage is not configured` | Production private storage unavailable/config missing. | Stop document flow and contact Visa Compass. |
-| 5xx | `UNEXPECTED` | Safe generic platform message | Unhandled server failure. | Retry only idempotent/safe work; give support correlation ID. |
+| HTTP | `error.code`                      | Exact current `error.message`                                                                    | When it occurs                                                         | Required client behavior                                                                                        |
+| ---: | --------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+|  400 | `VALIDATION_ERROR`                | `<field>: <Zod validation message>`                                                              | Any field/range/enum/date validation failure.                          | Read `details`, correct request, create a new idempotency key only if this is a new corrected business request. |
+|  400 | `PLAN_UNAVAILABLE`                | `Plan is unavailable`                                                                            | Plan absent, inactive, or destination disabled.                        | Refresh catalogue.                                                                                              |
+|  400 | `DOCUMENT_REQUIRED`               | `Required documents missing: <comma-separated types>`                                            | Direct order lacks plan-required type.                                 | Upload every missing type.                                                                                      |
+|  400 | `DOCUMENT_REQUIRED`               | `Required document missing: <type>`                                                              | Hosted initial purchase lacks required stored document.                | Upload/confirm named type.                                                                                      |
+|  400 | `UPLOAD_NOT_VERIFIED`             | `One or more document uploads are unavailable`                                                   | Intent missing/wrong partner/order/consumed.                           | Create new sessions and upload again.                                                                           |
+|  400 | `UPLOAD_NOT_VERIFIED`             | `Document upload type does not match`                                                            | Submitted document type differs from intent.                           | Correct mapping.                                                                                                |
+|  400 | `UPLOAD_NOT_VERIFIED`             | `Uploaded document does not match its declaration`                                               | Actual storage size/format mismatches declaration.                     | Recreate correct upload intent and upload again.                                                                |
+|  400 | `UPLOAD_EXPIRED`                  | `One or more document uploads have expired`                                                      | 15-minute intent expired.                                              | Create new upload session.                                                                                      |
+|  400 | `INSUFFICIENT_PARTNER_BALANCE`    | `Partner prepaid balance is insufficient`                                                        | Balance lower than charged plan price.                                 | Credit account; do not blind retry.                                                                             |
+|  400 | `INTEGRATION_TYPE_FORBIDDEN`      | `This partner is not approved for hosted checkout links`                                         | API partner calls hosted-session operation.                            | Ask Operations to configure `CHECKOUT_LINK`.                                                                    |
+|  400 | `PASSPORT_REQUIRED`               | `Upload a passport before verification`                                                          | Hosted verify called without passport.                                 | Upload passport.                                                                                                |
+|  400 | `TRAVELER_REQUIRED`               | `Traveller details are required before verification`                                             | Hosted verify called before traveller exists.                          | Save traveller first.                                                                                           |
+|  400 | `PASSPORT_VERIFICATION_REQUIRED`  | `Passport verification is required before completion`                                            | Hosted initial purchase has no `VERIFIED`/`SKIPPED` passport verdict.  | Verify/re-upload/correct traveller data.                                                                        |
+|  400 | `HOSTED_CHECKOUT_COMPLETED`       | `Hosted checkout is already completed`                                                           | Complete called after draft state.                                     | Treat token as no longer usable; retrieve order.                                                                |
+|  400 | `PARTNER_TRAVELER_REQUIRED`       | `Traveller details are required`                                                                 | Hosted initial purchase completed without traveller.                   | Submit traveller.                                                                                               |
+|  400 | `PARTNER_ORDER_INVALID_STATE`     | `Order cannot be changed in its current state`                                                   | Mutation violates table in 16.3.                                       | Fetch order; do not retry unless state changes legitimately.                                                    |
+|  400 | `PARTNER_USAGE_UNAVAILABLE`       | `Usage details are available once the eSIM is active`                                            | Usage read before completed.                                           | Poll/webhook until completed.                                                                                   |
+|  400 | `PARTNER_TRAVELER_REQUIRED`       | `Traveller contact details are required`                                                         | Notification request without traveller.                                | Ensure traveller exists.                                                                                        |
+|  400 | `PARTNER_DOCUMENT_INVALID`        | `Document must be a PDF, JPG or PNG up to 10 MB`                                                 | Stored document invalid.                                               | Upload a valid file.                                                                                            |
+|  400 | `PARTNER_DOCUMENT_INVALID`        | `Document upload could not be verified`                                                          | Storage verification failed.                                           | Retry after upload completion or create a new upload session.                                                   |
+|  400 | `INVALID_IDEMPOTENCY_KEY`         | `Invalid idempotency key`                                                                        | Key length outside 8–200.                                              | Generate valid key.                                                                                             |
+|  401 | `PARTNER_UNAUTHORIZED`            | `Your API key is invalid.` / `Your API key is invalid or has expired.`                           | Missing, malformed, revoked, expired, or incorrect bearer key.         | Correct header/credential.                                                                                      |
+|  401 | `PARTNER_UNAUTHORIZED`            | `Authentication is temporarily unavailable. Please try again shortly.`                           | Partner persistence unavailable.                                       | Retry later; contact support.                                                                                   |
+|  403 | `PARTNER_SCOPE_FORBIDDEN`         | `Your API key is not allowed to use this endpoint. Contact support to request access.`           | Credential lacks endpoint scope.                                       | Ask Operations for credential scope.                                                                            |
+|  403 | `PARTNER_SUSPENDED`               | `Your partner account is suspended. Contact support for help.`                                   | Suspended partner makes non-GET call.                                  | Contact Operations.                                                                                             |
+|  404 | `PARTNER_ORDER_NOT_FOUND`         | `Order not found`                                                                                | Order missing or belongs to another partner.                           | Verify order/credential.                                                                                        |
+|  404 | `PARTNER_ACTIVATION_UNAVAILABLE`  | `Activation details are not available yet`                                                       | Eligible order has no eSIM record.                                     | Contact Operations with correlation ID.                                                                         |
+|  404 | `PARTNER_DOCUMENT_NOT_FOUND`      | `Document not found`                                                                             | Hosted/legacy document missing/not owned.                              | Reload state.                                                                                                   |
+|  404 | `HOSTED_CHECKOUT_NOT_FOUND`       | `Hosted checkout not found`                                                                      | Token malformed, expired, consumed, invalid, or session order missing. | Create new hosted session.                                                                                      |
+|  404 | `PARTNER_NOT_FOUND`               | `Partner not found`                                                                              | Authenticated partner record missing or inactive.                      | Contact Operations.                                                                                             |
+|  409 | `EXTERNAL_ORDER_ID_EXISTS`        | `External order ID already exists`                                                               | Partner reused external order reference.                               | GET by external ID.                                                                                             |
+|  409 | `UPLOAD_ALREADY_CONSUMED`         | `Document upload was already consumed`                                                           | Upload session reused/raced.                                           | Never reuse upload IDs.                                                                                         |
+|  409 | `PARTNER_ORDER_NOT_READY`         | `Activation details are available once the eSIM is ready to use`                                 | eSIM endpoint too early.                                               | Poll status.                                                                                                    |
+|  409 | `ORDER_CONFLICT`                  | `Order was changed; reload and retry` / `Order was changed by another request; reload and retry` | Concurrency conflict.                                                  | GET current order then decide.                                                                                  |
+|  409 | `PARTNER_BALANCE_CONFLICT`        | `Partner balance changed; retry`                                                                 | Concurrent account change.                                             | GET account; retry safely.                                                                                      |
+|  409 | `IDEMPOTENCY_CONFLICT`            | `Idempotency key was already used with a different request`                                      | Same key, different JSON body.                                         | Use original request/key or new key.                                                                            |
+|  409 | `IDEMPOTENCY_CONFLICT`            | `Idempotent request is still being processed; retry shortly`                                     | Duplicate still running.                                               | Retry same request/key shortly.                                                                                 |
+|  410 | `QUOTES_DEPRECATED`               | `Quote creation is deprecated; place a complete order directly`                                  | Deprecated quote endpoint.                                             | Use complete order.                                                                                             |
+|  410 | `LEGACY_PARTNER_ORDER_DEPRECATED` | `Quote-based partner orders are disabled; submit a complete order using planId`                  | Quote-shaped create body.                                              | Use current complete payload.                                                                                   |
+|  410 | `HOSTED_PAYMENT_DEPRECATED`       | Hosted-payment endpoint message explaining prepaid account requirement.                          | Hosted payment/`HOSTED_PAYMENT` request.                               | Collect customer payment yourself; use prepaid account.                                                         |
+|  429 | `PARTNER_RATE_LIMITED`            | `Partner rate limit exceeded`                                                                    | Partner per-minute quota exceeded.                                     | Back off; use returned rate headers.                                                                            |
+|  429 | `RATE_LIMITED`                    | `Too many requests. Please wait a moment and try again.`                                         | Global rate guard.                                                     | Exponential backoff.                                                                                            |
+|  503 | `HTTP_503`                        | `Private document storage is not configured`                                                     | Production private storage unavailable/config missing.                 | Stop document flow and contact Visa Compass.                                                                    |
+|  5xx | `UNEXPECTED`                      | Safe generic platform message                                                                    | Unhandled server failure.                                              | Retry only idempotent/safe work; give support correlation ID.                                                   |
 
 ## 18. Legacy endpoints (complete list; do not integrate)
 
-| Method / URL | HTTP / code | Exact behavior | Replacement |
-| --- | --- | --- | --- |
-| POST `/partners/quotes` | 410 `QUOTES_DEPRECATED` | No quote is created. | `POST /partners/orders` complete payload. |
-| POST `/partners/orders` with `quoteId` | 410 `LEGACY_PARTNER_ORDER_DEPRECATED` | No quote-based order is created. | Current `planId` payload. |
-| POST `/partners/orders/{id}/traveler` | Deprecated | Legacy mutation; has `Deprecation: true` response header. | Include traveller in complete order. |
-| POST `/partners/orders/{id}/documents` | Deprecated | Legacy upload route. | Upload-session route. |
-| POST `/partners/orders/{id}/documents/{documentId}/confirm` | Deprecated | Legacy confirm route. | Upload-session + complete order. |
-| POST `/partners/orders/{id}/hosted-checkout-session` | 410 `HOSTED_PAYMENT_DEPRECATED` | Never creates payment session. | Hosted checkout session route. |
-| POST `/partners/orders/{id}/payment-session` | 410 `HOSTED_PAYMENT_DEPRECATED` | Never creates payment session. | Prepaid partner balance. |
+| Method / URL                                                | HTTP / code                           | Exact behavior                                            | Replacement                               |
+| ----------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------- | ----------------------------------------- |
+| POST `/partners/quotes`                                     | 410 `QUOTES_DEPRECATED`               | No quote is created.                                      | `POST /partners/orders` complete payload. |
+| POST `/partners/orders` with `quoteId`                      | 410 `LEGACY_PARTNER_ORDER_DEPRECATED` | No quote-based order is created.                          | Current `planId` payload.                 |
+| POST `/partners/orders/{id}/traveler`                       | Deprecated                            | Legacy mutation; has `Deprecation: true` response header. | Include traveller in complete order.      |
+| POST `/partners/orders/{id}/documents`                      | Deprecated                            | Legacy upload route.                                      | Upload-session route.                     |
+| POST `/partners/orders/{id}/documents/{documentId}/confirm` | Deprecated                            | Legacy confirm route.                                     | Upload-session + complete order.          |
+| POST `/partners/orders/{id}/hosted-checkout-session`        | 410 `HOSTED_PAYMENT_DEPRECATED`       | Never creates payment session.                            | Hosted checkout session route.            |
+| POST `/partners/orders/{id}/payment-session`                | 410 `HOSTED_PAYMENT_DEPRECATED`       | Never creates payment session.                            | Prepaid partner balance.                  |

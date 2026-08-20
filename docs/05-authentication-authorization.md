@@ -43,11 +43,11 @@ Error codes used: `AUTHENTICATION_REQUIRED` (401),
 
 `capabilitiesFor` (`auth.guard.ts:18-30`):
 
-| Account type | Capabilities |
-| --- | --- |
-| CUSTOMER | `customer:portal`, `customer:orders` |
-| OPERATIONS | `operations:portal`, `operations:review`, `operations:inventory` |
-| SUPER_ADMIN | OPERATIONS capabilities + `admin:portal`, `admin:users`, `admin:configuration` |
+| Account type | Capabilities                                                                   |
+| ------------ | ------------------------------------------------------------------------------ |
+| CUSTOMER     | `customer:portal`, `customer:orders`                                           |
+| OPERATIONS   | `operations:portal`, `operations:review`, `operations:inventory`               |
+| SUPER_ADMIN  | OPERATIONS capabilities + `admin:portal`, `admin:users`, `admin:configuration` |
 
 The same mapping is duplicated in `AdminService.users`
 (`modules/admin/admin.service.ts:334-346`).
@@ -72,22 +72,22 @@ Two complementary mechanisms:
 
 ## Endpoint → guard matrix
 
-| Controller | Guards |
-| --- | --- |
-| `AuthController` | `AuthGuard` |
-| `OrdersController` | `AuthGuard`, `AccountGuard` + CUSTOMER |
-| `OperationsController` | `AuthGuard`, `AccountGuard` + OPERATIONS/SUPER_ADMIN, plus `requireRole` per handler |
-| `PaymentsController` | `AuthGuard`, `AccountGuard` + CUSTOMER |
-| `InventoryController` | `AuthGuard`, `AccountGuard` + OPERATIONS/SUPER_ADMIN + `requireRole` |
-| `AdminController` | `AuthGuard`, `AccountGuard` + SUPER_ADMIN |
-| `NotificationController` | `AuthGuard` (+ `requireRole` per handler) |
-| `OperationsIntegrationEventsController` | `AuthGuard`, `AccountGuard` + OPERATIONS/SUPER_ADMIN + `requireRole` |
-| `OperationsIntegrationLogsController` | same |
-| `GuestOrdersController` | none (HMAC token) |
-| `PartnersController` | `PartnerAuthGuard` |
-| `WebhooksController` | none (signature verification) |
-| `CatalogController` | none |
-| `HealthController` | none |
+| Controller                              | Guards                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------ |
+| `AuthController`                        | `AuthGuard`                                                                          |
+| `OrdersController`                      | `AuthGuard`, `AccountGuard` + CUSTOMER                                               |
+| `OperationsController`                  | `AuthGuard`, `AccountGuard` + OPERATIONS/SUPER_ADMIN, plus `requireRole` per handler |
+| `PaymentsController`                    | `AuthGuard`, `AccountGuard` + CUSTOMER                                               |
+| `InventoryController`                   | `AuthGuard`, `AccountGuard` + OPERATIONS/SUPER_ADMIN + `requireRole`                 |
+| `AdminController`                       | `AuthGuard`, `AccountGuard` + SUPER_ADMIN                                            |
+| `NotificationController`                | `AuthGuard` (+ `requireRole` per handler)                                            |
+| `OperationsIntegrationEventsController` | `AuthGuard`, `AccountGuard` + OPERATIONS/SUPER_ADMIN + `requireRole`                 |
+| `OperationsIntegrationLogsController`   | same                                                                                 |
+| `GuestOrdersController`                 | none (HMAC token)                                                                    |
+| `PartnersController`                    | `PartnerAuthGuard`                                                                   |
+| `WebhooksController`                    | none (signature verification)                                                        |
+| `CatalogController`                     | none                                                                                 |
+| `HealthController`                      | none                                                                                 |
 
 ## Identity synchronization (`ClerkSyncService`)
 

@@ -10,16 +10,16 @@ Primary sources: `apps/api/src/jobs/queues.ts`, `queue.service.ts`,
 
 ```ts
 export const QUEUES = {
-  provisioning: 'provisioning',
-  providerCallbacks: 'provider-callbacks',
-  payments: 'payments',
-  notifications: 'notifications',
-  reconciliation: 'reconciliation',
+  provisioning: "provisioning",
+  providerCallbacks: "provider-callbacks",
+  payments: "payments",
+  notifications: "notifications",
+  reconciliation: "reconciliation",
 };
 
 export const DEFAULT_JOB_OPTIONS = {
   attempts: 3,
-  backoff: { type: 'exponential', delay: 2_000 },
+  backoff: { type: "exponential", delay: 2_000 },
   removeOnComplete: 500,
   removeOnFail: 2_000,
 };
@@ -45,7 +45,7 @@ export const DEFAULT_JOB_OPTIONS = {
 
 - Registers the `provisioning` queue.
 - Job `provision-order` → `orders.processProvisioning(orderId,
-  job.attemptsMade + 1, final = (attemptsMade + 1 >= 3))`.
+job.attemptsMade + 1, final = (attemptsMade + 1 >= 3))`.
 - Max attempts per job = 3 (from `DEFAULT_JOB_OPTIONS`).
 
 ## Integration worker
@@ -99,6 +99,7 @@ When `REDIS_URL` is unset, the following services execute the work directly:
 ## Webhook persistence interplay
 
 `WebhooksController` enqueues:
+
 - `payments` → `payment-callback` (`webhooks.controller.ts:43`)
 - `providerCallbacks` → `connectivity-callback` (`webhooks.controller.ts:60`)
 - The webhook `WebhookEvent` row is persisted first, so the worker can reload

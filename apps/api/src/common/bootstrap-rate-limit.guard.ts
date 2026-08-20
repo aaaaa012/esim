@@ -1,5 +1,11 @@
-import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { clientIp } from './client-ip.js';
+import {
+  CanActivate,
+  ExecutionContext,
+  HttpException,
+  HttpStatus,
+  Injectable,
+} from "@nestjs/common";
+import { clientIp } from "./client-ip.js";
 
 type Bucket = { attempts: number; resetAt: number };
 
@@ -16,12 +22,22 @@ type Bucket = { attempts: number; resetAt: number };
 @Injectable()
 export class BootstrapRateLimitGuard implements CanActivate {
   private readonly buckets = new Map<string, Bucket>();
-  private readonly perUserLimit = Number(process.env.BOOTSTRAP_LIMIT_PER_MINUTE ?? 5);
-  private readonly perIpLimit = Number(process.env.BOOTSTRAP_IP_LIMIT_PER_MINUTE ?? 20);
+  private readonly perUserLimit = Number(
+    process.env.BOOTSTRAP_LIMIT_PER_MINUTE ?? 5,
+  );
+  private readonly perIpLimit = Number(
+    process.env.BOOTSTRAP_IP_LIMIT_PER_MINUTE ?? 20,
+  );
   private readonly windowMs = 60_000;
 
   canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest<{ ip?: string; socket?: { remoteAddress?: string }; user?: { localUserId?: string } }>();
+    const request = context
+      .switchToHttp()
+      .getRequest<{
+        ip?: string;
+        socket?: { remoteAddress?: string };
+        user?: { localUserId?: string };
+      }>();
     const ip = clientIp(request);
     const userId = request.user?.localUserId ?? ip;
     const now = Date.now();
@@ -38,12 +54,22 @@ export class BootstrapRateLimitGuard implements CanActivate {
       return true;
     };
 
-    const allowed = consume(`user:${userId}`, this.perUserLimit) && consume(`ip:${ip}`, this.perIpLimit);
+    const allowed =
+      consume(`user:${userId}`, this.perUserLimit) &&
+      consume(`ip:${ip}`, this.perIpLimit);
     if (!allowed) {
-      const response = context.switchToHttp().getResponse<{ setHeader(name: string, value: string | number): void }>();
-      response.setHeader('retry-after', Math.ceil(this.windowMs / 1000));
+      const response = context
+        .switchToHttp()
+        .getResponse<{
+          setHeader(name: string, value: string | number): void;
+        }>();
+      response.setHeader("retry-after", Math.ceil(this.windowMs / 1000));
       throw new HttpException(
-        { code: 'RATE_LIMITED', message: 'Too many bootstrap attempts. Please wait a minute and try again.' },
+        {
+          code: "RATE_LIMITED",
+          message:
+            "Too many bootstrap attempts. Please wait a minute and try again.",
+        },
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }

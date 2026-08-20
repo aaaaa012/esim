@@ -35,7 +35,7 @@ documentation set had to make an assumption.
    `OPS_WEB_URL` even though `main.ts:17` uses those env vars for CORS.
 4. **`PAYMENT_MODE` semantics.** `payments.service.ts:25` selects the real
    gateway when `PAYMENT_MODE === 'sandbox'` **or** `NODE_ENV ===
-   'production'`; there is no explicit "simulator" string — any value other
+'production'`; there is no explicit "simulator" string — any value other
    than `sandbox` (outside production) selects the simulator. `.env.example`
    documents this, but it is a common misreading.
 5. **Rate limiter is per-process.** `rate-limit.guard.ts` keeps buckets in
@@ -63,9 +63,9 @@ documentation set had to make an assumption.
    require `20260806000200_inventory_batch_approval`. Until applied, the
    fields (and the audit rows they power) do not exist in a running DB.
 10. **`/metrics` is in-memory and resets on restart** (`metrics.service.ts`);
-   `/health/ready` Redis `PING` opens a short-lived connection per check
-   (`health.controller.ts`), which is fine at low volume but not a pooled
-   path.
+    `/health/ready` Redis `PING` opens a short-lived connection per check
+    (`health.controller.ts`), which is fine at low volume but not a pooled
+    path.
 
 ## Assumptions made in this documentation set
 

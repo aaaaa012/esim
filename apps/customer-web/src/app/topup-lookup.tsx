@@ -8,7 +8,13 @@ type LookupResult = {
   found: boolean;
   mobile: string;
   subscriber?: {
-    currentPlan?: { name: string; dataAllowance: string; validityDays: number; countryCode: string; countryName: string };
+    currentPlan?: {
+      name: string;
+      dataAllowance: string;
+      validityDays: number;
+      countryCode: string;
+      countryName: string;
+    };
     countryCode?: string;
     countryName?: string;
     expiresAt?: string;
@@ -38,16 +44,24 @@ export default function TopupLookup() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mobile: mobile.trim() }),
       });
-      const payload = (await response.json()) as { data?: unknown; error?: { message: string } };
-      if (!response.ok) throw new Error(payload.error?.message ?? "Lookup failed");
+      const payload = (await response.json()) as {
+        data?: unknown;
+        error?: { message: string };
+      };
+      if (!response.ok)
+        throw new Error(payload.error?.message ?? "Lookup failed");
       const value = payload.data as LookupResult;
       setResult(value);
       try {
         if (value?.found && value.topUpAvailable) {
           sessionStorage.setItem("vc_topup_mobile", mobile.trim());
-          if (value.lookupToken) sessionStorage.setItem("vc_topup_token", value.lookupToken);
+          if (value.lookupToken)
+            sessionStorage.setItem("vc_topup_token", value.lookupToken);
           if (value.subscriber?.countryCode) {
-            sessionStorage.setItem("vc_topup_country", value.subscriber.countryCode);
+            sessionStorage.setItem(
+              "vc_topup_country",
+              value.subscriber.countryCode,
+            );
           } else {
             sessionStorage.removeItem("vc_topup_country");
           }
@@ -71,7 +85,9 @@ export default function TopupLookup() {
       <div className="topup-head">
         <Smartphone size={16} />
         <b>Already have a Visa Compass eSIM?</b>
-        <small>Enter your mobile number to see your current plan and recharge it.</small>
+        <small>
+          Enter your mobile number to see your current plan and recharge it.
+        </small>
       </div>
       <div className="topup-row">
         <input
@@ -81,8 +97,17 @@ export default function TopupLookup() {
           placeholder="e.g. +977 9841 234 567"
           inputMode="tel"
         />
-        <button className="button" disabled={busy} onClick={() => void lookup()}>
-          {busy ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />} Check
+        <button
+          className="button"
+          disabled={busy}
+          onClick={() => void lookup()}
+        >
+          {busy ? (
+            <LoaderCircle className="spin" size={16} />
+          ) : (
+            <Search size={16} />
+          )}{" "}
+          Check
         </button>
       </div>
       {error && <p className="topup-note error">{error}</p>}
@@ -91,15 +116,18 @@ export default function TopupLookup() {
           {result.found && result.subscriber ? (
             <>
               <div className="topup-subscriber">
-                <b>{result.subscriber.currentPlan?.name ?? "Active subscriber"}</b>
+                <b>
+                  {result.subscriber.currentPlan?.name ?? "Active subscriber"}
+                </b>
                 <span>
                   {result.subscriber.currentPlan
                     ? `${result.subscriber.currentPlan.countryName} · ${result.subscriber.currentPlan.dataAllowance} · ${result.subscriber.currentPlan.validityDays} days`
-                    : result.subscriber.countryName ?? "Existing eSIM"}
+                    : (result.subscriber.countryName ?? "Existing eSIM")}
                 </span>
                 {result.subscriber.usage && (
                   <small>
-                    Used {result.subscriber.usage.usedMb} / {result.subscriber.usage.totalMb} MB
+                    Used {result.subscriber.usage.usedMb} /{" "}
+                    {result.subscriber.usage.totalMb} MB
                     {result.subscriber.expiresAt
                       ? ` · valid until ${new Date(result.subscriber.expiresAt).toLocaleDateString()}`
                       : ""}
@@ -108,15 +136,19 @@ export default function TopupLookup() {
               </div>
               {result.topUpAvailable ? (
                 <p className="topup-note ok">
-                  <RefreshCcw size={14} /> Recharge detected — select this destination below to top up this number.
+                  <RefreshCcw size={14} /> Recharge detected — select this
+                  destination below to top up this number.
                 </p>
               ) : (
-                <p className="topup-note warn">We could not find an active eSIM for this number.</p>
+                <p className="topup-note warn">
+                  We could not find an active eSIM for this number.
+                </p>
               )}
             </>
           ) : (
             <p className="topup-note warn">
-              No prior plan was found for this number. Choose a destination below to start a new eSIM.
+              No prior plan was found for this number. Choose a destination
+              below to start a new eSIM.
             </p>
           )}
         </div>

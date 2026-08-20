@@ -60,7 +60,9 @@ export class ClerkSyncService {
     });
     if (existing) {
       if (existing.status === UserStatus.DISABLED)
-        throw new ForbiddenException("Disabled accounts cannot be reactivated by a Clerk webhook");
+        throw new ForbiddenException(
+          "Disabled accounts cannot be reactivated by a Clerk webhook",
+        );
       await this.prisma.user.update({
         where: { id: existing.id },
         data: { email },
@@ -181,7 +183,12 @@ export class ClerkSyncService {
   }
 
   private async promoteByPortal(
-    existing: { id: string; accountType: UserRoleName; email: string; status: UserStatus },
+    existing: {
+      id: string;
+      accountType: UserRoleName;
+      email: string;
+      status: UserStatus;
+    },
     origin: string,
   ) {
     if (existing.accountType !== UserRoleName.CUSTOMER) return;
@@ -312,10 +319,12 @@ export class ClerkSyncService {
   async bootstrapSuperAdmin(clerkId: string, tokenInput: string) {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
-    const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+    const bootstrapEmail =
+      process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
     if (!bootstrapEmail)
       throw new BadRequestException("Bootstrap is not configured");
-    const configuredToken = process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim() ?? "";
+    const configuredToken =
+      process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim() ?? "";
     const requiresToken = process.env.NODE_ENV === "production";
     if (requiresToken && !configuredToken)
       throw new BadRequestException("Bootstrap token is not configured");

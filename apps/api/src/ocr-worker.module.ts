@@ -7,6 +7,7 @@ import { CloudinaryStorageService } from "./infrastructure/cloudinary-storage.se
 import { PrismaService } from "./infrastructure/prisma.service.js";
 import { validateEnv } from "./infrastructure/env-validation.js";
 import { PassportVerificationService } from "./modules/orders/passport-verification.service.js";
+import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { PassportVerificationService } from "./modules/orders/passport-verificat
     QueueService,
     PassportVerificationService,
     PassportOcrProcessor,
+    ProductionResilienceService,
   ],
 })
 export class OcrWorkerModule {}

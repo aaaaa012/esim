@@ -16,11 +16,24 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/spinner";
 import { EmptyState } from "@/components/empty-state";
 import { toast } from "sonner";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = { "content-type": "application/json" };
@@ -80,7 +93,8 @@ export default function IntegrationsClient() {
     const timer = window.setTimeout(() => {
       setPlansBusy(true);
       const params = new URLSearchParams({ limit: "50", offset: "0" });
-      if (eligibilityPlanQuery.trim()) params.set("q", eligibilityPlanQuery.trim());
+      if (eligibilityPlanQuery.trim())
+        params.set("q", eligibilityPlanQuery.trim());
       void request<{ items: Plan[] }>(`/admin/plans/page?${params}`)
         .then((result) => {
           if (!cancelled) setPlans(result.items);
@@ -100,9 +114,12 @@ export default function IntegrationsClient() {
   const test = async (item: Integration) => {
     setBusy(item.id);
     try {
-      const result = await request<{ message: string }>(`/admin/integrations/${item.id}/test`, {
-        method: "POST",
-      });
+      const result = await request<{ message: string }>(
+        `/admin/integrations/${item.id}/test`,
+        {
+          method: "POST",
+        },
+      );
       toast.success(result.message);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Test failed");
@@ -113,11 +130,14 @@ export default function IntegrationsClient() {
   const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
     setBusy(`transatel:${action}`);
     try {
-      await request(
-        `/admin/integrations/transatel/${action}`,
-        { method: "POST" },
+      await request(`/admin/integrations/transatel/${action}`, {
+        method: "POST",
+      });
+      toast.success(
+        action === "sync-catalog"
+          ? "Plans synced with the network provider"
+          : "Automatic notifications set up",
       );
-      toast.success(action === "sync-catalog" ? "Plans synced with the network provider" : "Automatic notifications set up");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
     } finally {
@@ -131,13 +151,13 @@ export default function IntegrationsClient() {
     }
     setBusy("transatel:eligibility");
     try {
-      await request(
-        "/admin/integrations/transatel/eligibility",
-        {
-          method: "POST",
-          body: JSON.stringify({ planId: eligibilityPlanId, msisdn: eligibilityMsisdn }),
-        },
-      );
+      await request("/admin/integrations/transatel/eligibility", {
+        method: "POST",
+        body: JSON.stringify({
+          planId: eligibilityPlanId,
+          msisdn: eligibilityMsisdn,
+        }),
+      });
       toast.success("Eligibility check complete");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Eligibility check failed");
@@ -150,7 +170,9 @@ export default function IntegrationsClient() {
     try {
       setLogs(await request<IntegrationLog[]>("/operations/integration-logs"));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not load integration logs");
+      toast.error(
+        e instanceof Error ? e.message : "Could not load integration logs",
+      );
     } finally {
       setLogsBusy(false);
     }
@@ -175,7 +197,10 @@ export default function IntegrationsClient() {
       ) : (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {integrations.map((item) => (
-            <div key={item.id} className="rounded-xl border bg-card p-5 shadow-card">
+            <div
+              key={item.id}
+              className="rounded-xl border bg-card p-5 shadow-card"
+            >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <span className="flex size-10 items-center justify-center rounded-lg bg-success-soft text-success-foreground">
@@ -188,14 +213,21 @@ export default function IntegrationsClient() {
                     </p>
                   </div>
                 </div>
-                <StatusBadge label={item.status} tone={item.status === "HEALTHY" ? "success" : "warning"} />
+                <StatusBadge
+                  label={item.status}
+                  tone={item.status === "HEALTHY" ? "success" : "warning"}
+                />
               </div>
               <Separator className="my-4" />
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">
-                  {item.enabled ? "Configured and enabled" : "Needs configuration"}
+                  {item.enabled
+                    ? "Configured and enabled"
+                    : "Needs configuration"}
                 </span>
-                <span className="text-xs text-muted-foreground">Credentials are kept secure.</span>
+                <span className="text-xs text-muted-foreground">
+                  Credentials are kept secure.
+                </span>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
                 Last checked: {new Date(item.checkedAt).toLocaleString()}
@@ -213,8 +245,17 @@ export default function IntegrationsClient() {
                   <Pencil className="size-4" />
                   Credential guidance
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => test(item)} disabled={busy === item.id}>
-                  {busy === item.id ? <Spinner /> : <FlaskConical className="size-4" />}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => test(item)}
+                  disabled={busy === item.id}
+                >
+                  {busy === item.id ? (
+                    <Spinner />
+                  ) : (
+                    <FlaskConical className="size-4" />
+                  )}
                   Test
                 </Button>
                 {item.id === "transatel" && (
@@ -225,7 +266,11 @@ export default function IntegrationsClient() {
                       onClick={() => transatelAction("sync-catalog")}
                       disabled={busy === "transatel:sync-catalog"}
                     >
-                      {busy === "transatel:sync-catalog" ? <Spinner /> : <RefreshCcw className="size-4" />}
+                      {busy === "transatel:sync-catalog" ? (
+                        <Spinner />
+                      ) : (
+                        <RefreshCcw className="size-4" />
+                      )}
                       Sync catalog
                     </Button>
                     <Button
@@ -234,7 +279,11 @@ export default function IntegrationsClient() {
                       onClick={() => transatelAction("ensure-webhook")}
                       disabled={busy === "transatel:ensure-webhook"}
                     >
-                      {busy === "transatel:ensure-webhook" ? <Spinner /> : <Pencil className="size-4" />}
+                      {busy === "transatel:ensure-webhook" ? (
+                        <Spinner />
+                      ) : (
+                        <Pencil className="size-4" />
+                      )}
                       Register webhook
                     </Button>
                   </>
@@ -246,12 +295,21 @@ export default function IntegrationsClient() {
                   <Input
                     placeholder="Search country or plan…"
                     value={eligibilityPlanQuery}
-                    onChange={(event) => setEligibilityPlanQuery(event.target.value)}
+                    onChange={(event) =>
+                      setEligibilityPlanQuery(event.target.value)
+                    }
                   />
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <Select value={eligibilityPlanId} onValueChange={setEligibilityPlanId}>
+                    <Select
+                      value={eligibilityPlanId}
+                      onValueChange={setEligibilityPlanId}
+                    >
                       <SelectTrigger className="w-full sm:w-auto">
-                        <SelectValue placeholder={plansBusy ? "Loading plans…" : "Select plan…"} />
+                        <SelectValue
+                          placeholder={
+                            plansBusy ? "Loading plans…" : "Select plan…"
+                          }
+                        />
                       </SelectTrigger>
                       <SelectContent>
                         {plans.map((plan) => (
@@ -272,7 +330,11 @@ export default function IntegrationsClient() {
                       disabled={busy === "transatel:eligibility"}
                       onClick={() => void checkEligibility()}
                     >
-                      {busy === "transatel:eligibility" ? <Spinner /> : <Settings2 className="size-4" />}
+                      {busy === "transatel:eligibility" ? (
+                        <Spinner />
+                      ) : (
+                        <Settings2 className="size-4" />
+                      )}
                       Check
                     </Button>
                   </div>
@@ -287,7 +349,12 @@ export default function IntegrationsClient() {
         title="Integration call log"
         description="Outbound integration requests and outcomes (most recent 200)."
         actions={
-          <Button variant="outline" size="sm" onClick={() => void refreshLogs()} disabled={logsBusy}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void refreshLogs()}
+            disabled={logsBusy}
+          >
             {logsBusy ? <Spinner /> : <History className="size-4" />}
             Refresh
           </Button>
@@ -321,7 +388,10 @@ export default function IntegrationsClient() {
                     </code>
                   </TableCell>
                   <TableCell>
-                    <StatusBadge label={log.status} tone={log.status === "SUCCESS" ? "success" : "warning"} />
+                    <StatusBadge
+                      label={log.status}
+                      tone={log.status === "SUCCESS" ? "success" : "warning"}
+                    />
                   </TableCell>
                   <TableCell className="tabular-nums">
                     {log.durationMs != null ? `${log.durationMs}ms` : "—"}

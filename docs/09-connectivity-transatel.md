@@ -13,7 +13,7 @@ Primary sources: `apps/api/src/modules/integration/connectivity-provider.ts`
 interface ConnectivityProvider {
   readonly name: string;
   health(): Promise<{ ok: boolean }>;
-  capabilities(): ConnectivityCapabilities;      // catalogSync, provisioning, usage, esimDetails, topUp, callbacks
+  capabilities(): ConnectivityCapabilities; // catalogSync, provisioning, usage, esimDetails, topUp, callbacks
   provision(request: ProvisionRequest): Promise<ProvisionResult>;
   getUsage(subscriptionId: string): Promise<{ usedMb; totalMb }>;
   getEsimDetails(subscriptionId: string): Promise<EsimDetailsResult>;
@@ -57,8 +57,8 @@ qrPayload?, smDpAddress? }`.
 3. Subscriber identifier defaults to ICCID (`TRANSATEL_SUBSCRIBER_IDENTIFIER`).
 4. `POST {base}/ocs/subscriptions/api/orders/products` with payload:
    `{ bind: { msisdn }, source: 'VisaCompass', orderType: 'preload',
-   mvnoRef, product: { productId: plan.providerPlanId },
-   payment?, transactionReference: orderId }`.
+mvnoRef, product: { productId: plan.providerPlanId },
+payment?, transactionReference: orderId }`.
 5. After the order, fetches eSIM details; if a QR is available returns
    `status: 'COMPLETED'` with qrPayload/smDpAddress; otherwise
    `status: 'DELAYED'` (activation delivered later via webhook).
@@ -103,7 +103,7 @@ qrPayload?, smDpAddress? }`.
 - Requires `TRANSATEL_WEBHOOK_TARGET_URL`.
 - Lists `GET {base}/webhooks/api/webhooks`; if an existing webhook matches
   targetUrl+mvnoRef it PUTs, else POSTs with `{ mvnoRef, status: 'active',
-  targetUrl, email, secret?, events }`.
+targetUrl, email, secret?, events }`.
 - Events default from `TRANSATEL_WEBHOOK_EVENTS`.
 
 ### Inbound webhook handling (`handleWebhook`, `transatel.provider.ts:508-582`)

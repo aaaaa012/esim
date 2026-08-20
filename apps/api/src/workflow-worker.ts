@@ -1,0 +1,36 @@
+import "reflect-metadata";
+import { Logger } from "@nestjs/common";
+import { NestFactory } from "@nestjs/core";
+import { AppModule } from "./app.module.js";
+import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
+
+async function bootstrap() {
+  const app = await NestFactory.createApplicationContext(AppModule, {
+    bufferLogs: true,
+  });
+  app.enableShutdownHooks();
+  const resilience = app.get(ProductionResilienceService);
+  const beat = () =>
+    void resilience
+      .heartbeat("workflow-worker", {
+        queues: [
+          "provisioning",
+          "payments",
+          "provider-callbacks",
+          "notifications",
+          "reconciliation",
+          "partner-webhooks",
+        ],
+      })
+      .catch((error) =>
+        new Logger("WorkflowWorker").warn(
+          error instanceof Error ? error.message : "Heartbeat failed",
+        ),
+      );
+  beat();
+  const timer = setInterval(beat, 30_000);
+  timer.unref();
+  new Logger("WorkflowWorker").log("Workflow and reconciliation worker ready");
+}
+
+void bootstrap();
