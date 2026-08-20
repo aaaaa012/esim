@@ -51,6 +51,8 @@ export class PaymentsService {
     provider: PaymentProvider,
   ) {
     const order = this.orders.get(orderId, ownerId ?? undefined);
+    if (order.purchaseType !== "TOPUP")
+      await this.orders.assertInventoryAvailableForNewOrder();
     const existing = order.payment;
     if (
       existing &&

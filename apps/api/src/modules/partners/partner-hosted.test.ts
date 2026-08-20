@@ -7,6 +7,7 @@ function service(
   storage: Record<string, unknown> = {
     verifyDocument: vi.fn().mockResolvedValue({ simulated: true }),
   },
+  applicationOrders: Record<string, unknown> = {},
 ) {
   return new PartnerService(
     prisma as never,
@@ -16,7 +17,7 @@ function service(
     {} as never,
     {} as never,
     {} as never,
-    {} as never,
+    applicationOrders as never,
   );
 }
 
@@ -116,5 +117,41 @@ describe("partner hosted checkout", () => {
     ).rejects.toMatchObject({
       response: { code: "DOCUMENT_REQUIRED" },
     });
+  });
+
+  it("does not debit or complete a hosted purchase when inventory is empty", async () => {
+    const transaction = vi.fn();
+    const assertInventory = vi
+      .fn()
+      .mockRejectedValue(new Error("No eSIM inventory is currently available"));
+    const instance = service(
+      {
+        partnerHostedCheckoutSession: {
+          findUnique: vi.fn().mockResolvedValue(session),
+        },
+        order: {
+          findUnique: vi.fn().mockResolvedValue({
+            ...order([
+              { type: "PASSPORT", privateAssetId: "passport-1" },
+              { type: "TICKET", privateAssetId: "ticket-1" },
+            ]),
+            orderType: "INITIAL_PURCHASE",
+            documentReviewStatus: "VERIFIED",
+          }),
+        },
+        $transaction: transaction,
+      },
+      undefined,
+      { assertInventoryAvailableForNewOrder: assertInventory },
+    );
+
+    await expect(
+      instance.completeHostedCheckout("abcdefghijklmnopqrstuvwxyz012345", {
+        ipAddress: "127.0.0.1",
+        userAgent: "vitest",
+      }),
+    ).rejects.toThrow("No eSIM inventory is currently available");
+    expect(assertInventory).toHaveBeenCalledOnce();
+    expect(transaction).not.toHaveBeenCalled();
   });
 });

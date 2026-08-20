@@ -117,6 +117,65 @@ function makeService(opts: {
   return { svc, order, confirmed, confirmedCalls, failedCalls };
 }
 
+describe("PaymentsService inventory admission", () => {
+  it("does not open a payment session when a new purchase has no inventory", async () => {
+    const order = orderFor({
+      status: OrderStatus.DRAFT,
+      purchaseType: "INITIAL_PURCHASE",
+      payment: undefined,
+    });
+    const assertInventory = vi
+      .fn()
+      .mockRejectedValue(new Error("No eSIM inventory is currently available"));
+    const initiate = vi.fn();
+    const service = new PaymentsService(
+      {
+        get: vi.fn().mockReturnValue(order),
+        assertInventoryAvailableForNewOrder: assertInventory,
+      } as never,
+      { initiate } as never,
+      { initiate } as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+    ).rejects.toThrow("No eSIM inventory is currently available");
+    expect(assertInventory).toHaveBeenCalledOnce();
+    expect(initiate).not.toHaveBeenCalled();
+  });
+
+  it("allows an existing-eSIM top-up to reach payment without new stock", async () => {
+    const order = orderFor({
+      status: OrderStatus.DRAFT,
+      purchaseType: "TOPUP",
+      payment: undefined,
+    });
+    const assertInventory = vi.fn();
+    const initiate = vi.fn().mockResolvedValue({
+      reference: "topup-payment",
+      redirectUrl: "https://khalti.example/topup",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const beginPayment = vi.fn().mockResolvedValue(undefined);
+    const service = new PaymentsService(
+      {
+        get: vi.fn().mockReturnValue(order),
+        beginPayment,
+        assertInventoryAvailableForNewOrder: assertInventory,
+      } as never,
+      { initiate } as never,
+      { initiate } as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+    ).resolves.toMatchObject({ reference: "topup-payment" });
+    expect(assertInventory).not.toHaveBeenCalled();
+    expect(initiate).toHaveBeenCalledOnce();
+    expect(beginPayment).toHaveBeenCalledOnce();
+  });
+});
+
 describe("PaymentsService payment verification mapping", () => {
   it("returns the pending order (200) while the gateway reports pending", async () => {
     const { svc, order, confirmedCalls } = makeService({

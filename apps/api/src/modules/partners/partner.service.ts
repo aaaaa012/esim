@@ -456,7 +456,6 @@ export class PartnerService {
         code: "PLAN_UNAVAILABLE",
         message: "Plan is unavailable",
       });
-    await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const verification =
       await this.prisma.partnerDocumentVerification.findFirst({
         where: { id: input.documentVerificationId, partnerId },
@@ -514,6 +513,7 @@ export class PartnerService {
           "Confirm every required document upload before placing the order",
         status: 409,
       });
+    await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const uploadIds = intents.map((item) => item.id);
     const amountPaisa = Math.round(Number(plan.sellingPrice) * 100);
     const orderId = randomUUID();
@@ -1748,6 +1748,7 @@ export class PartnerService {
           code: "PASSPORT_VERIFICATION_REQUIRED",
           message: "Passport verification is required before completion",
         });
+      await this.applicationOrders.assertInventoryAvailableForNewOrder();
     }
     const amountPaisa = Math.round(Number(order.totalAmount) * 100);
     await this.prisma.$transaction(async (tx) => {
