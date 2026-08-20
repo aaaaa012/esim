@@ -560,32 +560,33 @@ model Payment {
 }
 
 model InventoryBatch {
-  id              String          @id @default(uuid()) @db.Uuid
-  batchReference  String          @unique
-  totalProfiles   Int
-  importedCount   Int             @default(0)
-  failedCount     Int             @default(0)
-  status          BatchStatus     @default(PENDING)
-  submittedById   String?         @db.Uuid
-  approvedById    String?         @db.Uuid
-  rejectedById    String?         @db.Uuid
-  approvedAt      DateTime?
-  rejectedAt      DateTime?
-  rejectionReason String?
-  inventory       EsimInventory[]
-  createdAt       DateTime        @default(now())
+  id                 String                       @id @default(uuid()) @db.Uuid
+  batchReference     String                       @unique
+  totalProfiles      Int
+  importedCount      Int                          @default(0)
+  failedCount        Int                          @default(0)
+  status             BatchStatus                  @default(PENDING)
+  submittedById      String?                      @db.Uuid
+  approvedById       String?                      @db.Uuid
+  rejectedById       String?                      @db.Uuid
+  approvedAt         DateTime?
+  rejectedAt         DateTime?
+  rejectionReason    String?
+  inventory          EsimInventory[]
+  reconciliationRuns InventoryReconciliationRun[]
+  createdAt          DateTime                     @default(now())
 }
 
 model EsimInventory {
-  id                      String          @id @default(uuid()) @db.Uuid
-  batchId                 String          @db.Uuid
-  batch                   InventoryBatch  @relation(fields: [batchId], references: [id])
-  iccid                   String          @unique
-  eid                     String          @unique
-  msisdn                  String?         @unique
-  status                  InventoryStatus @default(IMPORTED)
-  assignedOrderId         String?         @unique @db.Uuid
-  assignedOrder           Order?          @relation(fields: [assignedOrderId], references: [id])
+  id                      String                        @id @default(uuid()) @db.Uuid
+  batchId                 String                        @db.Uuid
+  batch                   InventoryBatch                @relation(fields: [batchId], references: [id])
+  iccid                   String                        @unique
+  eid                     String                        @unique
+  msisdn                  String?                       @unique
+  status                  InventoryStatus               @default(IMPORTED)
+  assignedOrderId         String?                       @unique @db.Uuid
+  assignedOrder           Order?                        @relation(fields: [assignedOrderId], references: [id])
   activationCodeEncrypted String?
   smDpAddress             String?
   providerSubscriptionId  String?
@@ -595,11 +596,44 @@ model EsimInventory {
   activatedAt             DateTime?
   expiresAt               DateTime?
   customerEsims           CustomerEsim[]
-  version                 Int             @default(0)
-  createdAt               DateTime        @default(now())
-  updatedAt               DateTime        @updatedAt
+  reconciliationItems     InventoryReconciliationItem[]
+  version                 Int                           @default(0)
+  createdAt               DateTime                      @default(now())
+  updatedAt               DateTime                      @updatedAt
 
   @@index([status])
+}
+
+model InventoryReconciliationRun {
+  id            String                        @id @default(uuid()) @db.Uuid
+  trigger       String
+  status        String                        @default("QUEUED")
+  selection     String
+  batchId       String?                       @db.Uuid
+  batch         InventoryBatch?               @relation(fields: [batchId], references: [id])
+  requestedById String?                       @db.Uuid
+  total         Int
+  items         InventoryReconciliationItem[]
+  createdAt     DateTime                      @default(now())
+  completedAt   DateTime?
+
+  @@index([status, createdAt])
+  @@index([batchId])
+}
+
+model InventoryReconciliationItem {
+  id          String                     @id @default(uuid()) @db.Uuid
+  runId       String                     @db.Uuid
+  run         InventoryReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  inventoryId String                     @db.Uuid
+  inventory   EsimInventory              @relation(fields: [inventoryId], references: [id])
+  status      String                     @default("QUEUED")
+  error       String?
+  checkedAt   DateTime?
+
+  @@unique([runId, inventoryId])
+  @@index([runId, status])
+  @@index([inventoryId])
 }
 
 model CustomerEsim {

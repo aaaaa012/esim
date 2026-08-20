@@ -1,6 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Boxes,
@@ -90,6 +90,15 @@ type ImportResult = {
   skipped: number;
   errors?: string[];
   batch: string | null;
+};
+type ReconciliationRun = {
+  id: string;
+  trigger: string;
+  status: string;
+  total: number;
+  createdAt: string;
+  completedAt?: string | null;
+  counts: Record<string, number>;
 };
 type Plan = {
   id: string;
@@ -194,6 +203,12 @@ export default function InventoryClient() {
     InventoryProfile[]
   >([]);
   const [reconciling, setReconciling] = useState("");
+  const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(
+    new Set(),
+  );
+  const [reconciliationRun, setReconciliationRun] =
+    useState<ReconciliationRun | null>(null);
+  const [bulkReconciling, setBulkReconciling] = useState(false);
   const [liveQuery, setLiveQuery] = useState("");
   const [liveSearch, setLiveSearch] = useState("");
   const [batchQuery, setBatchQuery] = useState("");
@@ -201,6 +216,10 @@ export default function InventoryClient() {
   const [profileFile, setProfileFile] = useState<File | null>(null);
   const [profileSource, setProfileSource] = useState("");
   const [profileBusy, setProfileBusy] = useState(false);
+  const [profileResult, setProfileResult] = useState<{
+    message: string;
+    errors: string[];
+  }>({ message: "", errors: [] });
 
   const [packageFile, setPackageFile] = useState<File | null>(null);
   const [packageBusy, setPackageBusy] = useState(false);
@@ -306,6 +325,69 @@ export default function InventoryClient() {
       setReconciling("");
     }
   };
+  const loadReconciliationRun = useCallback(
+    async (id?: string) => {
+      const response = await authFetch(
+        `${API}/operations/inventory/reconciliation-runs/${id ?? "latest"}`,
+        { headers: {} },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Inventory refresh unavailable",
+        );
+      setReconciliationRun(value.data ?? null);
+    },
+    [authFetch],
+  );
+  useEffect(() => {
+    void loadReconciliationRun().catch(() => undefined);
+  }, [loadReconciliationRun]);
+  useEffect(() => {
+    if (!reconciliationRun || reconciliationRun.status === "COMPLETED") return;
+    const timer = window.setInterval(() => {
+      void loadReconciliationRun(reconciliationRun.id)
+        .then(() => load())
+        .catch(() => undefined);
+    }, 2_000);
+    return () => window.clearInterval(timer);
+    // `load` intentionally reads the current search without restarting polling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadReconciliationRun, reconciliationRun?.id, reconciliationRun?.status]);
+  const startBulkReconciliation = async () => {
+    setBulkReconciling(true);
+    try {
+      const profileIds = [...selectedProfiles];
+      const response = await authFetch(
+        `${API}/operations/inventory/reconciliation-runs`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            profileIds.length
+              ? { scope: "SELECTED", profileIds }
+              : { scope: "STALE_OR_UNVERIFIED" },
+          ),
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Inventory refresh failed");
+      if (!value.data?.run) {
+        toast.info(value.data?.message ?? "No profiles need refreshing");
+        return;
+      }
+      setReconciliationRun(value.data.run);
+      setSelectedProfiles(new Set());
+      toast.success(`Queued ${value.data.run.total} profile(s) for checking`);
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error ? cause.message : "Inventory refresh failed",
+      );
+    } finally {
+      setBulkReconciling(false);
+    }
+  };
   const restoreProfile = async (profile: InventoryProfile) => {
     setRestoring(profile.id);
     try {
@@ -348,6 +430,7 @@ export default function InventoryClient() {
       return;
     }
     setProfileBusy(true);
+    setProfileResult({ message: "", errors: [] });
     try {
       const content = await fileToTabularContent(profileFile);
       const r = await authFetch(`${API}/operations/inventory/import-csv`, {
@@ -360,11 +443,20 @@ export default function InventoryClient() {
         }),
       });
       const v = await r.json();
-      if (!r.ok) throw new Error(v.error?.message);
+      if (!r.ok) {
+        const correlation = v.meta?.correlationId;
+        throw new Error(
+          `${v.error?.message ?? "CSV/Excel import failed"}${correlation ? ` (reference: ${correlation})` : ""}`,
+        );
+      }
       const result = v.data as ImportResult;
-      toast.success(
-        `Imported ${result.imported} profiles, skipped ${result.skipped} row(s). Awaiting Super Admin approval.`,
-      );
+      const errors = result.errors ?? [];
+      const message = result.imported
+        ? `Imported ${result.imported} profile(s); skipped ${result.skipped} invalid row(s). The valid profiles await Super Admin approval.`
+        : `No eSIM profiles were imported. ${result.skipped} invalid row(s) must be corrected.`;
+      setProfileResult({ message, errors });
+      if (result.imported > 0) toast.success(message);
+      else toast.error(message);
       if (result.imported > 0) {
         setProfileFile(null);
         setProfileSource("");
@@ -541,6 +633,11 @@ export default function InventoryClient() {
   const pendingBatches = filteredBatches.filter(
     (batch) => batch.status === "PENDING",
   );
+  const reconciliationCompleted = reconciliationRun
+    ? (reconciliationRun.counts.success ?? 0) +
+      (reconciliationRun.counts.not_found ?? 0) +
+      (reconciliationRun.counts.failed ?? 0)
+    : 0;
 
   return (
     <>
@@ -626,6 +723,54 @@ export default function InventoryClient() {
             }
             noPadding
           >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+              <p className="text-xs text-muted-foreground">
+                {selectedProfiles.size
+                  ? `${selectedProfiles.size} profile(s) selected`
+                  : "Checks profiles never verified or not checked in the last 24 hours."}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={bulkReconciling}
+                onClick={() => void startBulkReconciliation()}
+              >
+                {bulkReconciling ? (
+                  <Spinner />
+                ) : (
+                  <RefreshCcw className="size-3.5" />
+                )}
+                {selectedProfiles.size
+                  ? "Refresh selected"
+                  : "Refresh stale & unverified"}
+              </Button>
+            </div>
+            {reconciliationRun && (
+              <div className="border-b bg-muted/30 px-4 py-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {humane(reconciliationRun.trigger)} refresh ·{" "}
+                    {humane(reconciliationRun.status)}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {reconciliationCompleted}/{reconciliationRun.total} checked
+                    {` · ${reconciliationRun.counts.not_found ?? 0} not found · ${reconciliationRun.counts.failed ?? 0} failed`}
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-primary transition-[width]"
+                    style={{
+                      width: `${Math.round(
+                        (reconciliationCompleted /
+                          Math.max(1, reconciliationRun.total)) *
+                          100,
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             {!reconciliationProfiles.length ? (
               <EmptyState
                 title="No inventory profiles"
@@ -635,6 +780,29 @@ export default function InventoryClient() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible profiles"
+                        checked={
+                          reconciliationProfiles.length > 0 &&
+                          reconciliationProfiles.every((profile) =>
+                            selectedProfiles.has(profile.id),
+                          )
+                        }
+                        onChange={(event) =>
+                          setSelectedProfiles(
+                            event.target.checked
+                              ? new Set(
+                                  reconciliationProfiles.map(
+                                    (profile) => profile.id,
+                                  ),
+                                )
+                              : new Set(),
+                          )
+                        }
+                      />
+                    </TableHead>
                     <TableHead>eSIM</TableHead>
                     <TableHead>Our system</TableHead>
                     <TableHead>Network provider</TableHead>
@@ -646,6 +814,19 @@ export default function InventoryClient() {
                 <TableBody>
                   {reconciliationProfiles.map((profile) => (
                     <TableRow key={profile.id}>
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${profile.iccid}`}
+                          checked={selectedProfiles.has(profile.id)}
+                          onChange={(event) => {
+                            const next = new Set(selectedProfiles);
+                            if (event.target.checked) next.add(profile.id);
+                            else next.delete(profile.id);
+                            setSelectedProfiles(next);
+                          }}
+                        />
+                      </TableCell>
                       <TableCell>
                         <code className="text-xs">{profile.iccid}</code>
                         <p className="text-xs text-muted-foreground">
@@ -672,7 +853,7 @@ export default function InventoryClient() {
                             ).toLocaleString()
                           : "Never"}
                       </TableCell>
-                      <TableCell className="max-w-64 text-xs text-destructive">
+                      <TableCell className="max-w-64 whitespace-normal break-words text-xs text-destructive">
                         {profile.providerCheckError ??
                           (profile.status === "QUARANTINED"
                             ? `${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`
@@ -744,7 +925,14 @@ export default function InventoryClient() {
                   hint="Columns: iccid (required) · msisdn (recommended) · eid (optional)"
                   value={profileFile}
                   busy={profileBusy}
-                  onFileSelected={setProfileFile}
+                  onFileSelected={(file) => {
+                    setProfileFile(file);
+                    setProfileResult({ message: "", errors: [] });
+                  }}
+                />
+                <UploadResult
+                  message={profileResult.message}
+                  errors={profileResult.errors}
                 />
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-muted-foreground">

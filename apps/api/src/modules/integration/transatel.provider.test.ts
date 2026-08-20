@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TransatelProvider } from "./transatel.provider.js";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
+import { ApiException } from "../../common/api-error.js";
+import { ApiErrorCode } from "@visa-compass/shared";
 
 type FetchInit = {
   method?: string;
@@ -143,12 +145,10 @@ describe("TransatelProvider", () => {
     prisma.plan.findUnique = vi
       .fn()
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
-    prisma.esimInventory.findFirst = vi
-      .fn()
-      .mockResolvedValue({
-        iccid: "8988247076000000319",
-        eid: "890490320000000000000000000001",
-      });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      eid: "890490320000000000000000000001",
+    });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -219,13 +219,11 @@ describe("TransatelProvider", () => {
     prisma.plan.findUnique = vi
       .fn()
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
-    prisma.esimInventory.findFirst = vi
-      .fn()
-      .mockResolvedValue({
-        iccid: "8988247076000000319",
-        eid: "890490320000000000000000000001",
-        msisdn: "882470001850263",
-      });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      eid: "890490320000000000000000000001",
+      msisdn: "882470001850263",
+    });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -270,12 +268,10 @@ describe("TransatelProvider", () => {
     prisma.plan.findUnique = vi
       .fn()
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
-    prisma.esimInventory.findFirst = vi
-      .fn()
-      .mockResolvedValue({
-        iccid: "8988247076000000319",
-        eid: "890490320000000000000000000001",
-      });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      eid: "890490320000000000000000000001",
+    });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -328,13 +324,11 @@ describe("TransatelProvider", () => {
     prisma.plan.findUnique = vi
       .fn()
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
-    prisma.esimInventory.findFirst = vi
-      .fn()
-      .mockResolvedValue({
-        id: "inv-1",
-        iccid: "8988247076000000319",
-        eid: "890490320000000000000000000001",
-      });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      id: "inv-1",
+      iccid: "8988247076000000319",
+      eid: "890490320000000000000000000001",
+    });
     prisma.order.findUnique = vi
       .fn()
       .mockResolvedValue({ providerSubscriptionId: "sub-existing" });
@@ -367,19 +361,15 @@ describe("TransatelProvider", () => {
     prisma.plan.findUnique = vi
       .fn()
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
-    prisma.esimInventory.findFirst = vi
-      .fn()
-      .mockResolvedValue({
-        id: "inv-1",
-        iccid: "8988247076000000319",
-        eid: "890490320000000000000000000001",
-      });
-    prisma.order.findUnique = vi
-      .fn()
-      .mockResolvedValue({
-        providerSubscriptionId: null,
-        providerStatus: "SUBMITTING",
-      });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      id: "inv-1",
+      iccid: "8988247076000000319",
+      eid: "890490320000000000000000000001",
+    });
+    prisma.order.findUnique = vi.fn().mockResolvedValue({
+      providerSubscriptionId: null,
+      providerStatus: "SUBMITTING",
+    });
     const provider = new TransatelProvider(prisma);
 
     const error = await provider
@@ -475,6 +465,29 @@ describe("TransatelProvider", () => {
       smDpAddress: "consumer.rsp.world",
       qrPayload: "LPA:1$consumer.rsp.world$XYZ",
     });
+  });
+
+  it("classifies an ICCID missing from Transatel as an inventory lookup failure", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi
+      .fn()
+      .mockResolvedValue({ iccid: "8988247076000000319" });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/sim-management/sims/api/esims/sim-serial/8988247076000000319": () =>
+        jsonResponse({ message: "SIM not found" }, 404),
+    });
+
+    const error = await provider
+      .getEsimDetails("8988247076000000319")
+      .catch((cause) => cause);
+
+    expect(error).toBeInstanceOf(ApiException);
+    expect(error).toMatchObject({ code: ApiErrorCode.ESIM_NOT_FOUND });
+    expect((error as Error).message).toContain("not found");
+    expect((error as Error).message).not.toContain("Usage");
   });
 
   it("retries once with a fresh token after a 401", async () => {

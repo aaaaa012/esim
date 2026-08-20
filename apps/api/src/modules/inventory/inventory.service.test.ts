@@ -3,6 +3,8 @@ import { InventoryService } from "./inventory.service.js";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { CryptoService } from "../../infrastructure/crypto.service.js";
 import type { ConnectivityService } from "../integration/connectivity.service.js";
+import { ApiException } from "../../common/api-error.js";
+import { ApiErrorCode } from "@visa-compass/shared";
 
 function prismaStub() {
   return {
@@ -238,6 +240,7 @@ describe("InventoryService.reconcileProviderProfile", () => {
           iccid: "8988247076000000319",
           status: "AVAILABLE",
           assignedOrderId: null,
+          batch: { status: "APPROVED" },
         }),
         update,
       },
@@ -284,6 +287,34 @@ describe("InventoryService.reconcileProviderProfile", () => {
     expect(prisma.esimInventory.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: "QUARANTINED" }),
+      }),
+    );
+  });
+
+  it("records a provider not-found result without presenting it as a usage error", async () => {
+    const prisma = reconciliationPrisma();
+    const connectivity = {
+      getEsimDetails: vi.fn().mockRejectedValue(
+        new ApiException({
+          code: ApiErrorCode.ESIM_NOT_FOUND,
+          message: "This ICCID was not found in the Transatel inventory.",
+          status: 404,
+        }),
+      ),
+    } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+
+    await expect(inventory.reconcileProviderProfile("inv-1")).rejects.toThrow(
+      "ICCID was not found",
+    );
+    expect(prisma.esimInventory.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "QUARANTINED",
+          providerStatus: "not_found",
+          providerCheckError:
+            "This ICCID was not found in the Transatel inventory.",
+        }),
       }),
     );
   });

@@ -1029,9 +1029,8 @@ export class TransatelProvider implements ConnectivityProvider {
     const iccid = subscriber.iccid ?? "";
     if (!iccid)
       throw new ApiException({
-        code: ApiErrorCode.USAGE_UNAVAILABLE,
-        message:
-          "Usage details are not available yet. Please check back shortly.",
+        code: ApiErrorCode.ESIM_NOT_FOUND,
+        message: "This ICCID was not found in the Transatel inventory.",
         status: 404,
         details: "No ICCID found for the requested subscriber",
       });
@@ -1043,14 +1042,19 @@ export class TransatelProvider implements ConnectivityProvider {
       headers: { Accept: "application/json" },
       operation: "esim-details",
     });
-    if (!response.ok)
+    if (!response.ok) {
+      const notFound = response.status === 404;
       throw new ApiException({
-        code: ApiErrorCode.USAGE_UNAVAILABLE,
-        message:
-          "Usage details are not available yet. Please check back shortly.",
-        status: 502,
+        code: notFound
+          ? ApiErrorCode.ESIM_NOT_FOUND
+          : ApiErrorCode.ESIM_LOOKUP_UNAVAILABLE,
+        message: notFound
+          ? "This ICCID was not found in the Transatel inventory."
+          : "Transatel could not check this eSIM right now. Please retry shortly.",
+        status: notFound ? 404 : 502,
         details: `Failed to query eSIM details from Transatel: ${await this.errorText(response)}`,
       });
+    }
 
     const data = (await response.json()) as ESimDetailsResponse;
     return {
@@ -1632,9 +1636,7 @@ export class TransatelProvider implements ConnectivityProvider {
     return Math.round(value);
   }
 
-  private allowanceEntries(
-    allowances: unknown,
-  ): Array<{
+  private allowanceEntries(allowances: unknown): Array<{
     resourceName?: string;
     startValue?: number | string;
     unit?: string;

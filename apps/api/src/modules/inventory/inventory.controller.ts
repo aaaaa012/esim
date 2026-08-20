@@ -114,6 +114,39 @@ export class InventoryController {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     return this.inventory.reconcileProviderProfile(id);
   }
+  @Post("reconciliation-runs")
+  startReconciliationRun(
+    @Body()
+    body: {
+      profileIds?: string[];
+      scope?: "STALE_OR_UNVERIFIED" | "SELECTED";
+    },
+    @Req() req: AuthenticatedRequest,
+  ) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    const profileIds = [...new Set(body.profileIds ?? [])].slice(0, 500);
+    if (body.scope === "SELECTED" && !profileIds.length)
+      throw new BadRequestException("Select at least one inventory profile");
+    return this.inventory.startProviderReconciliation({
+      trigger: "OPS_MANUAL",
+      selection: profileIds.length ? "SELECTED" : "STALE_OR_UNVERIFIED",
+      ...(profileIds.length ? { profileIds } : {}),
+      ...(req.user!.localUserId
+        ? { requestedById: req.user!.localUserId }
+        : {}),
+      limit: 500,
+    });
+  }
+  @Get("reconciliation-runs/latest")
+  latestReconciliationRun(@Req() req: AuthenticatedRequest) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.inventory.latestProviderReconciliationRun();
+  }
+  @Get("reconciliation-runs/:id")
+  reconciliationRun(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.inventory.providerReconciliationRun(id);
+  }
   @Post("profiles/:id/restore-availability")
   restoreProfileAvailability(
     @Param("id") id: string,

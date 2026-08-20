@@ -60,6 +60,8 @@ export const ApiErrorCode = {
   PROVISIONING_DELAYED: "PROVISIONING_DELAYED",
   INVENTORY_UNAVAILABLE: "INVENTORY_UNAVAILABLE",
   INVENTORY_IMPORT_INVALID: "INVENTORY_IMPORT_INVALID",
+  ESIM_NOT_FOUND: "ESIM_NOT_FOUND",
+  ESIM_LOOKUP_UNAVAILABLE: "ESIM_LOOKUP_UNAVAILABLE",
   USAGE_UNAVAILABLE: "USAGE_UNAVAILABLE",
 } as const;
 
@@ -129,6 +131,10 @@ export const apiErrorMessage = (
       return "We could not activate your eSIM right now. Our team is reviewing it and will contact you.";
     case ApiErrorCode.INVENTORY_UNAVAILABLE:
       return "No eSIM is available right now. Please try again shortly.";
+    case ApiErrorCode.ESIM_NOT_FOUND:
+      return "This ICCID was not found in the connectivity provider inventory.";
+    case ApiErrorCode.ESIM_LOOKUP_UNAVAILABLE:
+      return "The connectivity provider could not check this eSIM right now. Please retry shortly.";
     case ApiErrorCode.INSUFFICIENT_PARTNER_BALANCE:
       return "The partner account balance is insufficient. Please top up the partner account.";
     case ApiErrorCode.TOPUP_UNAVAILABLE:

@@ -12,6 +12,10 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { tabularToRecords } from "../../common/tabular.util.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
+import { ApiException } from "../../common/api-error.js";
+import { ApiErrorCode } from "@visa-compass/shared";
+import { QueueService } from "../../jobs/queue.service.js";
+import { QUEUES } from "../../jobs/queues.js";
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
@@ -20,7 +24,176 @@ export class InventoryService implements OnModuleInit {
     private readonly crypto: CryptoService,
     private readonly connectivity: ConnectivityService,
     private readonly resilience?: ProductionResilienceService,
+    private readonly queues?: QueueService,
   ) {}
+
+  async startProviderReconciliation(input: {
+    trigger: "AUTOMATIC" | "BATCH_APPROVAL" | "OPS_MANUAL";
+    selection: "STALE_OR_UNVERIFIED" | "SELECTED";
+    profileIds?: string[];
+    batchId?: string;
+    requestedById?: string;
+    limit?: number;
+  }) {
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    const staleHours = Math.max(
+      1,
+      Number(process.env.TRANSATEL_INVENTORY_RECONCILE_HOURS ?? 24),
+    );
+    const staleBefore = new Date(Date.now() - staleHours * 60 * 60_000);
+    const ids = [...new Set(input.profileIds ?? [])].slice(0, 500);
+    const profiles = await this.prisma.esimInventory.findMany({
+      where: {
+        assignedOrderId: null,
+        status: {
+          in: [
+            InventoryStatus.PENDING_PROVIDER_CHECK,
+            InventoryStatus.AVAILABLE,
+            InventoryStatus.QUARANTINED,
+          ],
+        },
+        ...(input.batchId ? { batchId: input.batchId } : {}),
+        ...(ids.length ? { id: { in: ids } } : {}),
+        ...(input.selection === "STALE_OR_UNVERIFIED" && !ids.length
+          ? {
+              OR: [
+                { lastProviderCheckedAt: null },
+                { lastProviderCheckedAt: { lte: staleBefore } },
+              ],
+            }
+          : {}),
+        reconciliationItems: {
+          none: { run: { status: { in: ["QUEUED", "RUNNING"] } } },
+        },
+      },
+      select: { id: true },
+      orderBy: [
+        { lastProviderCheckedAt: { sort: "asc", nulls: "first" } },
+        { createdAt: "asc" },
+      ],
+      take: Math.min(500, Math.max(1, input.limit ?? 500)),
+    });
+    if (!profiles.length)
+      return { run: null, message: "No eligible stale or unverified profiles" };
+
+    const run = await this.prisma.inventoryReconciliationRun.create({
+      data: {
+        trigger: input.trigger,
+        selection: input.selection,
+        total: profiles.length,
+        ...(input.batchId ? { batchId: input.batchId } : {}),
+        ...(input.requestedById ? { requestedById: input.requestedById } : {}),
+        items: {
+          create: profiles.map((profile) => ({ inventoryId: profile.id })),
+        },
+      },
+    });
+
+    for (const profile of profiles) {
+      try {
+        if (this.queues?.enabled) {
+          await this.queues.add(
+            QUEUES.reconciliation,
+            "reconcile-inventory-profile",
+            { id: profile.id, kind: "inventory-profile", runId: run.id },
+            `inventory-reconcile-${run.id}-${profile.id}`,
+            { attempts: 3, backoff: { type: "exponential", delay: 2_000 } },
+          );
+        } else {
+          await this.reconcileProviderProfile(profile.id);
+          await this.completeProviderReconciliationItem(
+            run.id,
+            profile.id,
+            "SUCCESS",
+          );
+        }
+      } catch (error) {
+        await this.completeProviderReconciliationItem(
+          run.id,
+          profile.id,
+          error instanceof ApiException &&
+            error.code === ApiErrorCode.ESIM_NOT_FOUND
+            ? "NOT_FOUND"
+            : "FAILED",
+          error instanceof Error ? error.message : "Provider check failed",
+        );
+      }
+    }
+    return { run: await this.providerReconciliationRun(run.id) };
+  }
+
+  async completeProviderReconciliationItem(
+    runId: string,
+    inventoryId: string,
+    status: "SUCCESS" | "NOT_FOUND" | "FAILED",
+    error?: string,
+  ) {
+    await this.prisma.inventoryReconciliationItem.updateMany({
+      where: { runId, inventoryId, status: { in: ["QUEUED", "RUNNING"] } },
+      data: {
+        status,
+        checkedAt: new Date(),
+        error: error?.slice(0, 2000) ?? null,
+      },
+    });
+    const groups = await this.prisma.inventoryReconciliationItem.groupBy({
+      by: ["status"],
+      where: { runId },
+      _count: { _all: true },
+    });
+    const completed = groups
+      .filter(
+        (group) => group.status !== "QUEUED" && group.status !== "RUNNING",
+      )
+      .reduce((sum, group) => sum + group._count._all, 0);
+    const run = await this.prisma.inventoryReconciliationRun.findUnique({
+      where: { id: runId },
+      select: { total: true },
+    });
+    await this.prisma.inventoryReconciliationRun.update({
+      where: { id: runId },
+      data:
+        run && completed >= run.total
+          ? { status: "COMPLETED", completedAt: new Date() }
+          : { status: "RUNNING" },
+    });
+  }
+
+  async providerReconciliationRun(id: string) {
+    const run = await this.prisma.inventoryReconciliationRun.findUnique({
+      where: { id },
+      include: {
+        items: {
+          where: { status: { in: ["NOT_FOUND", "FAILED"] } },
+          select: {
+            status: true,
+            error: true,
+            inventory: { select: { id: true, iccid: true } },
+          },
+          take: 20,
+        },
+      },
+    });
+    if (!run) throw new NotFoundException("Inventory refresh run not found");
+    const groups = await this.prisma.inventoryReconciliationItem.groupBy({
+      by: ["status"],
+      where: { runId: id },
+      _count: { _all: true },
+    });
+    const counts = Object.fromEntries(
+      groups.map((group) => [group.status.toLowerCase(), group._count._all]),
+    );
+    return { ...run, counts };
+  }
+
+  async latestProviderReconciliationRun() {
+    const run = await this.prisma.inventoryReconciliationRun.findFirst({
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    return run ? this.providerReconciliationRun(run.id) : null;
+  }
 
   async onModuleInit() {
     if (!this.prisma.enabled || process.env.NODE_ENV === "production") return;
@@ -415,10 +588,18 @@ export class InventoryService implements OnModuleInit {
         },
       });
     });
+    const reconciliation = await this.startProviderReconciliation({
+      trigger: "BATCH_APPROVAL",
+      selection: "SELECTED",
+      batchId,
+      limit: 500,
+      ...(actor ? { requestedById: actor.id } : {}),
+    });
     return {
       id: batchId,
       status: BatchStatus.APPROVED,
       reference: batch.batchReference,
+      reconciliation,
     };
   }
 
@@ -997,8 +1178,13 @@ export class InventoryService implements OnModuleInit {
       throw new BadRequestException("Database persistence is required");
     const profile = await this.prisma.esimInventory.findUnique({
       where: { id },
+      include: { batch: { select: { status: true } } },
     });
     if (!profile) throw new NotFoundException("Inventory profile not found");
+    if (profile.batch.status !== BatchStatus.APPROVED)
+      throw new BadRequestException(
+        "The inventory batch must be approved before checking the provider",
+      );
     try {
       const details = await this.connectivity.getEsimDetails(profile.iccid);
       const observed = details.status.toLowerCase();
@@ -1050,9 +1236,15 @@ export class InventoryService implements OnModuleInit {
     } catch (error) {
       const message =
         error instanceof Error ? error.message.slice(0, 2000) : "unknown error";
+      const providerStatus =
+        error instanceof ApiException &&
+        error.code === ApiErrorCode.ESIM_NOT_FOUND
+          ? "not_found"
+          : "check_failed";
       await this.prisma.esimInventory.update({
         where: { id },
         data: {
+          providerStatus,
           lastProviderCheckedAt: new Date(),
           providerCheckError: message,
           ...(profile.status === InventoryStatus.PENDING_PROVIDER_CHECK ||
@@ -1070,6 +1262,7 @@ export class InventoryService implements OnModuleInit {
         summary: `Provider check failed for eSIM ${profile.iccid}`,
         detail: message,
         localState: InventoryStatus.QUARANTINED,
+        externalState: providerStatus,
         lastSuccessfulStep: "BATCH_APPROVED",
         failureCategory: "PROVIDER_CHECK_FAILED",
         availableActions: ["RECHECK_INVENTORY"],

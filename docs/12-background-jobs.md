@@ -73,6 +73,10 @@ job.attemptsMade + 1, final = (attemptsMade + 1 >= 3))`.
 - `onModuleInit` (`reconciliation.service.ts:28-36`): registers the
   `reconciliation` queue worker; starts a `setInterval` of
   `RECONCILIATION_INTERVAL_MINUTES` (default 15 min); runs once immediately.
+  Inventory checks use `TRANSATEL_RECONCILIATION_CONCURRENCY` (default 1) to
+  protect the provider from bulk-refresh bursts. Approved batches are queued
+  immediately, while stale or never-checked unassigned stock is rechecked
+  automatically according to `TRANSATEL_INVENTORY_RECONCILE_HOURS`.
 - `run()` (`reconciliation.service.ts:42-73`): requires Prisma; first
   `sweepLifecycle`, then finds up to 500 ACTIVE subscriptions whose
   `usageLastCheckedAt` is stale (older than the interval) and enqueues

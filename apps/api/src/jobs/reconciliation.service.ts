@@ -16,6 +16,8 @@ import { InventoryService } from "../modules/inventory/inventory.service.js";
 import { TransatelOperationsService } from "../modules/integration/transatel-operations.service.js";
 import { ProductionResilienceService } from "./production-resilience.service.js";
 import { ManualRefundsService } from "../modules/payments/manual-refunds.service.js";
+import { ApiException } from "../common/api-error.js";
+import { ApiErrorCode } from "@visa-compass/shared";
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -48,12 +50,47 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     if (process.env.PROCESS_ROLE === "api") return;
-    this.queues.registerWorker(QUEUES.reconciliation, (job) => {
-      const data = job.data as { id: string; kind?: string };
-      return data.kind === "inventory-profile"
-        ? this.inventory.reconcileProviderProfile(String(data.id))
-        : this.reconcile(String(data.id));
-    });
+    this.queues.registerWorker(
+      QUEUES.reconciliation,
+      async (job) => {
+        const data = job.data as { id: string; kind?: string; runId?: string };
+        if (data.kind !== "inventory-profile")
+          return this.reconcile(String(data.id));
+        try {
+          const result = await this.inventory.reconcileProviderProfile(
+            String(data.id),
+          );
+          if (data.runId)
+            await this.inventory.completeProviderReconciliationItem(
+              data.runId,
+              String(data.id),
+              "SUCCESS",
+            );
+          return result;
+        } catch (error) {
+          const notFound =
+            error instanceof ApiException &&
+            error.code === ApiErrorCode.ESIM_NOT_FOUND;
+          const finalAttempt =
+            job.attemptsMade + 1 >= Number(job.opts.attempts ?? 1);
+          if (data.runId && (notFound || finalAttempt))
+            await this.inventory.completeProviderReconciliationItem(
+              data.runId,
+              String(data.id),
+              notFound ? "NOT_FOUND" : "FAILED",
+              error instanceof Error ? error.message : "Provider check failed",
+            );
+          if (notFound) return { status: "NOT_FOUND" };
+          throw error;
+        }
+      },
+      {
+        concurrency: Math.max(
+          1,
+          Number(process.env.TRANSATEL_RECONCILIATION_CONCURRENCY ?? 1),
+        ),
+      },
+    );
     const minutes = Number(process.env.RECONCILIATION_INTERVAL_MINUTES ?? 15);
     const intervalMs =
       Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 15 * 60_000;
@@ -330,46 +367,11 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         Number(process.env.TRANSATEL_INVENTORY_RECONCILE_BATCH_SIZE ?? 25),
       ),
     );
-    const staleHours = Math.max(
-      1,
-      Number(process.env.TRANSATEL_INVENTORY_RECONCILE_HOURS ?? 24),
-    );
-    const staleBefore = new Date(Date.now() - staleHours * 60 * 60_000);
-    const profiles = await this.prisma.esimInventory.findMany({
-      where: {
-        assignedOrderId: null,
-        status: {
-          in: [
-            "IMPORTED",
-            "PENDING_PROVIDER_CHECK",
-            "AVAILABLE",
-            "QUARANTINED",
-          ],
-        },
-        OR: [
-          { lastProviderCheckedAt: null },
-          { lastProviderCheckedAt: { lte: staleBefore } },
-        ],
-      },
-      select: { id: true },
-      orderBy: [
-        { lastProviderCheckedAt: { sort: "asc", nulls: "first" } },
-        { createdAt: "asc" },
-      ],
-      take: batchSize,
+    await this.inventory.startProviderReconciliation({
+      trigger: "AUTOMATIC",
+      selection: "STALE_OR_UNVERIFIED",
+      limit: batchSize,
     });
-    for (const profile of profiles) {
-      await this.queues.add(
-        QUEUES.reconciliation,
-        "reconcile-inventory-profile",
-        { id: profile.id, kind: "inventory-profile" },
-        `inventory-reconcile-${profile.id}-${new Date().toISOString().slice(0, 13)}`,
-      );
-      if (!this.queues.enabled)
-        await this.inventory
-          .reconcileProviderProfile(profile.id)
-          .catch(() => undefined);
-    }
   }
 
   private async reconcileProvisioningOperations() {
