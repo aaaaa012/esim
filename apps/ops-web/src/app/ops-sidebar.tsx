@@ -12,7 +12,10 @@ import {
   Handshake,
   History,
   PackageSearch,
+  PlugZap,
   RadioTower,
+  Server,
+  ScrollText,
   RotateCw,
   Settings,
   Undo2,
@@ -29,13 +32,13 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 const overviewItems: NavItem[] = [
-  { href: "/", label: "Home", icon: Gauge },
-  { href: "/work-queue", label: "To-do list", icon: ClipboardCheck },
+  { href: "/", label: "Dashboard", icon: Gauge },
+  { href: "/work-queue", label: "Review queue", icon: ClipboardCheck },
   { href: "/attention", label: "Attention queue", icon: AlertTriangle },
   { href: "/orders", label: "Orders", icon: PackageSearch },
   { href: "/customers", label: "Customers", icon: Users },
-  { href: "/inventory", label: "eSIM stock", icon: Boxes },
-  { href: "/transatel", label: "Provider status", icon: RadioTower },
+  { href: "/inventory", label: "Inventory", icon: Boxes },
+  { href: "/transatel", label: "Network", icon: RadioTower },
   {
     href: "/provisioning-operations",
     label: "Pending activations",
@@ -43,9 +46,12 @@ const overviewItems: NavItem[] = [
   },
 ];
 const systemItems: NavItem[] = [
-  { href: "/manual-refunds", label: "Refunds", icon: Undo2 },
-  { href: "/notifications", label: "Messages", icon: Bell },
-  { href: "/logs", label: "Logs", icon: History },
+  { href: "/logs", label: "Logs", icon: ScrollText },
+  { href: "/manual-refunds", label: "Manual refunds", icon: Undo2 },
+  { href: "/notifications", label: "Notifications", icon: Bell },
+  { href: "/integration-events", label: "Incoming updates", icon: PlugZap },
+  { href: "/integration-logs", label: "System activity", icon: Server },
+  { href: "/audit", label: "Activity log", icon: History },
 ];
 type Profile = {
   email: string;
@@ -88,12 +94,12 @@ export default function OpsSidebar({
     profile?.effectiveCapabilities.includes("admin:portal") ?? false;
   const adminItem: NavItem = {
     href: "/admin",
-    label: "Settings",
+    label: "Administration",
     icon: Settings,
   };
   const showcaseItem: NavItem = {
     href: "/admin/partners-showcase",
-    label: "Partners",
+    label: "Partner Showcase",
     icon: Handshake,
   };
   const path = usePathname();

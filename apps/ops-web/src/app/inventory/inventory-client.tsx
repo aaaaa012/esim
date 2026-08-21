@@ -20,6 +20,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Panel } from "@/components/panel";
+import ErrorDialog from "@/components/error-dialog";
 import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +36,6 @@ import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/empty-state";
 import { FileUploader } from "@/components/file-uploader";
 import { Spinner } from "@/components/spinner";
-import ErrorDialog from "@/components/error-dialog";
 import { PaginationBar } from "@/components/pagination-bar";
 import { SearchInput } from "@/components/search-input";
 import { cn } from "@/lib/utils";
@@ -83,7 +83,6 @@ type InventoryProfile = {
   providerStatus?: string | null;
   lastProviderCheckedAt?: string | null;
   providerCheckError?: string | null;
-  quarantineReason?: string | null;
   batchReference?: string | null;
   order?: { orderNumber: string } | null;
 };
@@ -516,7 +515,7 @@ export default function InventoryClient() {
       if (!r.ok) throw new Error(v.error?.message);
       toast.success(
         approve
-          ? `Batch ${batch.batchReference} approved — ${batch.importedCount} profile(s) sellable`
+          ? `Batch ${batch.batchReference} approved. ${batch.importedCount} profile(s) sellable`
           : `Batch ${batch.batchReference} rejected`,
       );
       load();
@@ -578,11 +577,22 @@ export default function InventoryClient() {
 
   if (!data)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> Loading inventory…
+      <>
+        <ErrorDialog error={error} onClose={() => setError("")} />
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            {error ? (
+              <Button variant="outline" onClick={load}>
+                Try again
+              </Button>
+            ) : (
+              <>
+                <Spinner /> Loading inventory...
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      </>
     );
 
   const metrics = [
@@ -645,7 +655,7 @@ export default function InventoryClient() {
     <>
       <ErrorDialog error={error} onClose={() => setError("")} />
       <PageHeader
-        title="eSIM stock"
+        title="eSIM Inventory"
         description="Upload eSIM profiles and packages, review pending approvals, and track stock."
         badge={
           <Badge
@@ -833,7 +843,7 @@ export default function InventoryClient() {
                       <TableCell>
                         <code className="text-xs">{profile.iccid}</code>
                         <p className="text-xs text-muted-foreground">
-                          {profile.batchReference ?? "—"}
+                          {profile.batchReference ?? "Not recorded"}
                         </p>
                       </TableCell>
                       <TableCell>
@@ -856,39 +866,18 @@ export default function InventoryClient() {
                             ).toLocaleString()
                           : "Never"}
                       </TableCell>
-                      <TableCell className="max-w-64 whitespace-normal break-words text-xs">
-                        {profile.quarantineReason ? (
-                          <span className="text-destructive">
-                            {profile.quarantineReason}
-                          </span>
-                        ) : profile.providerCheckError ? (
-                          <span className="text-destructive">
-                            {profile.providerCheckError}
-                          </span>
-                        ) : profile.status === "AVAILABLE" &&
+                      <TableCell className="max-w-64 whitespace-normal break-words text-xs text-destructive">
+                        {profile.providerCheckError ??
+                          (profile.status === "AVAILABLE" &&
                           !["available", "allocated"].includes(
                             profile.providerStatus?.toLowerCase() ?? "",
                           )
-                            ? (
-                                <span className="text-destructive">
-                                  {`Local stock is marked available, but ${humane(profile.providerStatus ?? "not checked")} is not safe for sale`}
-                                </span>
-                              )
+                            ? `Local stock is marked available, but ${humane(profile.providerStatus ?? "not checked")} is not safe for sale`
                             : profile.status === "PENDING_PROVIDER_CHECK"
-                              ? (
-                                  <span className="text-muted-foreground">
-                                    Provider verification is required before sale
-                                  </span>
-                                )
+                              ? "Provider verification is required before sale"
                               : profile.status === "QUARANTINED"
-                            ? (
-                                <span className="text-destructive">
-                                  {`${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`}
-                                </span>
-                              )
-                            : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
+                                ? `${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`
+                                : "Not recorded")}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex flex-wrap justify-end gap-2">
@@ -1412,13 +1401,13 @@ export default function InventoryClient() {
                             </span>
                           ) : (
                             <span className="text-xs text-muted-foreground">
-                              —
+                              Not recorded
                             </span>
                           )}
                         </TableCell>
                         <TableCell>
                           <span className="text-xs">
-                            {p.batchReference ?? "—"}
+                            {p.batchReference ?? "Not recorded"}
                           </span>
                           {p.batchReference && (
                             <div className="text-[11px] text-muted-foreground">
@@ -1427,7 +1416,7 @@ export default function InventoryClient() {
                           )}
                         </TableCell>
                         <TableCell className="text-right text-xs">
-                          {p.smDpAddress ?? "—"}
+                          {p.smDpAddress ?? "Not recorded"}
                         </TableCell>
                       </TableRow>
                     ))}

@@ -6,7 +6,7 @@ export default function LogsPage() {
     <>
       <PageHeader
         title="Logs"
-        description="A record of everything the system received and sent — payment and network calls, incoming updates, eSIM activations and staff changes. Use the filter to narrow the list, and download any record as a text file."
+        description="A searchable record of provider calls, incoming updates, eSIM activation activity, and audited staff changes. Downloaded records contain sanitized operational data."
       />
       <LogsClient />
     </>

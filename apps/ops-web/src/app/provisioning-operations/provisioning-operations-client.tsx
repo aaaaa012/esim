@@ -7,9 +7,9 @@ import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge, humane } from "@/components/status-badge";
-import ErrorDialog from "@/components/error-dialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
+import ErrorDialog from "@/components/error-dialog";
 import {
   Table,
   TableBody,
@@ -38,23 +38,30 @@ const recoverable = new Set([
   "MANUAL_REVIEW",
 ]);
 
-function humaniseTitle(title: string) {
-  return title.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
+function humaniseTitle(value: string) {
+  return value
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function shortError(item: Operation): string {
+function shortError(item: Operation) {
   const raw = item.lastErrorMessage;
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as { title?: string; detail?: string };
-      if (parsed.title) return humaniseTitle(parsed.title);
-      if (parsed.detail) return parsed.detail.length > 120 ? `${parsed.detail.slice(0, 120)}…` : parsed.detail;
-    } catch {
-      /* not JSON */
-    }
-    return raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
+  if (!raw)
+    return item.lastErrorCategory
+      ? humaniseTitle(item.lastErrorCategory)
+      : "Not recorded";
+  try {
+    const parsed = JSON.parse(raw) as { title?: string; detail?: string };
+    if (parsed.title) return humaniseTitle(parsed.title);
+    if (parsed.detail)
+      return parsed.detail.length > 120
+        ? `${parsed.detail.slice(0, 120)}...`
+        : parsed.detail;
+  } catch {
+    // Provider errors are not always JSON.
   }
-  return item.lastErrorCategory ? humaniseTitle(item.lastErrorCategory) : "—";
+  return raw.length > 120 ? `${raw.slice(0, 120)}...` : raw;
 }
 
 export default function ProvisioningOperationsClient() {
@@ -70,7 +77,9 @@ export default function ProvisioningOperationsClient() {
     );
     const value = await response.json();
     if (!response.ok)
-      throw new Error(value.error?.message ?? "Could not load set-up recovery");
+      throw new Error(
+        value.error?.message ?? "Could not load pending activations",
+      );
     setItems(value.data ?? []);
   };
   useEffect(() => {
@@ -111,7 +120,11 @@ export default function ProvisioningOperationsClient() {
         }
       />
       <ErrorDialog error={error} onClose={() => setError("")} />
-      <ErrorDialog error={viewError} title="Full problem details" onClose={() => setViewError(null)} />
+      <ErrorDialog
+        error={viewError}
+        title="Full problem details"
+        onClose={() => setViewError(null)}
+      />
       <Panel
         title="Orders needing attention"
         description="Set-ups that are delayed, uncertain, or waiting for review"
@@ -155,17 +168,21 @@ export default function ProvisioningOperationsClient() {
                   <TableCell>
                     <code className="text-xs">{item.iccid}</code>
                   </TableCell>
-                  <TableCell className="max-w-56">
-                    <span className="truncate text-xs text-muted-foreground" title={item.lastErrorMessage ?? undefined}>{shortError(item)}</span>
-                    {item.lastErrorMessage && (
+                  <TableCell className="max-w-72 text-xs text-muted-foreground">
+                    <span title={item.lastErrorMessage ?? undefined}>
+                      {shortError(item)}
+                    </span>
+                    {item.lastErrorMessage ? (
                       <button
                         type="button"
-                        className="ml-2 text-xs font-medium text-primary hover:underline"
-                        onClick={() => setViewError(item.lastErrorMessage ?? "")}
+                        className="ml-2 font-medium text-primary hover:underline"
+                        onClick={() =>
+                          setViewError(item.lastErrorMessage ?? null)
+                        }
                       >
                         View
                       </button>
-                    )}
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {new Date(item.updatedAt).toLocaleString()}

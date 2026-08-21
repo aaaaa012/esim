@@ -6,6 +6,7 @@ import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { Button } from "@/components/ui/button";
+import ErrorDialog from "@/components/error-dialog";
 import {
   Table,
   TableBody,
@@ -92,11 +93,7 @@ export default function AttentionClient() {
           </Button>
         }
       />
-      {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <ErrorDialog error={error} onClose={() => setError("")} />
       <Panel
         title="Open cases"
         description={`${items.length} case(s) need attention`}
@@ -147,7 +144,7 @@ export default function AttentionClient() {
                   <StatusBadge label={item.order?.status ?? item.status} />
                 </TableCell>
                 <TableCell>
-                  {item.failureCategory ?? "—"}
+                  {item.failureCategory ?? "Not recorded"}
                   <div className="text-xs text-muted-foreground">
                     Retries: {item.retryCount}
                   </div>

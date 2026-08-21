@@ -19,9 +19,23 @@ import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import ErrorDialog from "@/components/error-dialog";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { activityLabel } from "./log-activity";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -69,35 +83,9 @@ function dump(value: unknown): string {
   }
 }
 
-function activityLabel(entry: Pick<LogEntry, "group" | "identifier" | "title">): string {
-  if (entry.group === "incoming") {
-    const source = entry.identifier?.toLowerCase() ?? "";
-    if (source.includes("khalti")) return "Khalti payment callback received";
-    if (source.includes("transatel")) return "Transatel network update received";
-    return "External callback received";
-  }
-  if (entry.group !== "provider") return entry.title;
-
-  const operation = entry.identifier?.toLowerCase() ?? "";
-  const endpoint = entry.title.toLowerCase();
-  const provider = operation.startsWith("khalti") || endpoint.includes("epayment") ? "Khalti" : "Transatel";
-  if (operation.includes("token") || endpoint.includes("/token")) return `${provider} access token request`;
-  if (operation.includes("initiat") || endpoint.includes("/initiate")) return "Khalti payment initiation";
-  if (operation.includes("lookup") || endpoint.includes("/lookup")) return "Khalti payment lookup";
-  if (operation.includes("provision")) return "Transatel eSIM provisioning";
-  if (operation.includes("usage")) return "Transatel data-usage lookup";
-  if (operation.includes("esim-details")) return "Transatel eSIM details lookup";
-  if (operation.includes("subscriber-suspend")) return "Transatel eSIM suspension";
-  if (operation.includes("subscriber-terminate")) return "Transatel eSIM termination";
-  if (operation.includes("catalog")) return "Transatel plan catalog lookup";
-  if (operation.includes("eligibility")) return "Transatel eligibility check";
-  if (operation.includes("webhook")) return "Transatel webhook setup";
-  return `${provider} service request`;
-}
-
 function serialise(entry: LogEntry): string {
   const lines: string[] = [];
-  lines.push("Visa Compass — Log record");
+  lines.push("Visa Compass - Log record");
   lines.push("=".repeat(78));
   lines.push(`When:     ${new Date(entry.createdAt).toLocaleString()}`);
   lines.push(`Type:     ${GROUP_LABELS[entry.group]}`);
@@ -123,7 +111,9 @@ function serialise(entry: LogEntry): string {
 }
 
 function downloadTxt(filename: string, content: string) {
-  const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+  const url = URL.createObjectURL(
+    new Blob([content], { type: "text/plain;charset=utf-8" }),
+  );
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
@@ -160,15 +150,22 @@ export default function LogsClient() {
       if (search) params.set("q", search);
       params.set("page", String(page));
       params.set("pageSize", String(pageSize));
-      return authFetch(`${API}/operations/logs?${params.toString()}`, { headers })
+      return authFetch(`${API}/operations/logs?${params.toString()}`, {
+        headers,
+      })
         .then(async (response) => {
           const value = await response.json();
-          if (!response.ok) throw new Error(value.error?.message ?? "Could not load logs");
+          if (!response.ok)
+            throw new Error(value.error?.message ?? "Could not load logs");
           setItems(value.data?.items ?? []);
           setTotal(value.data?.total ?? 0);
           setError("");
         })
-        .catch((cause) => setError(cause.message))
+        .catch((cause: unknown) =>
+          setError(
+            cause instanceof Error ? cause.message : "Could not load logs",
+          ),
+        )
         .finally(() => {
           setLoading(false);
           setRefreshing(false);
@@ -196,7 +193,9 @@ export default function LogsClient() {
 
   const stats = useMemo(() => {
     const withStatus = items.filter((item) => item.status != null);
-    const ok = withStatus.filter((item) => item.status! >= 200 && item.status! < 400).length;
+    const ok = withStatus.filter(
+      (item) => item.status! >= 200 && item.status! < 400,
+    ).length;
     return { total: items.length, ok, failed: withStatus.length - ok };
   }, [items]);
 
@@ -210,7 +209,10 @@ export default function LogsClient() {
 
   const downloadAll = () => {
     const body = items.map(serialise).join("\n\n");
-    downloadTxt(`logs-${group}-${new Date().toISOString().slice(0, 10)}.txt`, body);
+    downloadTxt(
+      `logs-${group}-${new Date().toISOString().slice(0, 10)}.txt`,
+      body,
+    );
   };
 
   return (
@@ -222,7 +224,9 @@ export default function LogsClient() {
             <ServerCog className="size-5" />
           </span>
           <div className="leading-tight">
-            <p className="text-2xl font-semibold tracking-tight tabular-nums">{counts.all}</p>
+            <p className="text-2xl font-semibold tracking-tight tabular-nums">
+              {counts.all}
+            </p>
             <p className="text-xs text-muted-foreground">On this page</p>
           </div>
         </div>
@@ -231,7 +235,9 @@ export default function LogsClient() {
             <CircleCheck className="size-5" />
           </span>
           <div className="leading-tight">
-            <p className="text-2xl font-semibold tracking-tight tabular-nums">{stats.ok}</p>
+            <p className="text-2xl font-semibold tracking-tight tabular-nums">
+              {stats.ok}
+            </p>
             <p className="text-xs text-muted-foreground">Succeeded</p>
           </div>
         </div>
@@ -240,7 +246,9 @@ export default function LogsClient() {
             <CircleX className="size-5" />
           </span>
           <div className="leading-tight">
-            <p className="text-2xl font-semibold tracking-tight tabular-nums">{stats.failed}</p>
+            <p className="text-2xl font-semibold tracking-tight tabular-nums">
+              {stats.failed}
+            </p>
             <p className="text-xs text-muted-foreground">Failed</p>
           </div>
         </div>
@@ -252,11 +260,18 @@ export default function LogsClient() {
         actions={
           <>
             <div className="w-64">
-              <Select value={group} onValueChange={(v) => changeGroup(v as Group)}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <Select
+                value={group}
+                onValueChange={(v) => changeGroup(v as Group)}
+              >
+                <SelectTrigger className="h-9">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   {(Object.keys(GROUP_LABELS) as Group[]).map((g) => (
-                    <SelectItem key={g} value={g}>{GROUP_LABELS[g]}</SelectItem>
+                    <SelectItem key={g} value={g}>
+                      {GROUP_LABELS[g]}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -267,11 +282,21 @@ export default function LogsClient() {
               onChange={changeQuery}
               className="w-56"
             />
-            <Button variant="outline" size="sm" onClick={downloadAll} disabled={!items.length}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={downloadAll}
+              disabled={!items.length}
+            >
               <Download className="size-4" />
               Download all
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={refreshing}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void load(true)}
+              disabled={refreshing}
+            >
               {refreshing ? <Spinner /> : <RefreshCcw className="size-4" />}
               Refresh
             </Button>
@@ -301,9 +326,14 @@ export default function LogsClient() {
             <TableBody>
               {items.map((entry) => {
                 const Icon = GROUP_ICONS[entry.group];
-                const failed = entry.status != null && (entry.status < 200 || entry.status >= 400);
+                const failed =
+                  entry.status != null &&
+                  (entry.status < 200 || entry.status >= 400);
                 return (
-                  <TableRow key={`${entry.group}-${entry.id}`} className={cn(failed && "bg-destructive/[0.03]")}>
+                  <TableRow
+                    key={`${entry.group}-${entry.id}`}
+                    className={cn(failed && "bg-destructive/[0.03]")}
+                  >
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {new Date(entry.createdAt).toLocaleString()}
                     </TableCell>
@@ -317,7 +347,9 @@ export default function LogsClient() {
                           {entry.identifier}
                         </span>
                       )}
-                      <p className="mt-1 text-xs text-muted-foreground">{activityLabel(entry)}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {activityLabel(entry)}
+                      </p>
                     </TableCell>
                     <TableCell>
                       {entry.statusLabel ? (
@@ -326,7 +358,10 @@ export default function LogsClient() {
                           tone={
                             failed
                               ? "danger"
-                              : entry.statusLabel === "SUCCESS" || entry.statusLabel === "PROCESSED" || entry.statusLabel === "ACTIVATED" || entry.statusLabel === "SUCCEEDED"
+                              : entry.statusLabel === "SUCCESS" ||
+                                  entry.statusLabel === "PROCESSED" ||
+                                  entry.statusLabel === "ACTIVATED" ||
+                                  entry.statusLabel === "SUCCEEDED"
                                 ? "success"
                                 : entry.statusLabel === "FAILED"
                                   ? "danger"
@@ -334,14 +369,27 @@ export default function LogsClient() {
                           }
                         />
                       ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
+                        <span className="text-xs text-muted-foreground">
+                          Not recorded
+                        </span>
                       )}
                       {entry.status != null && (
-                        <span className="ml-2 text-xs tabular-nums text-muted-foreground">{entry.status}</span>
+                        <span className="ml-2 text-xs tabular-nums text-muted-foreground">
+                          {entry.status}
+                        </span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button size="sm" variant="outline" onClick={() => downloadTxt(`log-${entry.group}-${entry.id}.txt`, serialise(entry))}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          downloadTxt(
+                            `log-${entry.group}-${entry.id}.txt`,
+                            serialise(entry),
+                          )
+                        }
+                      >
                         <Download className="size-3.5" />
                         .txt
                       </Button>
@@ -355,14 +403,26 @@ export default function LogsClient() {
         {!loading && items.length > 0 && (
           <div className="flex items-center justify-between gap-3 border-t px-4 py-3">
             <p className="text-sm tabular-nums text-muted-foreground">
-              {rangeStart}–{rangeEnd} of {total} records
+              {rangeStart}-{rangeEnd} of {total} records
             </p>
             <div className="flex items-center gap-1">
-              <Button variant="outline" size="sm" disabled={page <= 1 || loading} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1 || loading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
                 Previous
               </Button>
-              <span className="px-3 text-sm tabular-nums text-muted-foreground">Page {page} of {maxPage}</span>
-              <Button variant="outline" size="sm" disabled={page >= maxPage || loading} onClick={() => setPage((p) => Math.min(maxPage, p + 1))}>
+              <span className="px-3 text-sm tabular-nums text-muted-foreground">
+                Page {page} of {maxPage}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= maxPage || loading}
+                onClick={() => setPage((p) => Math.min(maxPage, p + 1))}
+              >
                 Next
               </Button>
             </div>

@@ -15,7 +15,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { Panel } from "@/components/panel";
-import ErrorDialog from "@/components/error-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +22,7 @@ import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { cn } from "@/lib/utils";
+import ErrorDialog from "@/components/error-dialog";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const PAGE_SIZE = 200;
@@ -106,7 +106,7 @@ export default function QueueClient() {
   const authFetch = useAuthenticatedFetch();
   const [orders, setOrders] = useState<OpsOrder[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({ review: true });
 
@@ -117,14 +117,23 @@ export default function QueueClient() {
 
   const load = () => {
     setLoading(true);
-    setError("");
     authFetch(`${API}/operations/orders?limit=${PAGE_SIZE}`, { headers: {} })
-      .then(async (r) => {
-        const v = await r.json();
-        if (!r.ok) throw new Error(v?.error?.message ?? "Could not load the queue");
-        setOrders(v.data?.items ?? []);
+      .then(async (response) => {
+        const value = await response.json();
+        if (!response.ok)
+          throw new Error(
+            value?.error?.message ?? "Could not load the work queue",
+          );
+        setOrders(value.data?.items ?? []);
+        setError(null);
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load the queue"))
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not load the work queue",
+        ),
+      )
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
@@ -174,7 +183,7 @@ export default function QueueClient() {
 
   return (
     <>
-      <ErrorDialog error={error} onClose={() => setError("")} />
+      <ErrorDialog error={error} onClose={() => setError(null)} />
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <SearchInput
           placeholder="Search order, customer, email…"

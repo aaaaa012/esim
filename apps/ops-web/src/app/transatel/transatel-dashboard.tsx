@@ -17,11 +17,11 @@ import { LifecycleActions } from "./lifecycle-actions";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge } from "@/components/status-badge";
-import ErrorDialog from "@/components/error-dialog";
 import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
+import ErrorDialog from "@/components/error-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -54,12 +54,10 @@ type Subscriber = {
 type Inventory = {
   id: string;
   iccid: string;
-  msisdn?: string | null;
   status: string;
   providerStatus?: string | null;
   lastProviderCheckedAt?: string | null;
   providerCheckError?: string | null;
-  quarantineReason?: string | null;
   batchReference: string;
 };
 type Failure = {
@@ -212,24 +210,6 @@ export default function TransatelDashboard() {
       setBusy("");
     }
   };
-  const releaseToStock = async (profile: Inventory) => {
-    setBusy(profile.id);
-    try {
-      const response = await authFetch(
-        `${API}/operations/inventory/profiles/${profile.id}/restore-availability`,
-        { method: "POST", headers: {} },
-      );
-      const value = await response.json();
-      if (!response.ok)
-        throw new Error(value.error?.message ?? "Release failed");
-      toast.success(`${profile.iccid} released back to stock`);
-      await load();
-    } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Release failed");
-    } finally {
-      setBusy("");
-    }
-  };
   const refreshUsage = async (subscriber: Subscriber) => {
     setBusy(subscriber.orderId);
     try {
@@ -306,7 +286,7 @@ export default function TransatelDashboard() {
   return (
     <>
       <PageHeader
-            title="Provider status"
+        title="Network connectivity"
         description="See the network status, customer plans, stock checks and any issues needing your attention."
         badge={
           data ? (
@@ -397,8 +377,10 @@ export default function TransatelDashboard() {
                         />
                       </div>
                       <p className="mt-1 text-muted-foreground">
-                        {check.durationMs ?? "—"} ms ·{" "}
-                        {formatDate(check.checkedAt)}
+                        {check.durationMs == null
+                          ? "Duration not recorded"
+                          : `${check.durationMs} ms`}{" "}
+                        · {formatDate(check.checkedAt)}
                       </p>
                     </div>
                   ))}
@@ -572,41 +554,18 @@ export default function TransatelDashboard() {
                           <TableCell>
                             {formatDate(row.lastProviderCheckedAt)}
                           </TableCell>
-                          <TableCell className="max-w-64 truncate text-xs">
-                            {row.quarantineReason ? (
-                              <span className="text-destructive">
-                                {row.quarantineReason}
-                              </span>
-                            ) : row.providerCheckError ? (
-                              <span className="text-destructive">
-                                {row.providerCheckError}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
+                          <TableCell className="max-w-64 truncate text-xs text-destructive">
+                            {row.providerCheckError ?? "Not recorded"}
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center justify-end gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={busy === row.id}
-                                onClick={() => void reconcile(row)}
-                              >
-                                <RefreshCcw className="size-3.5" /> Check network
-                              </Button>
-                              {row.status === "QUARANTINED" && canTerminate ? (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={busy === row.id}
-                                  onClick={() => void releaseToStock(row)}
-                                >
-                                  <Boxes className="size-3.5" /> Release &amp;
-                                  restock
-                                </Button>
-                              ) : null}
-                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy === row.id}
+                              onClick={() => void reconcile(row)}
+                            >
+                              <RefreshCcw className="size-3.5" /> Check network
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -715,7 +674,7 @@ export default function TransatelDashboard() {
                             {row.reason}
                           </TableCell>
                           <TableCell className="font-mono text-xs">
-                            {row.providerTransactionId ?? "—"}
+                            {row.providerTransactionId ?? "Not recorded"}
                           </TableCell>
                         </TableRow>
                       ))}
