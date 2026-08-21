@@ -179,7 +179,7 @@
   display: grid;
   justify-items: center;
   background:
-    radial-gradient(circle at 50% 0%, rgba(79, 70, 229, 0.06), transparent 60%),
+    radial-gradient(circle at 50% 0%, rgba(7, 89, 133, 0.06), transparent 60%),
     var(--surface);
 }
 

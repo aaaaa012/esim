@@ -15,3 +15,8 @@ apps/api/prisma/dev.db
 apps/api/eng.traineddata
 apps/customer-web/.next-dev/
 apps/ops-web/.next-dev/
+
+# local diagnostic scripts
+_*.cjs
+apps/api/prisma/e2e-proof.cjs
+apps/api/prisma/reset-for-fresh.cjs

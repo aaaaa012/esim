@@ -138,4 +138,16 @@ if (!process.env.NODE_ENV) {
   process.exit(1);
 }
 
+// Last-gasp logging for crashes that bypass the framework (async gaps,
+// queue callbacks). Node still exits on unhandled rejections / uncaught
+// exceptions; these hooks guarantee the reason reaches container logs first.
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error('[fatal] Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('[fatal] Uncaught exception:', err);
+});
+
 void bootstrap();

@@ -15,7 +15,7 @@ describe("LifecycleActions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Suspend" }));
     const submit = screen.getByRole("button", { name: "Suspend connectivity" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(screen.getByPlaceholderText("Operational reason (required)"), { target: { value: "Customer reported device theft" } });
+    fireEvent.change(screen.getByPlaceholderText("Reason (required)"), { target: { value: "Customer reported device theft" } });
     fireEvent.change(screen.getByLabelText(/Type.*SUSPEND.*to confirm/), { target: { value: "SUSPEND" } });
     fireEvent.click(submit);
     await waitFor(() => expect(authFetch).toHaveBeenCalledOnce());

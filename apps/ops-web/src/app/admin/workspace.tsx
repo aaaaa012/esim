@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Building2,
   CheckCircle2,
+  Copy,
   Download,
   FlaskConical,
   History,
@@ -29,7 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/spinner";
@@ -1524,6 +1525,33 @@ export default function AdminWorkspace() {
           </TabsContent>
         )}
       </Tabs>
+      <Dialog open={Boolean(issuedPartnerKey)} onOpenChange={(open) => !open && setIssuedPartnerKey(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>API key for {issuedPartnerKey?.partnerName}</DialogTitle>
+            <DialogDescription>This value is shown once. Store it securely before closing.</DialogDescription>
+          </DialogHeader>
+          <code className="break-all rounded-lg bg-muted p-3 text-xs">{issuedPartnerKey?.apiKey}</code>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={async () => {
+                if (!issuedPartnerKey) return;
+                try {
+                  await navigator.clipboard.writeText(issuedPartnerKey.apiKey);
+                  toast.success("Secret copied");
+                } catch {
+                  toast.error("Clipboard access was denied");
+                }
+              }}
+            >
+              <Copy />
+              Copy
+            </Button>
+            <Button onClick={() => setIssuedPartnerKey(null)}>I have stored it</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
