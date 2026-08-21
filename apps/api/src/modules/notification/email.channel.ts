@@ -10,6 +10,7 @@ export type EmailSendInput = {
   to: string;
   subject: string;
   text: string;
+  html?: string;
   attachment?: EmailAttachment;
   idempotencyKey?: string;
 };

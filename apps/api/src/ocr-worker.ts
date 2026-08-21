@@ -20,4 +20,9 @@ async function bootstrap() {
   new Logger("OcrWorker").log("Document OCR worker ready (concurrency 1)");
 }
 
+if (!process.env.NODE_ENV)
+  throw new Error(
+    "NODE_ENV is required for the OCR worker (development, test, staging, or production).",
+  );
+
 void bootstrap();

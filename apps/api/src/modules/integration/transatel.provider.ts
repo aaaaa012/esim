@@ -640,7 +640,17 @@ export class TransatelProvider implements ConnectivityProvider {
       });
 
     const bindMsisdn = profile.msisdn ?? profile.iccid;
-    const idempotencyKey = `transatel:preload:${request.orderId}`;
+    const existingOperation = this.prisma.enabled
+      ? await this.prisma.provisioningOperation.findUnique({
+          where: { orderId: request.orderId },
+        })
+      : null;
+    const generation = existingOperation?.profileSwapCount ?? 0;
+    const idempotencyKey =
+      existingOperation?.idempotencyKey ??
+      (generation > 0
+        ? `transatel:preload:${request.orderId}:profile-${generation}`
+        : `transatel:preload:${request.orderId}`);
     const operationPayload = {
       orderId: request.orderId,
       planId: request.planId,
@@ -651,7 +661,11 @@ export class TransatelProvider implements ConnectivityProvider {
     if (this.prisma.enabled) {
       await this.prisma.provisioningOperation.upsert({
         where: { orderId: request.orderId },
-        update: {},
+        update: {
+          iccid: profile.iccid,
+          providerProductId: plan.providerPlanId,
+          requestSnapshot: operationPayload,
+        },
         create: {
           orderId: request.orderId,
           idempotencyKey,

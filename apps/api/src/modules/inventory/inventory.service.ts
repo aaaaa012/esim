@@ -5,7 +5,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { BatchStatus, InventoryStatus } from "@prisma/client";
+import { BatchStatus, InventoryStatus, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
@@ -342,6 +342,115 @@ export class InventoryService implements OnModuleInit {
         assignedOrderId: null,
         version: { increment: 1 },
       },
+    });
+  }
+
+  /**
+   * Atomically quarantines a definitively rejected, provider-unbound profile,
+   * reserves a fresh provider-safe profile, and advances the durable provider
+   * command generation. A new generation gets a new idempotency key; uncertain
+   * outcomes must never call this method.
+   */
+  async replacePermanentlyRejectedProfile(orderId: string, reason: string) {
+    if (!this.prisma.enabled)
+      throw new ConflictException("Database persistence is required");
+    const freshnessHours = Math.max(
+      1,
+      Number(process.env.INVENTORY_PROVIDER_FRESHNESS_HOURS ?? 24),
+    );
+    const freshAfter = new Date(Date.now() - freshnessHours * 60 * 60_000);
+    return this.prisma.$transaction(async (tx) => {
+      const rejected = await tx.esimInventory.findUnique({
+        where: { assignedOrderId: orderId },
+      });
+      if (!rejected)
+        throw new ConflictException("The order has no reserved eSIM to replace");
+      if (rejected.providerSubscriptionId)
+        throw new ConflictException(
+          "The rejected eSIM is provider-bound and cannot be replaced automatically",
+        );
+      const operation = await tx.provisioningOperation.findUnique({
+        where: { orderId },
+      });
+      if (!operation)
+        throw new ConflictException("Provisioning operation is missing");
+
+      const replacement = await tx.esimInventory.findFirst({
+        where: {
+          id: { not: rejected.id },
+          status: InventoryStatus.AVAILABLE,
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          providerStatus: {
+            in: ["available", "allocated", "AVAILABLE", "ALLOCATED"],
+          },
+          lastProviderCheckedAt: { gte: freshAfter },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          batch: { status: BatchStatus.APPROVED },
+        },
+        orderBy: { createdAt: "asc" },
+      });
+      if (!replacement)
+        throw new ConflictException(
+          "No safe replacement eSIM is currently available",
+        );
+      await tx.esimInventory.update({
+        where: { id: rejected.id },
+        data: {
+          status: InventoryStatus.QUARANTINED,
+          assignedOrderId: null,
+          providerCheckError: reason.slice(0, 2000),
+          version: { increment: 1 },
+        },
+      });
+      const claimed = await tx.esimInventory.updateMany({
+        where: {
+          id: replacement.id,
+          status: InventoryStatus.AVAILABLE,
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          lastProviderCheckedAt: { gte: freshAfter },
+        },
+        data: {
+          status: InventoryStatus.RESERVED,
+          assignedOrderId: orderId,
+          version: { increment: 1 },
+        },
+      });
+      if (claimed.count !== 1)
+        throw new ConflictException(
+          "Replacement inventory was claimed by another order",
+        );
+      const generation = operation.profileSwapCount + 1;
+      await tx.provisioningOperation.update({
+        where: { orderId },
+        data: {
+          state: "CREATED",
+          idempotencyKey: `transatel:preload:${orderId}:profile-${generation}`,
+          iccid: replacement.iccid,
+          profileSwapCount: generation,
+          providerOrderId: null,
+          providerSubscriptionId: null,
+          responseSnapshot: Prisma.DbNull,
+          lastErrorCategory: null,
+          lastErrorMessage: null,
+          submittedAt: null,
+          acceptedAt: null,
+          nextReconcileAt: null,
+          reconcileDeadlineAt: null,
+          completedAt: null,
+          version: { increment: 1 },
+        },
+      });
+      await tx.order.update({
+        where: { id: orderId },
+        data: { providerStatus: null, providerSubscriptionId: null },
+      });
+      return {
+        previousIccid: rejected.iccid,
+        replacement,
+        generation,
+      };
     });
   }
 

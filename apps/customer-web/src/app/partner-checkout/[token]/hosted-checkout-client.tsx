@@ -15,8 +15,9 @@ import {
   UserRound,
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
-import { DocumentType } from "@visa-compass/shared";
+import { apiErrorMessage, DocumentType } from "@visa-compass/shared";
 import DatePicker from "../../esim/checkout/date-picker";
+import ErrorModal from "../../../components/error-modal";
 import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -120,7 +121,12 @@ const api = async <T,>(path: string, init?: RequestInit) => {
     throw new Error(`Request failed (${response.status})`);
   }
   if (!response.ok || !payload.data)
-    throw new Error(payload.error?.message ?? "Something went wrong");
+    throw new Error(
+      apiErrorMessage(
+        payload.error?.code ?? "UNEXPECTED",
+        payload.error?.message ?? "Something went wrong",
+      ),
+    );
   return payload.data;
 };
 
@@ -433,6 +439,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const isTopUp = session!.order.orderType === "TOPUP";
   return (
     <main className="checkout-page">
+      <ErrorModal error={error || null} onClose={() => setError("")} />
       <div className="checkout-shell">
         <div className="checkout-heading">
           {session?.partner?.name && (
@@ -462,7 +469,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         </div>
         <div className="checkout-layout">
           <section className="checkout-card">
-            {error && <div className="form-error">{error}</div>}
             {done ? (
               <div className="form-section">
                 <div className="success-panel">

@@ -10,11 +10,22 @@ PostgreSQL is the lifecycle source of truth. Redis transports durable outbox wor
 
 All processes share `DATABASE_URL`, `REDIS_URL`, encryption keys, provider credentials, Cloudinary credentials, and notification credentials. The workflow worker consumes provisioning, callbacks, notifications, reconciliation, partner webhooks, and identity callbacks. OCR remains isolated at concurrency one.
 
+The API Dockerfile builds one immutable backend image for all three roles. Use
+its default command for the API, override the command with
+`pnpm start:workflow-worker` for workflow/reconciliation, and with
+`pnpm start:ocr-worker` for OCR. Set `NODE_ENV=production` and the appropriate
+`PROCESS_ROLE` on every service; backend processes refuse ambiguous startup
+without an explicit `NODE_ENV`.
+
 ## Recovery rules
 
 - `PAYMENT_REVIEW_REQUIRED`: recheck the payment provider; never create another charge or mark paid manually.
 - `ACTIVATION_ATTENTION`: preserve the delivered QR and reconcile Transatel; do not release inventory automatically.
 - Inventory is sellable only after a fresh provider state of `available` or `allocated`.
+- A definitive, provider-unbound eSIM rejection may reserve another fresh safe
+  profile up to `MAX_PROVISIONING_PROFILE_SWAPS`. The rejected profile is
+  quarantined and each replacement advances the durable provider idempotency
+  generation. Ambiguous outcomes and provider-bound profiles are never swapped.
 - Paid orders with no safe inventory remain `PROVISIONING`, are retried by reconciliation, and create `INVENTORY_SHORTAGE` attention. They are not changed to a terminal failure.
 - Reservations older than `INVENTORY_RESERVATION_STALE_HOURS` are released only when the order is terminal and no provider submission evidence exists. Every ambiguous reservation stays locked.
 - Payment verification attempt counts live on the payment row. Exhausted gateway-unreachable checks create `PAYMENT_REVIEW_REQUIRED`, never `PAYMENT_FAILED`.

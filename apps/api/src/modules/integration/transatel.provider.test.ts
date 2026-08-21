@@ -37,6 +37,7 @@ function prismaStub(overrides: Record<string, unknown> = {}) {
     },
     integrationLog: { create: vi.fn() },
     provisioningOperation: {
+      findUnique: vi.fn().mockResolvedValue(null),
       upsert: vi.fn().mockResolvedValue({ state: "CREATED" }),
       update: vi.fn().mockResolvedValue({}),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),

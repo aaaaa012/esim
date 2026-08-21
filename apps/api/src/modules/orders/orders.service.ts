@@ -129,6 +129,12 @@ export class OrdersService implements OnModuleInit {
     const parsed = Number(process.env.ACTIVATION_REFETCH_ATTEMPTS);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
   })();
+  private readonly maxProvisioningProfileSwaps = (() => {
+    const configured = Number(
+      process.env.MAX_PROVISIONING_PROFILE_SWAPS ?? 2,
+    );
+    return Number.isFinite(configured) ? Math.max(0, configured) : 2;
+  })();
   constructor(
     private readonly connectivity: ConnectivityService,
     private readonly storage: CloudinaryStorageService,
@@ -1652,6 +1658,73 @@ export class OrdersService implements OnModuleInit {
         error instanceof ApiException &&
         String(error.internalDetail ?? "").startsWith("PERMANENT_");
       const classifiedFailure = this.classifyProvisioningFailure(error);
+      if (
+        permanentRejection &&
+        !target &&
+        this.prisma.enabled &&
+        this.maxProvisioningProfileSwaps > 0
+      ) {
+        const operation = await this.prisma.provisioningOperation.findUnique({
+          where: { orderId: order.id },
+          select: { profileSwapCount: true },
+        });
+        if (
+          operation &&
+          operation.profileSwapCount < this.maxProvisioningProfileSwaps
+        ) {
+          try {
+            const replacement =
+              await this.inventory.replacePermanentlyRejectedProfile(
+                order.id,
+                `Provider permanently rejected provisioning: ${errorCode}`,
+              );
+            delete order.providerStatus;
+            delete order.providerSubscriptionId;
+            delete order.provisioningFailure;
+            delete order.operationalDisposition;
+            order.timeline.push({
+              from: OrderStatus.PROVISIONING,
+              to: OrderStatus.PROVISIONING,
+              at: new Date().toISOString(),
+              reason: `Provider rejected ${replacement.previousIccid}; reserved safe replacement ${replacement.replacement.iccid} (${replacement.generation}/${this.maxProvisioningProfileSwaps})`,
+            });
+            await this.persistence.save(order);
+            try {
+              await this.queues.add(
+                QUEUES.provisioning,
+                "provision-order",
+                { orderId: order.id },
+                `provision-${order.id}-profile-${replacement.generation}`,
+              );
+            } catch (queueError) {
+              await this.resilience?.attention({
+                dedupeKey: `provisioning-replacement-handoff:${order.id}`,
+                category: "PROVISIONING_ATTENTION",
+                entityType: "Order",
+                entityId: order.id,
+                orderId: order.id,
+                summary: `Replacement eSIM is waiting for provisioning for ${order.orderNumber}`,
+                detail:
+                  queueError instanceof Error
+                    ? queueError.message
+                    : "Queue handoff failed",
+                localState: OrderStatus.PROVISIONING,
+                lastSuccessfulStep: "SAFE_REPLACEMENT_RESERVED",
+                failureCategory: "QUEUE_HANDOFF_FAILED",
+                availableActions: ["RETRY_PROVISIONING"],
+              });
+            }
+            this.logger.warn(
+              `Provisioning failover ${order.id}: ${replacement.previousIccid} -> ${replacement.replacement.iccid}`,
+            );
+            return this.redact(order);
+          } catch (replacementError) {
+            this.logger.warn(
+              `Could not safely replace rejected inventory for ${order.id}: ${replacementError instanceof Error ? replacementError.message : "unknown"}`,
+            );
+          }
+        }
+      }
       const inventoryShortage =
         classifiedFailure.code === "INVENTORY_UNAVAILABLE";
       if (inventoryShortage) {

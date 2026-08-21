@@ -33,4 +33,9 @@ async function bootstrap() {
   new Logger("WorkflowWorker").log("Workflow and reconciliation worker ready");
 }
 
+if (!process.env.NODE_ENV)
+  throw new Error(
+    "NODE_ENV is required for the workflow worker (development, test, staging, or production).",
+  );
+
 void bootstrap();

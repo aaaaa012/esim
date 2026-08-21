@@ -146,4 +146,12 @@ function trustProxySetting(): boolean | string | number {
   return value;
 }
 
+if (!process.env.NODE_ENV) {
+  // Do not silently activate development defaults against a shared/live DB.
+  // Every deployed process must declare its environment explicitly.
+  throw new Error(
+    "NODE_ENV is required. Set it to development, test, staging, or production.",
+  );
+}
+
 void bootstrap();

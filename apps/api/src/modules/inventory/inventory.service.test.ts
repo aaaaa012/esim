@@ -177,6 +177,107 @@ describe("InventoryService.release", () => {
   });
 });
 
+describe("InventoryService.replacePermanentlyRejectedProfile", () => {
+  it("quarantines the rejected profile and advances provider idempotency atomically", async () => {
+    const inventoryUpdate = vi.fn().mockResolvedValue({});
+    const inventoryUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const operationUpdate = vi.fn().mockResolvedValue({});
+    const orderUpdate = vi.fn().mockResolvedValue({});
+    const tx = {
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "old-inventory",
+          iccid: "8988247000000000001",
+          providerSubscriptionId: null,
+        }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: "new-inventory",
+          iccid: "8988247000000000002",
+          eid: "new-eid",
+        }),
+        update: inventoryUpdate,
+        updateMany: inventoryUpdateMany,
+      },
+      provisioningOperation: {
+        findUnique: vi.fn().mockResolvedValue({ profileSwapCount: 0 }),
+        update: operationUpdate,
+      },
+      order: { update: orderUpdate },
+    };
+    const prisma = {
+      enabled: true,
+      $transaction: vi.fn(async (work: (client: typeof tx) => unknown) =>
+        work(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await expect(
+      inventory.replacePermanentlyRejectedProfile(
+        "order-1",
+        "Permanent provider rejection",
+      ),
+    ).resolves.toMatchObject({
+      previousIccid: "8988247000000000001",
+      generation: 1,
+      replacement: { iccid: "8988247000000000002" },
+    });
+    expect(inventoryUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "old-inventory" },
+        data: expect.objectContaining({
+          status: "QUARANTINED",
+          assignedOrderId: null,
+        }),
+      }),
+    );
+    expect(operationUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          profileSwapCount: 1,
+          idempotencyKey: "transatel:preload:order-1:profile-1",
+          iccid: "8988247000000000002",
+        }),
+      }),
+    );
+    expect(orderUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { providerStatus: null, providerSubscriptionId: null },
+      }),
+    );
+  });
+
+  it("never replaces a profile with provider subscription evidence", async () => {
+    const tx = {
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "old-inventory",
+          providerSubscriptionId: "provider-subscription",
+        }),
+      },
+    };
+    const prisma = {
+      enabled: true,
+      $transaction: vi.fn(async (work: (client: typeof tx) => unknown) =>
+        work(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await expect(
+      inventory.replacePermanentlyRejectedProfile("order-1", "rejected"),
+    ).rejects.toThrow("provider-bound");
+  });
+});
+
 describe("InventoryService.assertAvailableForNewOrder", () => {
   it("rejects order admission when no fresh, approved provider stock exists", async () => {
     const count = vi.fn().mockResolvedValue(0);

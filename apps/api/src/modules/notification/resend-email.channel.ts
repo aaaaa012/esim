@@ -31,6 +31,7 @@ export class ResendEmailChannel implements EmailChannel {
           to: [input.to],
           subject: input.subject,
           text: input.text,
+          ...(input.html ? { html: input.html } : {}),
           ...(process.env.EMAIL_REPLY_TO
             ? { replyTo: process.env.EMAIL_REPLY_TO }
             : {}),
