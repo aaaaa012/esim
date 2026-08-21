@@ -250,19 +250,27 @@ export class TransatelProvider implements ConnectivityProvider {
     const durationMs = Date.now() - startedAt;
     let path: string;
     try { const parsed = new URL(url); path = `${parsed.pathname}${parsed.search}`; } catch { path = url; }
+    let rawBody = '';
+    try { rawBody = await response.clone().text(); } catch { /* body already consumed */ }
+    const responseBody = this.parseCapture(rawBody);
+    const requestBody = this.parseCapture(request.body);
     if (response.ok) {
       this.providerSucceeded();
-      await this.record({ operation, method: request.method, endpoint: path, status: response.status, durationMs });
+      await this.record({ operation, method: request.method, endpoint: path, status: response.status, durationMs, requestBody, responseBody });
     } else {
       if (response.status === 429 || response.status >= 500) this.providerFailed();
-      let errorMessage: string | undefined;
-      try { errorMessage = (await response.clone().text()).slice(0, 2000); } catch { /* body already consumed */ }
-      await this.record({ operation, method: request.method, endpoint: path, status: response.status, durationMs, errorCode: `HTTP_${response.status}`, ...(errorMessage ? { errorMessage } : {}) });
+      const errorMessage = rawBody.slice(0, 2000) || undefined;
+      await this.record({ operation, method: request.method, endpoint: path, status: response.status, durationMs, errorCode: `HTTP_${response.status}`, ...(errorMessage ? { errorMessage } : {}), requestBody, responseBody });
     }
     return response;
   }
 
-  private async record(entry: { operation: string; method: string; endpoint: string; status: number; durationMs: number; errorCode?: string; errorMessage?: string }) {
+  private parseCapture(value?: string): unknown {
+    if (!value || !value.trim()) return undefined;
+    try { return JSON.parse(value) as unknown; } catch { return value.length > 12000 ? `${value.slice(0, 12000)}… (truncated)` : value; }
+  }
+
+  private async record(entry: { operation: string; method: string; endpoint: string; status: number; durationMs: number; errorCode?: string; errorMessage?: string; requestBody?: unknown; responseBody?: unknown }) {
     if (!this.prisma.enabled) return;
     try {
       await this.prisma.integrationLog.create({
@@ -274,6 +282,8 @@ export class TransatelProvider implements ConnectivityProvider {
           durationMs: entry.durationMs,
           ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
           ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
+          ...(entry.requestBody !== undefined ? { requestBody: entry.requestBody as Prisma.InputJsonValue } : {}),
+          ...(entry.responseBody !== undefined ? { responseBody: entry.responseBody as Prisma.InputJsonValue } : {}),
         },
       });
     } catch (error) {
@@ -282,11 +292,17 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   private async errorText(response: Response): Promise<string> {
+    let raw: string;
     try {
-      const data = (await response.json()) as ApiError;
-      return data.error_description ?? data.message ?? data.error ?? JSON.stringify(data);
+      raw = await response.text();
     } catch {
-      return response.text();
+      return '';
+    }
+    try {
+      const data = JSON.parse(raw) as ApiError;
+      return data.error_description ?? data.message ?? data.error ?? raw;
+    } catch {
+      return raw;
     }
   }
 
@@ -421,7 +437,13 @@ export class TransatelProvider implements ConnectivityProvider {
 
     const data = (await response.json()) as OrderProductResponse;
     const providerSubscriptionId = data.subscriptionId ?? data.id;
-    if (!providerSubscriptionId) throw new ApiException({ code: ApiErrorCode.PROVISIONING_FAILED, message: 'We could not activate your eSIM right now. Our team is reviewing it and will contact you.', status: 502, details: 'OCS order response did not include a subscription id' });
+    if (!providerSubscriptionId) {
+      // A 200 that omits a subscription id is a failure, not a success: record
+      // a compensating error row so the ops Logs page isn't misled by the OK
+      // HTTP status already logged by authorizedFetch.
+      if (this.prisma.enabled) await this.prisma.integrationLog.create({ data: { operation: 'provision', method: 'POST', endpoint: '/ocs/subscriptions/api/orders/products', status: response.status, errorCode: 'OCS_MISSING_SUBSCRIPTION_ID', errorMessage: 'OCS order response did not include a subscription id', responseBody: data as unknown as Prisma.InputJsonValue } }).catch(() => undefined);
+      throw new ApiException({ code: ApiErrorCode.PROVISIONING_FAILED, message: 'We could not activate your eSIM right now. Our team is reviewing it and will contact you.', status: 502, details: 'OCS order response did not include a subscription id' });
+    }
 
     // Provider acceptance is the commit point. Persist it before any secondary
     // QR/details call so a crash or timeout cannot cause a duplicate preload or

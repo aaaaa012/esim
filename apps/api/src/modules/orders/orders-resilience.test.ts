@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConflictException } from '@nestjs/common';
-import { OrderStatus, PaymentStatus } from '@visa-compass/shared';
+import { ApiErrorCode, OrderStatus, PaymentStatus } from '@visa-compass/shared';
+import { ApiException } from '../../common/api-error.js';
+import { QUEUES } from '../../jobs/queues.js';
 import { OrdersService, type DemoOrder } from './orders.service.js';
 import type { ConnectivityService } from '../integration/connectivity.service.js';
 import type { CloudinaryStorageService } from '../../infrastructure/cloudinary-storage.service.js';
@@ -43,7 +45,7 @@ function readyOrder(overrides: Partial<DemoOrder> = {}): DemoOrder {
   } as unknown as DemoOrder;
 }
 
-function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unknown = { release: vi.fn().mockResolvedValue(undefined) }, prisma: unknown = { enabled: false }) {
+function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unknown = { release: vi.fn().mockResolvedValue(undefined) }, prisma: unknown = { enabled: false }, queues: unknown = {}) {
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
     save: vi.fn().mockResolvedValue(undefined),
@@ -54,7 +56,7 @@ function ordersService(seed: DemoOrder[], connectivity: unknown, inventory: unkn
     {} as unknown as CloudinaryStorageService,
     persistence,
     inventory as unknown as InventoryService,
-    {} as unknown as QueueService,
+    queues as unknown as QueueService,
     {} as unknown as NotificationService,
     {} as unknown as CatalogService,
     prisma as unknown as PrismaService,
@@ -152,6 +154,118 @@ describe('OrdersService asynchronous provisioning', () => {
     expect(orders.get('stock-2').status).toBe(OrderStatus.PROVISIONING);
     expect(orders.get('stock-2').provisioningFailure).toBeUndefined();
     expect(inventory.release).not.toHaveBeenCalled();
+  });
+
+  it('auto-fails over to the next profile on a permanent rejection instead of failing the order', async () => {
+    const order = readyOrder({
+      id: 'swap-1',
+      orderNumber: 'VC-2026-R5',
+      status: OrderStatus.PROVISIONING,
+      traveler: { title: 'MS', firstName: 'Aisha', surname: 'Gurung', dateOfBirth: '1992-02-02', nationality: 'NP', email: 'aisha@example.com', mobile: '9779800000002', city: 'Pokhara', countryOfResidence: 'NP', passportNumber: 'P3333333', passportExpiryDate: '2030-01-01' },
+    });
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    delete order.providerStatus;
+    const connectivity = {
+      provision: vi.fn().mockRejectedValue(new ApiException({ code: ApiErrorCode.PROVISIONING_FAILED, message: 'We could not activate your eSIM right now.', status: 502, details: 'PERMANENT_INPUT: OCS product activation failed: SUBSCRIBER_STATUS_NOT_ELIGIBLE' })),
+      descriptor: vi.fn().mockReturnValue({ provider: 'TRANSATEL', capabilities: {} }),
+    } as unknown as ConnectivityService;
+    const inventory = {
+      profileForOrder: vi.fn().mockResolvedValue({ id: 'inv-1', eid: 'eid-1', iccid: 'OLDICCID' }),
+      release: vi.fn().mockResolvedValue(undefined),
+      reserveExcluding: vi.fn().mockResolvedValue({ id: 'inv-2', eid: 'eid-2', iccid: 'NEWICCID' }),
+    } as unknown as InventoryService;
+    const prisma = {
+      enabled: true,
+      provisioningOperation: { findUnique: vi.fn().mockResolvedValue({ profileSwapCount: 0 }), update: vi.fn().mockResolvedValue({ profileSwapCount: 1 }) },
+    } as unknown as PrismaService;
+    const queues = { enabled: true, add: vi.fn().mockResolvedValue(undefined) } as unknown as QueueService;
+    const orders = ordersService([order], connectivity, inventory, prisma, queues);
+    await orders.refreshFromPersistence();
+
+    await orders.processProvisioning('swap-1', 1, false);
+
+    expect(orders.get('swap-1').status).toBe(OrderStatus.PROVISIONING);
+    expect(orders.get('swap-1').providerStatus).toBeUndefined();
+    expect(inventory.release).toHaveBeenCalledWith('swap-1');
+    expect(inventory.reserveExcluding).toHaveBeenCalledWith('swap-1', 'OLDICCID');
+    expect(queues.add).toHaveBeenCalledWith(QUEUES.provisioning, 'provision-order', { orderId: 'swap-1' }, expect.stringMatching(/swap-1/));
+    expect(orders.get('swap-1').timeline.some((event) => event.reason?.includes('NEWICCID'))).toBe(true);
+    expect(prisma.provisioningOperation.update).toHaveBeenCalled();
+  });
+
+  it('fails the order once the provisioning swap budget is exhausted', async () => {
+    const order = readyOrder({
+      id: 'swap-2',
+      orderNumber: 'VC-2026-R6',
+      status: OrderStatus.PROVISIONING,
+      traveler: { title: 'MR', firstName: 'Dawa', surname: 'Sherpa', dateOfBirth: '1985-03-03', nationality: 'NP', email: 'dawa@example.com', mobile: '9779800000003', city: 'Kathmandu', countryOfResidence: 'NP', passportNumber: 'P4444444', passportExpiryDate: '2030-01-01' },
+    });
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    delete order.providerStatus;
+    const connectivity = {
+      provision: vi.fn().mockRejectedValue(new ApiException({ code: ApiErrorCode.PROVISIONING_FAILED, message: 'We could not activate your eSIM right now.', status: 502, details: 'PERMANENT_ELIGIBILITY: OCS product activation failed: SUBSCRIBER_STATUS_NOT_ELIGIBLE' })),
+      descriptor: vi.fn().mockReturnValue({ provider: 'TRANSATEL', capabilities: {} }),
+    } as unknown as ConnectivityService;
+    const inventory = {
+      profileForOrder: vi.fn().mockResolvedValue({ id: 'inv-1', eid: 'eid-1', iccid: 'OLDICCID' }),
+      release: vi.fn().mockResolvedValue(undefined),
+      reserveExcluding: vi.fn().mockResolvedValue({ id: 'inv-2', eid: 'eid-2', iccid: 'NEWICCID' }),
+    } as unknown as InventoryService;
+    const prisma = {
+      enabled: true,
+      provisioningOperation: { findUnique: vi.fn().mockResolvedValue({ profileSwapCount: 2 }), update: vi.fn().mockResolvedValue({ profileSwapCount: 3 }) },
+    } as unknown as PrismaService;
+    const queues = { enabled: true, add: vi.fn().mockResolvedValue(undefined) } as unknown as QueueService;
+    const orders = ordersService([order], connectivity, inventory, prisma, queues);
+    await orders.refreshFromPersistence();
+
+    await expect(orders.processProvisioning('swap-2', 1, false)).rejects.toThrow();
+
+    expect(orders.get('swap-2').status).toBe(OrderStatus.PROVISIONING_FAILED);
+    expect(inventory.release).toHaveBeenCalledWith('swap-2');
+    expect(inventory.reserveExcluding).not.toHaveBeenCalled();
+    expect(queues.add).not.toHaveBeenCalled();
+  });
+
+  it('adopts an in-memory replacement that lands while the provider call is in flight', async () => {
+    const order = readyOrder({
+      id: 'race-1',
+      orderNumber: 'VC-2026-R7',
+      status: OrderStatus.PROVISIONING,
+      traveler: { title: 'MR', firstName: 'Bikash', surname: 'Tamang', dateOfBirth: '1990-04-04', nationality: 'NP', email: 'bikash@example.com', mobile: '9779800000004', city: 'Kathmandu', countryOfResidence: 'NP', passportNumber: 'P5555555', passportExpiryDate: '2030-01-01' },
+    });
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    delete order.providerStatus;
+    let resolveProvision!: (value: unknown) => void;
+    const connectivity = {
+      provision: vi.fn().mockImplementation(() => new Promise((resolve) => { resolveProvision = resolve; })),
+      descriptor: vi.fn().mockReturnValue({ provider: 'TRANSATEL', capabilities: {} }),
+    } as unknown as ConnectivityService;
+    const inventory = {
+      profileForOrder: vi.fn().mockResolvedValue({ id: 'inv-1', eid: 'eid-1', iccid: 'RACEICCID' }),
+      release: vi.fn().mockResolvedValue(undefined),
+      assign: vi.fn().mockResolvedValue(undefined),
+      customerIdForOrder: vi.fn().mockResolvedValue('cust-1'),
+      inventoryForOrder: vi.fn().mockResolvedValue({ id: 'inv-1', iccid: 'RACEICCID' }),
+    } as unknown as InventoryService;
+    const queues = { enabled: true, add: vi.fn().mockResolvedValue(undefined) } as unknown as QueueService;
+    const orders = ordersService([order], connectivity, inventory, { enabled: false }, queues);
+    await orders.refreshFromPersistence();
+
+    const pending = orders.processProvisioning('race-1', 1, false);
+    // Concurrent payment verification replaces the in-memory entry (refreshOne)
+    await vi.waitFor(() => expect(connectivity.provision).toHaveBeenCalled());
+    const internal = orders as unknown as { orders: Map<string, DemoOrder> };
+    const replacement = structuredClone(internal.orders.get('race-1')) as DemoOrder;
+    internal.orders.set('race-1', replacement);
+    resolveProvision({ providerSubscriptionId: 'sub-race', status: 'COMPLETED', qrPayload: 'LPA:1$race' });
+    await pending;
+
+    expect(orders.get('race-1').status).toBe(OrderStatus.QR_READY);
+    expect(orders.get('race-1').qrPayload).toBe('LPA:1$race');
   });
 });
 

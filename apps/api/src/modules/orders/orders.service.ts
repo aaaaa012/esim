@@ -14,6 +14,7 @@ import { QUEUES } from '../../jobs/queues.js';
 import { NotificationService } from '../notification/notification.service.js';
 import { QrPdfService } from '../notification/qr-pdf.service.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
+import { Prisma } from '@prisma/client';
 import { MetricsService } from '../../observability/metrics.service.js';
 import { normalizeMsisdn, msisdnVariants } from '../../common/msisdn.util.js';
 import { PassportVerificationService, type PassportVerificationResult } from './passport-verification.service.js';
@@ -40,6 +41,14 @@ export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
   private readonly confirmLocks = new Map<string, Promise<unknown>>();
   private readonly maxActivationRefetches = (() => { const parsed = Number(process.env.ACTIVATION_REFETCH_ATTEMPTS); return Number.isFinite(parsed) && parsed > 0 ? parsed : 3; })();
+  // Bounded provisioning auto-failover: when a SIM is permanently rejected by
+  // the provider (eligibility/subscriber status), the order transparently moves
+  // to the next available profile up to this many swaps before failing.
+  private readonly maxProvisioningProfileSwaps = (() => { const parsed = Number(process.env.MAX_PROVISIONING_PROFILE_SWAPS); return Number.isFinite(parsed) && parsed >= 0 ? parsed : 2; })();
+  // Guard for orphaned PROVISIONING orders (no provisioning operation row):
+  // prevents the periodic recovery sweep from re-submitting in a tight loop.
+  private readonly lastProvisioningRecovery = new Map<string, number>();
+  private recoveryTimer: ReturnType<typeof setInterval> | null = null;
   constructor(private readonly connectivity: ConnectivityService, private readonly storage: CloudinaryStorageService, private readonly persistence: OrdersPersistenceService, private readonly inventory: InventoryService, private readonly queues: QueueService, private readonly notifications: NotificationService, private readonly catalog: CatalogService, private readonly prisma: PrismaService, private readonly qrPdf: QrPdfService, private readonly passportVerifier: PassportVerificationService, private readonly metrics?: MetricsService) {}
   async refreshFromPersistence(orderId?: string) { for (const order of await this.persistence.load()) if (!orderId || order.id === orderId) this.orders.set(order.id, order); }
   async refreshOne(orderId: string, force = false) { if (!force && this.orders.has(orderId)) return; for (const order of await this.persistence.load(orderId)) if (order.id === orderId) this.orders.set(order.id, order); }
@@ -47,13 +56,48 @@ export class OrdersService implements OnModuleInit {
     for (const order of await this.persistence.load()) this.orders.set(order.id, order);
     this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`);
     for (const order of this.orders.values()) {
-      if (![OrderStatus.APPROVED, OrderStatus.PROVISIONING].includes(order.status)) continue;
-      const recovery = order.status === OrderStatus.APPROVED
-        ? this.approveToProvisioning(order.id, 'Recovered accepted order')
-        : this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`);
-      void recovery.catch((error) =>
-        this.logger.error(`Could not recover order ${order.id} at boot: ${error instanceof Error ? error.message : 'unknown'}`),
-      );
+      if (order.status === OrderStatus.APPROVED) {
+        this.logger.warn(`Order ${order.id} was left APPROVED; attempting recovery to PROVISIONING`);
+        const recovery = this.approveToProvisioning(order.id, 'Recovered accepted order');
+        void recovery.catch((error) => this.logger.error(`Could not recover approved order ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`));
+      }
+    }
+    await this.recoverOrphanedProvisioning();
+    if (this.queues.enabled) {
+      this.recoveryTimer = setInterval(() => { void this.recoverOrphanedProvisioning().catch((error) => this.logger.warn(`Provisioning recovery sweep failed: ${error instanceof Error ? error.message : 'unknown'}`)); }, 60_000);
+      this.recoveryTimer.unref?.();
+    }
+  }
+  /**
+   * Recovers orders that reached PROVISIONING but have no provisioning operation
+   * row at all. This happens when provisioning crashes before the operation is
+   * recorded (e.g. no inventory was available at submission time) — such orders
+   * are invisible to the normal reconciliation machinery. A brand-new, unique
+   * job id is used so a stale BullMQ 'failed' job (from the original fixed
+   * `provision-<id>` job id) cannot block re-submission. processProvisioning is
+   * idempotent (it skips orders already carrying a QR / not in PROVISIONING), so
+   * re-enqueueing is safe and never double-submits to the provider.
+   */
+  async recoverOrphanedProvisioning() {
+    if (!this.prisma.enabled) return;
+    for (const order of this.orders.values()) {
+      if (order.status !== OrderStatus.PROVISIONING || order.qrPayload) continue;
+      const operation = await this.prisma.provisioningOperation.findUnique({
+        where: { orderId: order.id },
+        select: { id: true, state: true },
+      });
+      if (operation) continue; // an operation exists: the normal reconcile paths own it
+      const last = this.lastProvisioningRecovery.get(order.id) ?? 0;
+      if (Date.now() - last < 90_000) continue; // throttle to avoid a re-submit loop while inventory is unavailable
+      this.lastProvisioningRecovery.set(order.id, Date.now());
+      try {
+        await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `recover-${order.id}-${Date.now()}`);
+        this.logger.warn(`Order ${order.id} was in PROVISIONING with no provisioning operation; re-queued for provisioning recovery`);
+        await this.prisma.auditLog.create({ data: { module: 'PROVISIONING', entity: 'Order', entityId: order.id, action: 'ORPHAN_REQUEUED', newValue: { orderNumber: order.orderNumber, status: order.status } as Prisma.InputJsonValue } }).catch(() => undefined);
+      } catch (error) {
+        this.logger.error(`Could not re-queue orphaned provisioning for order ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`);
+        if (process.env.NODE_ENV === 'production' && this.queues.enabled) throw error;
+      }
     }
   }
   list(ownerId?: string) { return [...this.orders.values()].filter((o) => !ownerId || o.ownerId === ownerId).map((order) => ownerId ? this.redact(order) : this.expand(order)); }
@@ -234,6 +278,7 @@ export class OrdersService implements OnModuleInit {
     if (order.payment && order.payment.status !== PaymentStatus.COMPLETED) order.payment.status = paymentStatus;
     if (order.status !== OrderStatus.PAYMENT_FAILED) this.transition(order, OrderStatus.PAYMENT_FAILED, reason);
     await this.persistence.save(order);
+    if (this.prisma.enabled) await this.prisma.auditLog.create({ data: { module: 'PAYMENTS', entity: 'Order', entityId: id, action: 'PAYMENT_FAILED', previousValue: { paymentStatus } as Prisma.InputJsonValue, newValue: { reason, orderStatus: OrderStatus.PAYMENT_FAILED, initiatedBy: ownerId ? 'customer' : 'operations' } as Prisma.InputJsonValue } }).catch(() => undefined);
     return this.redact(order);
   }
 
@@ -353,7 +398,18 @@ export class OrdersService implements OnModuleInit {
   async reviewDocument(id: string, documentId: string, actorId: string, decision: 'APPROVE' | 'REUPLOAD', reason?: string) { const order = this.get(id); if (order.status !== OrderStatus.REVIEW_PENDING) throw new BadRequestException('Order is not awaiting review'); const document = order.documents.find((item) => item.id === documentId); if (!document) throw new NotFoundException('Document not found'); if (decision === 'APPROVE') { document.status = DocumentStatus.APPROVED; order.timeline.push({ from: order.status, to: order.status, at: new Date().toISOString(), reason: `${document.type} approved by ${actorId}` }); } else { if (!reason?.trim()) throw new BadRequestException('Re-upload reason is required'); document.status = DocumentStatus.REUPLOAD_REQUIRED; this.transition(order, OrderStatus.AWAITING_CUSTOMER, `${document.type}: ${reason.trim()} (requested by ${actorId})`); } await this.persistence.save(order); await this.persistence.recordReview(order.id, documentId, actorId, decision, reason); return this.redact(order); }
   async approve(id: string, actorId: string) { const order = this.get(id); const required = order.documents.filter((document) => [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type)); if (required.length !== 2 || required.some((document) => document.status !== DocumentStatus.APPROVED)) throw new BadRequestException('Passport and ticket must be individually approved first'); const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.APPROVED, `Approved by ${actorId}; inventory ${profile.iccid} reserved`); this.transition(order, OrderStatus.PROVISIONING); await this.persistence.save(order); let queued = true; try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); } catch (error) { this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`); if (process.env.NODE_ENV === 'production') throw error; queued = false; } if ((!queued || !this.queues.enabled) && process.env.NODE_ENV !== 'production') await this.processLocally(order.id); return this.redact(order); }
   async approveToProvisioning(orderId: string, note: string) { const order = this.get(orderId); if (order.status !== OrderStatus.APPROVED) throw new BadRequestException(`Order in ${order.status} cannot be auto-approved`); if (order.purchaseType === 'TOPUP') { const target = await this.provisioningTarget(order); this.transition(order, OrderStatus.PROVISIONING, target?.inventory ? `${note}; top-up on existing eSIM ${target.inventory.iccid}` : note); } else { const profile = await this.inventory.reserve(order.id); this.transition(order, OrderStatus.PROVISIONING, `${note}; inventory ${profile.iccid} reserved`); } await this.persistence.save(order); let queued = true; try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}`); } catch (error) { this.logger.error(`Provisioning queue unavailable for ${order.id}: ${error instanceof Error ? error.message : 'unknown'}`); if (process.env.NODE_ENV === 'production') throw error; queued = false; } if ((!queued || !this.queues.enabled) && process.env.NODE_ENV !== 'production') await this.processLocally(order.id); return this.redact(order); }
-  async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { const order = this.get(id); if (order.status !== OrderStatus.PROVISIONING || order.qrPayload) { this.logger.debug(`Order ${id} is not eligible for provisioning; skipping`); return; } const target = await this.provisioningTarget(order); const reuseExisting = Boolean(target); let profile: { id: string; eid: string; iccid: string } | undefined; let request: { orderId: string; planId: string; eid: string; traveler: { firstName: string; surname: string; email: string; mobile: string; city: string; countryOfResidence: string } } | undefined; try { profile = target?.inventory ?? await this.inventory.profileForOrder(order.id); const identity = order.purchaseType === 'TOPUP' ? target?.traveler ?? { email: (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail ?? '', mobile: order.topUpMobile ?? '', firstName: 'Existing', surname: 'Customer', city: '', countryOfResidence: 'NP' } : { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence }; request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: identity }; const result = await this.connectivity.provision(request); await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.providerSubscriptionId) throw new Error('Connectivity provider did not return a subscription id'); order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'PRELOADED'; if (result.status === 'DELAYED' || !result.qrPayload) { await this.persistence.save(order); this.logger.log(`Transatel accepted order ${order.id} as ${result.providerSubscriptionId}; waiting for activation details`); return this.redact(order); } order.qrPayload = result.qrPayload; order.qrDeliveredAt = new Date().toISOString(); const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString(); const providerInfo = { provider: this.connectivity.descriptor().provider, providerSubscriptionId: result.providerSubscriptionId, expiresAt }; if (reuseExisting) await this.inventory.assignTopup(order.id, await this.inventory.customerIdForOrder(order.id), profile.iccid, result.qrPayload, providerInfo); else await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, providerInfo); const assigned = await this.inventory.inventoryForOrder(order.id); if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), providerSubscriptionId: result.providerSubscriptionId, verificationStatus: 'PENDING' }; this.transition(order, OrderStatus.QR_READY, `Provisioned on attempt ${attempt}; activation QR delivered`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
+  async processProvisioning(id: string, attempt: number, finalAttempt: boolean) { let order = this.get(id); if (order.status !== OrderStatus.PROVISIONING || order.qrPayload) { this.logger.debug(`Order ${id} is not eligible for provisioning; skipping`); return; } const target = await this.provisioningTarget(order); const reuseExisting = Boolean(target); let profile: { id: string; eid: string; iccid: string } | undefined; let request: { orderId: string; planId: string; eid: string; traveler: { firstName: string; surname: string; email: string; mobile: string; city: string; countryOfResidence: string } } | undefined; try { profile = target?.inventory ?? await this.inventory.profileForOrder(order.id); const identity = order.purchaseType === 'TOPUP' ? target?.traveler ?? { email: (order.pricingSnapshot as { topUpEmail?: string }).topUpEmail ?? '', mobile: order.topUpMobile ?? '', firstName: 'Existing', surname: 'Customer', city: '', countryOfResidence: 'NP' } : { firstName: order.traveler!.firstName, surname: order.traveler!.surname, email: order.traveler!.email, mobile: order.traveler!.mobile, city: order.traveler!.city, countryOfResidence: order.traveler!.countryOfResidence }; request = { orderId: order.id, planId: order.plan.id, eid: profile.eid, traveler: identity }; const result = await this.connectivity.provision(request);
+      // A concurrent payment verification can replace the in-memory order while
+      // the provider call is in flight (confirmPaymentPersisted -> refreshOne).
+      // Mutating the captured reference would strand QR_READY in the database
+      // only, leaving every API read on a stale PROVISIONING entry.
+      const live = this.orders.get(id);
+      if (live && live !== order && live.status === OrderStatus.PROVISIONING) { this.logger.warn(`Order ${id} was replaced in memory while provisioning was in flight; adopting the live entry`); order = live; }
+      await this.persistence.provisioningAttempt(order.id, attempt, request, { response: result }); if (!result.providerSubscriptionId) throw new Error('Connectivity provider did not return a subscription id'); order.providerSubscriptionId = result.providerSubscriptionId; order.providerStatus = 'PRELOADED'; if (result.status === 'DELAYED' || !result.qrPayload) { await this.persistence.save(order); this.logger.log(`Transatel accepted order ${order.id} as ${result.providerSubscriptionId}; waiting for activation details`); return this.redact(order); } order.qrPayload = result.qrPayload; order.qrDeliveredAt = new Date().toISOString(); const expiresAt = new Date(Date.now() + order.plan.validityDays * 86_400_000).toISOString(); const providerInfo = { provider: this.connectivity.descriptor().provider, providerSubscriptionId: result.providerSubscriptionId, expiresAt }; if (reuseExisting) await this.inventory.assignTopup(order.id, await this.inventory.customerIdForOrder(order.id), profile.iccid, result.qrPayload, providerInfo); else await this.inventory.assign(order.id, await this.inventory.customerIdForOrder(order.id), result.qrPayload, providerInfo); const assigned = await this.inventory.inventoryForOrder(order.id); if (assigned) order.assignment = { inventoryId: assigned.id, iccid: assigned.iccid, ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}), providerSubscriptionId: result.providerSubscriptionId, verificationStatus: 'PENDING' }; this.transition(order, OrderStatus.QR_READY, `Provisioned on attempt ${attempt}; activation QR delivered`); await this.persistence.save(order); await this.safeNotify(order,'QR_READY'); return this.redact(order); } catch (error) {
+    // Same in-memory replacement guard as the success path: failure handling
+    // (release/transition) must land on the entry the API actually serves.
+    const liveAfterError = this.orders.get(id);
+    if (liveAfterError && liveAfterError !== order && liveAfterError.status === OrderStatus.PROVISIONING) { this.logger.warn(`Order ${id} was replaced in memory while provisioning was in flight; adopting the live entry for failure handling`); order = liveAfterError; }
     const errorCode = error instanceof ApiException
       ? `${error.code} (HTTP ${error.getStatus()})${error.internalDetail !== undefined ? `: ${typeof error.internalDetail === 'string' ? error.internalDetail : JSON.stringify(error.internalDetail)}` : ''}`.slice(0, 2000)
       : (error instanceof Error ? error.name : 'UNKNOWN');
@@ -364,6 +420,34 @@ export class OrdersService implements OnModuleInit {
       throw error;
     }
     const permanentRejection = error instanceof ApiException && String(error.internalDetail ?? '').startsWith('PERMANENT_');
+    // Bounded auto-failover: a permanent rejection means THIS SIM cannot accept a
+    // fresh order (e.g. SUBSCRIBER_STATUS_NOT_ELIGIBLE for a previously-onboarded
+    // profile). Such rejections never consume / bind a SIM, so it is safe to
+    // quarantine the failed profile and transparently move the order to the next
+    // AVAILABLE one up to a bounded number of swaps. Top-ups reuse an existing
+    // eSIM and are never swapped.
+    if (permanentRejection && !target && this.prisma.enabled) {
+      const swapsUsed = await this.provisioningSwapCount(order.id, false);
+      if (swapsUsed < this.maxProvisioningProfileSwaps) {
+        const oldIccid = profile?.iccid;
+        try {
+          await this.inventory.release(order.id);
+          const swapped = await this.inventory.reserveExcluding(order.id, oldIccid);
+          delete order.providerStatus;
+          delete order.providerSubscriptionId;
+          order.timeline.push({ from: OrderStatus.PROVISIONING, to: OrderStatus.PROVISIONING, at: new Date().toISOString(), reason: `Permanent rejection on ${oldIccid ?? 'n/a'}; auto-failed over to ${swapped.iccid} (swap ${swapsUsed + 1}/${this.maxProvisioningProfileSwaps})` });
+          await this.provisioningSwapCount(order.id, true);
+          await this.persistence.save(order);
+          this.logger.warn(`Auto provisioning failover for order ${order.id}: ${oldIccid ?? 'n/a'} -> ${swapped.iccid} (swap ${swapsUsed + 1}/${this.maxProvisioningProfileSwaps})`);
+          let queued = true;
+          try { await this.queues.add(QUEUES.provisioning, 'provision-order', { orderId: order.id }, `provision-${order.id}-swap-${swapsUsed + 1}-${Date.now()}`); } catch (queueError) { this.logger.error(`Failover queue unavailable for ${order.id}: ${queueError instanceof Error ? queueError.message : 'unknown'}`); if (process.env.NODE_ENV === 'production') throw error; queued = false; }
+          if ((!queued || !this.queues.enabled) && process.env.NODE_ENV !== 'production') await this.processLocally(order.id);
+          return this.redact(order);
+        } catch (swapError) {
+          this.logger.warn(`No failover inventory for order ${order.id} after permanent rejection; failing order: ${swapError instanceof Error ? swapError.message : 'unknown'}`);
+        }
+      }
+    }
     if (finalAttempt || permanentRejection) {
       this.metrics?.recordFailure('provisioning', 'exhausted');
       if (permanentRejection) order.providerStatus = 'REJECTED';
@@ -548,6 +632,20 @@ export class OrdersService implements OnModuleInit {
     if (this.prisma.enabled) await this.prisma.order.update({ where: { id: order.id }, data: { lastProvisioningRecoveryAt: new Date(at) } });
   }
   /**
+   * Reads or increments the persisted profile-swap counter backing bounded
+   * provisioning auto-failover. Stored on ProvisioningOperation so the budget
+   * survives worker restarts and is shared across all order channels.
+   */
+  private async provisioningSwapCount(orderId: string, increment: boolean): Promise<number> {
+    if (!this.prisma.enabled) return 0;
+    if (increment) {
+      const updated = await this.prisma.provisioningOperation.update({ where: { orderId }, data: { profileSwapCount: { increment: 1 }, version: { increment: 1 } }, select: { profileSwapCount: true } });
+      return updated.profileSwapCount;
+    }
+    const operation = await this.prisma.provisioningOperation.findUnique({ where: { orderId }, select: { profileSwapCount: true } });
+    return operation?.profileSwapCount ?? 0;
+  }
+  /**
    * Resolves the reference handed to the provider's details endpoint: the ICCID
    * from the reserved inventory when available, else the provider subscription
    * id, else the order id (which Transatel can resolve back to an inventory).
@@ -635,7 +733,7 @@ export class OrdersService implements OnModuleInit {
     }
     return provisioningFailure('UNKNOWN');
   }
-  private async safeNotify(order:DemoOrder,template:'QR_READY'|'DOCUMENT_REUPLOAD',reason?:string){const recipient=this.notifyEmailFor(order);if(!recipient)return;try{await this.notifications.enqueue({orderId:order.id,channel:'EMAIL',template,recipient,orderNumber:order.orderNumber,...(reason?{reason}:{})})}catch(error){this.logger.error(`Notification enqueue failed for order ${order.id}: ${error instanceof Error?error.message:'unknown'}`)}}
+  private async safeNotify(order:DemoOrder,template:'QR_READY'|'DOCUMENT_REUPLOAD',reason?:string){const recipient=this.notifyEmailFor(order);if(!recipient)return;try{await this.notifications.enqueue({orderId:order.id,channel:'EMAIL',template,recipient,orderNumber:order.orderNumber,...(reason?{reason}:{}),...(order.traveler?.firstName?{customerName:order.traveler.firstName}:{})})}catch(error){this.logger.error(`Notification enqueue failed for order ${order.id}: ${error instanceof Error?error.message:'unknown'}`)}}
   /**
    * Alerts operators (OPS_ALERT_EMAIL) when a provisioning run fails after its
    * retries are exhausted. The alert is best-effort and never blocks the order

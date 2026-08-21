@@ -119,7 +119,7 @@ export class OrdersPersistenceService {
    */
   async confirmPaymentAtomically(orderId: string, reference: string, transactionId?: string): Promise<{ claimed: boolean; alreadyCompleted: boolean }> {
     if (!this.prisma.enabled) return { claimed: true, alreadyCompleted: false };
-    return this.prisma.$transaction(async (tx) => {
+    return this.retryOnWriteConflict(() => this.prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUnique({
         where: { paymentReference: reference },
         select: { orderId: true, status: true, order: { select: { status: true } } },
@@ -140,9 +140,29 @@ export class OrdersPersistenceService {
       });
       if (transitioned.count === 1) {
         await tx.orderEvent.create({ data: { orderId, fromStatus: OrderStatus.PAYMENT_PENDING as DbOrderStatus, toStatus: OrderStatus.PAYMENT_CONFIRMED as DbOrderStatus, reason: 'Gateway payment confirmed' } });
+        await tx.auditLog.create({ data: { module: 'PAYMENTS', entity: 'Order', entityId: orderId, action: 'PAYMENT_CONFIRMED', newValue: { reference, ...(transactionId ? { providerTransactionId: transactionId } : {}), orderStatus: OrderStatus.PAYMENT_CONFIRMED } as Prisma.InputJsonValue } });
       }
       return { claimed: true, alreadyCompleted: false };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 15_000, timeout: 45_000 });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 15_000, timeout: 45_000 }));
+  }
+
+  /**
+   * CockroachDB runs serializable transactions; concurrent writers can abort a
+   * transaction with P2034 "write conflict / deadlock". The caller is required
+   * to retry the whole (idempotent) transaction on such conflicts. Without this,
+   * a normal race between duplicate payment-verify requests surfaces as an
+   * intermittent HTTP 500 instead of a clean confirm.
+   */
+  private async retryOnWriteConflict<T>(transaction: () => Promise<T>, attempts = 5): Promise<T> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await transaction();
+      } catch (error) {
+        const isConflict = error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+        if (!isConflict || attempt >= attempts) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50 * 2 ** (attempt - 1)));
+      }
+    }
   }
 
   async recordConsent(orderId: string, ownerId: string, type: string, version: string, ipAddress: string, userAgent: string) {

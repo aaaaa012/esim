@@ -133,7 +133,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const staleHours = Math.max(1, Number(process.env.TRANSATEL_INVENTORY_RECONCILE_HOURS ?? 24));
     const staleBefore = new Date(Date.now() - staleHours * 60 * 60_000);
     const profiles = await this.prisma.esimInventory.findMany({
-      where: { assignedOrderId: null, status: { in: ['IMPORTED', 'AVAILABLE', 'QUARANTINED'] }, OR: [{ lastProviderCheckedAt: null }, { lastProviderCheckedAt: { lte: staleBefore } }] },
+      where: { assignedOrderId: null, status: { in: ['AVAILABLE', 'QUARANTINED'] }, OR: [{ lastProviderCheckedAt: null }, { lastProviderCheckedAt: { lte: staleBefore } }] },
       select: { id: true },
       orderBy: [{ lastProviderCheckedAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }],
       take: batchSize,
@@ -218,11 +218,11 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async notifyLifecycle(order: { id: string; orderNumber: string; traveler: { email: string } | null; pricingSnapshot: unknown }, template: 'PLAN_EXPIRED' | 'PLAN_EXHAUSTED') {
+  private async notifyLifecycle(order: { id: string; orderNumber: string; traveler: { email: string; firstName?: string } | null; pricingSnapshot: unknown }, template: 'PLAN_EXPIRED' | 'PLAN_EXHAUSTED') {
     const recipient = order.traveler?.email ?? (order.pricingSnapshot as { topUpEmail?: string } | null)?.topUpEmail;
     if (!recipient) return;
     try {
-      await this.notifications.enqueue({ orderId: order.id, channel: 'EMAIL', template, recipient, orderNumber: order.orderNumber });
+      await this.notifications.enqueue({ orderId: order.id, channel: 'EMAIL', template, recipient, orderNumber: order.orderNumber, ...(order.traveler?.firstName ? { customerName: order.traveler.firstName } : {}) });
     } catch (error) {
       this.logger.warn(`Lifecycle notification failed for ${order.id}: ${error instanceof Error ? error.message : 'unknown error'}`);
     }

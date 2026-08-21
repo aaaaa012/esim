@@ -5,6 +5,7 @@ import { Panel } from '@/components/panel';
 import { StatusBadge, humane } from '@/components/status-badge';
 import { EmptyState } from '@/components/empty-state';
 import { Spinner } from '@/components/spinner';
+import ErrorDialog from '@/components/error-dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { RefreshCcw } from 'lucide-react';
@@ -39,11 +40,7 @@ export default function IntegrationEventsClient() {
 
   return (
     <>
-      {error && (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <ErrorDialog error={error} onClose={() => setError('')} />
       <Panel
         title="Incoming updates"
         description={`${items.length} updates received from our payment and network providers`}

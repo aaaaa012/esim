@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/spinner";
+import ErrorDialog from "@/components/error-dialog";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -42,11 +43,7 @@ export default function ChangePasswordPage() {
         </p>
       </div>
       <UserProfile routing="path" path="/change-password" />
-      {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <ErrorDialog error={error} onClose={() => setError("")} />
       <Button onClick={() => void finish()} disabled={busy}>
         {busy ? <Spinner className="text-primary-foreground" /> : null}
         {busy ? "Continuing…" : "I've set my new password — continue"}

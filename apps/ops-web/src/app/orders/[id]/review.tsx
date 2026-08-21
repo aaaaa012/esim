@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/spinner";
 import { InfoRow } from "@/components/info-row";
 import { Panel } from "@/components/panel";
+import ErrorDialog from "@/components/error-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { ManualRefundCard } from "./manual-refund-card";
@@ -241,11 +242,7 @@ export default function OrderReview({ id }: { id: string }) {
         {order.topUpMobile ? ` · top-up for ${order.topUpMobile}` : ""}
       </p>
 
-      {error && (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <ErrorDialog error={error} onClose={() => setError("")} />
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">

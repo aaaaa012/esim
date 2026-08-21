@@ -1,14 +1,22 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { BatchStatus, InventoryStatus } from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BatchStatus, InventoryStatus, Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { CryptoService } from '../../infrastructure/crypto.service.js';
 import { PrismaService } from '../../infrastructure/prisma.service.js';
 import { tabularToRecords } from '../../common/tabular.util.js';
 import { ConnectivityService } from '../integration/connectivity.service.js';
 
+function quarantineReasonText(providerStatus: string): string {
+  if (providerStatus === 'downloaded') return 'This eSIM appears to have been downloaded on a device before sale. Do not sell it.';
+  if (providerStatus === 'installed') return 'This eSIM appears to be installed on a device already. Do not sell it.';
+  if (providerStatus === 'deleted') return 'This eSIM has been removed at the provider. Do not sell it.';
+  return `This eSIM is unsold, but the provider reports its status as "${providerStatus}". It likely cannot be reused.`;
+}
+
 @Injectable()
 export class InventoryService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService, private readonly crypto: CryptoService, private readonly connectivity: ConnectivityService) {}
+  private readonly logger = new Logger(InventoryService.name);
 
   async onModuleInit() {
     if (!this.prisma.enabled || process.env.NODE_ENV === 'production') return;
@@ -36,20 +44,70 @@ export class InventoryService implements OnModuleInit {
   async profileForOrder(orderId: string) { return this.reserve(orderId); }
 
   /**
+   * Claims the next AVAILABLE profile for an order while guaranteeing forward
+   * progress: the profile identified by `excludeIccid` (the one that just
+   * failed a provisioning attempt) can never be reclaimed as the swap target.
+   * Used by provisioning auto-failover so a permanently-rejected SIM is left
+   * behind instead of being re-submitted in a loop.
+   */
+  async reserveExcluding(orderId: string, excludeIccid?: string) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const candidate = await this.prisma.esimInventory.findFirst({ where: { status: InventoryStatus.AVAILABLE, ...(excludeIccid ? { iccid: { not: excludeIccid } } : {}) }, orderBy: { createdAt: 'asc' } });
+      if (!candidate) throw new ConflictException('No eSIM inventory is currently available for failover');
+      const claimed = await this.prisma.esimInventory.updateMany({ where: { id: candidate.id, status: InventoryStatus.AVAILABLE, assignedOrderId: null }, data: { status: InventoryStatus.RESERVED, assignedOrderId: orderId, version: { increment: 1 } } });
+      if (claimed.count === 1) return { ...candidate, status: InventoryStatus.RESERVED, assignedOrderId: orderId };
+    }
+    throw new ConflictException('Inventory reservation conflict while failing over');
+  }
+
+  /** Provider states in which an unassigned SIM is genuinely safe to sell again. */
+  private readonly resellableStates = new Set(['available', 'allocated', 'released']);
+
+  /**
    * Returns a reserved eSIM to the AVAILABLE pool when provisioning has failed
    * terminally. A profile is only released if the provider never bound a
-   * subscription to it (providerSubscriptionId is null); otherwise it may be in
-   * use remotely and is kept reserved. This prevents failed ICCIDs from being
-   * stranded and lets a retry claim a fresh profile.
+   * subscription to it (providerSubscriptionId is null) AND the provider
+   * confirms the SIM is in a truly sellable state (available/allocated/released).
+   *
+   * Otherwise it is left reserved or quarantined:
+   *  - providerSubscriptionId set  -> SIM may be in use remotely, keep RESERVED
+   *  - provider reports enabled/disabled/downloaded/installed (previously
+   *    onboarded)                  -> QUARANTINED so it is never auto-recycled;
+   *    ops must explicitly release & restock after terminating it at the provider
+   *  - provider unreachable at this moment -> keep RESERVED (do not recycle
+   *    blindly, do not strand); a later reconcile or ops judgement resolves it.
    */
   async release(orderId: string) {
     if (!this.prisma.enabled) return;
     const inventory = await this.prisma.esimInventory.findUnique({ where: { assignedOrderId: orderId } });
     if (!inventory) return;
     if (inventory.providerSubscriptionId) return;
-    await this.prisma.esimInventory.updateMany({
-      where: { id: inventory.id, assignedOrderId: orderId, providerSubscriptionId: null },
-      data: { status: InventoryStatus.AVAILABLE, assignedOrderId: null, version: { increment: 1 } },
+
+    let observed = inventory.providerStatus?.toLowerCase();
+    if (!observed || !this.resellableStates.has(observed)) {
+      try {
+        const details = await this.connectivity.getEsimDetails(inventory.iccid);
+        observed = details.status.toLowerCase();
+      } catch {
+        this.logger.warn(`Cannot confirm provider state for ${inventory.iccid}; leaving it reserved for ${orderId}`);
+        return;
+      }
+    }
+
+    if (this.resellableStates.has(observed)) {
+      await this.prisma.esimInventory.updateMany({
+        where: { id: inventory.id, assignedOrderId: orderId, providerSubscriptionId: null },
+        data: { status: InventoryStatus.AVAILABLE, providerStatus: observed, quarantineReason: null, assignedOrderId: null, lastProviderCheckedAt: new Date(), version: { increment: 1 } },
+      });
+      return;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.esimInventory.update({
+        where: { id: inventory.id },
+        data: { status: InventoryStatus.QUARANTINED, quarantineReason: quarantineReasonText(observed), providerStatus: observed, lastProviderCheckedAt: new Date(), version: { increment: 1 } },
+      });
+      await tx.auditLog.create({ data: { module: 'INVENTORY', entity: 'Order', entityId: orderId, action: 'PROVISIONING_FAILED_QUARANTINED', newValue: { iccid: inventory.iccid, providerStatus: observed, reason: quarantineReasonText(observed) } as Prisma.InputJsonValue } });
     });
   }
 
@@ -336,6 +394,47 @@ export class InventoryService implements OnModuleInit {
     return order.customerId;
   }
 
+  /**
+   * Re-pools a stranded eSIM for sale after an operational release. This is the
+   * human-in-the-loop fix for a PROVISIONING_FAILED/REJECTED order whose SIM was
+   * previously onboarded at the provider (status enabled/disabled/downloaded).
+   *
+   * Steps (matching provider practice):
+   *  1. Terminate the subscriber at the provider (async, returns PENDING) so the
+   *     SIM is released from any residual binding.
+   *  2. Reconcile the provider's live SIM state.
+   *  3. Only when the provider reports a genuinely sellable state
+   *     (available/allocated/released) do we return the profile to AVAILABLE.
+   *     Otherwise it stays QUARANTINED and the operator is told to retry later.
+   */
+  async releaseToStock(profileId: string, actorId: string) {
+    if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
+    const profile = await this.prisma.esimInventory.findUnique({ where: { id: profileId } });
+    if (!profile) throw new NotFoundException('Inventory profile not found');
+    const idempotencyKey = `ops:release:${profile.iccid}:${Date.now()}`;
+    const terminated = await this.connectivity.terminate(profile.iccid, idempotencyKey)
+      .then((result) => ({ ...result, submitted: true, error: undefined as string | undefined }))
+      .catch((error) => ({ accepted: false, transactionId: undefined as string | undefined, status: undefined as string | undefined, submitted: false, error: error instanceof Error ? error.message : 'unknown error' }));
+    const submitted = Boolean(terminated.submitted);
+    const details = await this.connectivity.getEsimDetails(profile.iccid);
+    const observed = details.status.toLowerCase();
+    const resellable = this.resellableStates.has(observed);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.esimInventory.update({
+        where: { id: profile.id },
+        data: {
+          providerStatus: details.status,
+          lastProviderCheckedAt: new Date(),
+          providerCheckError: null,
+          ...(resellable ? { status: InventoryStatus.AVAILABLE, quarantineReason: null } : { status: InventoryStatus.QUARANTINED, quarantineReason: quarantineReasonText(observed) }),
+          version: { increment: 1 },
+        },
+      });
+      await tx.auditLog.create({ data: { module: 'INVENTORY', entity: 'EsimInventory', entityId: profile.id, action: 'RELEASED_TO_STOCK', performedById: actorId, newValue: { iccid: profile.iccid, providerStatus: details.status, submitted, providerTransactionId: terminated.transactionId ?? null } as Prisma.InputJsonValue } });
+    });
+    return { id: profile.id, iccid: profile.iccid, localStatus: resellable ? InventoryStatus.AVAILABLE : InventoryStatus.QUARANTINED, providerStatus: details.status, terminateSubmitted: submitted, providerTransactionId: terminated.transactionId ?? null, inStock: resellable, checkedAt: new Date().toISOString() };
+  }
+
   async refreshUsage(orderId: string) {
     if (!this.prisma.enabled) throw new BadRequestException('Database persistence is required');
     const inventory = await this.inventoryForOrder(orderId);
@@ -364,19 +463,32 @@ export class InventoryService implements OnModuleInit {
     try {
       const details = await this.connectivity.getEsimDetails(profile.iccid);
       const observed = details.status.toLowerCase();
-      const safeUnassigned = observed === 'available' || observed === 'allocated';
+      const resellableStates = new Set(['available', 'allocated', 'released']);
+      const safeUnassigned = resellableStates.has(observed);
       const unexpectedUse = profile.assignedOrderId === null && !safeUnassigned;
-      const updated = await this.prisma.esimInventory.update({
-        where: { id },
-        data: {
-          providerStatus: details.status,
-          lastProviderCheckedAt: new Date(),
-          providerCheckError: null,
-          ...(details.smDpAddress ? { smDpAddress: details.smDpAddress } : {}),
-          ...(unexpectedUse ? { status: InventoryStatus.QUARANTINED } : {}),
-          version: { increment: 1 },
-        },
-      });
+      const wasQuarantined = profile.status === InventoryStatus.QUARANTINED;
+      const record: Prisma.EsimInventoryUpdateInput = {
+        providerStatus: details.status,
+        lastProviderCheckedAt: new Date(),
+        providerCheckError: null,
+        ...(details.smDpAddress ? { smDpAddress: details.smDpAddress } : {}),
+        version: { increment: 1 },
+      };
+      if (unexpectedUse) {
+        record.status = InventoryStatus.QUARANTINED;
+        record.quarantineReason = quarantineReasonText(observed);
+      } else if (wasQuarantined) {
+        record.status = InventoryStatus.AVAILABLE;
+        record.quarantineReason = null;
+      }
+      const updated = await this.prisma.esimInventory.update({ where: { id }, data: record });
+      if (unexpectedUse) {
+        this.logger.warn(`eSIM ${updated.iccid} quarantined: provider reports "${details.status}"`);
+        await this.prisma.auditLog.create({ data: { module: 'INVENTORY', entity: 'EsimInventory', entityId: id, action: 'QUARANTINED', newValue: { iccid: updated.iccid, providerStatus: details.status, reason: quarantineReasonText(observed) } as Prisma.InputJsonValue } });
+      } else if (wasQuarantined) {
+        this.logger.warn(`eSIM ${updated.iccid} released from quarantine: provider now reports "${details.status}"`);
+        await this.prisma.auditLog.create({ data: { module: 'INVENTORY', entity: 'EsimInventory', entityId: id, action: 'RELEASED', newValue: { iccid: updated.iccid, providerStatus: details.status } as Prisma.InputJsonValue } });
+      }
       return { id, iccid: updated.iccid, localStatus: updated.status, providerStatus: details.status, inSync: !unexpectedUse, checkedAt: updated.lastProviderCheckedAt?.toISOString() };
     } catch (error) {
       const message = error instanceof Error ? error.message.slice(0, 2000) : 'unknown error';
@@ -436,6 +548,7 @@ export class InventoryService implements OnModuleInit {
         providerStatus: profile.providerStatus,
         lastProviderCheckedAt: profile.lastProviderCheckedAt?.toISOString() ?? null,
         providerCheckError: profile.providerCheckError,
+        quarantineReason: profile.quarantineReason,
         activatedAt: profile.activatedAt?.toISOString() ?? null,
         expiresAt: profile.expiresAt?.toISOString() ?? null,
         batchReference: profile.batch?.batchReference ?? null,

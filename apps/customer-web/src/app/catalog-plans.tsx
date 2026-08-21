@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AlertTriangle, CheckCircle2, ChevronDown, Globe2, MapPin } from "lucide-react";
 import CountryPicker, { flagEmoji } from "./country-picker";
+import ErrorModal from "../components/error-modal";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -179,7 +180,7 @@ export default function CatalogPlans() {
           </div>
         ) : !error && plans ? <p className="catalog-empty">No supported destinations are currently available.</p> : null}
       </section>
-      {error ? <div className="catalog-error">{error}</div> : null}
+      {error ? <ErrorModal error={error} onClose={() => setError(null)} /> : null}
       {coverageMessage ? (
         <div className={`coverage-note ${coverageMessage === "Coverage available" ? "ok" : "warn"}`}>
           {coverageMessage === "Coverage available" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}

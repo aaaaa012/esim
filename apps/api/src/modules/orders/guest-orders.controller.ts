@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query, Req, NotFoundException, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query, Req, Res, NotFoundException, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createOrderSchema, documentRequestSchema, initiatePaymentSchema, travelerSchema } from '@visa-compass/shared';
 import { GuestLookupRateLimitGuard } from '../../common/guest-lookup.rate-limit.guard.js';
@@ -78,6 +79,16 @@ export class GuestOrdersController {
   @Post(':id/payment/abandon') abandon(@Param('id') id: string, @Body() body: { token: string; reason?: string }) { this.assert(id, body.token); return this.orders.resolvePaymentFailure(id, null, body.reason ?? 'Payment abandoned by guest'); }
 
   @Post(':id/cancel') cancel(@Param('id') id: string, @Body() body: { token: string; reason?: string }) { this.assert(id, body.token); return this.orders.cancel(id, null, body.reason ?? 'Cancelled by guest'); }
+
+  @Post(':id/qr/resend') resendQr(@Param('id') id: string, @Body() body: { token: string }) { this.assert(id, body.token); return this.orders.resendQr(id); }
+
+  @Get(':id/activation-qr') async activationQr(@Param('id') id: string, @Query('token') token: string, @Res() response: Response) {
+    this.assert(id, token);
+    const { filename, contentType, bytes } = await this.orders.activationQr(id);
+    response.setHeader('Content-Type', contentType);
+    response.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    response.send(Buffer.from(bytes));
+  }
 
   @Post('topup-lookup')
   @UseGuards(GuestLookupRateLimitGuard)

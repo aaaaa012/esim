@@ -40,7 +40,7 @@ export class TransatelOperationsService {
         orderBy: { customerEsim: { assignedAt: 'desc' } },
         take: 100,
       }),
-      this.prisma.esimInventory.findMany({ where: { assignedOrderId: null }, include: { batch: true }, orderBy: { updatedAt: 'desc' }, take: 100 }),
+      this.prisma.esimInventory.findMany({ where: { OR: [{ assignedOrderId: null }, { status: 'QUARANTINED' }] }, include: { batch: true }, orderBy: { updatedAt: 'desc' }, take: 100 }),
       this.prisma.integrationLog.findMany({ where: { OR: [{ status: { gte: 400 } }, { errorCode: { not: null } }] }, orderBy: { createdAt: 'desc' }, take: 50 }),
       this.prisma.transatelLifecycleOperation.findMany({ include: { order: { select: { orderNumber: true } }, performedBy: { select: { email: true } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
     ]);
@@ -66,7 +66,7 @@ export class TransatelOperationsService {
         usageLastCheckedAt: subscription.usageLastCheckedAt?.toISOString() ?? null,
         expiresAt: subscription.expiresAt?.toISOString() ?? null,
       })),
-      inventory: inventory.map((profile) => ({ id: profile.id, iccid: profile.iccid, msisdn: profile.msisdn, status: profile.status, providerStatus: profile.providerStatus, lastProviderCheckedAt: profile.lastProviderCheckedAt?.toISOString() ?? null, providerCheckError: profile.providerCheckError, batchReference: profile.batch.batchReference })),
+      inventory: inventory.map((profile) => ({ id: profile.id, iccid: profile.iccid, msisdn: profile.msisdn, status: profile.status, providerStatus: profile.providerStatus, lastProviderCheckedAt: profile.lastProviderCheckedAt?.toISOString() ?? null, providerCheckError: profile.providerCheckError, quarantineReason: profile.quarantineReason, batchReference: profile.batch.batchReference })),
       failures: failures.map((entry) => ({ ...entry, createdAt: entry.createdAt.toISOString() })),
       lifecycleOperations: lifecycleOperations.map((operation) => ({ id: operation.id, orderId: operation.orderId, orderNumber: operation.order.orderNumber, action: operation.action, state: operation.state, reason: operation.reason, actor: operation.performedBy.email, providerTransactionId: operation.providerTransactionId, errorMessage: operation.errorMessage, createdAt: operation.createdAt.toISOString() })),
     };

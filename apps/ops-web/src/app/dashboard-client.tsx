@@ -16,6 +16,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Panel } from "@/components/panel";
 import { StatusBadge, humane } from "@/components/status-badge";
+import ErrorDialog from "@/components/error-dialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import {
@@ -57,10 +58,15 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1",
 export default function DashboardClient() {
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Dashboard | null>(null);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     void authFetch(`${API}/operations/dashboard`, { headers })
-      .then((r) => r.json())
-      .then((v) => setData(v.data));
+      .then(async (r) => {
+        const v = await r.json();
+        if (!r.ok) throw new Error(v?.error?.message ?? 'Could not load the overview');
+        setData(v.data);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Could not load the overview'));
   }, []);
 
   if (!data)
@@ -130,6 +136,7 @@ export default function DashboardClient() {
 
   return (
     <>
+      <ErrorDialog error={error} onClose={() => setError(null)} />
       <PageHeader
         title="Operations overview"
         description={`${new Intl.DateTimeFormat("en-NP", {
@@ -160,7 +167,7 @@ export default function DashboardClient() {
           title="Integration health"
           actions={
             <Link
-              href="/integration-events"
+              href="/logs"
               className="text-sm font-medium text-primary hover:underline"
             >
               View events

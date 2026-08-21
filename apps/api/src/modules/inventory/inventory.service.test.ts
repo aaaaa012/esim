@@ -76,21 +76,81 @@ describe('InventoryService.importBatchCsv', () => {
   });
 });
 
+describe('InventoryService.releaseToStock', () => {
+  function releaseStockPrisma(profile: { providerSubscriptionId?: string | null; providerStatus?: string | null; status?: string }) {
+    const update = vi.fn().mockResolvedValue({ id: 'inv-1', iccid: '8988247076000000319', ...profile, lastProviderCheckedAt: new Date() });
+    const auditCreate = vi.fn().mockResolvedValue({ id: 'audit-1' });
+    return {
+      enabled: true,
+      $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({ esimInventory: { update }, auditLog: { create: auditCreate } })),
+      auditLog: { create: auditCreate },
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'inv-1', iccid: '8988247076000000319', ...profile }),
+        update,
+      },
+    } as unknown as PrismaService;
+  }
+
+  it('submits a provider terminate and only restocks when the provider confirms a sellable state', async () => {
+    const prisma = releaseStockPrisma({ status: 'QUARANTINED' });
+    const connectivity = {
+      terminate: vi.fn().mockResolvedValue({ accepted: true, transactionId: 'tx-1' }),
+      getEsimDetails: vi.fn().mockResolvedValue({ subscriptionId: '8988247076000000319', status: 'released' }),
+    } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+    const result = await inventory.releaseToStock('inv-1', 'ops-user');
+    expect(connectivity.terminate).toHaveBeenCalledWith('8988247076000000319', expect.stringMatching(/^ops:release:8988247076000000319:/));
+    expect(result).toMatchObject({ localStatus: 'AVAILABLE', inStock: true, terminateSubmitted: true, providerTransactionId: 'tx-1' });
+    expect(prisma.esimInventory.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'inv-1' }, data: expect.objectContaining({ status: 'AVAILABLE' }) }));
+  });
+
+  it('keeps the profile QUARANTINED when the provider still reports a non-sellable state', async () => {
+    const prisma = releaseStockPrisma({ status: 'QUARANTINED' });
+    const connectivity = {
+      terminate: vi.fn().mockResolvedValue({ accepted: true, transactionId: 'tx-1' }),
+      getEsimDetails: vi.fn().mockResolvedValue({ subscriptionId: '8988247076000000319', status: 'enabled' }),
+    } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+    const result = await inventory.releaseToStock('inv-1', 'ops-user');
+    expect(result).toMatchObject({ localStatus: 'QUARANTINED', inStock: false });
+    expect(prisma.esimInventory.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'inv-1' }, data: expect.objectContaining({ status: 'QUARANTINED', quarantineReason: expect.any(String) }) }));
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: 'RELEASED_TO_STOCK' }) }));
+  });
+
+  it('records terminate submission failures instead of quenching the restock path', async () => {
+    const prisma = releaseStockPrisma({ status: 'QUARANTINED' });
+    const connectivity = {
+      terminate: vi.fn().mockRejectedValue(new Error('provider down')),
+      getEsimDetails: vi.fn().mockResolvedValue({ subscriptionId: '8988247076000000319', status: 'released' }),
+    } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+    const result = await inventory.releaseToStock('inv-1', 'ops-user');
+    expect(result).toMatchObject({ localStatus: 'AVAILABLE', inStock: true, terminateSubmitted: false });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: 'RELEASED_TO_STOCK' }) }));
+  });
+});
+
 describe('InventoryService.release', () => {
-  function releasePrisma(profile: { providerSubscriptionId: string | null }) {
+  function releasePrisma(profile: { providerSubscriptionId: string | null; providerStatus?: string | null }) {
     const updateMany = vi.fn().mockResolvedValue({ count: 1 });
     return {
       enabled: true,
+      $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({ esimInventory: { update: vi.fn().mockResolvedValue({ id: 'inv-1' }) }, auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-1' }) } })),
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-1' }) },
       esimInventory: {
-        findUnique: vi.fn().mockResolvedValue({ id: 'inv-1', ...profile }),
+        findUnique: vi.fn().mockResolvedValue({ id: 'inv-1', iccid: '8988247076000000319', ...profile }),
         updateMany,
       },
     } as unknown as PrismaService;
   }
 
-  it('returns an unreserved, provider-bound profile to AVAILABLE', async () => {
+  function connectivityWith(status: string) {
+    return { getEsimDetails: vi.fn().mockResolvedValue({ subscriptionId: '8988247076000000319', status }) } as unknown as ConnectivityService;
+  }
+
+  it('returns a provider-confirmed sellable profile to AVAILABLE', async () => {
     const prisma = releasePrisma({ providerSubscriptionId: null });
-    const inventory = new InventoryService(prisma, cryptoStub(), connectivityStub());
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivityWith('available'));
     await inventory.release('order-1');
     expect(prisma.esimInventory.findUnique).toHaveBeenCalledWith({ where: { assignedOrderId: 'order-1' } });
     expect(prisma.esimInventory.updateMany).toHaveBeenCalledWith(
@@ -101,16 +161,42 @@ describe('InventoryService.release', () => {
     );
   });
 
+  it('relies on a stored resellable providerStatus without another provider call', async () => {
+    const prisma = releasePrisma({ providerSubscriptionId: null, providerStatus: 'released' });
+    const connectivity = connectivityWith('available');
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+    await inventory.release('order-1');
+    expect(connectivity.getEsimDetails).not.toHaveBeenCalled();
+    expect(prisma.esimInventory.updateMany).toHaveBeenCalled();
+  });
+
   it('does not release a profile that the provider has bound a subscription to', async () => {
     const prisma = releasePrisma({ providerSubscriptionId: 'sub-9' });
-    const inventory = new InventoryService(prisma, cryptoStub(), connectivityStub());
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivityWith('available'));
     await inventory.release('order-1');
     expect(prisma.esimInventory.updateMany).not.toHaveBeenCalled();
   });
 
+  it('quarantines a profile the provider reports as previously onboarded (enabled/disabled/downloaded)', async () => {
+    const prisma = releasePrisma({ providerSubscriptionId: null });
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivityWith('downloaded'));
+    await inventory.release('order-1');
+    expect(prisma.esimInventory.updateMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it('keeps the profile reserved when the provider cannot be reached', async () => {
+    const prisma = releasePrisma({ providerSubscriptionId: null });
+    const connectivity = { getEsimDetails: vi.fn().mockRejectedValue(new Error('socket timeout')) } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+    await inventory.release('order-1');
+    expect(prisma.esimInventory.updateMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('is a no-op when no profile is reserved for the order', async () => {
     const prisma = { enabled: true, esimInventory: { findUnique: vi.fn().mockResolvedValue(null), updateMany: vi.fn() } } as unknown as PrismaService;
-    const inventory = new InventoryService(prisma, cryptoStub(), connectivityStub());
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivityWith('available'));
     await inventory.release('order-1');
     expect(prisma.esimInventory.updateMany).not.toHaveBeenCalled();
   });
@@ -121,6 +207,7 @@ describe('InventoryService.reconcileProviderProfile', () => {
     const update = vi.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'inv-1', iccid: '8988247076000000319', status: data.status ?? 'AVAILABLE', lastProviderCheckedAt: data.lastProviderCheckedAt }));
     return {
       enabled: true,
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-1' }) },
       esimInventory: {
         findUnique: vi.fn().mockResolvedValue({ id: 'inv-1', iccid: '8988247076000000319', status: 'AVAILABLE', assignedOrderId: null }),
         update,

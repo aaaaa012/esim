@@ -14,7 +14,7 @@ import {
 } from "@prisma/client";
 import { createClerkClient } from "@clerk/backend";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
-import { GmailChannel } from "../notification/gmail.channel.js";
+import { EmailChannel } from "../notification/email.channel.js";
 
 type ClerkUserEvent = {
   type: "user.created" | "user.updated" | "user.deleted";
@@ -38,7 +38,7 @@ export class ClerkSyncService {
   private readonly logger = new Logger(ClerkSyncService.name);
   constructor(
     private readonly prisma: PrismaService,
-    private readonly gmail?: GmailChannel,
+    private readonly email?: EmailChannel,
   ) {}
   async sync(event: ClerkUserEvent) {
     if (!this.prisma.enabled) return { persisted: false };
@@ -406,9 +406,9 @@ export class ClerkSyncService {
 
   private async alertIdentityEmergency(message: string) {
     const recipient = process.env.OPS_ALERT_EMAIL;
-    if (recipient && this.gmail) {
+    if (recipient && this.email) {
       try {
-        await this.gmail.send({
+        await this.email.send({
           to: recipient,
           subject: "[Ops Alert] Super Admin identity emergency",
           text: message,

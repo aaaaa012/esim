@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ApiErrorCode, PaymentStatus } from '@visa-compass/shared';
 import { ApiException } from '../../../common/api-error.js';
+import { PrismaService } from '../../../infrastructure/prisma.service.js';
 import type { PaymentContext, PaymentGateway, PaymentInitiation, PaymentVerification } from '../payment-gateway.js';
 
 /**
@@ -14,10 +16,17 @@ import type { PaymentContext, PaymentGateway, PaymentInitiation, PaymentVerifica
  * Provider failures are surfaced as `ApiException` with code
  * `PAYMENT_PROVIDER_ERROR`; the provider `detail`/`error_key`/field messages
  * are kept in `details` (logged server-side, never serialized to clients).
+ *
+ * Every outgoing call (request + response bodies) is persisted to the
+ * IntegrationLog so the operations team can inspect it from the Logs page.
+ * The secret Authorization header is never stored.
  */
 @Injectable()
 export class KhaltiGateway implements PaymentGateway {
   readonly provider = 'KHALTI';
+  private readonly log = new Logger('KhaltiGateway');
+
+  constructor(private readonly prisma: PrismaService) {}
 
   private get baseUrl(): string {
     return (process.env.KHALTI_BASE_URL ?? 'https://dev.khalti.com/api/v2').replace(/\/+$/, '');
@@ -42,18 +51,28 @@ export class KhaltiGateway implements PaymentGateway {
       });
   }
 
-  /** Extracts Khalti's `detail` or per-field validation errors from an error body. */
-  private async providerDetail(response: Response): Promise<string> {
+  /** Reads a response body exactly once; empty string when the body is unreadable. */
+  private async bodyText(response: Response): Promise<string> {
     try {
-      const data = (await response.json()) as Record<string, unknown>;
+      return await response.text();
+    } catch {
+      return "";
+    }
+  }
+
+  /** Extracts Khalti's `detail` or per-field validation errors from an already-read body. */
+  private providerDetail(raw: string): string {
+    if (!raw) return "";
+    try {
+      const data = JSON.parse(raw) as Record<string, unknown>;
       if (typeof data.detail === 'string' && data.detail) return data.detail;
       const fields = Object.entries(data)
         .filter(([, value]) => Array.isArray(value))
         .map(([key, value]) => `${key}: ${(value as string[]).join('; ')}`);
       if (fields.length) return fields.join('; ');
-      return JSON.stringify(data);
+      return raw;
     } catch {
-      return response.text();
+      return raw;
     }
   }
 
@@ -86,8 +105,10 @@ export class KhaltiGateway implements PaymentGateway {
 
   private async post(path: string, body: Record<string, unknown>, operation: string): Promise<Response> {
     this.ensureConfigured();
-    return this.request(
-      `${this.baseUrl}${path}`,
+    const url = `${this.baseUrl}${path}`;
+    const startedAt = Date.now();
+    const response = await this.request(
+      url,
       {
         method: 'POST',
         headers: { Authorization: `Key ${this.secret}`, 'Content-Type': 'application/json' },
@@ -96,6 +117,39 @@ export class KhaltiGateway implements PaymentGateway {
       },
       operation,
     );
+    let raw = '';
+    try { raw = await response.clone().text(); } catch { /* body unreadable */ }
+    const responseBody = this.parseCapture(raw);
+    const requestBody = this.parseCapture(JSON.stringify(body));
+    const duration = Date.now() - startedAt;
+    await this.persist(operation, url, response.status, duration, requestBody, responseBody).catch(() => undefined);
+    return response;
+  }
+
+  private parseCapture(value?: string): unknown {
+    if (!value || !value.trim()) return undefined;
+    try { return JSON.parse(value) as unknown; } catch { return value.length > 12000 ? `${value.slice(0, 12000)}… (truncated)` : value; }
+  }
+
+  private async persist(operation: string, url: string, status: number, durationMs: number, requestBody?: unknown, responseBody?: unknown) {
+    if (!this.prisma.enabled) return;
+    let path: string;
+    try { const parsed = new URL(url); path = `${parsed.pathname}${parsed.search}`; } catch { path = url; }
+    try {
+      await this.prisma.integrationLog.create({
+        data: {
+          operation: `khalti-${operation}`,
+          method: 'POST',
+          endpoint: path,
+          status,
+          durationMs,
+          ...(requestBody !== undefined ? { requestBody: requestBody as Prisma.InputJsonValue } : {}),
+          ...(responseBody !== undefined ? { responseBody: responseBody as Prisma.InputJsonValue } : {}),
+        },
+      });
+    } catch (error) {
+      this.log.error(`Failed to persist Khalti integration log for ${operation}`, error);
+    }
   }
 
   async initiate(input: { orderId: string; orderNumber: string; amountNpr: number; returnUrl: string }): Promise<PaymentInitiation> {
@@ -106,10 +160,11 @@ export class KhaltiGateway implements PaymentGateway {
       purchase_order_id: input.orderId,
       purchase_order_name: input.orderNumber,
     }, 'initiation');
-    if (!response.ok) throw this.providerError('initiation', response, await this.providerDetail(response));
+    const raw = await this.bodyText(response);
+    if (!response.ok) throw this.providerError('initiation', response, this.providerDetail(raw));
     let data: { pidx?: string; payment_url?: string; expires_at?: string };
     try {
-      data = (await response.json()) as typeof data;
+      data = JSON.parse(raw) as typeof data;
     } catch {
       throw new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
@@ -134,9 +189,10 @@ export class KhaltiGateway implements PaymentGateway {
 
   async verify(reference: string, context: PaymentContext): Promise<PaymentVerification> {
     const response = await this.post('/epayment/lookup/', { pidx: reference }, 'lookup');
+    const raw = await this.bodyText(response);
     let data: { status?: string; total_amount?: number; transaction_id?: string };
     try {
-      data = (await response.json()) as typeof data;
+      data = JSON.parse(raw) as typeof data;
     } catch {
       data = {};
     }
@@ -165,7 +221,7 @@ export class KhaltiGateway implements PaymentGateway {
         ...(data.transaction_id ? { providerTransactionId: data.transaction_id } : {}),
       };
     }
-    if (!response.ok) throw this.providerError('lookup', response, await this.providerDetail(response));
+    if (!response.ok) throw this.providerError('lookup', response, this.providerDetail(raw));
     throw new ApiException({
       code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
       message: 'The payment provider is temporarily unavailable. Please try again or use another method.',

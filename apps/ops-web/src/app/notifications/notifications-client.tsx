@@ -8,6 +8,7 @@ import { StatusBadge, humane } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/empty-state';
 import { Spinner } from '@/components/spinner';
+import ErrorDialog from '@/components/error-dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
@@ -68,9 +69,7 @@ export default function NotificationsClient() {
     <>
       {health && <div className={`mb-6 grid gap-3 rounded-xl border p-4 sm:grid-cols-4 ${health.operational ? 'bg-card' : 'border-destructive/30 bg-destructive/5'}`}><div><p className="text-xs text-muted-foreground">Delivery</p><StatusBadge label={health.operational ? 'OPERATIONAL' : 'ACTION REQUIRED'} /></div><div><p className="text-xs text-muted-foreground">Queue</p><p className="mt-1 text-sm font-medium">{health.queue}</p></div><div><p className="text-xs text-muted-foreground">Mode</p><p className="mt-1 text-sm font-medium">{health.mode}</p></div><div><p className="text-xs text-muted-foreground">Email sending</p><p className="mt-1 text-sm font-medium">{humane(health.channels.email)}</p></div>{!health.operational&&<p className="sm:col-span-4 text-sm text-destructive">Automatic sending needs to be configured before failed messages can be retried. Please ask a technical team member to set up email sending.</p>}</div>}
       {error && (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
+        <ErrorDialog error={error} onClose={() => setError('')} />
       )}
       <Panel
         title={

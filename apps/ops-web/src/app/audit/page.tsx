@@ -1,4 +1,5 @@
-import AuditClient from './audit-client';
+import { redirect } from "next/navigation";
+
 export default function Audit() {
-  return <AuditClient />;
+  redirect("/logs");
 }

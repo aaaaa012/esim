@@ -4,6 +4,13 @@ import { Prisma } from '@prisma/client';
 const prisma = new PrismaClient();
 const shouldDelete = process.argv.includes('--delete');
 
+// Hard safety gate: never wipe a production database. This script is a local
+// development tool only.
+if (process.env.NODE_ENV === 'production') {
+  console.error('Refusing to run wipe against NODE_ENV=production.');
+  process.exit(1);
+}
+
 // Order matters: children are deleted before the parents they reference, so
 // every foreign key is satisfied. The only rows preserved are the SUPER_ADMIN
 // user(s), their UserRole link(s) and the base Role rows.
@@ -68,7 +75,6 @@ async function main() {
 
   console.log('\n=== DELETING ALL DATA ===');
   for (const t of order) {
-    // @ts-expect-error dynamic access
     const r = await (prisma as any)[t].deleteMany();
     console.log(`deleted ${r.count} from ${t}`);
   }

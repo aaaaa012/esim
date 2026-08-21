@@ -40,7 +40,10 @@ export class NotificationService {
 
   health() {
     const mode = process.env.NOTIFICATION_MODE === 'live' ? 'LIVE' : 'SIMULATED';
-    const emailConfigured = Boolean(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET && process.env.GMAIL_REFRESH_TOKEN && process.env.GMAIL_SENDER);
+    const provider = process.env.EMAIL_PROVIDER === 'resend' ? 'resend' : 'gmail';
+    const emailConfigured = provider === 'resend'
+      ? Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM_ADDRESS)
+      : Boolean(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET && process.env.GMAIL_REFRESH_TOKEN && (process.env.GMAIL_FROM_ADDRESS || process.env.EMAIL_FROM_ADDRESS));
     const whatsappConfigured = Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
     return {
       queue: this.queues.enabled ? 'READY' : 'UNAVAILABLE',
@@ -57,6 +60,7 @@ export class NotificationService {
     recipient: string;
     orderNumber: string;
     reason?: string;
+    customerName?: string;
   }) {
     const id = randomUUID();
     if (this.prisma.enabled)

@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { clientIp } from './client-ip.js';
 import { QueueService } from '../jobs/queue.service.js';
 
@@ -16,10 +16,12 @@ type Bucket = { tokens: number; lastRefill: number };
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
+  private readonly logger = new Logger(RateLimitGuard.name);
   private readonly buckets = new Map<string, Bucket>();
   private readonly limit = Number(process.env.RATE_LIMIT_PER_MINUTE ?? 300);
   private readonly authLimit = Number(process.env.AUTH_RATE_LIMIT_PER_MINUTE ?? 60);
   private readonly windowMs = 60_000;
+  private lastSharedFailure = 0;
 
   constructor(private readonly queues?: QueueService) {}
 
@@ -48,14 +50,27 @@ export class RateLimitGuard implements CanActivate {
 
     const response = context.switchToHttp().getResponse<{ setHeader(name: string, value: string | number): void }>();
     if (this.queues?.enabled) {
-      const shared = await this.queues.consumeRateLimit(key, this.windowMs);
-      response.setHeader('x-ratelimit-limit', capacity);
-      response.setHeader('x-ratelimit-remaining', Math.max(0, capacity - shared.count));
-      if (shared.count > capacity) {
-        response.setHeader('retry-after', shared.retryAfterSeconds);
-        throw new HttpException({ code: 'RATE_LIMITED', message: 'Too many requests. Please wait a moment and try again.' }, HttpStatus.TOO_MANY_REQUESTS);
+      try {
+        const shared = await this.queues.consumeRateLimit(key, this.windowMs);
+        response.setHeader('x-ratelimit-limit', capacity);
+        response.setHeader('x-ratelimit-remaining', Math.max(0, capacity - shared.count));
+        if (shared.count > capacity) {
+          response.setHeader('retry-after', shared.retryAfterSeconds);
+          throw new HttpException({ code: 'RATE_LIMITED', message: 'Too many requests. Please wait a moment and try again.' }, HttpStatus.TOO_MANY_REQUESTS);
+        }
+        return true;
+      } catch (error) {
+        // Redis outage or exhausted quota: degrade to the in-memory token bucket
+        // rather than failing every request. Prevent log spam by reporting once
+        // per backoff window.
+        const now = Date.now();
+        if (!this.lastSharedFailure || now - this.lastSharedFailure > 60_000) {
+          this.lastSharedFailure = now;
+          this.logger.warn(
+            `Shared rate limiter unavailable (${(error as Error)?.message ?? error}); falling back to in-memory limiter`,
+          );
+        }
       }
-      return true;
     }
     response.setHeader('x-ratelimit-limit', capacity);
     response.setHeader('x-ratelimit-remaining', Math.floor(bucket.tokens));

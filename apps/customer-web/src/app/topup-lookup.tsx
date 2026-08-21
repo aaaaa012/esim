@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { LoaderCircle, RefreshCcw, Search, Smartphone } from "lucide-react";
+import ErrorModal from "../components/error-modal";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -85,7 +86,7 @@ export default function TopupLookup() {
           {busy ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />} Check
         </button>
       </div>
-      {error && <p className="topup-note error">{error}</p>}
+      {error && <ErrorModal error={error} onClose={() => setError("")} />}
       {result && (
         <div className="topup-result">
           {result.found && result.subscriber ? (

@@ -1,5 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "../../../authenticated-api-provider";
+import ErrorModal from "../../../../components/error-modal";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -188,7 +189,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
   if (error && !order)
     return (
       <main className="section">
-        <div className="shell form-error">{error}</div>
+        <ErrorModal error={error} onClose={() => setError("")} />
       </main>
     );
   if (!order)
@@ -229,7 +230,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
             <b>NPR {order.totalAmountNpr.toLocaleString()}</b>
           </div>
         </div>
-        {error && <div className="form-error">{error}</div>}
+        {error && <ErrorModal error={error} onClose={() => setError("")} />}
         {notice && <div className="qr-notice ok">{notice}</div>}
         {resumable && (
           <section className="customer-action-banner">

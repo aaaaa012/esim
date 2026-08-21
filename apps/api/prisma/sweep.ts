@@ -3,6 +3,12 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 const shouldDelete = process.argv.includes('--delete');
 
+// Hard safety gate: local development tool only.
+if (process.env.NODE_ENV === 'production') {
+  console.error('Refusing to run sweep against NODE_ENV=production.');
+  process.exit(1);
+}
+
 const tables = [
   'subscription',
   'customerConsent',

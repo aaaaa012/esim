@@ -580,6 +580,98 @@ button {
   background: var(--accent-soft);
 }
 
+/* ---------- Error modal popup ---------- */
+
+.error-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.error-modal {
+  position: relative;
+  width: max-content;
+  min-width: min(84vw, 340px);
+  max-width: min(92vw, 480px);
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  animation: error-modal-in 0.16s ease-out;
+}
+
+.error-modal-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding-right: 28px;
+}
+
+.error-modal-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.error-modal h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.error-modal-message {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.error-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 60%, transparent);
+  cursor: pointer;
+}
+
+.error-modal-close:hover,
+.error-modal-close:focus-visible {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  outline: none;
+}
+
+@keyframes error-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* ---------- Loading / empty / error states ---------- */
 
 .spin {

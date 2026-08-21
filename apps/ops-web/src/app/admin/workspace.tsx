@@ -34,6 +34,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/spinner";
 import { EmptyState } from "@/components/empty-state";
+import ErrorDialog from "@/components/error-dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -1602,11 +1603,7 @@ function ConfigPanel({
 
   return (
     <Panel title={tab} description="Live platform defaults and enforced business rules." bodyClassName="p-0">
-      {error ? (
-        <div className="m-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      ) : null}
+      <ErrorDialog error={error} onClose={() => setError("")} />
       {rows.length ? (
         <div className="divide-y">
           {rows.map(({ label, value, ok }) => (

@@ -519,6 +519,7 @@ model EsimInventory {
   providerStatus          String?
   lastProviderCheckedAt   DateTime?
   providerCheckError      String?
+  quarantineReason        String?
   activatedAt             DateTime?
   expiresAt               DateTime?
   customerEsims           CustomerEsim[]
@@ -909,6 +910,7 @@ model ProvisioningOperation {
   requestSnapshot        Json
   responseSnapshot       Json?
   attemptCount           Int                        @default(0)
+  profileSwapCount       Int                        @default(0)
   lastErrorCategory      String?
   lastErrorMessage       String?
   submittedAt            DateTime?
@@ -1002,6 +1004,8 @@ model IntegrationLog {
   errorCode     String?
   errorMessage  String?
   correlationId String?
+  requestBody   Json?
+  responseBody  Json?
   createdAt     DateTime @default(now())
 
   @@index([operation, createdAt])

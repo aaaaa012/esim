@@ -11,9 +11,7 @@ import {
   Handshake,
   History,
   PackageSearch,
-  PlugZap,
   RadioTower,
-  Server,
   RotateCw,
   Settings,
   Undo2,
@@ -30,20 +28,18 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 const overviewItems: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: Gauge },
-  { href: "/work-queue", label: "Review queue", icon: ClipboardCheck },
+  { href: "/", label: "Home", icon: Gauge },
+  { href: "/work-queue", label: "To-do list", icon: ClipboardCheck },
   { href: "/orders", label: "Orders", icon: PackageSearch },
   { href: "/customers", label: "Customers", icon: Users },
-  { href: "/inventory", label: "Inventory", icon: Boxes },
-  { href: "/transatel", label: "Network", icon: RadioTower },
-  { href: "/provisioning-operations", label: "Set-up recovery", icon: RotateCw },
+  { href: "/inventory", label: "eSIM stock", icon: Boxes },
+  { href: "/transatel", label: "Provider status", icon: RadioTower },
+  { href: "/provisioning-operations", label: "Pending activations", icon: RotateCw },
 ];
 const systemItems: NavItem[] = [
-  { href: "/manual-refunds", label: "Manual refunds", icon: Undo2 },
-  { href: "/notifications", label: "Notifications", icon: Bell },
-  { href: "/integration-events", label: "Incoming updates", icon: PlugZap },
-  { href: "/integration-logs", label: "System activity", icon: Server },
-  { href: "/audit", label: "Activity log", icon: History },
+  { href: "/manual-refunds", label: "Refunds", icon: Undo2 },
+  { href: "/notifications", label: "Messages", icon: Bell },
+  { href: "/logs", label: "Logs", icon: History },
 ];
 type Profile = {
   email: string;
@@ -77,8 +73,8 @@ export default function OpsSidebar({ open = false, onClose }: { open?: boolean; 
       .then((value) => setProfile(value.data ?? null));
   }, [authFetch]);
   const isAdmin = profile?.effectiveCapabilities.includes("admin:portal") ?? false;
-  const adminItem: NavItem = { href: "/admin", label: "Administration", icon: Settings };
-  const showcaseItem: NavItem = { href: "/admin/partners-showcase", label: "Partner Showcase", icon: Handshake };
+  const adminItem: NavItem = { href: "/admin", label: "Settings", icon: Settings };
+  const showcaseItem: NavItem = { href: "/admin/partners-showcase", label: "Partners", icon: Handshake };
   const path = usePathname();
   const items = isAdmin ? [...overviewItems, ...systemItems, adminItem, showcaseItem] : [...overviewItems, ...systemItems];
   return (

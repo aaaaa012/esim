@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ApiErrorCode, OrderStatus, PaymentProvider, PaymentStatus } from '@visa-compass/shared';
 import { ApiException } from '../../common/api-error.js';
 import { OrdersService, type DemoOrder } from '../orders/orders.service.js';
@@ -33,7 +33,22 @@ export class PaymentsService {
     if (existing && existing.status === PaymentStatus.PENDING && existing.expiresAt && new Date(existing.expiresAt).getTime() > Date.now() && existing.redirectUrl) {
       return { reference: existing.reference, redirectUrl: existing.redirectUrl, expiresAt: existing.expiresAt, ...(existing.correlationId ? { correlationId: existing.correlationId } : {}) };
     }
-    const returnUrl = `${process.env.CUSTOMER_WEB_URL ?? 'http://localhost:3000'}/esim/checkout?order=${orderId}`;
+    // A previous session exists but is no longer reusable. Before opening a new
+    // Khalti session, check the gateway so a customer whose earlier payment
+    // actually completed can never be charged a second time. We only create a
+    // fresh session once the prior reference is terminal at the gateway.
+    if (existing && (existing.status === PaymentStatus.PENDING || existing.status === PaymentStatus.COMPLETED)) {
+      const prior = await this.lookup(order, existing.reference, 'verify');
+      if (prior.outcome === 'CONFIRMED') {
+        await this.applyVerdict(orderId, ownerId, existing.reference, prior);
+        throw new ApiException({ code: ApiErrorCode.CONFLICT, message: 'This payment was already completed.', status: HttpStatus.CONFLICT });
+      }
+      if (prior.outcome === 'PENDING') {
+        throw new ApiException({ code: ApiErrorCode.PAYMENT_NOT_CONFIRMED, message: 'Your previous payment is still being confirmed. Please wait before paying again.' });
+      }
+      // TERMINAL at the gateway (failed/cancelled/expired) -> safe to retry.
+    }
+    const returnUrl = `${process.env.CUSTOMER_WEB_URL ?? 'http://localhost:3000'}/esim/checkout?order=${orderId}&step=4`;
     const result = await this.gateway().initiate({ orderId, orderNumber: order.orderNumber, amountNpr: order.totalAmountNpr, returnUrl });
     await this.orders.beginPayment(orderId, ownerId, provider, { ...result, returnUrl });
     return result;

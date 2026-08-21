@@ -129,4 +129,13 @@ function trustProxySetting(): boolean | string | number {
   return value;
 }
 
+// Refuse to boot with an ambiguous environment. Without an explicit NODE_ENV
+// the env-validation schema falls back to "development" defaults and the dev
+// secret fallbacks (simulator secret, deterministic crypto keys, guest HMAC)
+// stay armed even against a live database. Fail closed instead.
+if (!process.env.NODE_ENV) {
+  console.error('NODE_ENV is not set. Set NODE_ENV=production (or development) before starting the API.');
+  process.exit(1);
+}
+
 void bootstrap();

@@ -24,6 +24,7 @@ import {
   OperationsIntegrationEventsController,
   OperationsIntegrationLogsController,
   OperationsProvisioningOperationsController,
+  OperationsLogsController,
   WebhooksController,
 } from "./modules/webhooks/webhooks.controller.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
@@ -49,6 +50,8 @@ import { TransatelProvider } from "./modules/integration/transatel.provider.js";
 import { NotificationController } from "./modules/notification/notification.controller.js";
 import { NotificationService } from "./modules/notification/notification.service.js";
 import { GmailChannel } from "./modules/notification/gmail.channel.js";
+import { ResendChannel } from "./modules/notification/resend.channel.js";
+import { EmailChannel } from "./modules/notification/email.channel.js";
 import { WhatsappChannel } from "./modules/notification/whatsapp.channel.js";
 import { QrPdfService } from "./modules/notification/qr-pdf.service.js";
 import { IntegrationProcessor } from "./jobs/integration.processor.js";
@@ -89,7 +92,8 @@ OperationsController,
     WebhooksController,
     OperationsIntegrationEventsController,
     OperationsIntegrationLogsController,
-    OperationsProvisioningOperationsController,
+OperationsProvisioningOperationsController,
+    OperationsLogsController,
     PartnersController,
     PartnerAdminController,
     PartnerCheckoutController,
@@ -132,6 +136,8 @@ OperationsController,
     PartnerAuthGuard,
     NotificationService,
     GmailChannel,
+    ResendChannel,
+    EmailChannel,
     WhatsappChannel,
     QrPdfService,
     CustomerEsimsService,

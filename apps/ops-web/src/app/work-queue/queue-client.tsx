@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Panel } from '@/components/panel';
 import { StatusBadge } from '@/components/status-badge';
+import ErrorDialog from '@/components/error-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/empty-state';
@@ -68,6 +69,7 @@ export default function QueueClient() {
   const authFetch = useAuthenticatedFetch();
   const [orders, setOrders] = useState<OpsOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState<Record<string, boolean>>({ review: true });
 
@@ -78,9 +80,14 @@ export default function QueueClient() {
 
   const load = () => {
     setLoading(true);
+    setError('');
     authFetch(`${API}/operations/orders?limit=${PAGE_SIZE}`, { headers: {} })
-      .then((r) => r.json())
-      .then((v) => setOrders(v.data?.items ?? []))
+      .then(async (r) => {
+        const v = await r.json();
+        if (!r.ok) throw new Error(v?.error?.message ?? 'Could not load the queue');
+        setOrders(v.data?.items ?? []);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Could not load the queue'))
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
@@ -122,6 +129,7 @@ export default function QueueClient() {
 
   return (
     <>
+      <ErrorDialog error={error} onClose={() => setError('')} />
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <SearchInput placeholder="Search order, customer, email…" value={query} onChange={setQuery} className="sm:w-80" />
         <div className="flex items-center gap-2">

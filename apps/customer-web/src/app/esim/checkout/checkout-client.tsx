@@ -1,8 +1,9 @@
 "use client";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { useAuth } from "@clerk/nextjs";
+import ErrorModal from "../../../components/error-modal";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal, AlertTriangle } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
@@ -172,8 +173,10 @@ export default function CheckoutClient({
     let payload = (await response.json()) as Envelope<T>;
     if (
       !response.ok &&
-      isLoaded && isSignedIn !== true &&
-      ["AUTHENTICATION_REQUIRED", "FORBIDDEN"].includes(payload.error?.code ?? "")
+      ["AUTHENTICATION_REQUIRED", "FORBIDDEN", "ACCOUNT_TYPE_FORBIDDEN"].includes(
+        payload.error?.code ?? "",
+      ) &&
+      currentToken()
     ) {
       toGuest();
       setGuest((g) => {
@@ -221,9 +224,64 @@ export default function CheckoutClient({
     visa: File | undefined;
   }>({ passport: undefined, ticket: undefined, visa: undefined });
   const [order, setOrder] = useState<Order | null>(null),
-    [payment, setPayment] = useState<Payment | null>(null);
+    [payment, setPayment] = useState<Payment | null>(null),
+    [uxResending, setUxResending] = useState(false);
   const verifyRunToken = useRef(0);
+  const resendQrEmail = async () => {
+    if (!order || uxResending) return;
+    setUxResending(true);
+    try {
+      await api(`/customer/orders/${order.id}/qr/resend`, { method: "POST" });
+    } finally {
+      setUxResending(false);
+    }
+  };
   useEffect(() => () => { verifyRunToken.current += 1; }, []);
+  // History-aware wizard: each user-driven step advance records the step in the
+  // URL via pushState so the browser Back/Forward move between checkout steps
+  // (instead of exiting the page), and the on-page Back button shares the same
+  // stack. Programmatic/mount transitions still use setStep directly.
+  const stepFromUrl = () => {
+    const value = Number(new URLSearchParams(window.location.search).get("step"));
+    return Number.isInteger(value) && value >= 1 && value <= 4 ? value : 1;
+  };
+  const advance = (next: number) => {
+    if (typeof window === "undefined") { setStep(next); return; }
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("step", String(next));
+      window.history.pushState({ step: next }, "", url.toString());
+    } catch {
+      /* history unavailable */
+    }
+    setStep(next);
+  };
+  const goBack = () => {
+    if (typeof window !== "undefined" && window.history.state?.step) {
+      window.history.back();
+    } else {
+      setStep((current) => Math.max(1, current - 1));
+    }
+  };
+  // Jump back to an already-completed step: replaces the current entry so the
+  // back-stack stays intact (no forward clutter from navigation backwards).
+  const jumpTo = (next: number) => {
+    if (typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("step", String(next));
+        window.history.replaceState({ step: next }, "", url.toString());
+      } catch {
+        /* history unavailable */
+      }
+    }
+    setStep(next);
+  };
+  useEffect(() => {
+    const onPop = () => setStep(Math.min(4, Math.max(1, stepFromUrl())));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const summaryPlan = order?.plan ?? previewPlan;
   const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
   const [provider, setProvider] = useState<PaymentProvider>(
@@ -233,6 +291,38 @@ export default function CheckoutClient({
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
   const [verifyingPassport, setVerifyingPassport] = useState(false);
+  // Returning from the payment provider triggers a fresh page load at
+  // `/esim/checkout?order=…&pidx=…&reference=…` with no `step` param. Restore
+  // the payment step synchronously (before first paint) so the user lands
+  // straight on the "Confirming your payment" screen instead of flashing the
+  // compatibility step until the resume fetch resolves.
+  const stepRestored = useRef(false);
+  useLayoutEffect(() => {
+    if (stepRestored.current) return;
+    stepRestored.current = true;
+    const s = stepFromUrl();
+    if (s !== 1) { setStep(s); return; }
+    const returningFromProvider = ["reference", "pidx", "simulated"].some((key) =>
+      new URLSearchParams(window.location.search).has(key),
+    );
+    if (returningFromProvider) {
+      setStep(4);
+      setVerifying(true);
+    }
+  }, []);
+  // Never lose a user mid-verification: block accidental refresh/leave while
+  // the payment is being confirmed or the order is activating.
+  useEffect(() => {
+    const inFlight =
+      verifying || ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(order?.status ?? "");
+    if (!inFlight) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [verifying, order?.status]);
   useEffect(() => {
     if (!isTopUpIntent) return;
     setCompatible(true);
@@ -244,16 +334,21 @@ export default function CheckoutClient({
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
       .then((value) => {
-        if (!["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(value.status))
-          throw new Error("This order can no longer be resumed from checkout");
         setOrder(value);
         setCompatible(true);
         if (value.traveler) setTraveler({ ...initial, ...value.traveler });
+        // The Khalti webhook may have already confirmed the payment (and the
+        // order advanced to PAYMENT_CONFIRMED/PROVISIONING/QR_READY) before
+        // the provider redirects the browser back. Those must resume into the
+        // activation view / verifying flow — not be rejected as unresumable.
+        const settled = ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED", "PROVISIONING_FAILED"];
         if (value.purchaseType === "TOPUP") {
           setStep(4);
-          if (value.status === "PAYMENT_PENDING" && value.payment) {
+          if (value.payment && (value.status === "PAYMENT_PENDING" || settled.includes(value.status))) {
             setPayment({ reference: value.payment.reference, redirectUrl: "", expiresAt: "" });
             void verifyPayment(value);
+          } else if (!settled.includes(value.status)) {
+            setVerifying(false);
           }
           return;
         }
@@ -269,23 +364,51 @@ export default function CheckoutClient({
           });
           setStep(4);
           void verifyPayment(value);
-        } else if (value.status === "PAYMENT_FAILED") {
+        } else if (settled.includes(value.status)) {
+          if (value.payment) {
+            setPayment({ reference: value.payment.reference, redirectUrl: "", expiresAt: "" });
+            setStep(4);
+            void verifyPayment(value);
+          } else {
+            setVerifying(false);
+            setStep(4);
+          }
+        } else if (value.status === "PAYMENT_FAILED" || value.status === "CANCELLED" || value.status === "REFUNDED") {
           setPayment(null);
+          setVerifying(false);
           setStep(4);
-        } else if (!value.traveler) setStep(2);
-        else if (!hasRequiredDocs) setStep(3);
-        else setStep(4);
+        } else if (!value.traveler) {
+          setVerifying(false);
+          setStep(2);
+        } else if (!hasRequiredDocs) {
+          setVerifying(false);
+          setStep(3);
+        } else {
+          setVerifying(false);
+          setStep(4);
+        }
       })
-      .catch((cause) =>
+      .catch((cause) => {
+        setVerifying(false);
         setError(
           cause instanceof Error ? cause.message : "Order could not be resumed",
-        ),
-      )
+        );
+      })
       .finally(() => setBusy(false));
   }, [orderId, isLoaded, guestToken]);
   const VERIFY_DELAYS = [0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000];
   const VERIFY_BUDGET_MS = 120_000;
-  const TERMINAL_STATUSES = ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"];
+  // Only true outcome states stop the verification poll. The transitional
+  // success/failed states (PAYMENT_CONFIRMED, REVIEW_PENDING, APPROVED,
+  // PROVISIONING) must keep polling so an order that later fails provisioning
+  // flips from "activating your eSIM" to the failure panel without a refresh.
+  const TERMINAL_STATUSES = ["QR_READY", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED", "REFUNDED"];
+  // Confirmed-but-not-yet-terminal states. While an order is in one of these we
+  // must stop POSTing `payment/verify` (it would re-provide/re-trigger) and
+  // switch to cheap GET status polls so the UI flips once provisioning resolves
+  // (e.g. PROVISIONING -> PROVISIONING_FAILED) instead of staying on a static
+  // "Payment verified — activating your eSIM" screen.
+  const CONFIRMED_IN_PROGRESS = ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"];
   const stripReturnParams = () => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
@@ -301,7 +424,13 @@ export default function CheckoutClient({
     const started = Date.now();
     let current = initialOrder;
     let attempt = 0;
-    while (Date.now() - started < VERIFY_BUDGET_MS) {
+    // Once the gateway has confirmed the payment the 120s budget below no
+    // longer applies: the remaining wait is for asynchronous provisioning to
+    // reach a terminal outcome, so keep light status polls until it does
+    // (otherwise the page freezes on "activating your eSIM" if QR readiness
+    // takes longer than the payment-verification window).
+    let confirmed = false;
+    while (confirmed || Date.now() - started < VERIFY_BUDGET_MS) {
       if (verifyRunToken.current !== token) return;
       const wait = VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
       if (wait > 0) {
@@ -310,13 +439,23 @@ export default function CheckoutClient({
       }
       attempt += 1;
       try {
-        // Retry the verification lookup itself (not just the order poll):
-        // Khalti can report pending/initiated for a few seconds after the
-        // wallet redirect, so a single attempt is not enough.
-        const updated = await api<Order>(`/customer/orders/${current.id}/payment/verify`, {
-          method: "POST",
-          body: JSON.stringify({ reference: current.payment?.reference }),
-        });
+        // While payment is still unconfirmed, retry the verification lookup
+        // itself (Khalti can report pending/initiated for a few seconds after
+        // the wallet redirect). Once the order is confirmed, stop POSTing
+        // `payment/verify` (it would re-provide/re-trigger) and switch to cheap
+        // GET polls until a terminal outcome flips the UI (e.g. PROVISIONING ->
+        // PROVISIONING_FAILED renders the failure panel instead of leaving a
+        // static "activating your eSIM" screen).
+        const alreadyConfirmed =
+          current.status !== "PAYMENT_PENDING" &&
+          (current.payment?.status === "COMPLETED" || CONFIRMED_IN_PROGRESS.includes(current.status));
+        if (alreadyConfirmed) confirmed = true;
+        const updated = alreadyConfirmed
+          ? await api<Order>(`/customer/orders/${current.id}`)
+          : await api<Order>(`/customer/orders/${current.id}/payment/verify`, {
+              method: "POST",
+              body: JSON.stringify({ reference: current.payment?.reference }),
+            });
         setOrder(updated);
         current = updated;
         if (TERMINAL_STATUSES.includes(updated.status)) {
@@ -372,6 +511,20 @@ export default function CheckoutClient({
     if (!order.documents?.some((document) => document.type === "PASSPORT")) return;
     void verifyPassport();
   }, [step, order?.id, isTopUp]);
+  // Never lose a user mid-verification: block accidental refresh/leave while
+  // the payment is being confirmed or the order is activating.
+  useEffect(() => {
+    const inFlight =
+      verifying || ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(order?.status ?? "");
+    if (!inFlight) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [verifying, order?.status]);
+
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
     setError("");
@@ -483,7 +636,7 @@ export default function CheckoutClient({
           ? (({ passportVerification: _drop, ...rest }) => rest)(o)
           : o,
       );
-      setStep(3);
+      advance(3);
     });
   const saveDocuments = () =>
     run(async () => {
@@ -541,7 +694,7 @@ export default function CheckoutClient({
         );
       }
       setOrder(await api<Order>(`/customer/orders/${order.id}`));
-      setStep(4);
+      advance(4);
     });
   const initiate = (orderArg?: Order) =>
     run(async () => {
@@ -623,24 +776,32 @@ export default function CheckoutClient({
           <section className="checkout-card">
             <div className="step-tabs">
               {(isTopUp ? ["Payment"] : ["Compatibility", "Traveller", "Documents", "Payment"]).map(
-                (label, index) => (
-                  <div
-                    key={label}
-                    className={
-                      step === index + 1
-                        ? "active"
-                        : step > index + 1
-                          ? "done"
-                          : ""
-                    }
-                  >
-                    <i>{step > index + 1 ? <Check size={13} /> : index + 1}</i>
-                    <span>{label}</span>
-                  </div>
-                ),
+                (label, index) => {
+                  const current = step === index + 1;
+                  const passed = step > index + 1;
+                  const reachableBack = order !== null || index + 1 === 1;
+                  return (
+                    <div
+                      key={label}
+                      className={current ? "active" : passed ? "done" : ""}
+                    >
+                      {passed && reachableBack ? (
+                        <button type="button" onClick={() => jumpTo(index + 1)} title={`Go back to ${label}`}>
+                          <i>{<Check size={13} />}</i>
+                          <span>{label}</span>
+                        </button>
+                      ) : (
+                        <>
+                          <i>{passed ? <Check size={13} /> : index + 1}</i>
+                          <span>{label}</span>
+                        </>
+                      )}
+                    </div>
+                  );
+                },
               )}
             </div>
-            {error && <div className="form-error">{error}</div>}
+            {error && <ErrorModal error={error} onClose={() => setError("")} />}
             {step === 1 && (
               <div className="form-section">
                 <span className="form-icon">
@@ -665,9 +826,12 @@ export default function CheckoutClient({
                     </small>
                   </span>
                 </label>
-                <Action busy={busy} onClick={begin}>
+                <Action busy={busy} onClick={begin} disabled={!compatible && !isTopUpIntent && !order}>
                   Continue
                 </Action>
+                {!compatible && !isTopUpIntent && !order && (
+                  <p className="form-required">Tick the confirmation above to continue.</p>
+                )}
               </div>
             )}
             {step === 2 && (
@@ -790,7 +954,7 @@ export default function CheckoutClient({
                   </Field>
                 </div>
                 <datalist id="country-codes"><option value="NP">Nepal</option><option value="IN">India</option><option value="US">United States</option><option value="GB">United Kingdom</option><option value="AU">Australia</option><option value="CA">Canada</option><option value="AE">United Arab Emirates</option><option value="JP">Japan</option><option value="KR">South Korea</option></datalist>
-                <Nav back={() => setStep(1)} busy={busy} next={saveTraveler} />
+                <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
               </div>
             )}
             {step === 3 && (
@@ -823,7 +987,10 @@ export default function CheckoutClient({
                     capture
                   />
                 </div>
-                <Nav back={() => setStep(2)} busy={busy} next={saveDocuments} />
+                <Nav back={() => goBack()} busy={busy} next={saveDocuments} blocked={!files.passport || !files.ticket} />
+                {(!files.passport || !files.ticket) && (
+                  <p className="form-required">Add a passport and travel ticket to continue.</p>
+                )}
               </div>
             )}
             {step === 4 && (
@@ -851,7 +1018,7 @@ export default function CheckoutClient({
                       password-protected PDF, then connect to the network once to
                       activate it. Your order will complete automatically.
                     </p>
-                    {isSignedIn === true && (
+                    {isSignedIn === true ? (
                       <>
                         <Link className="button" href="/account/esims">
                           View my eSIMs
@@ -860,7 +1027,20 @@ export default function CheckoutClient({
                           Didn&apos;t get the QR? Recover it
                         </Link>
                       </>
-                    )}
+                    ) : guest ? (
+                      <>
+                        <a
+                          className="button"
+                          href={`${API}/guest/orders/${order.id}/activation-qr?token=${encodeURIComponent(currentToken())}`}
+                          download
+                        >
+                          Download QR PDF
+                        </a>
+                        <button className="button secondary" onClick={resendQrEmail} disabled={uxResending}>
+                          {uxResending ? "Sending…" : "Re-send email"}
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                 ) : order?.status === "COMPLETED" ? (
                   <div className="success-panel">
@@ -872,7 +1052,7 @@ export default function CheckoutClient({
                       PDF. Open it on your phone and enter the mobile number shown
                       in your email to reveal the QR.
                     </p>
-                    {isSignedIn === true && (
+                    {isSignedIn === true ? (
                       <>
                         <Link className="button" href="/account/esims">
                           View my eSIMs
@@ -881,7 +1061,20 @@ export default function CheckoutClient({
                           Didn&apos;t get the QR? Recover it
                         </Link>
                       </>
-                    )}
+                    ) : guest ? (
+                      <>
+                        <a
+                          className="button"
+                          href={`${API}/guest/orders/${order.id}/activation-qr?token=${encodeURIComponent(currentToken())}`}
+                          download
+                        >
+                          Download QR PDF
+                        </a>
+                        <button className="button secondary" onClick={resendQrEmail} disabled={uxResending}>
+                          {uxResending ? "Sending…" : "Re-send email"}
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                 ) : order && order.status === "PROVISIONING_FAILED" ? (
                   <div className="error-panel">
@@ -933,7 +1126,7 @@ export default function CheckoutClient({
                         result={order.passportVerification}
                         busy={verifyingPassport}
                         onRecheck={() => void verifyPassport()}
-                        onEdit={() => setStep(2)}
+                        onEdit={() => goBack()}
                       />
                     )}
                     {order &&
@@ -1193,17 +1386,20 @@ function Nav({
   back,
   busy,
   next,
+  blocked,
 }: {
   back: () => void;
   busy: boolean;
   next: () => void;
+  blocked?: boolean;
 }) {
+  const canNext = !busy && !blocked;
   return (
     <div className="form-actions">
-      <button className="button secondary" onClick={back}>
+      <button className="button secondary" onClick={back} disabled={busy}>
         Back
       </button>
-      <Action busy={busy} onClick={next}>
+      <Action busy={busy} onClick={next} disabled={!canNext}>
         Save and continue
       </Action>
     </div>

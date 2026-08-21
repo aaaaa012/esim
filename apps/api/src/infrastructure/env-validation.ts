@@ -27,11 +27,17 @@ const baseSchema = z.object({
   BOOTSTRAP_SUPER_ADMIN_TOKEN: z.string().min(32).optional(),
   OPS_ALERT_EMAIL: z.string().email().optional(),
   NOTIFICATION_MODE: z.enum(["live", "simulator"]).optional(),
+  EMAIL_PROVIDER: z.enum(["gmail", "resend"]).optional(),
+  EMAIL_FROM_ADDRESS: z.string().email().optional(),
+  EMAIL_REPLY_TO: z.string().min(1).optional(),
+  RESEND_API_KEY: z.string().min(1).optional(),
   GMAIL_CLIENT_ID: z.string().min(1).optional(),
   GMAIL_CLIENT_SECRET: z.string().min(1).optional(),
   GMAIL_REFRESH_TOKEN: z.string().min(1).optional(),
   GMAIL_FROM_ADDRESS: z.string().email().optional(),
   KHALTI_SECRET_KEY: z.string().min(1).optional(),
+  KHALTI_BASE_URL: z.string().url().optional(),
+  KHALTI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
   TRANSATEL_BASE_URL: z.string().url().optional(),
   TRANSATEL_CLIENT_ID: z.string().min(1).optional(),
   TRANSATEL_CLIENT_SECRET: z.string().min(1).optional(),
@@ -64,6 +70,8 @@ const productionSchema = baseSchema.extend({
   PAYMENT_MODE: z.literal("khalti"),
   PAYMENT_WEBHOOK_SECRET: z.string().min(16),
   KHALTI_SECRET_KEY: z.string().min(1),
+  KHALTI_BASE_URL: z.string().url().refine((url) => !url.includes("dev.khalti.com") && !/dev\.khalti\.com$/i.test(url), "must not point at the Khalti dev sandbox in production"),
+  TRANSATEL_COS: z.string().min(1),
   CONNECTIVITY_PROVIDER: z.literal("transatel"),
   TRANSATEL_BASE_URL: z.string().url(),
   TRANSATEL_CLIENT_ID: z.string().min(1),
@@ -72,10 +80,11 @@ const productionSchema = baseSchema.extend({
   TRANSATEL_WEBHOOK_TARGET_URL: z.string().url(),
   TRANSATEL_WEBHOOK_SECRET: z.string().min(16),
   NOTIFICATION_MODE: z.literal("live"),
-  GMAIL_CLIENT_ID: z.string().min(1),
-  GMAIL_CLIENT_SECRET: z.string().min(1),
-  GMAIL_REFRESH_TOKEN: z.string().min(1),
-  GMAIL_FROM_ADDRESS: z.string().email(),
+  EMAIL_PROVIDER: z.enum(["gmail", "resend"]),
+  GMAIL_CLIENT_ID: z.string().min(1).optional(),
+  GMAIL_CLIENT_SECRET: z.string().min(1).optional(),
+  GMAIL_REFRESH_TOKEN: z.string().min(1).optional(),
+  GMAIL_FROM_ADDRESS: z.string().email().optional(),
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
@@ -84,6 +93,14 @@ const productionSchema = baseSchema.extend({
   // accidental multi-replica production rollout rather than risking payment
   // races and cross-pod order divergence.
   ORDER_WORKFLOW_MODE: z.literal("single-instance"),
+}).superRefine((config, ctx) => {
+  if (config.EMAIL_PROVIDER === "resend") {
+    if (!config.RESEND_API_KEY) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["RESEND_API_KEY"], message: "required when EMAIL_PROVIDER=resend" });
+    if (!config.EMAIL_FROM_ADDRESS) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["EMAIL_FROM_ADDRESS"], message: "required when EMAIL_PROVIDER=resend (a sender verified in Resend)" });
+  } else {
+    if (!config.GMAIL_CLIENT_ID || !config.GMAIL_CLIENT_SECRET || !config.GMAIL_REFRESH_TOKEN) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["GMAIL_*"], message: "Gmail OAuth credentials are required when EMAIL_PROVIDER=gmail" });
+    if (!config.GMAIL_FROM_ADDRESS && !config.EMAIL_FROM_ADDRESS) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["GMAIL_FROM_ADDRESS"], message: "a from address is required when EMAIL_PROVIDER=gmail" });
+  }
 });
 
 export function validateEnv(config: Record<string, unknown>): Record<string, unknown> {

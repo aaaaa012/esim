@@ -20,6 +20,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Panel } from "@/components/panel";
+import ErrorDialog from "@/components/error-dialog";
 import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -75,6 +76,7 @@ type InventoryProfile = {
   providerStatus?: string | null;
   lastProviderCheckedAt?: string | null;
   providerCheckError?: string | null;
+  quarantineReason?: string | null;
   batchReference?: string | null;
   order?: { orderNumber: string } | null;
 };
@@ -422,8 +424,9 @@ export default function InventoryClient() {
 
   return (
     <>
+      <ErrorDialog error={error} onClose={() => setError("")} />
       <PageHeader
-        title="eSIM Inventory"
+        title="eSIM stock"
         description="Upload eSIM profiles and packages, review pending approvals, and track stock."
         badge={
           <Badge
@@ -499,7 +502,7 @@ export default function InventoryClient() {
                     <TableCell><StatusBadge label={profile.status} {...(profile.status === "QUARANTINED" ? { tone: "warning" as const } : {})} /></TableCell>
                     <TableCell><StatusBadge label={profile.providerStatus ?? "NOT CHECKED"} /></TableCell>
                     <TableCell className="text-xs text-muted-foreground">{profile.lastProviderCheckedAt ? new Date(profile.lastProviderCheckedAt).toLocaleString() : "Never"}</TableCell>
-                    <TableCell className="max-w-64 truncate text-xs text-destructive">{profile.providerCheckError ?? "—"}</TableCell>
+                    <TableCell className="max-w-64 truncate text-xs">{profile.quarantineReason ? <span className="text-destructive">{profile.quarantineReason}</span> : profile.providerCheckError ? <span className="text-destructive">{profile.providerCheckError}</span> : <span className="text-muted-foreground">—</span>}</TableCell>
                     <TableCell className="text-right"><Button size="sm" variant="outline" disabled={reconciling === profile.id} onClick={() => void reconcileProfile(profile)}>{reconciling === profile.id ? <Spinner /> : <RefreshCcw className="size-3.5" />} Check with network</Button></TableCell>
                   </TableRow>
                 ))}</TableBody>

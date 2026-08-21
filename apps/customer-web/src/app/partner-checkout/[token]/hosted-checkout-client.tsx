@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import ErrorModal from "../../../components/error-modal";
 import {
   AlertTriangle,
   Check,
@@ -198,8 +199,63 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     setFieldErrors((current) => ({ ...current, [key]: undefined }));
   };
 
-  const nextStep = () => setStep((v) => Math.min(v + 1, 4));
-  const prevStep = () => setStep((v) => Math.max(v - 1, 1));
+  const stepFromUrl = () => {
+    const value = Number(new URLSearchParams(window.location.search).get("step"));
+    return Number.isInteger(value) && value >= 1 && value <= 4 ? value : 1;
+  };
+  const stepPush = (next: number) => {
+    if (typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("step", String(next));
+        window.history.pushState({ step: next }, "", url.toString());
+      } catch {
+        /* history unavailable */
+      }
+    }
+    setStep(next);
+  };
+  const stepBack = () => {
+    if (typeof window !== "undefined" && window.history.state?.step) {
+      window.history.back();
+    } else {
+      setStep((v) => Math.max(1, v - 1));
+    }
+  };
+  // Jump back to an already-completed step: replace the current entry so the
+  // back-stack stays intact (no forward clutter from navigating backwards).
+  const stepJump = (next: number) => {
+    if (typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("step", String(next));
+        window.history.replaceState({ step: next }, "", url.toString());
+      } catch {
+        /* history unavailable */
+      }
+    }
+    setStep(next);
+  };
+  // Never lose a customer mid-verification: block refresh/leave while work is
+  // being saved, documents are being verified, or the order is being submitted.
+  useEffect(() => {
+    const inFlight = busy || verifying || verifyingDoc === "in-progress";
+    if (!inFlight) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [busy, verifying, verifyingDoc]);
+  useEffect(() => {
+    const onPop = () => setStep(Math.min(4, Math.max(1, stepFromUrl())));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const nextStep = () => stepPush(Math.min(step + 1, 4));
+  const prevStep = () => stepBack();
 
   const saveTraveler = () =>
     run(async () => {
@@ -353,6 +409,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
 
   const plan = session!.order.plan;
   const isTopUp = session!.order.orderType === "TOPUP";
+  const requiredDocTypes = session?.order.requiredDocuments ?? ["PASSPORT", "TICKET"];
   return (
     <main className="checkout-page">
       <div className="checkout-shell">
@@ -377,7 +434,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         </div>
         <div className="checkout-layout">
           <section className="checkout-card">
-            {error && <div className="form-error">{error}</div>}
+            {error && <ErrorModal error={error} onClose={() => setError("")} />}
             {done ? (
               <div className="form-section">
                 <div className="success-panel">
@@ -392,13 +449,21 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                 <div className="step-tabs">
                   {(isTopUp ? ["Compatibility", "Review"] : ["Compatibility", "Traveller", "Documents", "Review"]).map((label, index) => {
                     const value = isTopUp ? (index === 0 ? 1 : 4) : index + 1;
+                    const current = step === value;
+                    const passed = step > value;
                     return (
-                      <div
-                        key={label}
-                        className={step === value ? "active" : step > value ? "done" : ""}
-                      >
-                        <i>{step > value ? <Check size={13} /> : value}</i>
-                        <span>{label}</span>
+                      <div key={label} className={current ? "active" : passed ? "done" : ""}>
+                        {passed ? (
+                          <button type="button" onClick={() => stepJump(value)} title={`Go back to ${label}`}>
+                            <i>{<Check size={13} />}</i>
+                            <span>{label}</span>
+                          </button>
+                        ) : (
+                          <>
+                            <i>{passed ? <Check size={13} /> : value}</i>
+                            <span>{label}</span>
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -419,8 +484,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       back={() => {}}
                       backHidden
                       busy={busy}
-                      next={() => run(async () => { if (!compatible) throw new Error("Confirm your device is eSIM compatible first"); setStep(isTopUp ? 4 : 2); })}
+                      blocked={!compatible}
+                      next={() => run(async () => { setStep(isTopUp ? 4 : 2); })}
                     />
+                    {!compatible && (
+                      <p className="form-required">Tick the confirmation above to continue.</p>
+                    )}
                   </div>
                 )}
                 {step === 2 && (
@@ -490,7 +559,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         />
                       ))}
                     </div>
-                    <Nav back={() => prevStep()} busy={busy} next={saveDocuments} />
+                    <Nav back={() => prevStep()} busy={busy} next={saveDocuments} blocked={requiredDocTypes.some((type) => !files[type])} />
+                    {requiredDocTypes.some((type) => !files[type]) && (
+                      <p className="form-required">Add every required document below to continue.</p>
+                    )}
                   </div>
                 )}
                 {step === 4 && (
@@ -502,7 +574,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       ) : verification === null ? (
                         <PassportCheck status={undefined} busy={verifying} onRecheck={() => void verifyPassport()} />
                       ) : (
-                        <PassportCheck status={verification.status} busy={false} onRecheck={() => void verifyPassport()} onEdit={() => setStep(2)} />
+                        <PassportCheck status={verification.status} busy={false} onRecheck={() => void verifyPassport()} onEdit={() => stepJump(2)} />
                       ))}
                     {isTopUp && (
                       <p className="form-note">
@@ -517,8 +589,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       </span>
                     </label>
                     <div className="form-actions">
-                      {!isTopUp && <button className="button secondary" onClick={() => setStep(3)}><ChevronLeft size={16} /> Documents</button>}
-                      {isTopUp && <button className="button secondary" onClick={() => setStep(1)}><ChevronLeft size={16} /> Back</button>}
+                      {!isTopUp && <button className="button secondary" onClick={() => stepJump(3)}><ChevronLeft size={16} /> Documents</button>}
+                      {isTopUp && <button className="button secondary" onClick={() => stepJump(1)}><ChevronLeft size={16} /> Back</button>}
                       <Action busy={busy} disabled={verifying || !gatePassed || !consent} onClick={complete}>
                         Complete order
                       </Action>
@@ -638,13 +710,13 @@ function Action({ busy, onClick, children, disabled }: { busy: boolean; onClick:
     </button>
   );
 }
-function Nav({ back, busy, next, backHidden }: { back: () => void; busy: boolean; next: () => void; backHidden?: boolean }) {
+function Nav({ back, busy, next, backHidden, blocked }: { back: () => void; busy: boolean; next: () => void; backHidden?: boolean; blocked?: boolean }) {
   return (
     <div className="form-actions">
       {!backHidden && (
-        <button className="button secondary" onClick={back}>Back</button>
+        <button className="button secondary" onClick={back} disabled={busy}>Back</button>
       )}
-      <Action busy={busy} onClick={next}>Save and continue</Action>
+      <Action busy={busy} onClick={next} disabled={Boolean(blocked)}>Save and continue</Action>
     </div>
   );
 }

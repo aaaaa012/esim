@@ -1504,6 +1504,7 @@ await tx.order.create({
           ? order.traveler.email
           : order.traveler.mobile,
       orderNumber: order.orderNumber,
+      ...(order.traveler.firstName ? { customerName: order.traveler.firstName } : {}),
     });
   }
 

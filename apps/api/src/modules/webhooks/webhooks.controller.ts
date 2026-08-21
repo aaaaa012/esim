@@ -44,16 +44,22 @@ export class WebhooksController {
     if (!eventId) throw new BadRequestException('eventId is required');
     if (typeof eventId !== 'string' || eventId.length < 8 || eventId.length > 256) throw new BadRequestException('eventId is invalid');
     this.verifyPaymentSignature(this.rawPayload(body, request.rawBody), signature);
-    if (this.accepted.has(`${provider}:${eventId}`) || await this.webhookExists(provider, eventId)) return { accepted: true, duplicate: true };
-    this.remember(`${provider}:${eventId}`);
+    const key = `${provider}:${eventId}`;
+    const existing = await this.webhookState(provider, eventId);
+    if (existing?.deadLetteredAt) return { accepted: true, duplicate: true, deadLettered: true };
+    if (existing?.processedAt) return { accepted: true, duplicate: true };
     const reference = body.reference ?? body.pidx;
     let orderId = body.orderId;
     if (!orderId && reference && this.prisma.enabled) {
       orderId = (await this.prisma.payment.findUnique({ where: { paymentReference: reference }, select: { orderId: true } }))?.orderId;
     }
     const payload = { ...body, ...(reference ? { reference } : {}), ...(orderId ? { orderId } : {}) };
-    await this.persistWebhook(provider, eventId, payload, true);
-    await this.queues.add(QUEUES.payments, 'payment-callback', { provider, eventId, payload }, `${provider}-${eventId}`);
+    // Re-enqueue persisted-but-unprocessed duplicates. This closes the failure
+    // window where the database insert succeeds but Redis is temporarily down,
+    // so a Khalti retry can never be silently dropped.
+    if (!existing) await this.persistWebhook(provider, eventId, payload, true);
+    await this.queues.add(QUEUES.payments, 'payment-callback', { provider, eventId, payload }, key);
+    this.remember(key);
     return { accepted: true, queued: true };
   }
 
@@ -150,4 +156,130 @@ export class OperationsProvisioningOperationsController {
   constructor(private readonly prisma:PrismaService,private readonly reconciliation:ReconciliationService){}
   @Get() async list(@Req() request:AuthenticatedRequest,@Query('state') state?:string){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);if(!this.prisma.enabled)return [];const allowed=['CREATED','SUBMITTING','ACCEPTED','WAITING_FOR_QR','QR_READY','ACTIVATED','RECONCILE_REQUIRED','REJECTED','MANUAL_REVIEW','CANCELLED'];const selected=state&&allowed.includes(state)?state as never:undefined;return this.prisma.provisioningOperation.findMany({where:selected?{state:selected}:{},select:{id:true,orderId:true,provider:true,state:true,idempotencyKey:true,iccid:true,providerProductId:true,providerOrderId:true,providerSubscriptionId:true,attemptCount:true,lastErrorCategory:true,lastErrorMessage:true,submittedAt:true,acceptedAt:true,nextReconcileAt:true,reconcileDeadlineAt:true,completedAt:true,createdAt:true,updatedAt:true,order:{select:{orderNumber:true,status:true,orderType:true}}},orderBy:{updatedAt:'desc'},take:200})}
   @Post(':id/reconcile') async reconcile(@Param('id') id:string,@Req() request:AuthenticatedRequest){requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);return this.reconciliation.reconcileProvisioningOperationNow(id)}
+}
+
+type LogGroup = 'all' | 'provider' | 'incoming' | 'orders' | 'staff';
+type LogEntry = {
+  group: LogGroup;
+  id: string;
+  identifier?: string;
+  title: string;
+  detail: string;
+  status?: number;
+  statusLabel?: string;
+  createdAt: string;
+  durationMs?: number | null;
+  error?: string | null;
+  requestBody?: unknown;
+  responseBody?: unknown;
+};
+
+@Controller('operations/logs')
+@UseGuards(AuthGuard,AccountGuard)
+@AccountTypes(UserRoleName.OPERATIONS,UserRoleName.SUPER_ADMIN)
+export class OperationsLogsController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  @Get()
+  async list(@Req() request:AuthenticatedRequest, @Query('group') group?:string, @Query('q') q?:string, @Query('page') page?:string, @Query('pageSize') pageSize?:string):Promise<{total:number;page:number;pageSize:number;items:LogEntry[]}> {
+    requireRole(request,[UserRole.OPERATIONS,UserRole.SUPER_ADMIN]);
+    if(!this.prisma.enabled)return {total:0,page:1,pageSize:25,items:[]};
+    const selected:LogGroup = group==='provider'||group==='incoming'||group==='orders'||group==='staff' ? group : 'all';
+    const rawPage = Number.parseInt(page ?? '1',10);
+    const pageNum = Number.isFinite(rawPage)&&rawPage>=1 ? rawPage : 1;
+    const rawSize = Number.parseInt(pageSize ?? '25',10);
+    const size = Number.isFinite(rawSize)&&rawSize>=1 ? Math.min(rawSize,50) : 25;
+    const offset = (pageNum-1)*size;
+    const fetchCount = offset+size;
+    const [provider,incoming,orders,staff] = await Promise.all([
+      selected==='provider'||selected==='all' ? this.providerLogs(fetchCount) : [],
+      selected==='incoming'||selected==='all' ? this.incomingLogs(fetchCount) : [],
+      selected==='orders'||selected==='all' ? this.orderLogs(fetchCount) : [],
+      selected==='staff'||selected==='all' ? this.staffLogs(fetchCount) : [],
+    ]);
+    const groups = { provider, incoming, orders, staff };
+    const counts = await Promise.all([
+      selected==='provider'||selected==='all' ? this.prisma.integrationLog.count() : Promise.resolve(0),
+      selected==='incoming'||selected==='all' ? this.prisma.webhookEvent.count() : Promise.resolve(0),
+      selected==='orders'||selected==='all' ? Promise.all([this.prisma.provisioningAttempt.count(),this.prisma.provisioningOperation.count()]).then(([a,b])=>a+b) : Promise.resolve(0),
+      selected==='staff'||selected==='all' ? this.prisma.auditLog.count() : Promise.resolve(0),
+    ]);
+    const exactTotal = counts[0]+counts[1]+counts[2]+counts[3];
+    let items = [...groups.provider,...groups.incoming,...groups.orders,...groups.staff].sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+    let windowTotal:number|undefined;
+    const needle = q?.trim().toLowerCase();
+    if(needle){
+      items = items.filter((it)=>[it.title,it.detail,it.statusLabel,it.identifier,String(it.status??''),it.error].filter(Boolean).some((s)=>String(s).toLowerCase().includes(needle)));
+      windowTotal = items.length;
+    }
+    return { total: windowTotal ?? exactTotal, page: pageNum, pageSize: size, items: items.slice(offset,offset+size) };
+  }
+
+  private async providerLogs(take:number):Promise<LogEntry[]>{
+    const rows = await this.prisma.integrationLog.findMany({orderBy:{createdAt:'desc'},take});
+    return rows.map((row)=>({
+      group:'provider' as const, id:row.id, identifier: this.integrationIdentifier(row.operation,row.endpoint), title: row.operation,
+      detail: `${row.method} ${row.endpoint}`,
+      status: row.status, statusLabel: row.status>=200&&row.status<400?'SUCCESS':'FAILED',
+      createdAt: row.createdAt.toISOString(), durationMs: row.durationMs,
+      error: row.errorMessage ?? row.errorCode ?? null,
+      requestBody: row.requestBody ?? undefined, responseBody: row.responseBody ?? undefined,
+    }));
+  }
+  private integrationIdentifier(operation:string,endpoint:string):string {
+    const op = operation.toLowerCase();
+    const ep = endpoint.toLowerCase();
+    if(op.startsWith('khalti')||ep.includes('khalti')) return 'Khalti';
+    if(op.startsWith('cloudinary')||ep.includes('cloudinary')) return 'Cloudinary';
+    return 'Transatel';
+  }
+
+  private async incomingLogs(take:number):Promise<LogEntry[]>{
+    const rows = await this.prisma.webhookEvent.findMany({orderBy:{createdAt:'desc'},take});
+    const providerNames:Record<string,string>={transatel:'Transatel',khalti:'Khalti',clerk:'Clerk'};
+    return rows.map((row)=>({
+      group:'incoming' as const, id:row.id, identifier: providerNames[row.source.toLowerCase()] ?? row.source.toUpperCase(), title: this.humaneSource(row.source),
+      detail: row.eventId,
+      statusLabel: row.deadLetteredAt?'FAILED':row.processedAt?'PROCESSED':'QUEUED',
+      createdAt: row.createdAt.toISOString(),
+      error: row.errorMessage ?? null,
+      responseBody: row.payload as unknown,
+    }));
+  }
+
+  private async orderLogs(take:number):Promise<LogEntry[]>{
+    const [attempts, operations] = await Promise.all([
+      this.prisma.provisioningAttempt.findMany({orderBy:{createdAt:'desc'},take}),
+      this.prisma.provisioningOperation.findMany({orderBy:{updatedAt:'desc'},take,select:{id:true,state:true,iccid:true,requestSnapshot:true,responseSnapshot:true,lastErrorMessage:true,lastErrorCategory:true,attemptCount:true,createdAt:true,order:{select:{orderNumber:true}}}}),
+    ]);
+    const attemptRows:LogEntry[] = attempts.map((row)=>({
+      group:'orders' as const, id:`attempt-${row.id}`, title:'Activation attempt',
+      detail:`attempt #${row.attempt} · ${row.provider} · order ${row.orderId}`,
+      statusLabel: row.status, createdAt: row.createdAt.toISOString(),
+      error: row.errorCode ?? null, requestBody: row.requestSnapshot as unknown, responseBody: row.responseSnapshot ?? undefined,
+    }));
+    const opRows:LogEntry[] = operations.map((row)=>({
+      group:'orders' as const, id:`op-${row.id}`, title:'eSIM activation',
+      detail: row.order?.orderNumber ? `order ${row.order.orderNumber}` : `order ${row.id}`,
+      statusLabel: row.state, createdAt: row.createdAt.toISOString(),
+      error: row.lastErrorCategory ? `${row.lastErrorCategory}: ${row.lastErrorMessage??''}`.slice(0,2000) : null,
+      requestBody: row.requestSnapshot as unknown, responseBody: row.responseSnapshot ?? undefined,
+    }));
+    return [...attemptRows,...opRows].sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  }
+
+  private async staffLogs(take:number):Promise<LogEntry[]>{
+    const rows = await this.prisma.auditLog.findMany({orderBy:{createdAt:'desc'},take,include:{performedBy:{select:{email:true}}}});
+    return rows.map((row)=>({
+      group:'staff' as const, id:row.id, title: row.action,
+      detail: `${row.module} · ${row.entity} · ${row.entityId}` + (row.performedBy?.email?` · by ${row.performedBy.email}`:''),
+      createdAt: row.createdAt.toISOString(),
+      requestBody: row.previousValue ?? undefined, responseBody: row.newValue ?? undefined,
+    }));
+  }
+
+  private humaneSource(source:string):string {
+    const map:Record<string,string>={transatel:'Network provider',khalti:'Payment gateway',clerk:'Accounts'};
+    return map[source.toLowerCase()]??source;
+  }
 }

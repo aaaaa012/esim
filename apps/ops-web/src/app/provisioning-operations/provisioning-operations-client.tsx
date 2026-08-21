@@ -7,6 +7,7 @@ import { useAuthenticatedFetch } from '../authenticated-api-provider';
 import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { StatusBadge, humane } from '@/components/status-badge';
+import ErrorDialog from '@/components/error-dialog';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -25,15 +26,35 @@ type Operation = {
 };
 const recoverable = new Set(['ACCEPTED', 'WAITING_FOR_QR', 'RECONCILE_REQUIRED', 'MANUAL_REVIEW']);
 
+function humaniseTitle(title: string) {
+  return title.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function shortError(item: Operation): string {
+  const raw = item.lastErrorMessage;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { title?: string; detail?: string };
+      if (parsed.title) return humaniseTitle(parsed.title);
+      if (parsed.detail) return parsed.detail.length > 120 ? `${parsed.detail.slice(0, 120)}…` : parsed.detail;
+    } catch {
+      /* not JSON */
+    }
+    return raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
+  }
+  return item.lastErrorCategory ? humaniseTitle(item.lastErrorCategory) : '—';
+}
+
 export default function ProvisioningOperationsClient() {
   const authFetch = useAuthenticatedFetch();
   const [items, setItems] = useState<Operation[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
+  const [viewError, setViewError] = useState<string | null>(null);
   const load = async () => {
     const response = await authFetch(`${API}/operations/provisioning-operations`, { headers: {} });
     const value = await response.json();
-    if (!response.ok) throw new Error(value.error?.message ?? 'Could not load set-up recovery');
+    if (!response.ok) throw new Error(value.error?.message ?? 'Could not load pending activations');
     setItems(value.data ?? []);
   };
   useEffect(() => {
@@ -59,11 +80,12 @@ export default function ProvisioningOperationsClient() {
   return (
     <>
       <PageHeader
-        title="Set-up recovery"
+        title="Pending activations"
         description="Orders where the network set-up is stuck or uncertain. Use Check again to safely continue without creating a duplicate."
         actions={<Button variant="outline" onClick={() => void load()}><RefreshCcw className="size-4" />Refresh</Button>}
       />
-      {error ? <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</div> : null}
+      <ErrorDialog error={error} onClose={() => setError('')} />
+      <ErrorDialog error={viewError} title="Full problem details" onClose={() => setViewError(null)} />
       <Panel title="Orders needing attention" description="Set-ups that are delayed, uncertain, or waiting for review" noPadding>
         {!items.length ? (
           <EmptyState title="Nothing is stuck" description="All network set-ups are moving normally. This screen is for rare recovery cases." />
@@ -88,7 +110,18 @@ export default function ProvisioningOperationsClient() {
                   </TableCell>
                   <TableCell><StatusBadge label={item.state} /></TableCell>
                   <TableCell><code className="text-xs">{item.iccid}</code></TableCell>
-                  <TableCell className="max-w-72 text-xs text-muted-foreground">{item.lastErrorMessage ?? item.lastErrorCategory ?? '—'}</TableCell>
+                  <TableCell className="max-w-56">
+                      <span className="truncate text-xs text-muted-foreground" title={item.lastErrorMessage ?? undefined}>{shortError(item)}</span>
+                      {item.lastErrorMessage && (
+                        <button
+                          type="button"
+                          className="ml-2 text-xs font-medium text-primary hover:underline"
+                          onClick={() => setViewError(item.lastErrorMessage ?? '')}
+                        >
+                          View
+                        </button>
+                      )}
+                    </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
