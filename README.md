@@ -17,7 +17,7 @@ API documentation is available at `http://localhost:4000/api/docs` after the API
 
 - Node.js 22 or newer
 - pnpm 11.9.0 (`corepack enable` is recommended)
-- A CockroachDB or CockroachDB-compatible PostgreSQL connection
+- A PostgreSQL 15+ connection
 - A Clerk development application
 - Redis with a TCP/TLS endpoint when BullMQ processing is required
 
@@ -50,7 +50,8 @@ openssl rand -hex 32
 Put the first result in `APP_ENCRYPTION_KEY_BASE64` and the second in `PII_HASH_KEY`. Then configure at least:
 
 ```dotenv
-DATABASE_URL=postgresql://user:password@host:26257/visa_compass?sslmode=require
+DATABASE_URL=postgresql://app_user:password@host:5432/postgres?schema=visa_compass&sslmode=require
+DIRECT_DATABASE_URL=postgresql://migration_user:password@host:5432/postgres?schema=visa_compass&sslmode=require
 PERSISTENCE_MODE=prisma
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...

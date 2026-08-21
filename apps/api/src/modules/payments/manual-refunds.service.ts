@@ -12,6 +12,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { withPostgresTransactionRetry } from "../../infrastructure/postgres-transaction-retry.js";
 import { OrdersService } from "../orders/orders.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 
@@ -276,62 +277,64 @@ export class ManualRefundsService {
         "Partial refunds are not supported; the amount must equal the confirmed payment",
       );
     try {
-      await this.prisma.$transaction(
-        async (tx) => {
-          const claimed = await tx.manualRefund.updateMany({
-            where: { id, status: ManualRefundStatus.APPROVED },
-            data: {
-              status: ManualRefundStatus.COMPLETED,
-              activeKey: null,
-              reviewedById: actorId,
-              providerReference: reference,
-              completionNote: input.note?.trim() || null,
-              completedAt,
-            },
-          });
-          if (claimed.count !== 1)
-            throw new ConflictException(
-              "This manual refund was changed by another administrator",
-            );
-          await tx.payment.update({
-            where: { id: current.paymentId },
-            data: { status: PaymentStatus.REFUNDED },
-          });
-          await tx.order.update({
-            where: { id: current.orderId },
-            data: { status: OrderStatus.REFUNDED, version: { increment: 1 } },
-          });
-          await tx.orderEvent.create({
-            data: {
-              orderId: current.orderId,
-              fromStatus: current.order.status,
-              toStatus: OrderStatus.REFUNDED,
-              actorId,
-              reason: `Manual refund completed (${reference})`,
-              metadata: { manualRefundId: id, reason: current.reason },
-            },
-          });
-          await tx.auditLog.create({
-            data: {
-              module: "PAYMENTS",
-              entity: "ManualRefund",
-              entityId: id,
-              action: "MANUAL_REFUND_COMPLETED",
-              performedById: actorId,
-              previousValue: {
-                orderStatus: current.order.status,
-                paymentStatus: current.payment.status,
-              } as Prisma.InputJsonValue,
-              newValue: {
-                orderStatus: OrderStatus.REFUNDED,
-                paymentStatus: PaymentStatus.REFUNDED,
+      await withPostgresTransactionRetry(() =>
+        this.prisma.$transaction(
+          async (tx) => {
+            const claimed = await tx.manualRefund.updateMany({
+              where: { id, status: ManualRefundStatus.APPROVED },
+              data: {
+                status: ManualRefundStatus.COMPLETED,
+                activeKey: null,
+                reviewedById: actorId,
                 providerReference: reference,
-                amount: input.amount,
-              } as Prisma.InputJsonValue,
-            },
-          });
-        },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+                completionNote: input.note?.trim() || null,
+                completedAt,
+              },
+            });
+            if (claimed.count !== 1)
+              throw new ConflictException(
+                "This manual refund was changed by another administrator",
+              );
+            await tx.payment.update({
+              where: { id: current.paymentId },
+              data: { status: PaymentStatus.REFUNDED },
+            });
+            await tx.order.update({
+              where: { id: current.orderId },
+              data: { status: OrderStatus.REFUNDED, version: { increment: 1 } },
+            });
+            await tx.orderEvent.create({
+              data: {
+                orderId: current.orderId,
+                fromStatus: current.order.status,
+                toStatus: OrderStatus.REFUNDED,
+                actorId,
+                reason: `Manual refund completed (${reference})`,
+                metadata: { manualRefundId: id, reason: current.reason },
+              },
+            });
+            await tx.auditLog.create({
+              data: {
+                module: "PAYMENTS",
+                entity: "ManualRefund",
+                entityId: id,
+                action: "MANUAL_REFUND_COMPLETED",
+                performedById: actorId,
+                previousValue: {
+                  orderStatus: current.order.status,
+                  paymentStatus: current.payment.status,
+                } as Prisma.InputJsonValue,
+                newValue: {
+                  orderStatus: OrderStatus.REFUNDED,
+                  paymentStatus: PaymentStatus.REFUNDED,
+                  providerReference: reference,
+                  amount: input.amount,
+                } as Prisma.InputJsonValue,
+              },
+            });
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        ),
       );
     } catch (error) {
       if (

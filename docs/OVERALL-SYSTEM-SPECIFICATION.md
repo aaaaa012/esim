@@ -19,7 +19,7 @@ flowchart LR
   CW --> API[NestJS API]
   PA --> API
   OW --> API
-  API --> DB[(CockroachDB via Prisma)]
+  API --> DB[(PostgreSQL via Prisma)]
   API --> R[Redis + BullMQ]
   API --> K[Khalti payment]
   API --> T[Transatel eSIM]
@@ -28,7 +28,7 @@ flowchart LR
   API --> S[Cloudinary private documents]
 ```
 
-The API is the central decision point. It validates requests, applies business rules, controls access, records changes and connects the web applications to the external providers. CockroachDB is the durable business record when `PERSISTENCE_MODE=prisma`. Redis/BullMQ runs work that should not keep a customer waiting, such as provisioning, notifications and callback processing.
+The API is the central decision point. It validates requests, applies business rules, controls access, records changes and connects the web applications to the external providers. PostgreSQL is the durable business record when `PERSISTENCE_MODE=prisma`. Redis/BullMQ runs work that should not keep a customer waiting, such as provisioning, notifications and callback processing.
 
 ## 2. Main parts of the system
 
@@ -38,7 +38,7 @@ The API is the central decision point. It validates requests, applies business r
 | Hosted checkout        | A token-based partner traveller/document flow.       | Lets a partner use Visa Compass pages instead of building its own checkout.                           | Checkout-link partners and travellers.                               |
 | Ops Web (Next.js)      | Internal Operations/Admin website.                   | Lets staff investigate and resolve operational work.                                                  | Operations and Super Admin users.                                    |
 | API (NestJS)           | Backend service.                                     | Enforces validation, RBAC, lifecycle changes, integrations and response redaction.                    | Every portal and integration.                                        |
-| CockroachDB / Prisma   | Primary business database.                           | Holds users, plans, orders, payments, documents, eSIM stock, subscriptions, events and audit records. | Every durable business process.                                      |
+| PostgreSQL / Prisma   | Primary business database.                           | Holds users, plans, orders, payments, documents, eSIM stock, subscriptions, events and audit records. | Every durable business process.                                      |
 | Khalti                 | Customer payment gateway.                            | Starts and verifies direct customer payments.                                                         | Customer checkout.                                                   |
 | Transatel              | Connectivity/eSIM provider.                          | Supplies catalogue, provisioning, lifecycle and usage information.                                    | eSIM fulfilment.                                                     |
 | Clerk                  | Identity provider.                                   | Handles customer/staff sign-in and identity synchronisation. Database roles still decide permissions. | Sign-in and staff access.                                            |
@@ -207,7 +207,7 @@ BullMQ queues are `provisioning`, `provider-callbacks`, `payments`, `notificatio
 
 ## 13. Environments and configuration
 
-Local development can use simulator modes. Production needs `NODE_ENV=production`, CockroachDB, Redis, encryption/hashing keys, Clerk production keys/webhook secret, Khalti keys/webhook secret, Transatel OAuth/callback secret, Cloudinary and live notification credentials. Main URLs are `API_PUBLIC_URL`, `CUSTOMER_WEB_URL`, `OPS_WEB_URL` and `NEXT_PUBLIC_API_URL`.
+Local development can use simulator modes. Production needs `NODE_ENV=production`, PostgreSQL, Redis, encryption/hashing keys, Clerk production keys/webhook secret, Khalti keys/webhook secret, Transatel OAuth/callback secret, Cloudinary and live notification credentials. Main URLs are `API_PUBLIC_URL`, `CUSTOMER_WEB_URL`, `OPS_WEB_URL` and `NEXT_PUBLIC_API_URL`.
 
 Production requires `ORDER_WORKFLOW_MODE=database-first`. Lifecycle mutations refresh canonical PostgreSQL state and use optimistic versions; Redis is limited to transport, coordination, and bounded leases. Run the API with `PROCESS_ROLE=api`, the platform-neutral workflow worker with `pnpm --filter @visa-compass/api start:workflow-worker`, and the one-concurrency OCR worker with `pnpm --filter @visa-compass/api start:ocr-worker`. UAT/production domain names, provider certification status, and deployment platform remain environment-specific.
 

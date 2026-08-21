@@ -31,7 +31,7 @@ money and real customers live.
 | Item                            | Purpose                                              | Status            |
 | ------------------------------- | ---------------------------------------------------- | ----------------- |
 | Production **server / hosting** | Where the app runs 24/7                              | ▢ Needed          |
-| **Database** (CockroachDB)      | Stores customers, orders, payments                   | ▢ Needed          |
+| **Database** (PostgreSQL)      | Stores customers, orders, payments                   | ▢ Needed          |
 | **Redis**                       | Background jobs (OCR, provisioning, payments checks) | ▢ Needed          |
 | **Internet access** (egress)    | Reach providers (Khalti, Transatel, OCR files)       | ▢ Confirm allowed |
 

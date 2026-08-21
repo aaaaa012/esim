@@ -633,7 +633,7 @@ integration calls are recorded.
 | Documents       | Local "simulator" signed upload                                                      | Cloudinary authenticated upload                             |
 | Email/WhatsApp  | `NOTIFICATION_MODE=simulator` (no real send)                                         | Resend / WhatsApp Cloud API                                 |
 | Jobs            | In-process "fake" queue                                                              | BullMQ + Redis                                              |
-| Persistence     | In-memory order map (lost on restart)                                                | CockroachDB/Postgres via Prisma (`PERSISTENCE_MODE=prisma`) |
+| Persistence     | In-memory order map (lost on restart)                                                | PostgreSQL/Postgres via Prisma (`PERSISTENCE_MODE=prisma`) |
 
 ---
 

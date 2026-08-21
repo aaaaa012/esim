@@ -33,7 +33,7 @@ export class PrismaService
       return;
     }
     await this.$connect();
-    this.logger.log("CockroachDB connection established");
+    this.logger.log("PostgreSQL connection established");
   }
 
   async onModuleDestroy() {

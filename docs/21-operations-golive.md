@@ -3,7 +3,7 @@
 This guide describes the operator-facing features added for production go-live:
 the Super Admin approval gate over SIM-profile and plan uploads, the public
 `/metrics` endpoint, structured logging, Redis-aware readiness, operational
-alerts, and the CockroachDB backup / disaster-recovery runbook.
+alerts, and the PostgreSQL backup / disaster-recovery runbook.
 
 It assumes the platform described in `docs/PLATFORM-SPECIFICATION.md` and
 `docs/19-observability-hardening.md`.
@@ -133,44 +133,33 @@ Reconciliation failures increment
 
 ---
 
-## 6. CockroachDB backup / disaster recovery runbook
+## 6. PostgreSQL backup / disaster recovery runbook
 
 ### Recommended approach
 
-CockroachDB emits streaming **RESTORE**-compatible
-[`BACKUP`](https://www.cockroachlabs.com/docs/stable/backup) snapshots to cloud
-storage (S3 / GCS / Azure) — prefer this over SQL dumps for scale and point
-in-time recovery. Schedule `BACKUP INTO` on a cron as below. For very small
-deployments, `cockroach dump` produces a portable SQL text export.
+Enable managed point-in-time recovery on Supabase or AWS RDS. Keep independent
+custom-format backups for restore drills and provider-independent recovery.
 
 ### SQL dump backup (small footprint)
 
-Use `scripts/db-backup.*` (PowerShell and Bash variants) to run
-`cockroach dump` with the app identity from `DATABASE_URL`. It:
+Use `scripts/db-backup.*` (PowerShell and Bash variants) with the elevated,
+direct `DIRECT_DATABASE_URL`. The scripts:
 
-1. runs `cockroach dump` for `public` schema tables into a timestamped `.sql`
-   file;
+1. run `pg_dump` for the `visa_compass` schema into a timestamped custom-format
+   `.dump` file;
 2. verifies the dump is non-empty;
-3. keeps only the most recent `BACKUP_RETENTION` files (default 14).
+3. keep only the requested number of recent files (default 14).
 
-Write access to the database is required. Run on a schedule, e.g. cron
+Read access to the application schema is required. Run on a schedule, e.g. cron
 `0 3 * * *` or a Task Scheduler job.
 
-### REST backup (recommended for production)
-
-```sql
--- Requires COCKROACH_BACKUP_* credentials in the statement or an implicit
--- external-io connection. S3 example:
-BACKUP INTO 's3://visa-compass-backups/api?AWS_ACCESS_KEY_ID=...&AWS_SECRET_ACCESS_KEY=...';
-```
-
-Automate with a cron job that invokes `cockroach sql --execute "BACKUP INTO ..."`.
-Add `AS OF SYSTEM TIME '-10s'` to a repeated-schedule point-in-time profile.
+Store encrypted copies outside the database provider account. Supabase and RDS
+point-in-time recovery complement these dumps; they do not replace restore tests.
 
 ### Disaster recovery steps
 
-1. **Restore the database:** `cockroach restore` from the latest backup into a
-   freshly provisioned cluster (same DB name): `cockroach -db=visa_compass restore from 's3://...'`.
+1. **Restore the database:** create an empty PostgreSQL database and restore the
+   latest dump with `pg_restore --no-owner --no-acl --dbname "$DIRECT_DATABASE_URL" backup.dump`.
 2. **Bring API VIP...**: apply any pending Prisma migrations that were not yet
    shipped: `pnpm --filter api prisma:migrate`.
 3. **Restore operator identity / secrets:** recreate `.env` from the secrets
@@ -181,8 +170,7 @@ Add `AS OF SYSTEM TIME '-10s'` to a repeated-schedule point-in-time profile.
 
 ### RPO / RTO guidance
 
-- **RPO**: equal to your `BACKUP` frequency (minutes-to-hours for streaming
-  repeated backups).
+- **RPO**: the smaller of managed PITR coverage and independent dump frequency.
 - **RTO**: restore time + migration time + service start; pre-provision a
   standby cluster and load test the restore to reduce this.
 
@@ -196,11 +184,11 @@ Add `AS OF SYSTEM TIME '-10s'` to a repeated-schedule point-in-time profile.
 
 ## 7. Go-live checklist
 
-- [ ] Apply migrations to a real CockroachDB: `pnpm --filter api prisma:migrate`.
+- [ ] Apply migrations to a real PostgreSQL: `pnpm --filter api prisma:migrate`.
 - [ ] Set `NODE_ENV=production`, `TRUST_PROXY`, `REDIS_URL`, `OPS_ALERT_EMAIL`.
 - [ ] Configure real secrets: `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`,
       `BOOTSTRAP_SUPER_ADMIN_TOKEN`, Khalti, Transatel, Cloudinary, Resend.
 - [ ] Set `STAFF_EMAIL_DOMAIN` (default `visacompassnepal.com`) — staff accounts are
       pre-provisioned by a Super Admin at this domain; there is no public staff sign-up.
 - [ ] Point `/metrics` at a Prometheus scrape and add the failure alert rules.
-- [ ] Schedule a nightly Cockroach `BACKUP` and a monthly restore drill.
+- [ ] Enable managed PITR, schedule nightly `pg_dump`, and run a monthly restore drill.

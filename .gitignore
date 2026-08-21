@@ -12,6 +12,9 @@ graphify-out/
 *.log
 *.tsbuildinfo
 apps/api/prisma/dev.db
+apps/api/generated/cockroach-client/
+.postgres-transfer-checkpoint.json
+apps/api/.postgres-transfer-checkpoint.json
 .clerk/
 .opencode/
 apps/api/eng.traineddata

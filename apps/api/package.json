@@ -6,16 +6,22 @@
   "scripts": {
     "build": "nest build",
     "dev": "node --env-file-if-exists=../../.env node_modules/@nestjs/cli/bin/nest.js start --watch",
-    "start": "pnpm prisma:deploy && node dist/src/main.js",
+    "start": "node dist/src/main.js",
+    "start:with-migrations": "pnpm prisma:deploy && node dist/src/main.js",
     "start:ocr-worker": "node dist/src/ocr-worker.js",
     "start:workflow-worker": "node dist/src/workflow-worker.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js generate",
+    "prisma:generate:source": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js generate --schema prisma/source-cockroach.prisma",
     "prisma:deploy": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js migrate deploy",
     "prisma:migrate": "node --env-file-if-exists=../../.env node_modules/prisma/build/index.js migrate dev",
-    "prisma:seed": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/seed.ts"
+    "prisma:seed": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/seed.ts",
+    "db:transfer": "pnpm prisma:generate:source && node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/transfer-cockroach-to-postgres.ts",
+    "db:validate-transfer": "pnpm prisma:generate:source && node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/validate-postgres-transfer.ts",
+    "db:transfer:typecheck": "pnpm prisma:generate:source && tsc -p tsconfig.transfer.json",
+    "db:smoke": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/postgres-smoke.ts"
   },
   "dependencies": {
     "@clerk/backend": "^2.14.0",

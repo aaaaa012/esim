@@ -394,7 +394,7 @@ export class OrdersService implements OnModuleInit {
    * Builds the Prisma `OR` filter for looking up a customer by either its
    * internal UUID id or the Clerk identity id. Clerk ids are not UUIDs, so the
    * `id` clause is only included when the value can legally cast to the UUID
-   * column, otherwise CockroachDB rejects the query with a cast error.
+   * column, otherwise PostgreSQL rejects the query with a cast error.
    */
   private customerMatch(ownerId: string) {
     const uuid =

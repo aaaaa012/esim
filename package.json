@@ -13,7 +13,9 @@
     "db:generate": "pnpm --filter @visa-compass/api prisma:generate",
     "db:migrate": "pnpm --filter @visa-compass/api prisma:migrate",
     "db:deploy": "pnpm --filter @visa-compass/api prisma:deploy",
-    "db:seed": "pnpm --filter @visa-compass/api prisma:seed"
+    "db:seed": "pnpm --filter @visa-compass/api prisma:seed",
+    "db:transfer": "pnpm --filter @visa-compass/api db:transfer",
+    "db:validate-transfer": "pnpm --filter @visa-compass/api db:validate-transfer"
   },
   "devDependencies": {
     "prettier": "^3.6.2",

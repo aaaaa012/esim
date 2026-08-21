@@ -185,7 +185,7 @@ surfaced to customers later.
 | Component                         | Plain-English role                                                                                                                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Sign-in (Clerk)**               | Handles logins/passwords/MFA so we don't store passwords ourselves. Customer and staff are **separate accounts** — staff can never see the customer website as a customer and vice versa. |
-| **Database (CockroachDB)**        | The single source of truth: customers, orders, documents, payments, inventory, subscriptions, audit logs.                                                                                 |
+| **Database (PostgreSQL)**        | The single source of truth: customers, orders, documents, payments, inventory, subscriptions, audit logs.                                                                                 |
 | **Telecom provider (Transatel)**  | The company that actually turns on the eSIM in the destination network.                                                                                                                   |
 | **Wallets (Khalti)**              | Collect the money in NPR.                                                                                                                                                                 |
 | **Document storage (Cloudinary)** | Holds passport/ticket files privately, with short-lived access links.                                                                                                                     |
@@ -241,7 +241,7 @@ agencies, etc.) sell Visa Compass eSIMs inside their own systems:
 | Customer portal             | Next.js App Router (React)                                                                             |
 | Operations portal           | Next.js App Router (React)                                                                             |
 | Shared contracts/validation | Internal `@visa-compass/shared` package (zod schemas, enums, error codes)                              |
-| Database                    | CockroachDB via Prisma (enums, Decimal money, Json columns)                                            |
+| Database                    | PostgreSQL via Prisma (enums, Decimal money, Json columns)                                            |
 | Background jobs             | BullMQ on Redis (3 attempts, exponential backoff)                                                      |
 | Auth                        | Clerk (JWT, authorized parties, MFA flag from session `fva`)                                           |
 | Payments                    | Khalti adapter + local simulator                                                                       |

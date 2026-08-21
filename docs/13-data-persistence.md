@@ -13,7 +13,7 @@ Primary sources: `apps/api/prisma/schema.prisma`,
   (`prisma.service.ts:7`).
 - `onModuleInit` connects when enabled, else logs "Prisma persistence
   disabled; using the local in-memory workflow store".
-- DB: CockroachDB (`schema.prisma:7`, `provider = "cockroachdb"`).
+- DB: PostgreSQL (`schema.prisma`, `provider = "postgresql"`).
 
 When disabled, services degrade:
 

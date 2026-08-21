@@ -1,11 +1,11 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../generated/cockroach-client"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_DATABASE_URL")
+  provider = "cockroachdb"
+  url      = env("SOURCE_DATABASE_URL")
 }
 
 enum UserStatus {

@@ -45,7 +45,7 @@ All requests are namespaced under `/api/v1`. Swagger is exposed at
   `ApiExceptionFilter`, the global `RateLimitGuard`, and three global
   interceptors (Correlation → Logging → Idempotency).
 - **Persistence** (`apps/api/src/infrastructure/prisma.service.ts:7`):
-  Prisma + CockroachDB is active only when `PERSISTENCE_MODE=prisma` and
+  Prisma + PostgreSQL is active only when `PERSISTENCE_MODE=prisma` and
   `DATABASE_URL` are set. Otherwise the API runs entirely from an in-memory
   order store (`OrdersService.orders` Map) plus in-memory queue/notification
   simulation — used for local development and tests.
@@ -121,10 +121,10 @@ just-in-time sync:
 
 ## 3. Database schema (`apps/api/prisma/schema.prisma`)
 
-Provider: `cockroachdb`. All JSON columns are `Json`; all money columns are
-`Decimal(12,2)`; UUID PKs are `String @db.Uuid`. Pending migrations (not yet
-applied to a real database): `20260804000300_transatel_provider_columns`,
-`20260805000100_subscription_usage`, `20260805000200_integration_log`.
+Provider: `postgresql`. All JSON columns are `Json`; all money columns are
+`Decimal(12,2)`; UUID PKs are `String @db.Uuid`. The active migration history
+starts with the PostgreSQL baseline; the former Cockroach history is retained
+under `prisma/migrations-cockroach-archive` for audit only.
 
 ### 3.1 Identity & RBAC
 
@@ -924,7 +924,7 @@ redirects unverified-MFA Super Admins to `/security`.
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Runtime       | `NODE_ENV`, `PORT` (4000), `API_PUBLIC_URL`, `CUSTOMER_WEB_URL`, `OPS_WEB_URL`                                                                                                                                                                                                                                                                                                                                                             |
 | Crypto        | `APP_ENCRYPTION_KEY_BASE64` (32-byte base64), `PII_HASH_KEY`                                                                                                                                                                                                                                                                                                                                                                               |
-| Database      | `DATABASE_URL` (CockroachDB), `PERSISTENCE_MODE` (`prisma` enables persistence)                                                                                                                                                                                                                                                                                                                                                            |
+| Database      | `DATABASE_URL` (PostgreSQL), `PERSISTENCE_MODE` (`prisma` enables persistence)                                                                                                                                                                                                                                                                                                                                                            |
 | Clerk         | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `BOOTSTRAP_SUPER_ADMIN_EMAIL`, `ENFORCE_SUPER_ADMIN_MFA` (default true)                                                                                                                                                                                                                                                                                   |
 | Queues        | `REDIS_URL` (empty → simulation), `QUEUE_CONCURRENCY` (3), `RECONCILIATION_INTERVAL_MINUTES` (15)                                                                                                                                                                                                                                                                                                                                          |
 | Hardening     | `RATE_LIMIT_PER_MINUTE` (300), `AUTH_RATE_LIMIT_PER_MINUTE` (60)                                                                                                                                                                                                                                                                                                                                                                           |
@@ -940,10 +940,10 @@ redirects unverified-MFA Super Admins to `/security`.
 ## 15. Operating notes / known limitations
 
 - The three newest migrations are committed but **not applied** to any real
-  database; run `pnpm db:migrate` on a real CockroachDB before staging.
+  database; run `pnpm db:migrate` on a real PostgreSQL before staging.
 - In-memory rate limiting, webhook dedup, orders, notifications, and queue
   simulation are per-process — for multi-instance production, configure
-  Redis (`REDIS_URL`) and the shared CockroachDB.
+  Redis (`REDIS_URL`) and the shared PostgreSQL.
 - Live provider/payment/notification credentials have not been smoke-tested;
   until then all integrations report `CONFIG_REQUIRED`/`SIMULATED` in the ops
   dashboard.

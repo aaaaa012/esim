@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "prisma/transfer-cockroach-to-postgres.ts",
+    "prisma/transfer-helpers.ts",
+    "prisma/validate-postgres-transfer.ts",
+    "prisma/postgres-smoke.ts"
+  ]
+}

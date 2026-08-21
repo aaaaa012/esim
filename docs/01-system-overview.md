@@ -13,7 +13,7 @@ Source of truth: `README.md` (repository root), `apps/api/src/app.module.ts`,
 
 | Workspace           | Tech                                 | Purpose                                | Local URL               |
 | ------------------- | ------------------------------------ | -------------------------------------- | ----------------------- |
-| `apps/api`          | NestJS, Prisma (CockroachDB), BullMQ | Business API                           | `http://localhost:4000` |
+| `apps/api`          | NestJS, Prisma (PostgreSQL), BullMQ | Business API                           | `http://localhost:4000` |
 | `apps/customer-web` | Next.js App Router                   | Customer portal                        | `http://localhost:3000` |
 | `apps/ops-web`      | Next.js App Router                   | Operations/admin portal                | `http://localhost:3001` |
 | `packages/shared`   | TypeScript                           | Shared contracts, schemas, error codes | internal                |

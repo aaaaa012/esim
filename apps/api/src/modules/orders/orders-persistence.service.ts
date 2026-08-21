@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { withPostgresTransactionRetry } from "../../infrastructure/postgres-transaction-retry.js";
 import type { DemoOrder } from "./orders.service.js";
 import type { PassportVerificationResult } from "./passport-verification.service.js";
 
@@ -543,100 +544,104 @@ export class OrdersPersistenceService {
   }> {
     if (!this.prisma.enabled)
       return { claimed: true, alreadyCompleted: false, requiresReview: false };
-    return this.prisma.$transaction(
-      async (tx) => {
-        const payment = await tx.payment.findUnique({
-          where: { paymentReference: reference },
-          select: {
-            orderId: true,
-            status: true,
-            order: { select: { status: true } },
-          },
-        });
-        if (!payment || payment.orderId !== orderId)
-          throw new ConflictException(
-            "Payment reference does not belong to this order",
-          );
-        if (payment.status === PaymentStatus.COMPLETED)
-          return {
-            claimed: false,
-            alreadyCompleted: true,
-            requiresReview: false,
-          };
-        const orderCanAdvance = [
-          OrderStatus.PAYMENT_PENDING,
-          OrderStatus.PAYMENT_REVIEW_REQUIRED,
-        ].includes(payment.order.status as OrderStatus);
-        const paid = await tx.payment.updateMany({
-          where: {
-            paymentReference: reference,
-            orderId,
-            status: {
-              in: [
-                PaymentStatus.PENDING,
-                PaymentStatus.REVIEW_REQUIRED,
-              ] as DbPaymentStatus[],
-            },
-          },
-          data: {
-            status: PaymentStatus.COMPLETED as DbPaymentStatus,
-            ...(transactionId ? { providerTransactionId: transactionId } : {}),
-            paidAt: new Date(),
-          },
-        });
-        if (paid.count !== 1) {
-          const latest = await tx.payment.findUnique({
+    return withPostgresTransactionRetry(() =>
+      this.prisma.$transaction(
+        async (tx) => {
+          const payment = await tx.payment.findUnique({
             where: { paymentReference: reference },
-            select: { status: true },
+            select: {
+              orderId: true,
+              status: true,
+              order: { select: { status: true } },
+            },
           });
-          return {
-            claimed: false,
-            alreadyCompleted: latest?.status === PaymentStatus.COMPLETED,
-            requiresReview: false,
-          };
-        }
-        if (!orderCanAdvance)
+          if (!payment || payment.orderId !== orderId)
+            throw new ConflictException(
+              "Payment reference does not belong to this order",
+            );
+          if (payment.status === PaymentStatus.COMPLETED)
+            return {
+              claimed: false,
+              alreadyCompleted: true,
+              requiresReview: false,
+            };
+          const orderCanAdvance = [
+            OrderStatus.PAYMENT_PENDING,
+            OrderStatus.PAYMENT_REVIEW_REQUIRED,
+          ].includes(payment.order.status as OrderStatus);
+          const paid = await tx.payment.updateMany({
+            where: {
+              paymentReference: reference,
+              orderId,
+              status: {
+                in: [
+                  PaymentStatus.PENDING,
+                  PaymentStatus.REVIEW_REQUIRED,
+                ] as DbPaymentStatus[],
+              },
+            },
+            data: {
+              status: PaymentStatus.COMPLETED as DbPaymentStatus,
+              ...(transactionId
+                ? { providerTransactionId: transactionId }
+                : {}),
+              paidAt: new Date(),
+            },
+          });
+          if (paid.count !== 1) {
+            const latest = await tx.payment.findUnique({
+              where: { paymentReference: reference },
+              select: { status: true },
+            });
+            return {
+              claimed: false,
+              alreadyCompleted: latest?.status === PaymentStatus.COMPLETED,
+              requiresReview: false,
+            };
+          }
+          if (!orderCanAdvance)
+            return {
+              claimed: true,
+              alreadyCompleted: false,
+              requiresReview: true,
+            };
+          const transitioned = await tx.order.updateMany({
+            where: {
+              id: orderId,
+              status: {
+                in: [
+                  OrderStatus.PAYMENT_PENDING,
+                  OrderStatus.PAYMENT_REVIEW_REQUIRED,
+                ] as DbOrderStatus[],
+              },
+            },
+            data: {
+              status: OrderStatus.PAYMENT_CONFIRMED as DbOrderStatus,
+              version: { increment: 1 },
+            },
+          });
+          if (transitioned.count === 1) {
+            await tx.orderEvent.create({
+              data: {
+                orderId,
+                fromStatus: payment.order.status as DbOrderStatus,
+                toStatus: OrderStatus.PAYMENT_CONFIRMED as DbOrderStatus,
+                reason: "Gateway payment confirmed",
+              },
+            });
+          }
           return {
             claimed: true,
             alreadyCompleted: false,
-            requiresReview: true,
+            requiresReview: false,
           };
-        const transitioned = await tx.order.updateMany({
-          where: {
-            id: orderId,
-            status: {
-              in: [
-                OrderStatus.PAYMENT_PENDING,
-                OrderStatus.PAYMENT_REVIEW_REQUIRED,
-              ] as DbOrderStatus[],
-            },
-          },
-          data: {
-            status: OrderStatus.PAYMENT_CONFIRMED as DbOrderStatus,
-            version: { increment: 1 },
-          },
-        });
-        if (transitioned.count === 1) {
-          await tx.orderEvent.create({
-            data: {
-              orderId,
-              fromStatus: payment.order.status as DbOrderStatus,
-              toStatus: OrderStatus.PAYMENT_CONFIRMED as DbOrderStatus,
-              reason: "Gateway payment confirmed",
-            },
-          });
-        }
-        return {
-          claimed: true,
-          alreadyCompleted: false,
-          requiresReview: false,
-        };
-      },
-      {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-        maxWait: 15_000,
-        timeout: 45_000,
-      },
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 15_000,
+          timeout: 45_000,
+        },
+      ),
     );
   }
 

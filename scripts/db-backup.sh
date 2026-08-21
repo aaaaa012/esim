@@ -1,50 +1,30 @@
 #!/usr/bin/env bash
-# CockroachDB SQL dump backup for Visa Compass (small-footprint fallback to
-# streaming BACKUP). Prefer `BACKUP INTO` for production scale.
-#
-# Usage:  DB_URL='postgresql://user:pass@host:port/dbname?sslmode=disable' \
-#           ./scripts/db-backup.sh [backup-dir] [retention]
+# PostgreSQL custom-format backup for Supabase, AWS RDS, or standard PostgreSQL.
+# Usage: DIRECT_DATABASE_URL='postgresql://...' ./scripts/db-backup.sh [dir] [retention]
 set -euo pipefail
 
-: "${DB_URL:?Set DB_URL to the CockroachDB connection string}"
+: "${DIRECT_DATABASE_URL:?Set DIRECT_DATABASE_URL to the direct PostgreSQL connection string}"
 BACKUP_DIR="${1:-./db-backups}"
 RETENTION="${2:-14}"
-
-command -v cockroach >/dev/null 2>&1 || { echo "cockroach not found on PATH" >&2; exit 1; }
-
-# postgresql://user[:pass]@host[:port]/dbname[?opts]
-without_scheme="${DB_URL#*://}"
-credentials="${without_scheme%%@*}"
-hostport="${without_scheme#*@}"
-hostport="${hostport%%/*}"
-host="${hostport%%:*}"
-PORT="${hostport##*:}"
-[ "$PORT" = "$host" ] && PORT=26257        # no explicit port
-user="${credentials%%:*}"
-DB="${without_scheme#*@}"
-DB="${DB#*/}"
-DB="${DB%%\?*}"
+command -v pg_dump >/dev/null 2>&1 || { echo "pg_dump not found on PATH" >&2; exit 1; }
 
 mkdir -p "$BACKUP_DIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-OUT="$BACKUP_DIR/visa_compass_$STAMP.sql"
-
-echo "Dumping database '$DB' from $host:$PORT as '$user' -> $OUT"
-cockroach dump "$DB" --host "$host" --port "$PORT" --user "$user" --insecure --file "$OUT"
+OUT="$BACKUP_DIR/visa_compass_$STAMP.dump"
+echo "Creating PostgreSQL backup -> $OUT"
+pg_dump --format=custom --verbose --no-owner --no-acl --schema=visa_compass \
+  --file="$OUT" "$DIRECT_DATABASE_URL"
 
 if [ ! -s "$OUT" ]; then
   echo "Backup file is empty; aborting. No rotation performed." >&2
   exit 1
 fi
-
 echo "Backup complete: $(wc -c < "$OUT") bytes"
 
-total=$(ls -1 "$BACKUP_DIR"/visa_compass_*.sql 2>/dev/null | wc -l)
+total=$(find "$BACKUP_DIR" -maxdepth 1 -name 'visa_compass_*.dump' -type f | wc -l)
 if [ "$total" -gt "$RETENTION" ]; then
-  ls -1 "$BACKUP_DIR"/visa_compass_*.sql | sort | head -n "$((total - RETENTION))" | while read -r old; do
-    echo "Removing old backup $old"
-    rm -f "$old"
-  done
+  find "$BACKUP_DIR" -maxdepth 1 -name 'visa_compass_*.dump' -type f -printf '%T@ %p\n' \
+    | sort -rn | tail -n "+$((RETENTION + 1))" | cut -d' ' -f2- \
+    | while read -r old; do echo "Removing old backup $old"; rm -f -- "$old"; done
 fi
-
 echo "Done. Keeping up to $RETENTION backups."
