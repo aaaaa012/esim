@@ -22,6 +22,11 @@ without an explicit `NODE_ENV`.
 - `PAYMENT_REVIEW_REQUIRED`: recheck the payment provider; never create another charge or mark paid manually.
 - `ACTIVATION_ATTENTION`: preserve the delivered QR and reconcile Transatel; do not release inventory automatically.
 - Inventory is sellable only after a fresh provider state of `available` or `allocated`.
+- Releasing a provider-unbound reservation moves it to
+  `PENDING_PROVIDER_CHECK`, clears the provider-check timestamp, and makes it
+  eligible for immediate reconciliation. It never returns directly to sale.
+- Bulk reconciliation always includes a locally `AVAILABLE` profile whose
+  stored provider state is missing or unsafe, even when its timestamp is recent.
 - A definitive, provider-unbound eSIM rejection may reserve another fresh safe
   profile up to `MAX_PROVISIONING_PROFILE_SWAPS`. The rejected profile is
   quarantined and each replacement advances the durable provider idempotency

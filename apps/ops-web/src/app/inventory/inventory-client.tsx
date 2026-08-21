@@ -855,7 +855,14 @@ export default function InventoryClient() {
                       </TableCell>
                       <TableCell className="max-w-64 whitespace-normal break-words text-xs text-destructive">
                         {profile.providerCheckError ??
-                          (profile.status === "QUARANTINED"
+                          (profile.status === "AVAILABLE" &&
+                          !["available", "allocated"].includes(
+                            profile.providerStatus?.toLowerCase() ?? "",
+                          )
+                            ? `Local stock is marked available, but ${humane(profile.providerStatus ?? "not checked")} is not safe for sale`
+                            : profile.status === "PENDING_PROVIDER_CHECK"
+                              ? "Provider verification is required before sale"
+                              : profile.status === "QUARANTINED"
                             ? `${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`
                             : "—")}
                       </TableCell>

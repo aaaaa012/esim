@@ -122,7 +122,7 @@ describe("InventoryService.release", () => {
     } as unknown as PrismaService;
   }
 
-  it("returns an unreserved, provider-bound profile to AVAILABLE", async () => {
+  it("returns a provider-unbound reservation to pending provider check", async () => {
     const prisma = releasePrisma({ providerSubscriptionId: null });
     const inventory = new InventoryService(
       prisma,
@@ -141,8 +141,9 @@ describe("InventoryService.release", () => {
           providerSubscriptionId: null,
         },
         data: expect.objectContaining({
-          status: "AVAILABLE",
+          status: "PENDING_PROVIDER_CHECK",
           assignedOrderId: null,
+          lastProviderCheckedAt: null,
         }),
       }),
     );
@@ -174,6 +175,53 @@ describe("InventoryService.release", () => {
     );
     await inventory.release("order-1");
     expect(prisma.esimInventory.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("InventoryService bulk reconciliation selection", () => {
+  it("includes locally available profiles with unsafe or missing provider state regardless of freshness", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      enabled: true,
+      esimInventory: { findMany },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await expect(
+      inventory.startProviderReconciliation({
+        trigger: "OPS_MANUAL",
+        selection: "STALE_OR_UNVERIFIED",
+      }),
+    ).resolves.toMatchObject({ run: null });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            {
+              status: "AVAILABLE",
+              OR: [
+                { providerStatus: null },
+                {
+                  providerStatus: {
+                    notIn: [
+                      "available",
+                      "allocated",
+                      "AVAILABLE",
+                      "ALLOCATED",
+                    ],
+                  },
+                },
+              ],
+            },
+          ]),
+        }),
+      }),
+    );
   });
 });
 
@@ -657,8 +705,9 @@ describe("InventoryService stale reservation reconciliation", () => {
           assignedOrderId: "order-1",
         }),
         data: expect.objectContaining({
-          status: "AVAILABLE",
+          status: "PENDING_PROVIDER_CHECK",
           assignedOrderId: null,
+          lastProviderCheckedAt: null,
         }),
       }),
     );

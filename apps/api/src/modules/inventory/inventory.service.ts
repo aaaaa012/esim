@@ -60,6 +60,22 @@ export class InventoryService implements OnModuleInit {
               OR: [
                 { lastProviderCheckedAt: null },
                 { lastProviderCheckedAt: { lte: staleBefore } },
+                {
+                  status: InventoryStatus.AVAILABLE,
+                  OR: [
+                    { providerStatus: null },
+                    {
+                      providerStatus: {
+                        notIn: [
+                          "available",
+                          "allocated",
+                          "AVAILABLE",
+                          "ALLOCATED",
+                        ],
+                      },
+                    },
+                  ],
+                },
               ],
             }
           : {}),
@@ -318,11 +334,10 @@ export class InventoryService implements OnModuleInit {
   }
 
   /**
-   * Returns a reserved eSIM to the AVAILABLE pool when provisioning has failed
-   * terminally. A profile is only released if the provider never bound a
-   * subscription to it (providerSubscriptionId is null); otherwise it may be in
-   * use remotely and is kept reserved. This prevents failed ICCIDs from being
-   * stranded and lets a retry claim a fresh profile.
+   * Releases a provider-unbound reservation back into provider verification.
+   * It never becomes sellable directly: even previously safe evidence may have
+   * changed while the profile was reserved, so reconciliation must prove the
+   * profile is currently available/allocated again.
    */
   async release(orderId: string) {
     if (!this.prisma.enabled) return;
@@ -338,8 +353,10 @@ export class InventoryService implements OnModuleInit {
         providerSubscriptionId: null,
       },
       data: {
-        status: InventoryStatus.AVAILABLE,
+        status: InventoryStatus.PENDING_PROVIDER_CHECK,
         assignedOrderId: null,
+        lastProviderCheckedAt: null,
+        providerCheckError: "Provider recheck required after reservation release",
         version: { increment: 1 },
       },
     });
@@ -1141,8 +1158,11 @@ export class InventoryService implements OnModuleInit {
             assignedOrderId: profile.assignedOrderId,
           },
           data: {
-            status: InventoryStatus.AVAILABLE,
+            status: InventoryStatus.PENDING_PROVIDER_CHECK,
             assignedOrderId: null,
+            lastProviderCheckedAt: null,
+            providerCheckError:
+              "Provider recheck required after stale reservation release",
             version: { increment: 1 },
           },
         });
