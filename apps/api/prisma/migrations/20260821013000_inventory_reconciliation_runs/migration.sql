@@ -21,6 +21,12 @@ CREATE TABLE "InventoryReconciliationItem" (
   CONSTRAINT "InventoryReconciliationItem_pkey" PRIMARY KEY ("id")
 );
 
+-- CockroachDB may automatically schema-lock tables watched by a changefeed.
+-- Temporarily unlock these new tables so their indexes and foreign keys can
+-- be installed, then restore the changefeed performance protection below.
+ALTER TABLE "InventoryReconciliationRun" SET (schema_locked = false);
+ALTER TABLE "InventoryReconciliationItem" SET (schema_locked = false);
+
 CREATE INDEX "InventoryReconciliationRun_status_createdAt_idx"
   ON "InventoryReconciliationRun"("status", "createdAt");
 CREATE INDEX "InventoryReconciliationRun_batchId_idx"
@@ -44,3 +50,6 @@ ALTER TABLE "InventoryReconciliationItem"
   ADD CONSTRAINT "InventoryReconciliationItem_inventoryId_fkey"
   FOREIGN KEY ("inventoryId") REFERENCES "EsimInventory"("id")
   ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE "InventoryReconciliationRun" SET (schema_locked = true);
+ALTER TABLE "InventoryReconciliationItem" SET (schema_locked = true);
