@@ -9,4 +9,6 @@ const SHELL_FREE_PATHS = [
 ] as const;
 
 export const isShellFreePath = (pathname: string) =>
-  SHELL_FREE_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  SHELL_FREE_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
+  );

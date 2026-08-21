@@ -70,10 +70,12 @@ describe("PartnerWorkspace", () => {
     const ordersTab = screen.getByRole("tab", { name: "orders" });
     fireEvent.mouseDown(ordersTab);
     fireEvent.click(ordersTab);
-    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith(
-      expect.stringContaining("tab=orders"),
-      { scroll: false },
-    ));
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith(
+        expect.stringContaining("tab=orders"),
+        { scroll: false },
+      ),
+    );
   });
 
   it("blocks balance changes until the reason and typed confirmation are provided", async () => {
@@ -84,15 +86,27 @@ describe("PartnerWorkspace", () => {
     fireEvent.mouseDown(ledgerTab);
     fireEvent.click(ledgerTab);
 
-    fireEvent.change(screen.getByPlaceholderText("5000"), { target: { value: "100" } });
-    fireEvent.change(screen.getByPlaceholderText("bank-deposit-2026-001"), { target: { value: "deposit-001" } });
-    fireEvent.change(screen.getByPlaceholderText("Offline settlement received"), { target: { value: "Cash received" } });
+    fireEvent.change(screen.getByPlaceholderText("5000"), {
+      target: { value: "100" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("bank-deposit-2026-001"), {
+      target: { value: "deposit-001" },
+    });
+    fireEvent.change(
+      screen.getByPlaceholderText("Offline settlement received"),
+      { target: { value: "Cash received" } },
+    );
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
 
     const apply = screen.getByRole("button", { name: "Apply adjustment" });
     expect(apply).toHaveProperty("disabled", true);
-    fireEvent.change(screen.getByPlaceholderText("Required for the audit log"), { target: { value: "Cash received" } });
-    fireEvent.change(screen.getByLabelText(/Type.*ADJUST.*to confirm/), { target: { value: "ADJUST" } });
+    fireEvent.change(
+      screen.getByPlaceholderText("Required for the audit log"),
+      { target: { value: "Cash received" } },
+    );
+    fireEvent.change(screen.getByLabelText(/Type.*ADJUST.*to confirm/), {
+      target: { value: "ADJUST" },
+    });
     expect(apply).toHaveProperty("disabled", false);
   });
 });

@@ -10,12 +10,15 @@ import { z } from "zod";
  * hard-requires every secret that other code paths treat as mandatory.
  */
 const baseSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "staging", "production"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "test", "staging", "production"])
+    .default("development"),
   API_PUBLIC_URL: z.string().url().optional(),
   CUSTOMER_WEB_URL: z.string().url().optional(),
   OPS_WEB_URL: z.string().url().optional(),
   PORT: z.coerce.number().int().positive().optional(),
   DATABASE_URL: z.string().min(1).optional(),
+  DIRECT_DATABASE_URL: z.string().min(1).optional(),
   PERSISTENCE_MODE: z.enum(["prisma", "memory"]).optional(),
   REDIS_URL: z.string().min(1).optional(),
   APP_ENCRYPTION_KEY_BASE64: z.string().min(16).optional(),
@@ -27,17 +30,12 @@ const baseSchema = z.object({
   BOOTSTRAP_SUPER_ADMIN_TOKEN: z.string().min(32).optional(),
   OPS_ALERT_EMAIL: z.string().email().optional(),
   NOTIFICATION_MODE: z.enum(["live", "simulator"]).optional(),
-  EMAIL_PROVIDER: z.enum(["gmail", "resend"]).optional(),
-  EMAIL_FROM_ADDRESS: z.string().email().optional(),
-  EMAIL_REPLY_TO: z.string().min(1).optional(),
+  EMAIL_PROVIDER: z.literal("resend").optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
-  GMAIL_CLIENT_ID: z.string().min(1).optional(),
-  GMAIL_CLIENT_SECRET: z.string().min(1).optional(),
-  GMAIL_REFRESH_TOKEN: z.string().min(1).optional(),
-  GMAIL_FROM_ADDRESS: z.string().email().optional(),
+  EMAIL_FROM_ADDRESS: z.string().email().optional(),
+  EMAIL_FROM_NAME: z.string().min(1).optional(),
+  EMAIL_REPLY_TO: z.string().email().optional(),
   KHALTI_SECRET_KEY: z.string().min(1).optional(),
-  KHALTI_BASE_URL: z.string().url().optional(),
-  KHALTI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
   TRANSATEL_BASE_URL: z.string().url().optional(),
   TRANSATEL_CLIENT_ID: z.string().min(1).optional(),
   TRANSATEL_CLIENT_SECRET: z.string().min(1).optional(),
@@ -49,14 +47,45 @@ const baseSchema = z.object({
   CLERK_PUBLISHABLE_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),
   CLERK_WEBHOOK_SECRET: z.string().optional(),
-  ORDER_WORKFLOW_MODE: z.enum(["single-instance"]).optional(),
+  ORDER_WORKFLOW_MODE: z.enum(["single-instance", "database-first"]).optional(),
+  PAYMENT_VERIFY_ATTEMPTS: z.coerce.number().int().positive().optional(),
+  INVENTORY_PROVIDER_FRESHNESS_HOURS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  INVENTORY_RESERVATION_STALE_HOURS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  REFUND_ATTENTION_HOURS: z.coerce.number().int().positive().optional(),
 });
 
 const productionSchema = baseSchema.extend({
-  API_PUBLIC_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
-  CUSTOMER_WEB_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
-  OPS_WEB_URL: z.string().url().refine((url) => !url.includes("localhost") && !url.includes("127.0.0.1"), "must not use localhost in production"),
+  API_PUBLIC_URL: z
+    .string()
+    .url()
+    .refine(
+      (url) => !url.includes("localhost") && !url.includes("127.0.0.1"),
+      "must not use localhost in production",
+    ),
+  CUSTOMER_WEB_URL: z
+    .string()
+    .url()
+    .refine(
+      (url) => !url.includes("localhost") && !url.includes("127.0.0.1"),
+      "must not use localhost in production",
+    ),
+  OPS_WEB_URL: z
+    .string()
+    .url()
+    .refine(
+      (url) => !url.includes("localhost") && !url.includes("127.0.0.1"),
+      "must not use localhost in production",
+    ),
   DATABASE_URL: z.string().min(1),
+  DIRECT_DATABASE_URL: z.string().min(1),
   PERSISTENCE_MODE: z.literal("prisma"),
   REDIS_URL: z.string().min(1),
   APP_ENCRYPTION_KEY_BASE64: z.string().min(16),
@@ -70,8 +99,6 @@ const productionSchema = baseSchema.extend({
   PAYMENT_MODE: z.literal("khalti"),
   PAYMENT_WEBHOOK_SECRET: z.string().min(16),
   KHALTI_SECRET_KEY: z.string().min(1),
-  KHALTI_BASE_URL: z.string().url().refine((url) => !url.includes("dev.khalti.com") && !/dev\.khalti\.com$/i.test(url), "must not point at the Khalti dev sandbox in production"),
-  TRANSATEL_COS: z.string().min(1),
   CONNECTIVITY_PROVIDER: z.literal("transatel"),
   TRANSATEL_BASE_URL: z.string().url(),
   TRANSATEL_CLIENT_ID: z.string().min(1),
@@ -80,30 +107,22 @@ const productionSchema = baseSchema.extend({
   TRANSATEL_WEBHOOK_TARGET_URL: z.string().url(),
   TRANSATEL_WEBHOOK_SECRET: z.string().min(16),
   NOTIFICATION_MODE: z.literal("live"),
-  EMAIL_PROVIDER: z.enum(["gmail", "resend"]),
-  GMAIL_CLIENT_ID: z.string().min(1).optional(),
-  GMAIL_CLIENT_SECRET: z.string().min(1).optional(),
-  GMAIL_REFRESH_TOKEN: z.string().min(1).optional(),
-  GMAIL_FROM_ADDRESS: z.string().email().optional(),
+  EMAIL_PROVIDER: z.literal("resend"),
+  RESEND_API_KEY: z.string().min(1),
+  EMAIL_FROM_ADDRESS: z.string().email(),
+  EMAIL_FROM_NAME: z.string().min(1),
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
   TRUST_PROXY: z.string().min(1),
-  // Order state and per-order locks are not yet distributed. Refuse an
-  // accidental multi-replica production rollout rather than risking payment
-  // races and cross-pod order divergence.
-  ORDER_WORKFLOW_MODE: z.literal("single-instance"),
-}).superRefine((config, ctx) => {
-  if (config.EMAIL_PROVIDER === "resend") {
-    if (!config.RESEND_API_KEY) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["RESEND_API_KEY"], message: "required when EMAIL_PROVIDER=resend" });
-    if (!config.EMAIL_FROM_ADDRESS) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["EMAIL_FROM_ADDRESS"], message: "required when EMAIL_PROVIDER=resend (a sender verified in Resend)" });
-  } else {
-    if (!config.GMAIL_CLIENT_ID || !config.GMAIL_CLIENT_SECRET || !config.GMAIL_REFRESH_TOKEN) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["GMAIL_*"], message: "Gmail OAuth credentials are required when EMAIL_PROVIDER=gmail" });
-    if (!config.GMAIL_FROM_ADDRESS && !config.EMAIL_FROM_ADDRESS) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["GMAIL_FROM_ADDRESS"], message: "a from address is required when EMAIL_PROVIDER=gmail" });
-  }
+  // Production lifecycle commands use PostgreSQL compare-and-set transitions;
+  // the in-process lock is only a development fallback.
+  ORDER_WORKFLOW_MODE: z.literal("database-first"),
 });
 
-export function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
+export function validateEnv(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
   if (config.NODE_ENV === "production") {
     return productionSchema.safeParse(config).success
       ? config
@@ -120,12 +139,20 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
     );
   }
   if (config.REDIS_URL && !(`${config.REDIS_URL}`.length > 1)) {
-    throw new Error("REDIS_URL is set but empty. Refusing to boot with an unusable queue.");
+    throw new Error(
+      "REDIS_URL is set but empty. Refusing to boot with an unusable queue.",
+    );
   }
   return config;
 }
 
-function failWith(result: { error?: { issues?: Array<{ path: Array<PropertyKey>; message: string }> } }): never {
-  const detail = result.error?.issues?.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
-  throw new Error(`Environment configuration is invalid: ${detail ?? "unknown"}`);
+function failWith(result: {
+  error?: { issues?: Array<{ path: Array<PropertyKey>; message: string }> };
+}): never {
+  const detail = result.error?.issues
+    ?.map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+    .join("; ");
+  throw new Error(
+    `Environment configuration is invalid: ${detail ?? "unknown"}`,
+  );
 }

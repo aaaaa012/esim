@@ -33,13 +33,22 @@ function iso(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-export default function DatePicker({ name, value, onChange, min, max, placeholder = "Select date" }: DatePickerProps) {
+export default function DatePicker({
+  name,
+  value,
+  onChange,
+  min,
+  max,
+  placeholder = "Select date",
+}: DatePickerProps) {
   const selected = parse(value);
   const minDate = parse(min);
   const maxDate = parse(max);
   const initial = selected ?? maxDate ?? minDate ?? new Date();
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState(() => new Date(initial.getFullYear(), initial.getMonth(), 1));
+  const [view, setView] = useState(
+    () => new Date(initial.getFullYear(), initial.getMonth(), 1),
+  );
   const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,7 +62,10 @@ export default function DatePicker({ name, value, onChange, min, max, placeholde
   const years = useMemo(() => {
     const lower = minDate?.getFullYear() ?? new Date().getFullYear() - 120;
     const upper = maxDate?.getFullYear() ?? new Date().getFullYear() + 20;
-    return Array.from({ length: upper - lower + 1 }, (_, index) => upper - index);
+    return Array.from(
+      { length: upper - lower + 1 },
+      (_, index) => upper - index,
+    );
   }, [min, max]);
 
   const start = new Date(view.getFullYear(), view.getMonth(), 1);
@@ -64,7 +76,8 @@ export default function DatePicker({ name, value, onChange, min, max, placeholde
     date.setDate(gridStart.getDate() + index);
     return date;
   });
-  const disabled = (date: Date) => Boolean((minDate && date < minDate) || (maxDate && date > maxDate));
+  const disabled = (date: Date) =>
+    Boolean((minDate && date < minDate) || (maxDate && date > maxDate));
 
   return (
     <div className="date-picker" ref={root}>
@@ -80,30 +93,98 @@ export default function DatePicker({ name, value, onChange, min, max, placeholde
         <CalendarDays size={18} />
       </button>
       {open && (
-        <div className="date-picker-popover" role="dialog" aria-label={`Choose ${name}`}>
+        <div
+          className="date-picker-popover"
+          role="dialog"
+          aria-label={`Choose ${name}`}
+        >
           <div className="date-picker-nav">
-            <button type="button" aria-label="Previous month" onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}><ChevronLeft size={18}/></button>
+            <button
+              type="button"
+              aria-label="Previous month"
+              onClick={() =>
+                setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))
+              }
+            >
+              <ChevronLeft size={18} />
+            </button>
             <div>
-              <select aria-label="Month" value={view.getMonth()} onChange={(event) => setView(new Date(view.getFullYear(), Number(event.target.value), 1))}>
-                {Array.from({ length: 12 }, (_, month) => <option value={month} key={month}>{months.format(new Date(2024, month, 1))}</option>)}
+              <select
+                aria-label="Month"
+                value={view.getMonth()}
+                onChange={(event) =>
+                  setView(
+                    new Date(view.getFullYear(), Number(event.target.value), 1),
+                  )
+                }
+              >
+                {Array.from({ length: 12 }, (_, month) => (
+                  <option value={month} key={month}>
+                    {months.format(new Date(2024, month, 1))}
+                  </option>
+                ))}
               </select>
-              <select aria-label="Year" value={view.getFullYear()} onChange={(event) => setView(new Date(Number(event.target.value), view.getMonth(), 1))}>
-                {years.map((year) => <option value={year} key={year}>{year}</option>)}
+              <select
+                aria-label="Year"
+                value={view.getFullYear()}
+                onChange={(event) =>
+                  setView(
+                    new Date(Number(event.target.value), view.getMonth(), 1),
+                  )
+                }
+              >
+                {years.map((year) => (
+                  <option value={year} key={year}>
+                    {year}
+                  </option>
+                ))}
               </select>
             </div>
-            <button type="button" aria-label="Next month" onClick={() => setView(new Date(view.getFullYear(), view.getMonth() + 1, 1))}><ChevronRight size={18}/></button>
+            <button
+              type="button"
+              aria-label="Next month"
+              onClick={() =>
+                setView(new Date(view.getFullYear(), view.getMonth() + 1, 1))
+              }
+            >
+              <ChevronRight size={18} />
+            </button>
           </div>
-          <div className="date-picker-weekdays" aria-hidden="true">{["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => <span key={day}>{day}</span>)}</div>
+          <div className="date-picker-weekdays" aria-hidden="true">
+            {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
+              <span key={day}>{day}</span>
+            ))}
+          </div>
           <div className="date-picker-days">
             {days.map((date) => {
               const dateValue = iso(date);
               const isSelected = value === dateValue;
-              return <button type="button" key={dateValue} disabled={disabled(date)} className={`${date.getMonth() !== view.getMonth() ? "outside " : ""}${isSelected ? "selected" : ""}`} aria-pressed={isSelected} onClick={() => { onChange(dateValue); setOpen(false); }}>{date.getDate()}</button>;
+              return (
+                <button
+                  type="button"
+                  key={dateValue}
+                  disabled={disabled(date)}
+                  className={`${date.getMonth() !== view.getMonth() ? "outside " : ""}${isSelected ? "selected" : ""}`}
+                  aria-pressed={isSelected}
+                  onClick={() => {
+                    onChange(dateValue);
+                    setOpen(false);
+                  }}
+                >
+                  {date.getDate()}
+                </button>
+              );
             })}
           </div>
           <div className="date-picker-footer">
-            {value && <button type="button" onClick={() => onChange("")}>Clear</button>}
-            <span>{selected ? displayDate.format(selected) : "Choose a date"}</span>
+            {value && (
+              <button type="button" onClick={() => onChange("")}>
+                Clear
+              </button>
+            )}
+            <span>
+              {selected ? displayDate.format(selected) : "Choose a date"}
+            </span>
           </div>
         </div>
       )}

@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../infrastructure/prisma.service.js';
+import { Injectable, NotFoundException } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
+import { PrismaService } from "../../infrastructure/prisma.service.js";
 
 @Injectable()
 export class PartnerShowcaseService {
@@ -8,7 +8,9 @@ export class PartnerShowcaseService {
 
   async listAll() {
     if (!this.prisma.enabled) return [];
-    return this.prisma.partnerShowcase.findMany({ orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] });
+    return this.prisma.partnerShowcase.findMany({
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
   }
 
   async listActive() {
@@ -16,7 +18,7 @@ export class PartnerShowcaseService {
     return this.prisma.partnerShowcase.findMany({
       where: { active: true },
       select: { id: true, name: true, logoUrl: true, sortOrder: true },
-      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     });
   }
 
@@ -29,7 +31,8 @@ export class PartnerShowcaseService {
     },
     actorId: string,
   ) {
-    if (!this.prisma.enabled) throw new NotFoundException('Database is required');
+    if (!this.prisma.enabled)
+      throw new NotFoundException("Database is required");
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.partnerShowcase.create({
         data: {
@@ -39,7 +42,14 @@ export class PartnerShowcaseService {
           active: input.active ?? true,
         },
       });
-      await this.audit(tx, actorId, created.id, 'CREATED', null, this.publicValue(created));
+      await this.audit(
+        tx,
+        actorId,
+        created.id,
+        "CREATED",
+        null,
+        this.publicValue(created),
+      );
       return created;
     });
   }
@@ -54,37 +64,71 @@ export class PartnerShowcaseService {
     },
     actorId: string,
   ) {
-    if (!this.prisma.enabled) throw new NotFoundException('Database is required');
-    const existing = await this.prisma.partnerShowcase.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Partner showcase entry not found');
+    if (!this.prisma.enabled)
+      throw new NotFoundException("Database is required");
+    const existing = await this.prisma.partnerShowcase.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new NotFoundException("Partner showcase entry not found");
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.partnerShowcase.update({
         where: { id },
         data: {
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.logoUrl !== undefined ? { logoUrl: input.logoUrl } : {}),
-          ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
+          ...(input.sortOrder !== undefined
+            ? { sortOrder: input.sortOrder }
+            : {}),
           ...(input.active !== undefined ? { active: input.active } : {}),
         },
       });
-      await this.audit(tx, actorId, id, 'UPDATED', this.publicValue(existing), this.publicValue(updated));
+      await this.audit(
+        tx,
+        actorId,
+        id,
+        "UPDATED",
+        this.publicValue(existing),
+        this.publicValue(updated),
+      );
       return updated;
     });
   }
 
   async remove(id: string, actorId: string) {
-    if (!this.prisma.enabled) throw new NotFoundException('Database is required');
-    const existing = await this.prisma.partnerShowcase.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Partner showcase entry not found');
+    if (!this.prisma.enabled)
+      throw new NotFoundException("Database is required");
+    const existing = await this.prisma.partnerShowcase.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new NotFoundException("Partner showcase entry not found");
     await this.prisma.$transaction(async (tx) => {
       await tx.partnerShowcase.delete({ where: { id } });
-      await this.audit(tx, actorId, id, 'DELETED', this.publicValue(existing), null);
+      await this.audit(
+        tx,
+        actorId,
+        id,
+        "DELETED",
+        this.publicValue(existing),
+        null,
+      );
     });
     return { deleted: true };
   }
 
-  private publicValue(item: { name: string; logoUrl: string | null; sortOrder: number; active: boolean }) {
-    return { name: item.name, logoUrl: item.logoUrl, sortOrder: item.sortOrder, active: item.active };
+  private publicValue(item: {
+    name: string;
+    logoUrl: string | null;
+    sortOrder: number;
+    active: boolean;
+  }) {
+    return {
+      name: item.name,
+      logoUrl: item.logoUrl,
+      sortOrder: item.sortOrder,
+      active: item.active,
+    };
   }
 
   private async audit(
@@ -95,11 +139,14 @@ export class PartnerShowcaseService {
     previousValue: object | null,
     newValue: object | null,
   ) {
-    const actor = await tx.user.findUnique({ where: { clerkId: actorClerkId }, select: { id: true } });
+    const actor = await tx.user.findUnique({
+      where: { clerkId: actorClerkId },
+      select: { id: true },
+    });
     await tx.auditLog.create({
       data: {
-        module: 'PARTNER_SHOWCASE',
-        entity: 'PartnerShowcase',
+        module: "PARTNER_SHOWCASE",
+        entity: "PartnerShowcase",
         entityId,
         action,
         ...(actor ? { performedById: actor.id } : {}),

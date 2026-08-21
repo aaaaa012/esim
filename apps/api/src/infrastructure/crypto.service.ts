@@ -1,26 +1,38 @@
-import { Injectable } from '@nestjs/common';
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
+import { Injectable } from "@nestjs/common";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHmac,
+  randomBytes,
+} from "node:crypto";
 
 @Injectable()
 export class CryptoService {
   private key() {
     const configured = process.env.APP_ENCRYPTION_KEY_BASE64;
-    if (!configured && process.env.NODE_ENV === 'production') throw new Error('APP_ENCRYPTION_KEY_BASE64 is required');
-    return configured ? Buffer.from(configured, 'base64') : Buffer.alloc(32, 7);
+    if (!configured && process.env.NODE_ENV === "production")
+      throw new Error("APP_ENCRYPTION_KEY_BASE64 is required");
+    return configured ? Buffer.from(configured, "base64") : Buffer.alloc(32, 7);
   }
   private blindIndexKey(): Buffer {
     const configured = process.env.PII_HASH_KEY;
     if (!configured) {
-      if (process.env.NODE_ENV === 'production') throw new Error('PII_HASH_KEY is required in production');
-      return Buffer.from('development-only', 'utf8');
+      if (process.env.NODE_ENV === "production")
+        throw new Error("PII_HASH_KEY is required in production");
+      return Buffer.from("development-only", "utf8");
     }
-    return Buffer.from(configured, 'utf8');
+    return Buffer.from(configured, "utf8");
   }
   encrypt(value: string) {
     const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.key(), iv);
-    const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
-    return [iv, cipher.getAuthTag(), encrypted].map((part) => part.toString('base64url')).join('.');
+    const cipher = createCipheriv("aes-256-gcm", this.key(), iv);
+    const encrypted = Buffer.concat([
+      cipher.update(value, "utf8"),
+      cipher.final(),
+    ]);
+    return [iv, cipher.getAuthTag(), encrypted]
+      .map((part) => part.toString("base64url"))
+      .join(".");
   }
   decrypt(value: string) {
     const parts = value.split(".");
@@ -33,9 +45,13 @@ export class CryptoService {
       throw new Error("Invalid encrypted value");
     const decipher = createDecipheriv("aes-256-gcm", this.key(), iv);
     decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+    return Buffer.concat([decipher.update(data), decipher.final()]).toString(
+      "utf8",
+    );
   }
   blindIndex(value: string) {
-    return createHmac('sha256', this.blindIndexKey()).update(value.trim().toUpperCase()).digest('hex');
+    return createHmac("sha256", this.blindIndexKey())
+      .update(value.trim().toUpperCase())
+      .digest("hex");
   }
 }

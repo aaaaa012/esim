@@ -31,7 +31,7 @@
   color: var(--accent-strong);
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: .06em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -115,40 +115,218 @@
   box-shadow: var(--shadow-md);
 }
 
-.checkout-card { box-shadow: 0 18px 45px rgba(15, 41, 51, .09), var(--shadow-md); }
-.order-summary { position: sticky; top: 92px; overflow: hidden; }
+.checkout-card {
+  box-shadow:
+    0 18px 45px rgba(15, 41, 51, 0.09),
+    var(--shadow-md);
+}
+.order-summary {
+  position: sticky;
+  top: 92px;
+  overflow: hidden;
+}
 
 .checkout-card {
   overflow: hidden;
 }
-.checkout-recovery{max-width:620px;margin:80px auto;padding:48px;text-align:center;background:linear-gradient(170deg,var(--surface),color-mix(in srgb,var(--accent-soft) 35%,var(--surface)));border:1px solid var(--border);border-radius:var(--radius-xl);box-shadow:var(--shadow-lg)}
-.checkout-recovery svg{color:var(--primary);width:46px;height:46px;filter:drop-shadow(0 8px 18px var(--primary-ring))}.checkout-recovery h1{margin:18px 0 8px}.checkout-recovery p{color:var(--text-2)}.checkout-recovery>div{display:flex;justify-content:center;gap:12px;margin-top:26px}
-.field-invalid input,.field-invalid select{border-color:var(--danger)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 12%,transparent)}
-.field-error{display:block;color:var(--danger);font-size:12px;margin-top:5px;font-weight:600}
-.field-invalid .date-picker-trigger{border-color:var(--danger)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 12%,transparent)}
+.checkout-recovery {
+  max-width: 620px;
+  margin: 80px auto;
+  padding: 48px;
+  text-align: center;
+  background: linear-gradient(
+    170deg,
+    var(--surface),
+    color-mix(in srgb, var(--accent-soft) 35%, var(--surface))
+  );
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+}
+.checkout-recovery svg {
+  color: var(--primary);
+  width: 46px;
+  height: 46px;
+  filter: drop-shadow(0 8px 18px var(--primary-ring));
+}
+.checkout-recovery h1 {
+  margin: 18px 0 8px;
+}
+.checkout-recovery p {
+  color: var(--text-2);
+}
+.checkout-recovery > div {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 26px;
+}
+.field-invalid input,
+.field-invalid select {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.field-error {
+  display: block;
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 5px;
+  font-weight: 600;
+}
+.field-invalid .date-picker-trigger {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 12%, transparent);
+}
 
-.date-picker{position:relative;width:100%}
-.date-picker-trigger{width:100%;height:46px;padding:0 13px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-3);display:flex;align-items:center;justify-content:space-between;font:inherit;font-size:15px;cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease}
-.date-picker-trigger.has-value{color:var(--text)}
-.date-picker-trigger:hover{border-color:color-mix(in srgb,var(--primary) 45%,var(--border-strong))}
-.date-picker-trigger:focus-visible{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-ring)}
-.date-picker-trigger svg{color:var(--primary)}
-.date-picker-popover{position:absolute;z-index:30;top:calc(100% + 8px);left:0;width:min(330px,calc(100vw - 48px));padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:0 18px 45px rgba(15,23,42,.18)}
-.date-picker-nav{display:grid;grid-template-columns:36px 1fr 36px;align-items:center;gap:8px;margin-bottom:12px}
-.date-picker-nav>div{display:grid;grid-template-columns:1fr 86px;gap:6px}
-.date-picker-nav button,.date-picker-footer button{border:0;background:var(--surface-2);color:var(--text-2);border-radius:9px;cursor:pointer;font:inherit;font-weight:700}
-.date-picker-nav button{width:36px;height:36px;display:grid;place-items:center}
-.date-picker-nav button:hover,.date-picker-footer button:hover{background:var(--primary-soft);color:var(--primary)}
-.date-picker-nav select{width:100%;height:36px;padding:0 8px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--text);font:inherit;font-size:13px;font-weight:700;outline:none}
-.date-picker-weekdays,.date-picker-days{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
-.date-picker-weekdays span{text-align:center;color:var(--text-3);font-size:11px;font-weight:800;padding:5px 0}
-.date-picker-days button{aspect-ratio:1;border:0;border-radius:9px;background:transparent;color:var(--text);font:inherit;font-size:13px;cursor:pointer}
-.date-picker-days button:hover:not(:disabled){background:var(--primary-soft);color:var(--primary)}
-.date-picker-days button.outside{color:var(--text-3);opacity:.5}
-.date-picker-days button.selected{background:var(--primary);color:var(--on-primary);font-weight:800;box-shadow:0 4px 10px var(--primary-ring)}
-.date-picker-days button:disabled{opacity:.25;cursor:not-allowed}
-.date-picker-footer{min-height:34px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;color:var(--text-2);font-size:12px}
-.date-picker-footer button{padding:7px 10px}
+.date-picker {
+  position: relative;
+  width: 100%;
+}
+.date-picker-trigger {
+  width: 100%;
+  height: 46px;
+  padding: 0 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.date-picker-trigger.has-value {
+  color: var(--text);
+}
+.date-picker-trigger:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border-strong));
+}
+.date-picker-trigger:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+.date-picker-trigger svg {
+  color: var(--primary);
+}
+.date-picker-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(330px, calc(100vw - 48px));
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+}
+.date-picker-nav {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.date-picker-nav > div {
+  display: grid;
+  grid-template-columns: 1fr 86px;
+  gap: 6px;
+}
+.date-picker-nav button,
+.date-picker-footer button {
+  border: 0;
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-radius: 9px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+.date-picker-nav button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+}
+.date-picker-nav button:hover,
+.date-picker-footer button:hover {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.date-picker-nav select {
+  width: 100%;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  outline: none;
+}
+.date-picker-weekdays,
+.date-picker-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+.date-picker-weekdays span {
+  text-align: center;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 0;
+}
+.date-picker-days button {
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.date-picker-days button:hover:not(:disabled) {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.date-picker-days button.outside {
+  color: var(--text-3);
+  opacity: 0.5;
+}
+.date-picker-days button.selected {
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: 800;
+  box-shadow: 0 4px 10px var(--primary-ring);
+}
+.date-picker-days button:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+.date-picker-footer {
+  min-height: 34px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.date-picker-footer button {
+  padding: 7px 10px;
+}
 
 /* ---------- Step tabs ---------- */
 
@@ -157,7 +335,11 @@
   gap: 0;
   padding: 20px 28px;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--bg) 50%, var(--surface)));
+  background: linear-gradient(
+    180deg,
+    var(--surface),
+    color-mix(in srgb, var(--bg) 50%, var(--surface))
+  );
 }
 
 .step-tabs div {
@@ -231,7 +413,8 @@
 .step-tabs .done i {
   background: var(--success-soft);
   color: var(--success);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 30%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--success) 30%, transparent);
 }
 
 .form-required {
@@ -278,7 +461,9 @@
   border-radius: var(--radius);
   background: var(--accent-soft);
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .confirm-box:hover {
@@ -348,7 +533,9 @@
   border-radius: var(--radius);
   cursor: pointer;
   background: var(--surface);
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .file-field .file-input {
@@ -476,6 +663,31 @@
   border-style: dashed;
 }
 
+.passport-check.background,
+.passport-check.manual {
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border-strong));
+}
+
+.passport-check.background > svg,
+.passport-check.manual > svg {
+  color: var(--primary);
+}
+
+.passport-check-tag {
+  grid-column: 2;
+  justify-self: start;
+  display: inline-flex !important;
+  width: fit-content;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 /* ---------- Payment ---------- */
 
 .gateway-grid {
@@ -496,7 +708,10 @@
   background: var(--surface);
   cursor: pointer;
   color: var(--text);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .gateway-grid button:hover {
@@ -547,7 +762,9 @@
 }
 
 .success-panel > svg {
-  filter: drop-shadow(0 10px 22px color-mix(in srgb, var(--success) 40%, transparent));
+  filter: drop-shadow(
+    0 10px 22px color-mix(in srgb, var(--success) 40%, transparent)
+  );
 }
 
 .success-panel b {
@@ -588,7 +805,9 @@
 }
 
 .error-panel > svg {
-  filter: drop-shadow(0 10px 22px color-mix(in srgb, var(--error, #ef4444) 40%, transparent));
+  filter: drop-shadow(
+    0 10px 22px color-mix(in srgb, var(--error, #ef4444) 40%, transparent)
+  );
 }
 
 .error-panel b {
@@ -782,7 +1001,11 @@
   width: 100%;
   max-width: 420px;
   border-radius: 20px;
-  background: linear-gradient(180deg, var(--surface, #fff), color-mix(in srgb, var(--bg, #fff) 60%, var(--surface, #fff)));
+  background: linear-gradient(
+    180deg,
+    var(--surface, #fff),
+    color-mix(in srgb, var(--bg, #fff) 60%, var(--surface, #fff))
+  );
   border: 1px solid rgba(148, 163, 184, 0.25);
   padding: 32px;
   display: flex;
@@ -792,13 +1015,31 @@
   gap: 10px;
   box-shadow: 0 24px 60px rgba(2, 6, 23, 0.35);
 }
-.verify-modal-icon { color: var(--muted, #64748b); }
-.verify-modal .spin { animation: spin 1s linear infinite; }
-.verify-modal.done .verify-modal-icon { color: #16a34a; filter: drop-shadow(0 8px 16px rgba(22, 163, 74, 0.35)); }
-.verify-modal.failed .verify-modal-icon { color: #dc2626; }
-.verify-modal b { font-size: 18px; }
-.verify-modal p { color: var(--muted, #64748b); font-size: 14px; line-height: 1.5; }
-.verify-modal .form-actions { width: 100%; margin-top: 6px; }
+.verify-modal-icon {
+  color: var(--muted, #64748b);
+}
+.verify-modal .spin {
+  animation: spin 1s linear infinite;
+}
+.verify-modal.done .verify-modal-icon {
+  color: #16a34a;
+  filter: drop-shadow(0 8px 16px rgba(22, 163, 74, 0.35));
+}
+.verify-modal.failed .verify-modal-icon {
+  color: #dc2626;
+}
+.verify-modal b {
+  font-size: 18px;
+}
+.verify-modal p {
+  color: var(--muted, #64748b);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.verify-modal .form-actions {
+  width: 100%;
+  margin-top: 6px;
+}
 
 .checkout-page .form-note {
   color: var(--text-2);
@@ -837,7 +1078,11 @@
 
 .checkout-page .step-tabs {
   padding: 16px 26px;
-  background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--bg) 55%, var(--surface)));
+  background: linear-gradient(
+    180deg,
+    var(--surface),
+    color-mix(in srgb, var(--bg) 55%, var(--surface))
+  );
 }
 
 .checkout-page .form-section h1 {
@@ -868,7 +1113,11 @@
 }
 
 .checkout-page .success-panel {
-  background: linear-gradient(160deg, var(--success-soft), color-mix(in srgb, var(--success-soft) 40%, var(--surface)));
+  background: linear-gradient(
+    160deg,
+    var(--success-soft),
+    color-mix(in srgb, var(--success-soft) 40%, var(--surface))
+  );
   border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
   border-radius: var(--radius-lg);
 }

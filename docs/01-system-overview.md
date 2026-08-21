@@ -11,12 +11,12 @@ Source of truth: `README.md` (repository root), `apps/api/src/app.module.ts`,
 
 ## Workspaces
 
-| Workspace | Tech | Purpose | Local URL |
-| --- | --- | --- | --- |
-| `apps/api` | NestJS, Prisma (CockroachDB), BullMQ | Business API | `http://localhost:4000` |
-| `apps/customer-web` | Next.js App Router | Customer portal | `http://localhost:3000` |
-| `apps/ops-web` | Next.js App Router | Operations/admin portal | `http://localhost:3001` |
-| `packages/shared` | TypeScript | Shared contracts, schemas, error codes | internal |
+| Workspace           | Tech                                 | Purpose                                | Local URL               |
+| ------------------- | ------------------------------------ | -------------------------------------- | ----------------------- |
+| `apps/api`          | NestJS, Prisma (PostgreSQL), BullMQ | Business API                           | `http://localhost:4000` |
+| `apps/customer-web` | Next.js App Router                   | Customer portal                        | `http://localhost:3000` |
+| `apps/ops-web`      | Next.js App Router                   | Operations/admin portal                | `http://localhost:3001` |
+| `packages/shared`   | TypeScript                           | Shared contracts, schemas, error codes | internal                |
 
 Source: `README.md` "Applications" table.
 
@@ -41,6 +41,7 @@ there are no feature modules. Controllers registered at `app.module.ts:56-71`,
 providers at `app.module.ts:72-98`.
 
 Controllers:
+
 - `HealthController` — `observability/health.controller.ts`
 - `AuthController` — `modules/identity/auth.controller.ts`
 - `CatalogController` — `modules/catalog/catalog.controller.ts`
@@ -55,13 +56,14 @@ Controllers:
 - `NotificationController` — `modules/notification/notification.controller.ts`
 
 Key services:
+
 - `OrdersService` — in-memory order store with Prisma-backed persistence
 - `OrdersPersistenceService` — DB projection of orders
 - `InventoryService` — eSIM inventory
 - `PaymentsService` — payment orchestration
 - `AdminService` — plan/CSV, integrations, users, invitations
 - `ConnectivityService` / `TransatelProvider` — eSIM provisioning
-- `NotificationService` + `GmailChannel` + `WhatsappChannel` + `QrPdfService`
+- `NotificationService` + provider-neutral `EmailChannel` (`ResendEmailChannel`) + `WhatsappChannel` + `QrPdfService`
 - `ClerkSyncService` — identity synchronization
 - `CloudinaryStorageService` — private document storage
 - `QueueService` + processors + `ReconciliationService` — background jobs
@@ -89,14 +91,15 @@ reconciliation `reconciliation.service.ts:70`).
 ### Simulated integrations
 
 With default `.env.example` values, the system runs with:
+
 - Payment simulator gateway (no Khalti credentials)
 - Local document-storage simulator (no Cloudinary)
-- Simulated notifications (no Gmail/WhatsApp)
+- Simulated notifications (no Resend/WhatsApp)
 - In-process queue (no Redis)
 
 Source: `README.md` "Integration modes"; each adapter falls back to a
 simulated branch when credentials are absent (`khalti.gateway.ts:9`,
-`cloudinary-storage.service.ts:17-19`, `gmail.channel.ts:8`, `whatsapp.channel.ts:6`).
+`cloudinary-storage.service.ts:17-19`, `resend-email.channel.ts`, `whatsapp.channel.ts:6`).
 
 ### Transatel connectivity is the single production connectivity provider
 

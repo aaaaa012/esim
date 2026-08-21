@@ -18,16 +18,16 @@ a `local-simulator` mode so the whole flow still works offline.
 - If any of `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` /
   `CLOUDINARY_API_SECRET` is missing:
   - Returns `{ assetId, upload: { mode: 'local-simulator', timestamp,
-    signature: sha256(`${assetId}:${timestamp}`), folder,
-    expiresInSeconds: 600 } }`.
+signature: sha256(`${assetId}:${timestamp}`), folder,
+expiresInSeconds: 600 } }`.
 - Otherwise (Cloudinary configured):
   - `publicId = {type.toLowerCase()}-{assetId}`.
   - `signature = cloudinary.utils.api_sign_request({ timestamp, folder,
-    public_id: publicId, type: 'authenticated' }, apiSecret)`.
+public_id: publicId, type: 'authenticated' }, apiSecret)`.
   - Returns `{ assetId: '{folder}/{publicId}', upload: { mode:
-    'cloudinary-signed', endpoint: https://api.cloudinary.com/v1_1/{cloudName}/auto/upload,
-    cloudName, apiKey, publicId, deliveryType: 'authenticated', timestamp,
-    signature, folder, expiresInSeconds: 600 } }`.
+'cloudinary-signed', endpoint: https://api.cloudinary.com/v1_1/{cloudName}/auto/upload,
+cloudName, apiKey, publicId, deliveryType: 'authenticated', timestamp,
+signature, folder, expiresInSeconds: 600 } }`.
 
 The client uploads directly to the Cloudinary endpoint with the signature
 (`checkout-client.tsx:325-346`).
@@ -81,5 +81,5 @@ With default `.env.example` (no Cloudinary), the checkout flow works as:
 
 - Uploads are `authenticated` delivery type — not public.
 - Signed read URLs expire in 300 s.
-- The QR payload in notifications is protected by a PDF password
+- The QR payload remains encrypted at rest, but notification attachments and authenticated account downloads are intentionally unencrypted
   (`qr-pdf.service.ts:10-24`, see `docs/11-notifications.md`).

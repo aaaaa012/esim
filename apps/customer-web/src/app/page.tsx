@@ -1,12 +1,24 @@
-import { Suspense } from 'react';
-import Image from 'next/image';
-import Link from 'next/link';
-import { ArrowRight, CheckCircle2, Globe2, Headset, Plane, QrCode, ShieldCheck, Smartphone, Timer, Wifi, Zap } from 'lucide-react';
-import CatalogPlans from './catalog-plans';
-import TopupLookup from './topup-lookup';
-import Faq from './faq';
-import PartnersShowcase from './partners-showcase';
-import './home.css';
+import { Suspense } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import {
+  ArrowRight,
+  CheckCircle2,
+  Globe2,
+  Headset,
+  Plane,
+  QrCode,
+  ShieldCheck,
+  Smartphone,
+  Timer,
+  Wifi,
+  Zap,
+} from "lucide-react";
+import CatalogPlans from "./catalog-plans";
+import TopupLookup from "./topup-lookup";
+import Faq from "./faq";
+import PartnersShowcase from "./partners-showcase";
+import "./home.css";
 
 export default function Home() {
   return (
@@ -24,8 +36,8 @@ export default function Home() {
               Travel <em>freely.</em>
             </h1>
             <p>
-              Get secure travel data before you fly. No airport queues, no physical SIM swaps—just scan your Visa
-              Compass eSIM and go.
+              Get secure travel data before you fly. No airport queues, no
+              physical SIM swaps—just scan your Visa Compass eSIM and go.
             </p>
             <div className="actions">
               <Link className="button" href="#plans">
@@ -35,10 +47,19 @@ export default function Home() {
                 How it works
               </Link>
             </div>
-            <div className="hero-proof" aria-label="Why travellers choose Visa Compass">
-              <span><CheckCircle2 size={16} /> Keep your number</span>
-              <span><CheckCircle2 size={16} /> Install before you fly</span>
-              <span><CheckCircle2 size={16} /> Support when you need it</span>
+            <div
+              className="hero-proof"
+              aria-label="Why travellers choose Visa Compass"
+            >
+              <span>
+                <CheckCircle2 size={16} /> Keep your number
+              </span>
+              <span>
+                <CheckCircle2 size={16} /> Install before you fly
+              </span>
+              <span>
+                <CheckCircle2 size={16} /> Support when you need it
+              </span>
             </div>
           </div>
           <div className="phone-stage">
@@ -50,7 +71,8 @@ export default function Home() {
                     <b>My eSIM</b>
                   </div>
                   <span className="signal">
-                    <i />READY
+                    <i />
+                    READY
                   </span>
                 </div>
                 <div className="plan-chip">
@@ -102,7 +124,10 @@ export default function Home() {
               Popular destinations
             </span>
             <h2>One plan. Zero roaming surprises.</h2>
-            <p>Clear NPR pricing, trusted coverage, and a secure digital delivery experience from checkout to activation.</p>
+            <p>
+              Clear NPR pricing, trusted coverage, and a secure digital delivery
+              experience from checkout to activation.
+            </p>
           </div>
           <TopupLookup />
           <Suspense fallback={null}>
@@ -122,21 +147,49 @@ export default function Home() {
           </div>
           <div className="how-layout">
             <div className="journey-visual">
-              <Image src="/images/traveller-connected-v1.webp" alt="Nepali traveller checking their phone before a flight" fill sizes="(max-width: 860px) 100vw, 46vw" />
-              <div className="journey-caption"><span><Wifi size={17} /></span><div><b>Ready before takeoff</b><small>Install at home. Connect when you land.</small></div></div>
+              <Image
+                src="/images/traveller-connected-v1.webp"
+                alt="Nepali traveller checking their phone before a flight"
+                fill
+                sizes="(max-width: 860px) 100vw, 46vw"
+              />
+              <div className="journey-caption">
+                <span>
+                  <Wifi size={17} />
+                </span>
+                <div>
+                  <b>Ready before takeoff</b>
+                  <small>Install at home. Connect when you land.</small>
+                </div>
+              </div>
             </div>
             <div className="steps">
               <div className="step">
                 <span className="step-number">1</span>
-                <div><h3>Choose your destination</h3><p>Compare plans with transparent data, validity, and coverage.</p></div>
+                <div>
+                  <h3>Choose your destination</h3>
+                  <p>
+                    Compare plans with transparent data, validity, and coverage.
+                  </p>
+                </div>
               </div>
               <div className="step">
                 <span className="step-number">2</span>
-                <div><h3>Verify and pay securely</h3><p>Confirm compatibility, add your details, and pay via Khalti.</p></div>
+                <div>
+                  <h3>Verify and pay securely</h3>
+                  <p>
+                    Confirm compatibility, add your details, and pay via Khalti.
+                  </p>
+                </div>
               </div>
               <div className="step">
                 <span className="step-number">3</span>
-                <div><h3>Scan your QR code</h3><p>Access your private eSIM QR and activate before departure.</p></div>
+                <div>
+                  <h3>Scan your QR code</h3>
+                  <p>
+                    Access your private eSIM QR and activate before departure.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -151,38 +204,71 @@ export default function Home() {
               Why Visa Compass
             </span>
             <h2>Travel light. Stay connected.</h2>
-            <p>Everything a traveller needs to land connected — priced clearly in NPR, without the roaming shock.</p>
+            <p>
+              Everything a traveller needs to land connected — priced clearly in
+              NPR, without the roaming shock.
+            </p>
           </div>
           <div className="why-grid">
             <div className="why-card">
-              <span className="why-icon"><Wifi size={22} /></span>
+              <span className="why-icon">
+                <Wifi size={22} />
+              </span>
               <h3>Instant digital eSIM</h3>
-              <p>Receive your QR code after payment verification and successful provider provisioning. No physical SIM or airport counter.</p>
+              <p>
+                Receive your QR code after payment verification and successful
+                provider provisioning. No physical SIM or airport counter.
+              </p>
             </div>
             <div className="why-card">
-              <span className="why-icon"><Timer size={22} /></span>
+              <span className="why-icon">
+                <Timer size={22} />
+              </span>
               <h3>Connect before you fly</h3>
-              <p>Activate your data the moment you land. Skip queues and start exploring while others wait in roaming lines.</p>
+              <p>
+                Activate your data the moment you land. Skip queues and start
+                exploring while others wait in roaming lines.
+              </p>
             </div>
             <div className="why-card">
-              <span className="why-icon"><ShieldCheck size={22} /></span>
+              <span className="why-icon">
+                <ShieldCheck size={22} />
+              </span>
               <h3>Transparent NPR pricing</h3>
-              <p>Every plan shows its full cost in NPR before you pay. No hidden fees, no surprise roaming bills on return.</p>
+              <p>
+                Every plan shows its full cost in NPR before you pay. No hidden
+                fees, no surprise roaming bills on return.
+              </p>
             </div>
             <div className="why-card">
-              <span className="why-icon"><QrCode size={22} /></span>
+              <span className="why-icon">
+                <QrCode size={22} />
+              </span>
               <h3>One eSIM, many plans</h3>
-              <p>Store several country plans on a single eSIM and top up an existing one using just your mobile number.</p>
+              <p>
+                Store several country plans on a single eSIM and top up an
+                existing one using just your mobile number.
+              </p>
             </div>
             <div className="why-card">
-              <span className="why-icon"><Headset size={22} /></span>
+              <span className="why-icon">
+                <Headset size={22} />
+              </span>
               <h3>Local support</h3>
-              <p>Travel document review, activation help and re-delivery of your QR — handled by a team that responds.</p>
+              <p>
+                Travel document review, activation help and re-delivery of your
+                QR — handled by a team that responds.
+              </p>
             </div>
             <div className="why-card">
-              <span className="why-icon"><Globe2 size={22} /></span>
+              <span className="why-icon">
+                <Globe2 size={22} />
+              </span>
               <h3>Real-time usage</h3>
-              <p>Track your data in your account and refresh live usage whenever you need a quick top-up decision.</p>
+              <p>
+                Track your data in your account and refresh live usage whenever
+                you need a quick top-up decision.
+              </p>
             </div>
           </div>
         </div>
@@ -207,11 +293,21 @@ export default function Home() {
       <section className="section" id="support">
         <div className="shell">
           <div className="notice">
-            <div className="notice-graphic" aria-hidden="true"><span><Smartphone size={30} /></span><i className="notice-check"><CheckCircle2 size={18} /></i></div>
+            <div className="notice-graphic" aria-hidden="true">
+              <span>
+                <Smartphone size={30} />
+              </span>
+              <i className="notice-check">
+                <CheckCircle2 size={18} />
+              </i>
+            </div>
             <div>
               <span className="notice-kicker">Before you purchase</span>
               <h2>Not sure your phone supports eSIM?</h2>
-              <p>Take our two-minute compatibility check before payment and travel with confidence.</p>
+              <p>
+                Take our two-minute compatibility check before payment and
+                travel with confidence.
+              </p>
             </div>
             <Link href="/compatibility" className="button secondary">
               <ShieldCheck size={18} />

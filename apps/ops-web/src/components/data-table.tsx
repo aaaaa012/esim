@@ -8,7 +8,12 @@ type DataTableProps = {
   className?: string;
 };
 
-export function DataTable({ columns, rows, rowKey, className }: DataTableProps) {
+export function DataTable({
+  columns,
+  rows,
+  rowKey,
+  className,
+}: DataTableProps) {
   return (
     <div className={cn("ops-data-table overflow-x-auto", className)}>
       <table className="w-full text-left text-sm">

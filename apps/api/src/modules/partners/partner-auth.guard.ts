@@ -39,7 +39,9 @@ export class PartnerAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext) {
     if (!this.prisma.enabled)
-      throw PARTNER_UNAUTHORIZED("Authentication is temporarily unavailable. Please try again shortly.");
+      throw PARTNER_UNAUTHORIZED(
+        "Authentication is temporarily unavailable. Please try again shortly.",
+      );
     const request = context.switchToHttp().getRequest<PartnerRequest>();
     const response = context
       .switchToHttp()
@@ -87,7 +89,8 @@ export class PartnerAuthGuard implements CanActivate {
       throw new HttpException(
         {
           code: "PARTNER_SCOPE_FORBIDDEN",
-          message: "Your API key is not allowed to use this endpoint. Contact support to request access.",
+          message:
+            "Your API key is not allowed to use this endpoint. Contact support to request access.",
         },
         403,
       );
@@ -98,7 +101,8 @@ export class PartnerAuthGuard implements CanActivate {
       throw new HttpException(
         {
           code: "PARTNER_SUSPENDED",
-          message: "Your partner account is suspended. Contact support for help.",
+          message:
+            "Your partner account is suspended. Contact support for help.",
         },
         403,
       );
@@ -146,7 +150,14 @@ export class PartnerAuthGuard implements CanActivate {
       response.setHeader(
         "Retry-After",
         String(
-          Math.max(1, Math.ceil((new Date(windowStart.getTime() + 60_000).getTime() - now.getTime()) / 1000)),
+          Math.max(
+            1,
+            Math.ceil(
+              (new Date(windowStart.getTime() + 60_000).getTime() -
+                now.getTime()) /
+                1000,
+            ),
+          ),
         ),
       );
       throw new HttpException(

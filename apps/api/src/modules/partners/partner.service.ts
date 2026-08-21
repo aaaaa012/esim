@@ -37,14 +37,20 @@ import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
 import { OrdersService } from "../orders/orders.service.js";
-import { PassportVerificationService } from "../orders/passport-verification.service.js";
 
 /** Opaque, deterministic composite cursor for (createdAt, id) keyset pagination. */
-function encodeCursor(createdAt: Date | undefined, id: string | undefined): string | null {
+function encodeCursor(
+  createdAt: Date | undefined,
+  id: string | undefined,
+): string | null {
   if (!createdAt || !id) return null;
-  return Buffer.from(`${createdAt.toISOString()}|${id}`, "utf8").toString("base64url");
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, "utf8").toString(
+    "base64url",
+  );
 }
-function decodeCursor(cursor?: string | undefined): { createdAt: Date; id: string } | null {
+function decodeCursor(
+  cursor?: string | undefined,
+): { createdAt: Date; id: string } | null {
   if (!cursor) return null;
   let raw: string;
   try {
@@ -74,13 +80,16 @@ type CompleteOrderInput = {
   externalOrderId: string;
   externalCustomerId: string;
   planId: string;
-  settlement?: (
-    | { method: "PARTNER_ACCOUNT" }
-    | {
-        method: "HOSTED_PAYMENT";
-        provider: PaymentProvider;
-        redirectUrl: string;
-      }) | undefined;
+  settlement?:
+    | (
+        | { method: "PARTNER_ACCOUNT" }
+        | {
+            method: "HOSTED_PAYMENT";
+            provider: PaymentProvider;
+            redirectUrl: string;
+          }
+      )
+    | undefined;
   documentVerificationId: string;
   consent: {
     compatibilityAccepted: true;
@@ -129,7 +138,6 @@ export class PartnerService {
     private readonly partnerWebhooks: PartnerWebhookProcessor,
     private readonly queues: QueueService,
     private readonly applicationOrders: OrdersService,
-    private readonly passportVerifier: PassportVerificationService,
   ) {}
 
   private async verifyUploadedDocument(assetId: string) {
@@ -171,7 +179,9 @@ export class PartnerService {
         country: {
           active: true,
           isoCode: {
-            ...(RESTRICTED_PLAN_COUNTRY_CODES.length ? { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } : {}),
+            ...(RESTRICTED_PLAN_COUNTRY_CODES.length
+              ? { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] }
+              : {}),
             ...(country ? { equals: country.toUpperCase() } : {}),
           },
         },
@@ -209,6 +219,12 @@ export class PartnerService {
   async createUploadSessions(partnerId: string, input: UploadSessionInput) {
     await this.partner(partnerId);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60_000);
+    const config = await this.prisma.platformConfiguration.upsert({
+      where: { id: "platform" },
+      update: {},
+      create: { id: "platform" },
+    });
+    const checkoutReleaseAt = new Date(Date.now() + config.ocrCheckoutWaitMs);
     const verificationId = randomUUID();
     const response = await this.prisma.$transaction(async (tx) => {
       await tx.partnerDocumentVerification.create({
@@ -216,8 +232,17 @@ export class PartnerService {
           id: verificationId,
           partnerId,
           externalOrderId: input.externalOrderId,
-          travelerSnapshot: this.travelerData(input.traveler) as unknown as Prisma.InputJsonValue,
+          travelerSnapshot: this.travelerData(
+            input.traveler,
+          ) as unknown as Prisma.InputJsonValue,
           expiresAt,
+          reviewPolicy: config.documentReviewPolicy,
+          checkoutReleaseAt,
+          ...(config.documentReviewPolicy === "MANUAL_REVIEW"
+            ? { status: "MANUAL_REVIEW" }
+            : config.documentReviewPolicy === "NO_REVIEW"
+              ? { status: "SKIPPED" }
+              : {}),
         },
       });
       const items = [];
@@ -249,32 +274,43 @@ export class PartnerService {
           upload: signed.upload,
         });
       }
-      return { verificationId, externalOrderId: input.externalOrderId, status: "AWAITING_UPLOAD", expiresAt, documents: items };
+      return {
+        verificationId,
+        externalOrderId: input.externalOrderId,
+        status:
+          config.documentReviewPolicy === "MANUAL_REVIEW"
+            ? "MANUAL_REVIEW"
+            : config.documentReviewPolicy === "NO_REVIEW"
+              ? "SKIPPED"
+              : "AWAITING_UPLOAD",
+        expiresAt,
+        checkoutReleaseAt,
+        documents: items,
+      };
     });
-    try {
-      await this.queues.add(
-        QUEUES.documents,
-        "verify-partner-documents",
-        { verificationId },
-        `document-verification-${verificationId}`,
-        { attempts: 30, backoff: { type: "fixed", delay: 5_000 } },
-      );
-    } catch (error) {
-      await this.prisma.partnerDocumentVerification.update({
-        where: { id: verificationId },
-        data: { status: "PROCESSING_FAILED", failureCode: "QUEUE_UNAVAILABLE" },
-      });
-      this.logger.error(`Could not queue document verification ${verificationId}: ${error instanceof Error ? error.message : "unknown"}`);
-    }
     return response;
   }
 
   async documentVerification(partnerId: string, verificationId: string) {
-    const verification = await this.prisma.partnerDocumentVerification.findFirst({
+    let verification = await this.prisma.partnerDocumentVerification.findFirst({
       where: { id: verificationId, partnerId },
       include: { documents: true },
     });
-    if (!verification) throw new NotFoundException({ code: "DOCUMENT_VERIFICATION_NOT_FOUND", message: "Document verification not found" });
+    if (!verification)
+      throw new NotFoundException({
+        code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+        message: "Document verification not found",
+      });
+    if (
+      ["AWAITING_UPLOAD", "PROCESSING"].includes(verification.status) &&
+      verification.checkoutReleaseAt &&
+      verification.checkoutReleaseAt <= new Date()
+    )
+      verification = await this.prisma.partnerDocumentVerification.update({
+        where: { id: verification.id },
+        data: { status: "PROCESSING_BACKGROUND" },
+        include: { documents: true },
+      });
     return {
       id: verification.id,
       externalOrderId: verification.externalOrderId,
@@ -282,13 +318,111 @@ export class PartnerService {
       failureCode: verification.failureCode,
       expiresAt: verification.expiresAt,
       consumedAt: verification.consumedAt,
+      orderCreationAllowed: [
+        "VERIFIED",
+        "MANUAL_REVIEW",
+        "PROCESSING_BACKGROUND",
+        "SKIPPED",
+      ].includes(verification.status),
       documents: verification.documents.map((document) => ({
         id: document.id,
         type: document.type,
+        uploadVerified: document.uploadVerified,
         status: document.verificationStatus,
         code: document.verificationCode,
         verifiedAt: document.verifiedAt,
       })),
+    };
+  }
+
+  async confirmVerificationDocument(
+    partnerId: string,
+    verificationId: string,
+    documentId: string,
+  ) {
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { id: verificationId, partnerId },
+        include: { documents: true },
+      });
+    if (!verification)
+      throw new NotFoundException({
+        code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+        message: "Document verification not found",
+      });
+    const document = verification.documents.find(
+      (item) => item.id === documentId,
+    );
+    if (!document)
+      throw new NotFoundException({
+        code: "PARTNER_DOCUMENT_NOT_FOUND",
+        message: "Document not found",
+      });
+    if (!document.uploadVerified) {
+      await this.verifyUploadedDocument(document.privateAssetId);
+      await this.prisma.partnerDocumentUploadIntent.update({
+        where: { id: document.id },
+        data: { uploadVerified: true, verificationStatus: "UPLOADED" },
+      });
+    }
+    const remaining = await this.prisma.partnerDocumentUploadIntent.count({
+      where: { verificationId, uploadVerified: false },
+    });
+    if (remaining > 0)
+      return {
+        id: document.id,
+        uploadVerified: true,
+        verificationQueued: false,
+        remaining,
+      };
+    if (verification.reviewPolicy !== "AUTO_OCR") {
+      const status =
+        verification.reviewPolicy === "NO_REVIEW" ? "SKIPPED" : "MANUAL_REVIEW";
+      await this.prisma.partnerDocumentVerification.update({
+        where: { id: verificationId },
+        data: { status, failureCode: null },
+      });
+      return {
+        id: document.id,
+        uploadVerified: true,
+        verificationQueued: false,
+        remaining: 0,
+        status,
+      };
+    }
+    await this.prisma.partnerDocumentVerification.updateMany({
+      where: { id: verificationId, status: "AWAITING_UPLOAD" },
+      data: { status: "PROCESSING" },
+    });
+    try {
+      await this.queues.add(
+        QUEUES.documents,
+        "verify-partner-documents",
+        { verificationId },
+        `document-verification-${verificationId}`,
+        { attempts: 3, backoff: { type: "exponential", delay: 2_000 } },
+      );
+    } catch (error) {
+      await this.prisma.partnerDocumentVerification.update({
+        where: { id: verificationId },
+        data: { status: "MANUAL_REVIEW", failureCode: "QUEUE_UNAVAILABLE" },
+      });
+      this.logger.error(
+        `Could not queue document verification ${verificationId}: ${error instanceof Error ? error.message : "unknown"}`,
+      );
+      return {
+        id: document.id,
+        uploadVerified: true,
+        verificationQueued: false,
+        manualReview: true,
+        remaining: 0,
+      };
+    }
+    return {
+      id: document.id,
+      uploadVerified: true,
+      verificationQueued: true,
+      remaining: 0,
     };
   }
 
@@ -298,12 +432,23 @@ export class PartnerService {
     requestContext: { ipAddress: string; userAgent: string },
   ) {
     const partner = await this.partner(partnerId);
-    const settlement = input.settlement ?? { method: "PARTNER_ACCOUNT" as const };
+    const settlement = input.settlement ?? {
+      method: "PARTNER_ACCOUNT" as const,
+    };
     if (settlement.method === "HOSTED_PAYMENT")
       throw this.hostedPaymentDeprecated();
     const settlementMethod = PartnerSettlementMethod.PARTNER_ACCOUNT;
     const plan = await this.prisma.plan.findFirst({
-      where: { id: input.planId, status: "ACTIVE", country: { active: true, ...(RESTRICTED_PLAN_COUNTRY_CODES.length ? { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } } : {}) } },
+      where: {
+        id: input.planId,
+        status: "ACTIVE",
+        country: {
+          active: true,
+          ...(RESTRICTED_PLAN_COUNTRY_CODES.length
+            ? { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } }
+            : {}),
+        },
+      },
       include: { country: true },
     });
     if (!plan)
@@ -311,24 +456,49 @@ export class PartnerService {
         code: "PLAN_UNAVAILABLE",
         message: "Plan is unavailable",
       });
-    const verification = await this.prisma.partnerDocumentVerification.findFirst({
-      where: { id: input.documentVerificationId, partnerId },
-      include: { documents: true },
-    });
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { id: input.documentVerificationId, partnerId },
+        include: { documents: true },
+      });
     if (!verification || verification.externalOrderId !== input.externalOrderId)
-      throw new BadRequestException({ code: "VERIFICATION_ORDER_MISMATCH", message: "Document verification does not match this order" });
+      throw new BadRequestException({
+        code: "VERIFICATION_ORDER_MISMATCH",
+        message: "Document verification does not match this order",
+      });
     if (verification.expiresAt <= new Date())
-      throw new GoneException({ code: "VERIFICATION_EXPIRED", message: "Document verification has expired" });
+      throw new GoneException({
+        code: "VERIFICATION_EXPIRED",
+        message: "Document verification has expired",
+      });
     if (verification.consumedAt)
-      throw new ConflictException({ code: "VERIFICATION_ALREADY_CONSUMED", message: "Document verification was already consumed" });
-    if (verification.status !== "VERIFIED")
+      throw new ConflictException({
+        code: "VERIFICATION_ALREADY_CONSUMED",
+        message: "Document verification was already consumed",
+      });
+    if (
+      ![
+        "VERIFIED",
+        "MANUAL_REVIEW",
+        "PROCESSING_BACKGROUND",
+        "SKIPPED",
+      ].includes(verification.status)
+    )
       throw new ApiException({
-        code: verification.status === "INVALID" ? "DOCUMENT_REUPLOAD_REQUIRED" : "VERIFICATION_NOT_READY",
-        message: verification.status === "INVALID" ? "Documents are invalid; upload replacements" : "Document verification is not complete",
+        code:
+          verification.status === "INVALID"
+            ? "DOCUMENT_REUPLOAD_REQUIRED"
+            : "VERIFICATION_NOT_READY",
+        message:
+          verification.status === "INVALID"
+            ? "Documents are invalid; upload replacements"
+            : "Document verification is not complete",
         status: verification.status === "INVALID" ? 422 : 409,
       });
     const required = this.requiredDocuments(plan.country.isoCode);
-    const suppliedTypes = new Set(verification.documents.map((item) => item.type));
+    const suppliedTypes = new Set(
+      verification.documents.map((item) => item.type),
+    );
     const missing = required.filter((type) => !suppliedTypes.has(type));
     if (missing.length)
       throw new BadRequestException({
@@ -336,6 +506,14 @@ export class PartnerService {
         message: `Missing required documents: ${missing.map(documentTypeLabel).join(", ")}`,
       });
     const intents = verification.documents;
+    if (intents.some((intent) => !intent.uploadVerified))
+      throw new ApiException({
+        code: "DOCUMENT_UPLOAD_NOT_CONFIRMED",
+        message:
+          "Confirm every required document upload before placing the order",
+        status: 409,
+      });
+    await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const uploadIds = intents.map((item) => item.id);
     const amountPaisa = Math.round(Number(plan.sellingPrice) * 100);
     const orderId = randomUUID();
@@ -344,7 +522,11 @@ export class PartnerService {
         where: { partnerId, externalOrderId: input.externalOrderId },
       });
       if (duplicate)
-        throw new ApiException({ code: "EXTERNAL_ORDER_ID_EXISTS", message: "External order ID already exists", status: 409 });
+        throw new ApiException({
+          code: "EXTERNAL_ORDER_ID_EXISTS",
+          message: "External order ID already exists",
+          status: 409,
+        });
       const consumable = await tx.partnerDocumentUploadIntent.updateMany({
         where: {
           id: { in: uploadIds },
@@ -356,13 +538,41 @@ export class PartnerService {
         data: { consumedAt: new Date(), consumedOrderId: orderId },
       });
       if (consumable.count !== uploadIds.length)
-        throw new ApiException({ code: "UPLOAD_ALREADY_CONSUMED", message: "Document upload was already consumed", status: 409 });
-      const consumedVerification = await tx.partnerDocumentVerification.updateMany({
-        where: { id: verification.id, partnerId, status: "VERIFIED", consumedAt: null, expiresAt: { gt: new Date() } },
-        data: { status: "CONSUMED", consumedAt: new Date(), consumedOrderId: orderId },
-      });
+        throw new ApiException({
+          code: "UPLOAD_ALREADY_CONSUMED",
+          message: "Document upload was already consumed",
+          status: 409,
+        });
+      const consumedVerification =
+        await tx.partnerDocumentVerification.updateMany({
+          where: {
+            id: verification.id,
+            partnerId,
+            status: {
+              in: [
+                "VERIFIED",
+                "MANUAL_REVIEW",
+                "PROCESSING_BACKGROUND",
+                "SKIPPED",
+              ],
+            },
+            consumedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+          data: {
+            ...(verification.status === "VERIFIED"
+              ? { status: "CONSUMED" }
+              : {}),
+            consumedAt: new Date(),
+            consumedOrderId: orderId,
+          },
+        });
       if (consumedVerification.count !== 1)
-        throw new ApiException({ code: "VERIFICATION_ALREADY_CONSUMED", message: "Document verification was already consumed", status: 409 });
+        throw new ApiException({
+          code: "VERIFICATION_ALREADY_CONSUMED",
+          message: "Document verification was already consumed",
+          status: 409,
+        });
       const partnerCustomer = await this.ensurePartnerCustomer(
         tx,
         partner.code,
@@ -395,26 +605,49 @@ export class PartnerService {
           partnerMetadata: input.metadata ?? Prisma.JsonNull,
           planId: plan.id,
           status,
+          documentReviewPolicy: verification.reviewPolicy,
+          documentReviewStatus:
+            verification.status === "VERIFIED"
+              ? "VERIFIED"
+              : verification.status === "MANUAL_REVIEW"
+                ? "MANUAL_REVIEW"
+                : verification.status === "SKIPPED"
+                  ? "SKIPPED"
+                  : "OCR_BACKGROUND",
           subtotal: amountPaisa / 100,
           totalAmount: amountPaisa / 100,
           pricingSnapshot,
           compatibilityAcceptedAt: new Date(input.consent.acceptedAt),
-          traveler: { create: verification.travelerSnapshot as Prisma.TravelerUncheckedCreateWithoutOrderInput },
+          traveler: {
+            create:
+              verification.travelerSnapshot as Prisma.TravelerUncheckedCreateWithoutOrderInput,
+          },
           documents: {
             create: intents.map((intent) => {
-              const result = intent.verificationResult as { method?: string; matchedFields?: unknown; confidence?: number | null } | null;
+              const result = intent.verificationResult as {
+                method?: string;
+                matchedFields?: unknown;
+                confidence?: number | null;
+              } | null;
               return {
                 type: intent.type,
                 fileName: intent.fileName,
                 privateAssetId: intent.privateAssetId,
-                status: DocumentStatus.APPROVED,
-                ...(intent.type === DocumentType.PASSPORT ? {
-                  passportVerificationStatus: "VERIFIED",
-                  passportVerificationMethod: result?.method ?? null,
-                  passportMatchedFields: result?.matchedFields as Prisma.InputJsonValue,
-                  passportConfidence: result?.confidence ?? null,
-                  passportVerifiedAt: intent.verifiedAt,
-                } : {}),
+                status:
+                  verification.status === "VERIFIED"
+                    ? DocumentStatus.APPROVED
+                    : DocumentStatus.PENDING,
+                ...(intent.type === DocumentType.PASSPORT &&
+                verification.status === "VERIFIED"
+                  ? {
+                      passportVerificationStatus: "VERIFIED",
+                      passportVerificationMethod: result?.method ?? null,
+                      passportMatchedFields:
+                        result?.matchedFields as Prisma.InputJsonValue,
+                      passportConfidence: result?.confidence ?? null,
+                      passportVerifiedAt: intent.verifiedAt,
+                    }
+                  : {}),
               };
             }),
           },
@@ -431,15 +664,37 @@ export class PartnerService {
           acceptedAt: new Date(input.consent.acceptedAt),
         })),
       });
-      await this.debitAccount(tx, partnerId, orderId, amountPaisa, input.externalOrderId);
-      await this.createEvent(tx, partnerId, orderId, "order.accepted", orderId, {
+      await this.debitAccount(
+        tx,
+        partnerId,
         orderId,
-        externalOrderId: input.externalOrderId,
-        status,
-        fulfillmentStatus: "PENDING",
-        version: 0,
         amountPaisa,
-        currency: "NPR",
+        input.externalOrderId,
+      );
+      await this.createEvent(
+        tx,
+        partnerId,
+        orderId,
+        "order.accepted",
+        orderId,
+        {
+          orderId,
+          externalOrderId: input.externalOrderId,
+          status,
+          fulfillmentStatus: "PENDING",
+          version: 0,
+          amountPaisa,
+          currency: "NPR",
+        },
+      );
+      await tx.outboxMessage.create({
+        data: {
+          dedupeKey: `partner-fulfillment-${orderId}`,
+          topic: "provisioning",
+          jobName: "advance-approved-order",
+          payload: { orderId },
+          orderId,
+        },
       });
     });
     const handoff = await Promise.allSettled([
@@ -473,10 +728,13 @@ export class PartnerService {
     planId: string,
     settlementMethod: PartnerSettlementMethod,
   ) {
-    void partnerId; void planId; void settlementMethod;
+    void partnerId;
+    void planId;
+    void settlementMethod;
     throw new GoneException({
       code: "PARTNER_QUOTES_DEPRECATED",
-      message: "Quotes are no longer available. Place a complete order instead (POST /partners/orders).",
+      message:
+        "Quotes are no longer available. Place a complete order instead (POST /partners/orders).",
     });
     /* Retained below for historical schema compatibility; no new quotes are created.
     const partner = await this.partner(partnerId);
@@ -525,10 +783,12 @@ export class PartnerService {
   }
 
   async createOrder(partnerId: string, input: CreateOrderInput) {
-    void partnerId; void input;
+    void partnerId;
+    void input;
     throw new GoneException({
       code: "LEGACY_PARTNER_ORDER_DEPRECATED",
-      message: "Quote-based orders are no longer available. Place a complete order instead (POST /partners/orders).",
+      message:
+        "Quote-based orders are no longer available. Place a complete order instead (POST /partners/orders).",
     });
     /* Retained below for historical schema compatibility; no new quote orders are created.
     const result = await this.prisma.$transaction(async (tx) => {
@@ -628,7 +888,14 @@ export class PartnerService {
         ...(input.externalOrderId
           ? { externalOrderId: input.externalOrderId }
           : {}),
-        ...(bound ? { OR: [{ createdAt: { lt: bound.createdAt } }, { createdAt: bound.createdAt, id: { lt: bound.id } }] } : {}),
+        ...(bound
+          ? {
+              OR: [
+                { createdAt: { lt: bound.createdAt } },
+                { createdAt: bound.createdAt, id: { lt: bound.id } },
+              ],
+            }
+          : {}),
       },
       include: PARTNER_ORDER_INCLUDE,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -638,7 +905,9 @@ export class PartnerService {
     const items = rows.slice(0, limit);
     return {
       items: items.map((order) => this.normalizeOrder(order)),
-      nextCursor: more ? (encodeCursor(items.at(-1)?.createdAt, items.at(-1)?.id) ?? null) : null,
+      nextCursor: more
+        ? (encodeCursor(items.at(-1)?.createdAt, items.at(-1)?.id) ?? null)
+        : null,
     };
   }
 
@@ -653,7 +922,9 @@ export class PartnerService {
       this.prisma.partnerLedgerEntry.aggregate({
         where: {
           partnerId,
-          type: { in: [PartnerLedgerEntryType.DEBIT, PartnerLedgerEntryType.CAPTURE] },
+          type: {
+            in: [PartnerLedgerEntryType.DEBIT, PartnerLedgerEntryType.CAPTURE],
+          },
         },
         _sum: { amountPaisa: true },
       }),
@@ -664,12 +935,30 @@ export class PartnerService {
         },
         _sum: { amountPaisa: true },
       }),
-      this.prisma.partnerLedgerEntry.aggregate({ where: { partnerId, type: PartnerLedgerEntryType.REFUND }, _sum: { amountPaisa: true } }),
-      this.prisma.partnerLedgerEntry.aggregate({ where: { partnerId, type: PartnerLedgerEntryType.ADJUSTMENT }, _sum: { amountPaisa: true } }),
-      this.prisma.order.findMany({ where: { partnerId }, select: { status: true, totalAmount: true } }),
+      this.prisma.partnerLedgerEntry.aggregate({
+        where: { partnerId, type: PartnerLedgerEntryType.REFUND },
+        _sum: { amountPaisa: true },
+      }),
+      this.prisma.partnerLedgerEntry.aggregate({
+        where: { partnerId, type: PartnerLedgerEntryType.ADJUSTMENT },
+        _sum: { amountPaisa: true },
+      }),
+      this.prisma.order.findMany({
+        where: { partnerId },
+        select: { status: true, totalAmount: true },
+      }),
     ]);
-    const ordersByStatus = orders.reduce<Record<string, number>>((result, order) => ({ ...result, [order.status]: (result[order.status] ?? 0) + 1 }), {});
-    const totalOrderValuePaisa = orders.reduce((total, order) => total + Math.round(Number(order.totalAmount) * 100), 0);
+    const ordersByStatus = orders.reduce<Record<string, number>>(
+      (result, order) => ({
+        ...result,
+        [order.status]: (result[order.status] ?? 0) + 1,
+      }),
+      {},
+    );
+    const totalOrderValuePaisa = orders.reduce(
+      (total, order) => total + Math.round(Number(order.totalAmount) * 100),
+      0,
+    );
     return {
       currency: "NPR",
       balancePaisa: account.balancePaisa,
@@ -680,10 +969,13 @@ export class PartnerService {
       totalAdjustedPaisa: adjustments._sum.amountPaisa ?? 0,
       ordersCreated: orders.length,
       ordersByStatus,
-      fulfilledOrders: (ordersByStatus.QR_READY ?? 0) + (ordersByStatus.COMPLETED ?? 0),
+      fulfilledOrders:
+        (ordersByStatus.QR_READY ?? 0) + (ordersByStatus.COMPLETED ?? 0),
       failedOrders: ordersByStatus.PROVISIONING_FAILED ?? 0,
       totalOrderValuePaisa,
-      averageOrderValuePaisa: orders.length ? Math.round(totalOrderValuePaisa / orders.length) : 0,
+      averageOrderValuePaisa: orders.length
+        ? Math.round(totalOrderValuePaisa / orders.length)
+        : 0,
       updatedAt: account.updatedAt,
     };
   }
@@ -716,10 +1008,16 @@ export class PartnerService {
             }
           : {}),
         ...(input.externalOrderId || input.orderNumber
-          ? { order: {
-              ...(input.externalOrderId ? { externalOrderId: input.externalOrderId } : {}),
-              ...(input.orderNumber ? { orderNumber: input.orderNumber } : {}),
-            } }
+          ? {
+              order: {
+                ...(input.externalOrderId
+                  ? { externalOrderId: input.externalOrderId }
+                  : {}),
+                ...(input.orderNumber
+                  ? { orderNumber: input.orderNumber }
+                  : {}),
+              },
+            }
           : {}),
         ...(input.reference
           ? { reference: { contains: input.reference, mode: "insensitive" } }
@@ -735,7 +1033,9 @@ export class PartnerService {
           : {}),
       },
       include: {
-        order: { select: { id: true, externalOrderId: true, orderNumber: true } },
+        order: {
+          select: { id: true, externalOrderId: true, orderNumber: true },
+        },
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
@@ -753,7 +1053,9 @@ export class PartnerService {
         order: entry.order,
         createdAt: entry.createdAt,
       })),
-      nextCursor: more ? (encodeCursor(items.at(-1)?.createdAt, items.at(-1)?.id) ?? null) : null,
+      nextCursor: more
+        ? (encodeCursor(items.at(-1)?.createdAt, items.at(-1)?.id) ?? null)
+        : null,
     };
   }
 
@@ -762,7 +1064,12 @@ export class PartnerService {
       where: { id, partnerId },
       include: PARTNER_ORDER_INCLUDE,
     });
-    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
     return this.normalizeOrder(order);
   }
 
@@ -771,7 +1078,12 @@ export class PartnerService {
       where: { partnerId, externalOrderId },
       select: { id: true },
     });
-    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
     return this.order(partnerId, order.id);
   }
 
@@ -779,26 +1091,51 @@ export class PartnerService {
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, partnerId },
       include: {
-        customerEsim: { include: { inventory: true, subscriptions: { take: 1 } } },
+        customerEsim: {
+          include: { inventory: true, subscriptions: { take: 1 } },
+        },
       },
     });
-    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
-    if (order.status !== OrderStatus.QR_READY && order.status !== OrderStatus.COMPLETED)
-      throw new ApiException({ code: "PARTNER_ORDER_NOT_READY", message: "Activation details are available once the eSIM is ready to use", status: 409 });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
+    if (
+      order.status !== OrderStatus.QR_READY &&
+      order.status !== OrderStatus.ACTIVATION_ATTENTION &&
+      order.status !== OrderStatus.COMPLETED
+    )
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_READY",
+        message:
+          "Activation details are available once the eSIM is ready to use",
+        status: 409,
+      });
     if (!order.customerEsim)
-      throw new ApiException({ code: "PARTNER_ACTIVATION_UNAVAILABLE", message: "Activation details are not available yet", status: 404 });
+      throw new ApiException({
+        code: "PARTNER_ACTIVATION_UNAVAILABLE",
+        message: "Activation details are not available yet",
+        status: 404,
+      });
     const subscription = order.customerEsim.subscriptions[0];
     return {
       orderId: order.id,
       externalOrderId: order.externalOrderId,
       status: order.status,
       fulfillmentStatus: this.fulfillmentStatus(order.status),
+      documentStatus: order.documentReviewStatus,
+      recoverability: order.operationalDisposition ?? null,
       iccid: order.customerEsim.inventory.iccid,
       msisdn: order.customerEsim.inventory.msisdn,
       smDpAddress: order.customerEsim.inventory.smDpAddress,
-      activationCode: this.crypto.decrypt(order.customerEsim.qrPayloadEncrypted),
+      activationCode: this.crypto.decrypt(
+        order.customerEsim.qrPayloadEncrypted,
+      ),
       activatedAt: order.activatedAt,
-      expiresAt: subscription?.expiresAt ?? order.customerEsim.inventory.expiresAt,
+      expiresAt:
+        subscription?.expiresAt ?? order.customerEsim.inventory.expiresAt,
     };
   }
 
@@ -891,7 +1228,12 @@ export class PartnerService {
     const document = await this.prisma.travelerDocument.findFirst({
       where: { id: documentId, orderId, order: { partnerId } },
     });
-    if (!document) throw new ApiException({ code: "PARTNER_DOCUMENT_NOT_FOUND", message: "Document not found", status: 404 });
+    if (!document)
+      throw new ApiException({
+        code: "PARTNER_DOCUMENT_NOT_FOUND",
+        message: "Document not found",
+        status: 404,
+      });
     await this.verifyUploadedDocument(document.privateAssetId);
     if (document.type === DocumentType.PASSPORT)
       await this.enqueuePassportOcr(orderId, documentId);
@@ -904,7 +1246,9 @@ export class PartnerService {
   }
 
   async hostedSession(partnerId: string, orderId: string, redirectUrl: string) {
-    void partnerId; void orderId; void redirectUrl;
+    void partnerId;
+    void orderId;
+    void redirectUrl;
     throw this.hostedPaymentDeprecated();
   }
 
@@ -932,7 +1276,16 @@ export class PartnerService {
         message: "This partner is not approved for hosted checkout links",
       });
     const plan = await this.prisma.plan.findFirst({
-      where: { id: input.planId, status: "ACTIVE", country: { active: true, ...(RESTRICTED_PLAN_COUNTRY_CODES.length ? { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } } : {}) } },
+      where: {
+        id: input.planId,
+        status: "ACTIVE",
+        country: {
+          active: true,
+          ...(RESTRICTED_PLAN_COUNTRY_CODES.length
+            ? { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } }
+            : {}),
+        },
+      },
       include: { country: true },
     });
     if (!plan)
@@ -946,7 +1299,8 @@ export class PartnerService {
       : null;
     const correctCountry =
       topUp !== null &&
-      topUp.planCountryCode.toUpperCase() === plan.country.isoCode.toUpperCase();
+      topUp.planCountryCode.toUpperCase() ===
+        plan.country.isoCode.toUpperCase();
     // A top-up is only valid when we can bind to a real eSIM. If the subscriber
     // resolved by mobile but has no persisted inventory (e.g. an older order
     // without a customerEsim row) we fall back to a clean new purchase rather
@@ -957,6 +1311,8 @@ export class PartnerService {
     // than silently downgrading without any signal.
     const topUpUnavailable =
       Boolean(input.topUpMobile) && !isTopUp && topUp !== null;
+    if (!isTopUp)
+      await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const token = randomBytes(24).toString("base64url");
     const sessionId = randomUUID();
     const id = randomUUID();
@@ -969,14 +1325,18 @@ export class PartnerService {
         },
       });
       if (duplicate)
-        throw new ApiException({ code: "EXTERNAL_ORDER_ID_EXISTS", message: "External order ID already exists", status: 409 });
+        throw new ApiException({
+          code: "EXTERNAL_ORDER_ID_EXISTS",
+          message: "External order ID already exists",
+          status: 409,
+        });
       const partnerCustomer = await this.ensurePartnerCustomer(
         tx,
         partner.code,
         partnerId,
         input.externalCustomerId,
       );
-await tx.order.create({
+      await tx.order.create({
         data: {
           id,
           orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`,
@@ -1002,9 +1362,15 @@ await tx.order.create({
             amountPaisa,
             currency: "NPR",
             capturedAt: new Date().toISOString(),
-            ...(isTopUp && input.topUpMobile ? { topUpMobile: input.topUpMobile } : {}),
-            ...(isTopUp && topUp?.inventory ? { targetEsimId: topUp.inventory.id } : {}),
-            ...(isTopUp && topUp?.traveler?.email ? { topUpEmail: topUp.traveler.email } : {}),
+            ...(isTopUp && input.topUpMobile
+              ? { topUpMobile: input.topUpMobile }
+              : {}),
+            ...(isTopUp && topUp?.inventory
+              ? { targetEsimId: topUp.inventory.id }
+              : {}),
+            ...(isTopUp && topUp?.traveler?.email
+              ? { topUpEmail: topUp.traveler.email }
+              : {}),
           },
           compatibilityAcceptedAt: new Date(),
           events: { create: { fromStatus: null, toStatus: OrderStatus.DRAFT } },
@@ -1033,13 +1399,21 @@ await tx.order.create({
       topUp: isTopUp
         ? {
             mobile: input.topUpMobile,
-            ...(topUp?.traveler ? { subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}` } : {}),
+            ...(topUp?.traveler
+              ? {
+                  subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}`,
+                }
+              : {}),
             status: "BOUND",
           }
         : topUpUnavailable
           ? {
               mobile: input.topUpMobile,
-              ...(topUp?.traveler ? { subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}` } : {}),
+              ...(topUp?.traveler
+                ? {
+                    subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}`,
+                  }
+                : {}),
               status: "UNAVAILABLE",
             }
           : undefined,
@@ -1065,7 +1439,12 @@ await tx.order.create({
         partner: { select: { name: true, slug: true, brand: true } },
       },
     });
-    if (!order) throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
+    if (!order)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
     return {
       sessionId: session.id,
       expiresAt: session.expiresAt,
@@ -1177,7 +1556,12 @@ await tx.order.create({
     const document = await this.prisma.travelerDocument.findFirst({
       where: { id: documentId, orderId: order.id },
     });
-    if (!document) throw new ApiException({ code: "PARTNER_DOCUMENT_NOT_FOUND", message: "Document not found", status: 404 });
+    if (!document)
+      throw new ApiException({
+        code: "PARTNER_DOCUMENT_NOT_FOUND",
+        message: "Document not found",
+        status: 404,
+      });
     await this.verifyUploadedDocument(document.privateAssetId);
     return {
       id: document.id,
@@ -1204,38 +1588,109 @@ await tx.order.create({
         code: "PASSPORT_REQUIRED",
         message: "Upload a passport before verification",
       });
-    const traveler = this.decryptTraveler(order.traveler);
-    if (!traveler)
+    if (!this.decryptTraveler(order.traveler))
       throw new BadRequestException({
         code: "TRAVELER_REQUIRED",
         message: "Traveller details are required before verification",
       });
-    const result = await this.passportVerifier.verify({
-      id: order.id,
-      purchaseType: "INITIAL_PURCHASE",
-      traveler,
-      documents: [
-        {
-          id: passport.id,
-          type: DocumentType.PASSPORT,
-          fileName: passport.fileName,
-          privateAssetId: passport.privateAssetId,
-          status: passport.status,
-          uploadVerified: true,
+    if (
+      [
+        "VERIFIED",
+        "MANUAL_REVIEW",
+        "OCR_BACKGROUND",
+        "REUPLOAD_REQUIRED",
+      ].includes(order.documentReviewStatus)
+    )
+      return {
+        status: order.documentReviewStatus,
+        checkedAt: new Date().toISOString(),
+        method: "asynchronous",
+      };
+    const config = await this.prisma.platformConfiguration.upsert({
+      where: { id: "platform" },
+      update: {},
+      create: { id: "platform" },
+    });
+    const now = new Date();
+    const releaseAt =
+      order.documentCheckoutReleaseAt ??
+      new Date(now.getTime() + config.ocrCheckoutWaitMs);
+    if (config.documentReviewPolicy === "MANUAL_REVIEW") {
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: {
+          documentReviewPolicy: config.documentReviewPolicy,
+          documentReviewStatus: "MANUAL_REVIEW",
+          documentReviewStartedAt: order.documentReviewStartedAt ?? now,
+          documentCheckoutReleaseAt: releaseAt,
         },
-      ],
-    } as never);
-    await this.prisma.travelerDocument.update({
-      where: { id: passport.id },
+      });
+      return {
+        status: "MANUAL_REVIEW",
+        checkedAt: now.toISOString(),
+        method: "manual",
+      };
+    }
+    if (config.documentReviewPolicy === "NO_REVIEW") {
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: {
+          documentReviewPolicy: config.documentReviewPolicy,
+          documentReviewStatus: "SKIPPED",
+          documentReviewStartedAt: order.documentReviewStartedAt ?? now,
+          documentCheckoutReleaseAt: releaseAt,
+        },
+      });
+      return {
+        status: "SKIPPED",
+        checkedAt: now.toISOString(),
+        method: "policy",
+      };
+    }
+    if (releaseAt <= now) {
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: { documentReviewStatus: "OCR_BACKGROUND" },
+      });
+      return {
+        status: "OCR_BACKGROUND",
+        checkedAt: now.toISOString(),
+        method: "asynchronous",
+      };
+    }
+    await this.prisma.order.update({
+      where: { id: order.id },
       data: {
-        passportVerificationStatus: result.status,
-        passportVerificationMethod: result.method,
-        passportMatchedFields: result.matchedFields as Prisma.InputJsonValue,
-        passportConfidence: result.confidence ?? null,
-        passportVerifiedAt: new Date(result.checkedAt),
+        documentReviewPolicy: config.documentReviewPolicy,
+        documentReviewStatus: "OCR_PENDING",
+        documentReviewStartedAt: order.documentReviewStartedAt ?? now,
+        documentCheckoutReleaseAt: releaseAt,
       },
     });
-    return result;
+    try {
+      await this.queues.add(
+        QUEUES.documents,
+        "verify-order-passport",
+        { orderId: order.id, documentId: passport.id },
+        `order-passport-${order.id}-${passport.id}`,
+        { attempts: 3, backoff: { type: "exponential", delay: 2_000 } },
+      );
+      return {
+        status: "OCR_PENDING",
+        checkedAt: now.toISOString(),
+        method: "asynchronous",
+      };
+    } catch {
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: { documentReviewStatus: "MANUAL_REVIEW" },
+      });
+      return {
+        status: "MANUAL_REVIEW",
+        checkedAt: now.toISOString(),
+        method: "manual-failover",
+      };
+    }
   }
 
   async completeHostedCheckout(
@@ -1251,12 +1706,25 @@ await tx.order.create({
         documents: true,
       },
     });
-    if (!order) throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
+    if (!order)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
     if (order.status !== OrderStatus.DRAFT)
-      throw new ApiException({ code: "HOSTED_CHECKOUT_COMPLETED", message: "Hosted checkout is already completed", status: 400 });
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_COMPLETED",
+        message: "Hosted checkout is already completed",
+        status: 400,
+      });
     const required = this.requiredDocuments(order.plan.country.isoCode);
     if (!order.traveler && order.orderType !== "TOPUP")
-      throw new ApiException({ code: "PARTNER_TRAVELER_REQUIRED", message: "Traveller details are required", status: 400 });
+      throw new ApiException({
+        code: "PARTNER_TRAVELER_REQUIRED",
+        message: "Traveller details are required",
+        status: 400,
+      });
     if (order.orderType !== "TOPUP") {
       for (const type of required) {
         const document = order.documents.find((item) => item.type === type);
@@ -1267,15 +1735,20 @@ await tx.order.create({
           });
         await this.verifyUploadedDocument(document.privateAssetId);
       }
-      const passport = order.documents.find(
-        (item) => item.type === DocumentType.PASSPORT,
-      )!;
-      const verification = passport.passportVerificationStatus;
-      if (verification !== "VERIFIED" && verification !== "SKIPPED")
+      if (
+        ![
+          "VERIFIED",
+          "MANUAL_REVIEW",
+          "MANUALLY_APPROVED",
+          "SKIPPED",
+          "OCR_BACKGROUND",
+        ].includes(order.documentReviewStatus)
+      )
         throw new BadRequestException({
           code: "PASSPORT_VERIFICATION_REQUIRED",
           message: "Passport verification is required before completion",
         });
+      await this.applicationOrders.assertInventoryAvailableForNewOrder();
     }
     const amountPaisa = Math.round(Number(order.totalAmount) * 100);
     await this.prisma.$transaction(async (tx) => {
@@ -1291,7 +1764,11 @@ await tx.order.create({
         data: { status: OrderStatus.APPROVED, version: { increment: 1 } },
       });
       if (updated.count !== 1)
-        throw new ApiException({ code: "ORDER_CONFLICT", message: "Order was changed; reload and retry", status: 409 });
+        throw new ApiException({
+          code: "ORDER_CONFLICT",
+          message: "Order was changed; reload and retry",
+          status: 409,
+        });
       await tx.orderEvent.create({
         data: {
           orderId: order.id,
@@ -1362,7 +1839,11 @@ await tx.order.create({
         data: { status: OrderStatus.CANCELLED, version: { increment: 1 } },
       });
       if (updated.count !== 1)
-        throw new ApiException({ code: "ORDER_CONFLICT", message: "Order was changed by another request; reload and retry", status: 409 });
+        throw new ApiException({
+          code: "ORDER_CONFLICT",
+          message: "Order was changed by another request; reload and retry",
+          status: 409,
+        });
       await tx.orderEvent.create({
         data: {
           orderId,
@@ -1474,9 +1955,18 @@ await tx.order.create({
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, partnerId },
     });
-    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
     if (order.status !== OrderStatus.COMPLETED)
-      throw new ApiException({ code: "PARTNER_USAGE_UNAVAILABLE", message: "Usage details are available once the eSIM is active", status: 400 });
+      throw new ApiException({
+        code: "PARTNER_USAGE_UNAVAILABLE",
+        message: "Usage details are available once the eSIM is active",
+        status: 400,
+      });
     return this.connectivity.getUsage(orderId);
   }
 
@@ -1492,9 +1982,18 @@ await tx.order.create({
       where: { id: orderId, partnerId },
       include: { traveler: true },
     });
-    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
     if (!order.traveler)
-      throw new ApiException({ code: "PARTNER_TRAVELER_REQUIRED", message: "Traveller contact details are required", status: 400 });
+      throw new ApiException({
+        code: "PARTNER_TRAVELER_REQUIRED",
+        message: "Traveller contact details are required",
+        status: 400,
+      });
     return this.notifications.enqueue({
       orderId,
       channel: input.channel,
@@ -1545,7 +2044,10 @@ await tx.order.create({
         events: `/api/v1/partners/orders/${order.id}/events`,
         esim: `/api/v1/partners/orders/${order.id}/esim`,
       },
-      esimDetailsAvailable: order.status === OrderStatus.QR_READY || order.status === OrderStatus.COMPLETED,
+      esimDetailsAvailable:
+        order.status === OrderStatus.QR_READY ||
+        order.status === OrderStatus.ACTIVATION_ATTENTION ||
+        order.status === OrderStatus.COMPLETED,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
     };
@@ -1558,18 +2060,30 @@ await tx.order.create({
       (partner.status !== PartnerStatus.ACTIVE &&
         partner.status !== PartnerStatus.SUSPENDED)
     )
-      throw new ApiException({ code: "PARTNER_NOT_FOUND", message: "Partner not found", status: 404 });
+      throw new ApiException({
+        code: "PARTNER_NOT_FOUND",
+        message: "Partner not found",
+        status: 404,
+      });
     return partner;
   }
 
   private async hostedCheckoutSession(token: string) {
     if (!/^[A-Za-z0-9_-]{32,100}$/.test(token))
-      throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
     const session = await this.prisma.partnerHostedCheckoutSession.findUnique({
       where: { tokenHash: createHash("sha256").update(token).digest("hex") },
     });
     if (!session || session.consumedAt || session.expiresAt <= new Date())
-      throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
     return session;
   }
 
@@ -1584,9 +2098,18 @@ await tx.order.create({
         partner: { select: { name: true, slug: true, brand: true } },
       },
     });
-    if (!order) throw new ApiException({ code: "HOSTED_CHECKOUT_NOT_FOUND", message: "Hosted checkout not found", status: 404 });
+    if (!order)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
     if (statuses && !statuses.includes(order.status))
-      throw new ApiException({ code: "PARTNER_ORDER_INVALID_STATE", message: "Order cannot be changed in its current state", status: 400 });
+      throw new ApiException({
+        code: "PARTNER_ORDER_INVALID_STATE",
+        message: "Order cannot be changed in its current state",
+        status: 400,
+      });
     return order;
   }
 
@@ -1599,9 +2122,18 @@ await tx.order.create({
       where: { id, partnerId },
       include: { partnerQuote: true },
     });
-    if (!order) throw new ApiException({ code: "PARTNER_ORDER_NOT_FOUND", message: "Order not found", status: 404 });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
     if (!statuses.includes(order.status))
-      throw new ApiException({ code: "PARTNER_ORDER_INVALID_STATE", message: "Order cannot be changed in its current state", status: 400 });
+      throw new ApiException({
+        code: "PARTNER_ORDER_INVALID_STATE",
+        message: "Order cannot be changed in its current state",
+        status: 400,
+      });
     return order;
   }
 
@@ -1611,7 +2143,11 @@ await tx.order.create({
       data: { version: { increment: 1 } },
     });
     if (result.count !== 1)
-      throw new ApiException({ code: "ORDER_CONFLICT", message: "Order was changed by another request; reload and retry", status: 409 });
+      throw new ApiException({
+        code: "ORDER_CONFLICT",
+        message: "Order was changed by another request; reload and retry",
+        status: 409,
+      });
   }
 
   private async ensurePartnerCustomer(
@@ -1656,7 +2192,11 @@ await tx.order.create({
     const available =
       account.balancePaisa + account.creditLimitPaisa - account.reservedPaisa;
     if (available < amountPaisa)
-      throw new ApiException({ code: "INSUFFICIENT_PARTNER_BALANCE", message: "Partner prepaid balance is insufficient", status: 400 });
+      throw new ApiException({
+        code: "INSUFFICIENT_PARTNER_BALANCE",
+        message: "Partner prepaid balance is insufficient",
+        status: 400,
+      });
     const updated = await tx.partnerAccount.updateMany({
       where: { id: account.id, version: account.version },
       data: {
@@ -1665,7 +2205,11 @@ await tx.order.create({
       },
     });
     if (updated.count !== 1)
-      throw new ApiException({ code: "PARTNER_BALANCE_CONFLICT", message: "Partner balance changed; retry", status: 409 });
+      throw new ApiException({
+        code: "PARTNER_BALANCE_CONFLICT",
+        message: "Partner balance changed; retry",
+        status: 409,
+      });
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
@@ -1696,14 +2240,22 @@ await tx.order.create({
       });
     const balanceAfterPaisa = account.balancePaisa - amountPaisa;
     const updated = await tx.partnerAccount.updateMany({
-      where: { id: account.id, version: account.version, balancePaisa: { gte: amountPaisa } },
+      where: {
+        id: account.id,
+        version: account.version,
+        balancePaisa: { gte: amountPaisa },
+      },
       data: {
         balancePaisa: balanceAfterPaisa,
         version: { increment: 1 },
       },
     });
     if (updated.count !== 1)
-      throw new ApiException({ code: "PARTNER_BALANCE_CONFLICT", message: "Partner balance changed; retry", status: 409 });
+      throw new ApiException({
+        code: "PARTNER_BALANCE_CONFLICT",
+        message: "Partner balance changed; retry",
+        status: 409,
+      });
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
@@ -1771,9 +2323,7 @@ await tx.order.create({
       email: traveler.email,
       mobile: traveler.mobile,
       passportNumber: this.crypto.decrypt(traveler.passportNumberEncrypted),
-      passportExpiryDate: this.crypto.decrypt(
-        traveler.passportExpiryEncrypted,
-      ),
+      passportExpiryDate: this.crypto.decrypt(traveler.passportExpiryEncrypted),
       ...(traveler.pointOfSaleCode
         ? { pointOfSaleCode: traveler.pointOfSaleCode }
         : {}),
@@ -1790,7 +2340,9 @@ await tx.order.create({
     return [
       DocumentType.PASSPORT,
       DocumentType.TICKET,
-      ...(visaCountries.has(countryCode.toUpperCase()) ? [DocumentType.VISA] : []),
+      ...(visaCountries.has(countryCode.toUpperCase())
+        ? [DocumentType.VISA]
+        : []),
     ];
   }
 
@@ -1841,7 +2393,11 @@ await tx.order.create({
       },
     });
     if (updated.count !== 1)
-      throw new ApiException({ code: "PARTNER_BALANCE_CONFLICT", message: "Partner balance changed; retry", status: 409 });
+      throw new ApiException({
+        code: "PARTNER_BALANCE_CONFLICT",
+        message: "Partner balance changed; retry",
+        status: 409,
+      });
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
@@ -1870,7 +2426,9 @@ await tx.order.create({
       where: { partnerId, orderId, type: PartnerLedgerEntryType.DEBIT },
     });
     if (!debit) return;
-    const account = await tx.partnerAccount.findUnique({ where: { partnerId } });
+    const account = await tx.partnerAccount.findUnique({
+      where: { partnerId },
+    });
     if (!account) return;
     const balanceAfterPaisa = account.balancePaisa + amountPaisa;
     const updated = await tx.partnerAccount.updateMany({
@@ -1878,7 +2436,11 @@ await tx.order.create({
       data: { balancePaisa: balanceAfterPaisa, version: { increment: 1 } },
     });
     if (updated.count !== 1)
-      throw new ApiException({ code: "PARTNER_BALANCE_CONFLICT", message: "Partner balance changed; retry", status: 409 });
+      throw new ApiException({
+        code: "PARTNER_BALANCE_CONFLICT",
+        message: "Partner balance changed; retry",
+        status: 409,
+      });
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
@@ -1955,17 +2517,27 @@ await tx.order.create({
   }
 
   private fulfillmentStatus(status: OrderStatus) {
-    if (status === OrderStatus.QR_READY) return "READY";
+    if (
+      status === OrderStatus.QR_READY ||
+      status === OrderStatus.ACTIVATION_ATTENTION
+    )
+      return "READY";
     if (status === OrderStatus.COMPLETED) return "ACTIVATED";
     if (status === OrderStatus.PROVISIONING_FAILED) return "FAILED";
-    if (status === OrderStatus.APPROVED || status === OrderStatus.PROVISIONING) return "PENDING";
+    if (
+      status === OrderStatus.APPROVED ||
+      status === OrderStatus.PROVISIONING ||
+      status === OrderStatus.PAYMENT_REVIEW_REQUIRED
+    )
+      return "PENDING";
     return "NOT_READY";
   }
 
   private hostedPaymentDeprecated() {
     return new GoneException({
       code: "HOSTED_PAYMENT_DEPRECATED",
-      message: "Hosted payments are no longer available. Include settlement.method = \"PARTNER_ACCOUNT\" when creating an order.",
+      message:
+        'Hosted payments are no longer available. Include settlement.method = "PARTNER_ACCOUNT" when creating an order.',
     });
   }
 }

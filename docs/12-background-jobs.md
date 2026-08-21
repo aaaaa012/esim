@@ -10,16 +10,16 @@ Primary sources: `apps/api/src/jobs/queues.ts`, `queue.service.ts`,
 
 ```ts
 export const QUEUES = {
-  provisioning: 'provisioning',
-  providerCallbacks: 'provider-callbacks',
-  payments: 'payments',
-  notifications: 'notifications',
-  reconciliation: 'reconciliation',
+  provisioning: "provisioning",
+  providerCallbacks: "provider-callbacks",
+  payments: "payments",
+  notifications: "notifications",
+  reconciliation: "reconciliation",
 };
 
 export const DEFAULT_JOB_OPTIONS = {
   attempts: 3,
-  backoff: { type: 'exponential', delay: 2_000 },
+  backoff: { type: "exponential", delay: 2_000 },
   removeOnComplete: 500,
   removeOnFail: 2_000,
 };
@@ -45,7 +45,7 @@ export const DEFAULT_JOB_OPTIONS = {
 
 - Registers the `provisioning` queue.
 - Job `provision-order` → `orders.processProvisioning(orderId,
-  job.attemptsMade + 1, final = (attemptsMade + 1 >= 3))`.
+job.attemptsMade + 1, final = (attemptsMade + 1 >= 3))`.
 - Max attempts per job = 3 (from `DEFAULT_JOB_OPTIONS`).
 
 ## Integration worker
@@ -54,7 +54,7 @@ export const DEFAULT_JOB_OPTIONS = {
 
 - Registers `notifications`, `payments`, and `providerCallbacks` queues.
 - `notification(job)` (`integration.processor.ts:23-24`): marks SENDING,
-  renders template, EMAIL via Gmail (+ optional QR PDF attachment for
+  renders template, EMAIL through the provider-neutral channel using Resend (+ optional unencrypted QR PNG attachment for
   QR_READY), WHATSAPP via WhatsApp channel, then marks SENT/SIMULATED/FAILED.
 - `payment(job)` (`integration.processor.ts:25`): loads payload (inline or
   from `WebhookEvent`), requires `orderId` + `reference`, calls
@@ -73,6 +73,10 @@ export const DEFAULT_JOB_OPTIONS = {
 - `onModuleInit` (`reconciliation.service.ts:28-36`): registers the
   `reconciliation` queue worker; starts a `setInterval` of
   `RECONCILIATION_INTERVAL_MINUTES` (default 15 min); runs once immediately.
+  Inventory checks use `TRANSATEL_RECONCILIATION_CONCURRENCY` (default 1) to
+  protect the provider from bulk-refresh bursts. Approved batches are queued
+  immediately, while stale or never-checked unassigned stock is rechecked
+  automatically according to `TRANSATEL_INVENTORY_RECONCILE_HOURS`.
 - `run()` (`reconciliation.service.ts:42-73`): requires Prisma; first
   `sweepLifecycle`, then finds up to 500 ACTIVE subscriptions whose
   `usageLastCheckedAt` is stale (older than the interval) and enqueues
@@ -99,6 +103,7 @@ When `REDIS_URL` is unset, the following services execute the work directly:
 ## Webhook persistence interplay
 
 `WebhooksController` enqueues:
+
 - `payments` → `payment-callback` (`webhooks.controller.ts:43`)
 - `providerCallbacks` → `connectivity-callback` (`webhooks.controller.ts:60`)
 - The webhook `WebhookEvent` row is persisted first, so the worker can reload

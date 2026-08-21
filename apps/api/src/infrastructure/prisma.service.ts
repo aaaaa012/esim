@@ -1,10 +1,20 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
+import { PrismaClient } from "@prisma/client";
 
 @Injectable()
-export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+export class PrismaService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(PrismaService.name);
-  readonly enabled = process.env.PERSISTENCE_MODE === 'prisma' && Boolean(process.env.DATABASE_URL);
+  readonly enabled =
+    process.env.PERSISTENCE_MODE === "prisma" &&
+    Boolean(process.env.DATABASE_URL);
 
   constructor() {
     super({
@@ -17,11 +27,13 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     if (!this.enabled) {
-      this.logger.log('Prisma persistence disabled; using the local in-memory workflow store');
+      this.logger.log(
+        "Prisma persistence disabled; using the local in-memory workflow store",
+      );
       return;
     }
     await this.$connect();
-    this.logger.log('CockroachDB connection established');
+    this.logger.log("PostgreSQL connection established");
   }
 
   async onModuleDestroy() {

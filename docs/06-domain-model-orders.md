@@ -31,6 +31,7 @@ The Prisma schema mirrors this enum exactly (`schema.prisma:45-59`).
   (`order-machine.ts:15-16`).
 
 Notable edges:
+
 - `DRAFT → {PAYMENT_PENDING, CANCELLED}`
 - `PAYMENT_PENDING → {PAYMENT_CONFIRMED, PAYMENT_FAILED, CANCELLED}`
 - `PAYMENT_CONFIRMED → {APPROVED, REVIEW_PENDING}`
@@ -50,24 +51,31 @@ Notable edges:
 ```ts
 type DemoOrder = {
   id: string;
-  ownerId: string | null;        // null for guest orders
-  orderNumber: string;           // VC-{year}-{8 hex}
+  ownerId: string | null; // null for guest orders
+  orderNumber: string; // VC-{year}-{8 hex}
   status: OrderStatus;
-  version: number;               // optimistic-lock counter
+  version: number; // optimistic-lock counter
   plan: CatalogPlan;
-  totalAmountNpr: number;        // plan.sellingPriceNpr at creation
-  pricingSnapshot: object;       // { planId, name, amount, currency: 'NPR', topUpMobile? }
+  totalAmountNpr: number; // plan.sellingPriceNpr at creation
+  pricingSnapshot: object; // { planId, name, amount, currency: 'NPR', topUpMobile? }
   compatibilityAcceptedAt: string;
   traveler?: TravelerInput;
-  documents: { id, type, fileName, privateAssetId, status, uploadVerified? }[];
-  payment?: { provider, reference, status, correlationId?, expiresAt?, returnUrl? };
-  timeline: { from, to, at, reason? }[];
+  documents: { id; type; fileName; privateAssetId; status; uploadVerified? }[];
+  payment?: {
+    provider;
+    reference;
+    status;
+    correlationId?;
+    expiresAt?;
+    returnUrl?;
+  };
+  timeline: { from; to; at; reason? }[];
   qrPayload?: string;
   createdAt: string;
   providerSubscriptionId?: string;
   providerStatus?: string;
-  usage?: { usedMb, totalMb, lastCheckedAt? };
-  purchaseType?: 'INITIAL_PURCHASE' | 'TOPUP';
+  usage?: { usedMb; totalMb; lastCheckedAt? };
+  purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   topUpMobile?: string;
 };
 ```

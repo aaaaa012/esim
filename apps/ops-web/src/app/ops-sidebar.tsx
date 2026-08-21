@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
+  AlertTriangle,
   Bell,
   Boxes,
   ClipboardCheck,
@@ -30,11 +31,16 @@ type NavItem = {
 const overviewItems: NavItem[] = [
   { href: "/", label: "Home", icon: Gauge },
   { href: "/work-queue", label: "To-do list", icon: ClipboardCheck },
+  { href: "/attention", label: "Attention queue", icon: AlertTriangle },
   { href: "/orders", label: "Orders", icon: PackageSearch },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/inventory", label: "eSIM stock", icon: Boxes },
   { href: "/transatel", label: "Provider status", icon: RadioTower },
-  { href: "/provisioning-operations", label: "Pending activations", icon: RotateCw },
+  {
+    href: "/provisioning-operations",
+    label: "Pending activations",
+    icon: RotateCw,
+  },
 ];
 const systemItems: NavItem[] = [
   { href: "/manual-refunds", label: "Refunds", icon: Undo2 },
@@ -64,7 +70,13 @@ function isActive(path: string, href: string) {
   return href === "/" ? path === "/" : path.startsWith(href);
 }
 
-export default function OpsSidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void }) {
+export default function OpsSidebar({
+  open = false,
+  onClose,
+}: {
+  open?: boolean;
+  onClose?: () => void;
+}) {
   const authFetch = useAuthenticatedFetch();
   const [profile, setProfile] = useState<Profile | null>(null);
   useEffect(() => {
@@ -72,46 +84,76 @@ export default function OpsSidebar({ open = false, onClose }: { open?: boolean; 
       .then((response) => response.json())
       .then((value) => setProfile(value.data ?? null));
   }, [authFetch]);
-  const isAdmin = profile?.effectiveCapabilities.includes("admin:portal") ?? false;
-  const adminItem: NavItem = { href: "/admin", label: "Settings", icon: Settings };
-  const showcaseItem: NavItem = { href: "/admin/partners-showcase", label: "Partners", icon: Handshake };
+  const isAdmin =
+    profile?.effectiveCapabilities.includes("admin:portal") ?? false;
+  const adminItem: NavItem = {
+    href: "/admin",
+    label: "Settings",
+    icon: Settings,
+  };
+  const showcaseItem: NavItem = {
+    href: "/admin/partners-showcase",
+    label: "Partners",
+    icon: Handshake,
+  };
   const path = usePathname();
-  const items = isAdmin ? [...overviewItems, ...systemItems, adminItem, showcaseItem] : [...overviewItems, ...systemItems];
+  const items = isAdmin
+    ? [...overviewItems, ...systemItems, adminItem, showcaseItem]
+    : [...overviewItems, ...systemItems];
   return (
     <>
-    <button type="button" aria-label="Close operations navigation" className={cn("ops-sidebar-backdrop", open && "open")} onClick={onClose} />
-    <aside className={cn("ops-sidebar", open && "open")} aria-label="Operations navigation">
-      <div className="ops-sidebar-brand">
-        <span className="mark">
-          <Compass className="size-4" />
-        </span>
-        <div className="word">
-          <b>Visa Compass</b>
-          <span>Operations</span>
+      <button
+        type="button"
+        aria-label="Close operations navigation"
+        className={cn("ops-sidebar-backdrop", open && "open")}
+        onClick={onClose}
+      />
+      <aside
+        className={cn("ops-sidebar", open && "open")}
+        aria-label="Operations navigation"
+      >
+        <div className="ops-sidebar-brand">
+          <span className="mark">
+            <Compass className="size-4" />
+          </span>
+          <div className="word">
+            <b>Visa Compass</b>
+            <span>Operations</span>
+          </div>
+          <button
+            type="button"
+            className="ops-sidebar-close"
+            aria-label="Close navigation"
+            onClick={onClose}
+          >
+            <X className="size-5" />
+          </button>
         </div>
-        <button type="button" className="ops-sidebar-close" aria-label="Close navigation" onClick={onClose}><X className="size-5" /></button>
-      </div>
 
-      <nav className="ops-sidebar-nav">
-        {items.map((item) => (
-          <SidebarLink
-            key={item.href}
-            item={item}
-            active={isActive(path, item.href)}
-          />
-        ))}
-      </nav>
+        <nav className="ops-sidebar-nav">
+          {items.map((item) => (
+            <SidebarLink
+              key={item.href}
+              item={item}
+              active={isActive(path, item.href)}
+            />
+          ))}
+        </nav>
 
-      <div className="ops-sidebar-foot">
-        <div className="ops-sidebar-user">
-          <span className="avatar">{profile?.email.slice(0, 1).toUpperCase() ?? "…"}</span>
-          <div className="meta">
-            <b>{profile?.email ?? "Loading…"}</b>
-            <span>{profile ? humane(profile.accountType) : "Authenticating"}</span>
+        <div className="ops-sidebar-foot">
+          <div className="ops-sidebar-user">
+            <span className="avatar">
+              {profile?.email.slice(0, 1).toUpperCase() ?? "…"}
+            </span>
+            <div className="meta">
+              <b>{profile?.email ?? "Loading…"}</b>
+              <span>
+                {profile ? humane(profile.accountType) : "Authenticating"}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-    </aside>
+      </aside>
     </>
   );
 }

@@ -150,7 +150,9 @@ export default function PartnersShowcaseClient() {
           }),
         },
       );
-      setItems((v) => v.map((item) => (item.id === updated.id ? updated : item)));
+      setItems((v) =>
+        v.map((item) => (item.id === updated.id ? updated : item)),
+      );
       setEditing(null);
       toast.success(`${updated.name} updated`);
     } catch (e) {
@@ -171,7 +173,9 @@ export default function PartnersShowcaseClient() {
         },
       );
       setItems((v) => v.map((row) => (row.id === updated.id ? updated : row)));
-      toast.success(`${updated.name} is now ${updated.active ? "visible" : "hidden"} on the homepage`);
+      toast.success(
+        `${updated.name} is now ${updated.active ? "visible" : "hidden"} on the homepage`,
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Visibility update failed");
     } finally {
@@ -220,7 +224,9 @@ export default function PartnersShowcaseClient() {
         >
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Display name</Label>
+              <Label className="text-xs text-muted-foreground">
+                Display name
+              </Label>
               <Input
                 placeholder="e.g. Himalayan Airways"
                 value={name}
@@ -228,18 +234,23 @@ export default function PartnersShowcaseClient() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Logo URL (optional)</Label>
+              <Label className="text-xs text-muted-foreground">
+                Logo URL (optional)
+              </Label>
               <Input
                 placeholder="https://example.com/logo.png"
                 value={logoUrl}
                 onChange={(event) => setLogoUrl(event.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Use a direct link to an image file (.png, .jpg, .svg) so it renders correctly.
+                Use a direct link to an image file (.png, .jpg, .svg) so it
+                renders correctly.
               </p>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Sort order (lower first)</Label>
+              <Label className="text-xs text-muted-foreground">
+                Sort order (lower first)
+              </Label>
               <Input
                 type="number"
                 min="0"
@@ -248,8 +259,16 @@ export default function PartnersShowcaseClient() {
                 onChange={(event) => setSortOrder(event.target.value)}
               />
             </div>
-            <Button className="w-full" disabled={busy} onClick={() => void create()}>
-              {busy ? <Spinner className="text-primary-foreground" /> : <Plus className="size-4" />}
+            <Button
+              className="w-full"
+              disabled={busy}
+              onClick={() => void create()}
+            >
+              {busy ? (
+                <Spinner className="text-primary-foreground" />
+              ) : (
+                <Plus className="size-4" />
+              )}
               Add partner
             </Button>
           </div>
@@ -282,7 +301,10 @@ export default function PartnersShowcaseClient() {
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <span className="flex size-9 items-center justify-center overflow-hidden rounded-lg bg-muted">
-                          <Logo item={item} className="size-full object-contain" />
+                          <Logo
+                            item={item}
+                            className="size-full object-contain"
+                          />
                         </span>
                         <div>
                           <p className="font-medium">{item.name}</p>
@@ -292,7 +314,9 @@ export default function PartnersShowcaseClient() {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="tabular-nums">{item.sortOrder}</TableCell>
+                    <TableCell className="tabular-nums">
+                      {item.sortOrder}
+                    </TableCell>
                     <TableCell>
                       <Switch
                         checked={item.active}
@@ -318,7 +342,11 @@ export default function PartnersShowcaseClient() {
                           disabled={busyId === item.id}
                           onClick={() => void remove(item)}
                         >
-                          {busyId === item.id ? <Spinner /> : <Trash2 className="size-4" />}
+                          {busyId === item.id ? (
+                            <Spinner />
+                          ) : (
+                            <Trash2 className="size-4" />
+                          )}
                           Remove
                         </Button>
                       </div>
@@ -331,7 +359,10 @@ export default function PartnersShowcaseClient() {
         </Panel>
       </div>
 
-      <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(open) => !open && setEditing(null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit partner</DialogTitle>
@@ -342,7 +373,9 @@ export default function PartnersShowcaseClient() {
           {editing && (
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Display name</Label>
+                <Label className="text-xs text-muted-foreground">
+                  Display name
+                </Label>
                 <Input
                   value={editing.name}
                   onChange={(event) =>
@@ -351,7 +384,9 @@ export default function PartnersShowcaseClient() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Logo URL (optional)</Label>
+                <Label className="text-xs text-muted-foreground">
+                  Logo URL (optional)
+                </Label>
                 <Input
                   placeholder="https://example.com/logo.png"
                   value={editing.logoUrl ?? ""}
@@ -364,14 +399,19 @@ export default function PartnersShowcaseClient() {
                 </p>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Sort order (lower first)</Label>
+                <Label className="text-xs text-muted-foreground">
+                  Sort order (lower first)
+                </Label>
                 <Input
                   type="number"
                   min="0"
                   max="9999"
                   value={editing.sortOrder}
                   onChange={(event) =>
-                    setEditing({ ...editing, sortOrder: Number(event.target.value) })
+                    setEditing({
+                      ...editing,
+                      sortOrder: Number(event.target.value),
+                    })
                   }
                 />
               </div>
@@ -381,8 +421,15 @@ export default function PartnersShowcaseClient() {
             <Button variant="outline" onClick={() => setEditing(null)}>
               Cancel
             </Button>
-            <Button disabled={busyId === editing?.id} onClick={() => void save()}>
-              {busyId === editing?.id ? <Spinner className="text-primary-foreground" /> : <Save className="size-4" />}
+            <Button
+              disabled={busyId === editing?.id}
+              onClick={() => void save()}
+            >
+              {busyId === editing?.id ? (
+                <Spinner className="text-primary-foreground" />
+              ) : (
+                <Save className="size-4" />
+              )}
               Save changes
             </Button>
           </DialogFooter>

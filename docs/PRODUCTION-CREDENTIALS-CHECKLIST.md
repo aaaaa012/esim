@@ -13,27 +13,27 @@ money and real customers live.
 
 ## 1. Real Accounts + Passwords (fill in values)
 
-| What it's for | How it's used | Status |
-| --- | --- | --- |
-| **Clerk** keys | Customer logins (sign up / sign in) | ▢ Needed |
-| **Khalti** (live) | Taking real card / wallet payment for eSIMs | ▢ Needed |
-| **Cloudinary** keys | Secure storage of passport photos | ▢ Needed |
-| **Transatel** (live) | The real SIM / data provider that delivers the eSIM | ▢ Needed |
-| **Gmail** OAuth | Sending order / alert emails to customers & ops | ▢ Needed |
-| **WhatsApp Business** | Sending order / status messages to customers | ▢ Needed |
-| **Super Admin** email | The admin who approves plans, SIM batches, refunds | ▢ Needed |
-| **Partner API keys** | Any outside partner that sells on our behalf (optional) | ▢ Optional |
+| What it's for         | How it's used                                           | Status     |
+| --------------------- | ------------------------------------------------------- | ---------- |
+| **Clerk** keys        | Customer logins (sign up / sign in)                     | ▢ Needed   |
+| **Khalti** (live)     | Taking real card / wallet payment for eSIMs             | ▢ Needed   |
+| **Cloudinary** keys   | Secure storage of passport photos                       | ▢ Needed   |
+| **Transatel** (live)  | The real SIM / data provider that delivers the eSIM     | ▢ Needed   |
+| **Resend** API key    | Sending order / alert emails to customers & ops         | ▢ Needed   |
+| **WhatsApp Business** | Sending order / status messages to customers            | ▢ Needed   |
+| **Super Admin** email | The admin who approves plans, SIM batches, refunds      | ▢ Needed   |
+| **Partner API keys**  | Any outside partner that sells on our behalf (optional) | ▢ Optional |
 
 ---
 
 ## 2. Infrastructure (provide access)
 
-| Item | Purpose | Status |
-| --- | --- | --- |
-| Production **server / hosting** | Where the app runs 24/7 | ▢ Needed |
-| **Database** (CockroachDB) | Stores customers, orders, payments | ▢ Needed |
-| **Redis** | Background jobs (OCR, provisioning, payments checks) | ▢ Needed |
-| **Internet access** (egress) | Reach providers (Khalti, Transatel, OCR files) | ▢ Confirm allowed |
+| Item                            | Purpose                                              | Status            |
+| ------------------------------- | ---------------------------------------------------- | ----------------- |
+| Production **server / hosting** | Where the app runs 24/7                              | ▢ Needed          |
+| **Database** (PostgreSQL)      | Stores customers, orders, payments                   | ▢ Needed          |
+| **Redis**                       | Background jobs (OCR, provisioning, payments checks) | ▢ Needed          |
+| **Internet access** (egress)    | Reach providers (Khalti, Transatel, OCR files)       | ▢ Confirm allowed |
 
 ---
 
@@ -59,9 +59,9 @@ money and real customers live.
 
 ## The two most important questions, in short
 
-1. *"Is our production server allowed to reach the outside internet?"* — if
+1. _"Is our production server allowed to reach the outside internet?"_ — if
    **no**, passport OCR and calls to Khalti/Transatel will not work.
-2. *"Who is the single owner of all the real login keys and passwords?"* —
+2. _"Who is the single owner of all the real login keys and passwords?"_ —
    we need one trusted person / one secure secrets store.
 
 ---

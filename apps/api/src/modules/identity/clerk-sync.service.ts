@@ -2,9 +2,11 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
@@ -14,7 +16,10 @@ import {
 } from "@prisma/client";
 import { createClerkClient } from "@clerk/backend";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
-import { EmailChannel } from "../notification/email.channel.js";
+import {
+  EMAIL_CHANNEL,
+  type EmailChannel,
+} from "../notification/email.channel.js";
 
 type ClerkUserEvent = {
   type: "user.created" | "user.updated" | "user.deleted";
@@ -38,7 +43,7 @@ export class ClerkSyncService {
   private readonly logger = new Logger(ClerkSyncService.name);
   constructor(
     private readonly prisma: PrismaService,
-    private readonly email?: EmailChannel,
+    @Optional() @Inject(EMAIL_CHANNEL) private readonly email?: EmailChannel,
   ) {}
   async sync(event: ClerkUserEvent) {
     if (!this.prisma.enabled) return { persisted: false };
@@ -60,7 +65,9 @@ export class ClerkSyncService {
     });
     if (existing) {
       if (existing.status === UserStatus.DISABLED)
-        throw new ForbiddenException("Disabled accounts cannot be reactivated by a Clerk webhook");
+        throw new ForbiddenException(
+          "Disabled accounts cannot be reactivated by a Clerk webhook",
+        );
       await this.prisma.user.update({
         where: { id: existing.id },
         data: { email },
@@ -181,7 +188,12 @@ export class ClerkSyncService {
   }
 
   private async promoteByPortal(
-    existing: { id: string; accountType: UserRoleName; email: string; status: UserStatus },
+    existing: {
+      id: string;
+      accountType: UserRoleName;
+      email: string;
+      status: UserStatus;
+    },
     origin: string,
   ) {
     if (existing.accountType !== UserRoleName.CUSTOMER) return;
@@ -312,10 +324,12 @@ export class ClerkSyncService {
   async bootstrapSuperAdmin(clerkId: string, tokenInput: string) {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
-    const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+    const bootstrapEmail =
+      process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
     if (!bootstrapEmail)
       throw new BadRequestException("Bootstrap is not configured");
-    const configuredToken = process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim() ?? "";
+    const configuredToken =
+      process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim() ?? "";
     const requiresToken = process.env.NODE_ENV === "production";
     if (requiresToken && !configuredToken)
       throw new BadRequestException("Bootstrap token is not configured");
@@ -412,6 +426,7 @@ export class ClerkSyncService {
           to: recipient,
           subject: "[Ops Alert] Super Admin identity emergency",
           text: message,
+          idempotencyKey: `identity-emergency-${createHash("sha256").update(message).digest("hex")}`,
         });
       } catch (error) {
         this.logger.error(

@@ -15,7 +15,12 @@ import {
   Upload,
 } from "lucide-react";
 import "./recovery.css";
-import { apiErrorMessage, documentStatusLabel, documentTypeLabel, orderStatusLabel } from "@visa-compass/shared";
+import {
+  apiErrorMessage,
+  documentStatusLabel,
+  documentTypeLabel,
+  orderStatusLabel,
+} from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -49,9 +54,12 @@ type Order = {
   timeline: { from: string | null; to: string; at: string; reason?: string }[];
   usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
   provisioningFailure?: { code: string; message: string };
+  documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
+  documentReviewStatus?: string;
 };
 
-export default function EsimDetails({ id }: { id: string }) {const authFetch=useAuthenticatedFetch();
+export default function EsimDetails({ id }: { id: string }) {
+  const authFetch = useAuthenticatedFetch();
   const [order, setOrder] = useState<Order | null>(null),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
@@ -63,7 +71,13 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
     authFetch(`${API}/customer/orders/${id}`, { headers }).then(
       async (response) => {
         const value = await response.json();
-        if (!response.ok) throw new Error(apiErrorMessage(value.error?.code ?? "", value.error?.message ?? "Something went wrong"));
+        if (!response.ok)
+          throw new Error(
+            apiErrorMessage(
+              value.error?.code ?? "",
+              value.error?.message ?? "Something went wrong",
+            ),
+          );
         setOrder(value.data);
       },
     );
@@ -96,7 +110,12 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
       );
       const authorizationValue = await authorizationResponse.json();
       if (!authorizationResponse.ok)
-        throw new Error(apiErrorMessage(authorizationValue.error?.code ?? "", authorizationValue.error?.message ?? "Something went wrong"));
+        throw new Error(
+          apiErrorMessage(
+            authorizationValue.error?.code ?? "",
+            authorizationValue.error?.message ?? "Something went wrong",
+          ),
+        );
       const authorization = authorizationValue.data as DocumentAuthorization;
       if (
         authorization.upload.mode !== "cloudinary-signed" ||
@@ -129,7 +148,13 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
         },
       );
       const confirmationValue = await confirmation.json();
-      if (!confirmation.ok) throw new Error(apiErrorMessage(confirmationValue.error?.code ?? "", confirmationValue.error?.message ?? "Something went wrong"));
+      if (!confirmation.ok)
+        throw new Error(
+          apiErrorMessage(
+            confirmationValue.error?.code ?? "",
+            confirmationValue.error?.message ?? "Something went wrong",
+          ),
+        );
       setReplacements({});
       await load();
     } catch (cause) {
@@ -145,20 +170,33 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
     setError("");
     setNotice("");
     try {
-      const response = await authFetch(`${API}/customer/orders/${id}/resend-qr`, {
-        method: "POST",
-        headers: {
-          ...headers,
-          "content-type": "application/json",
-          "x-idempotency-key": crypto.randomUUID(),
+      const response = await authFetch(
+        `${API}/customer/orders/${id}/resend-qr`,
+        {
+          method: "POST",
+          headers: {
+            ...headers,
+            "content-type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+          },
+          body: "{}",
         },
-        body: "{}",
-      });
+      );
       const value = await response.json();
-      if (!response.ok) throw new Error(apiErrorMessage(value.error?.code ?? "", value.error?.message ?? "Something went wrong"));
-      setNotice("QR email sent — check your inbox (and spam) for the password-protected PDF.");
+      if (!response.ok)
+        throw new Error(
+          apiErrorMessage(
+            value.error?.code ?? "",
+            value.error?.message ?? "Something went wrong",
+          ),
+        );
+      setNotice(
+        "QR email sent — check your inbox (and spam) for the QR image.",
+      );
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The QR could not be resent");
+      setError(
+        cause instanceof Error ? cause.message : "The QR could not be resent",
+      );
     } finally {
       setBusy("");
     }
@@ -168,7 +206,10 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
     setError("");
     setNotice("");
     try {
-      const response = await authFetch(`${API}/customer/orders/${id}/activation-qr`, { headers });
+      const response = await authFetch(
+        `${API}/customer/orders/${id}/activation-qr`,
+        { headers },
+      );
       if (!response.ok) throw new Error("The QR document could not be loaded");
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -179,9 +220,13 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setNotice("QR PDF downloaded. Open it on your phone and enter your eSIM number (MSISDN) when prompted.");
+      setNotice("QR PDF downloaded. No password is required.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The QR document could not be loaded");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "The QR document could not be loaded",
+      );
     } finally {
       setBusy("");
     }
@@ -199,9 +244,17 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
         Loading secure order…
       </main>
     );
-  const resumable = ["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(order.status);
-  const paymentPending = order.status === "PAYMENT_PENDING" && Boolean(order.payment?.reference);
-  const needsReupload = order.status === "AWAITING_CUSTOMER";
+  const resumable = ["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(
+    order.status,
+  );
+  const paymentPending =
+    order.status === "PAYMENT_PENDING" && Boolean(order.payment?.reference);
+  const needsReupload = order.documents.some(
+    (document) => document.status === "REUPLOAD_REQUIRED",
+  );
+  const documentReviewPending = ["MANUAL_REVIEW", "OCR_BACKGROUND"].includes(
+    order.documentReviewStatus ?? "",
+  );
   const resumeLabel = paymentPending
     ? "Check payment status"
     : order.status === "PAYMENT_FAILED"
@@ -236,7 +289,11 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
           <section className="customer-action-banner">
             <AlertCircle />
             <span>
-              <b>{paymentPending ? "Confirm your payment" : "Complete your purchase"}</b>
+              <b>
+                {paymentPending
+                  ? "Confirm your payment"
+                  : "Complete your purchase"}
+              </b>
               <small>
                 {paymentPending
                   ? "Your payment returned to us but is still being confirmed. We re-check it automatically."
@@ -258,6 +315,18 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                   .reverse()
                   .find((event) => event.to === "AWAITING_CUSTOMER")?.reason ??
                   "Upload the requested document to submit the order again."}
+              </small>
+            </span>
+          </section>
+        )}
+        {documentReviewPending && !needsReupload && (
+          <section className="customer-action-banner">
+            <Clock3 />
+            <span>
+              <b>Your documents are being reviewed separately</b>
+              <small>
+                Your payment and eSIM activation continue normally. Our team
+                will contact you only if another document is required.
               </small>
             </span>
           </section>
@@ -301,7 +370,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                     {documentTypeLabel(document.type)} · {document.fileName}
                   </span>
                   <b>{documentStatusLabel(document.status)}</b>
-                  {needsReupload && document.status === "REUPLOAD_REQUIRED" && (
+                  {document.status === "REUPLOAD_REQUIRED" && (
                     <div className="replacement-control">
                       <input
                         type="file"
@@ -353,9 +422,9 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
             ) : order.status === "QR_READY" ? (
               <>
                 <p>
-                  Your activation QR was emailed to you as a password-protected
-                  PDF. Install the eSIM and connect once to activate it — your
-                  order will then be marked complete.
+                  Your activation QR was emailed to you as an image. Install the
+                  eSIM and connect once to activate it — your order will then be
+                  marked complete.
                 </p>
                 <div className="processing">
                   <QrCode size={18} />
@@ -364,15 +433,33 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                 <div className="qr-recovery">
                   <b>Did the QR email not arrive?</b>
                   <small>
-                    Resend it or download the same password-protected PDF here.
-                    You&apos;ll enter your eSIM number (MSISDN) when opening it.
+                    Resend the QR image or download an unencrypted PDF here. No
+                    password is required.
                   </small>
                   <div className="qr-recovery-buttons">
-                    <button className="button secondary" disabled={Boolean(busy)} onClick={() => void resendQrAction()}>
-                      {busy === "qr-resend" ? <LoaderCircle className="spin" size={16} /> : <Mail size={16} />} Resend email
+                    <button
+                      className="button secondary"
+                      disabled={Boolean(busy)}
+                      onClick={() => void resendQrAction()}
+                    >
+                      {busy === "qr-resend" ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <Mail size={16} />
+                      )}{" "}
+                      Resend email
                     </button>
-                    <button className="button" disabled={Boolean(busy)} onClick={() => void downloadQrAction()}>
-                      {busy === "qr-download" ? <LoaderCircle className="spin" size={16} /> : <QrCode size={16} />} Download QR PDF
+                    <button
+                      className="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => void downloadQrAction()}
+                    >
+                      {busy === "qr-download" ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <QrCode size={16} />
+                      )}{" "}
+                      Download QR PDF
                     </button>
                   </div>
                 </div>
@@ -380,9 +467,9 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
             ) : order.status === "COMPLETED" ? (
               <>
                 <p>
-                  Your activation QR was emailed to you as a password-protected
-                  PDF. Open the PDF on your phone and enter the eSIM number
-                  (MSISDN) shown in your email to reveal the QR.
+                  Your activation QR was emailed to you as an image. Open it on
+                  another screen and scan it from your phone&apos;s eSIM
+                  settings.
                 </p>
                 <div className="processing">
                   <Mail size={18} />
@@ -391,15 +478,33 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                 <div className="qr-recovery">
                   <b>Did the QR email not arrive?</b>
                   <small>
-                    Resend it or download the same password-protected PDF here.
-                    You&apos;ll enter your eSIM number (MSISDN) when opening it.
+                    Resend the QR image or download an unencrypted PDF here. No
+                    password is required.
                   </small>
                   <div className="qr-recovery-buttons">
-                    <button className="button secondary" disabled={Boolean(busy)} onClick={() => void resendQrAction()}>
-                      {busy === "qr-resend" ? <LoaderCircle className="spin" size={16} /> : <Mail size={16} />} Resend email
+                    <button
+                      className="button secondary"
+                      disabled={Boolean(busy)}
+                      onClick={() => void resendQrAction()}
+                    >
+                      {busy === "qr-resend" ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <Mail size={16} />
+                      )}{" "}
+                      Resend email
                     </button>
-                    <button className="button" disabled={Boolean(busy)} onClick={() => void downloadQrAction()}>
-                      {busy === "qr-download" ? <LoaderCircle className="spin" size={16} /> : <QrCode size={16} />} Download QR PDF
+                    <button
+                      className="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => void downloadQrAction()}
+                    >
+                      {busy === "qr-download" ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <QrCode size={16} />
+                      )}{" "}
+                      Download QR PDF
                     </button>
                   </div>
                 </div>
@@ -420,10 +525,8 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                       />
                     </div>
                     <p>
-                      <b>
-                        {order.usage.usedMb.toLocaleString()} MB
-                      </b>{" "}
-                      of {order.usage.totalMb.toLocaleString()} MB used
+                      <b>{order.usage.usedMb.toLocaleString()} MB</b> of{" "}
+                      {order.usage.totalMb.toLocaleString()} MB used
                     </p>
                     <small>
                       Remaining:{" "}
@@ -444,10 +547,21 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                   </p>
                 )}
               </>
+            ) : order.status === "PAYMENT_REVIEW_REQUIRED" ? (
+              <p>
+                Your payment needs confirmation. Our operations team can recheck
+                it without creating another charge.
+              </p>
+            ) : order.status === "ACTIVATION_ATTENTION" ? (
+              <p>
+                Your QR remains available. Network activation confirmation is
+                delayed and our operations team is reconciling it.
+              </p>
             ) : order.status === "PROVISIONING_FAILED" ? (
               <>
                 <p>
-                  {order.provisioningFailure?.message ?? "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}
+                  {order.provisioningFailure?.message ??
+                    "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}
                 </p>
                 <div className="processing">
                   <AlertTriangle size={18} />

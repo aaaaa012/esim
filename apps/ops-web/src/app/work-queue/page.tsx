@@ -1,5 +1,5 @@
-import QueueClient from './queue-client';
-import { PageHeader } from '@/components/page-header';
+import QueueClient from "./queue-client";
+import { PageHeader } from "@/components/page-header";
 export default function Queue() {
   return (
     <>

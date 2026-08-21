@@ -13,17 +13,17 @@ documentation set had to make an assumption.
   `payments.service.ts` / `transatel.provider.ts` map it to `UNEXPECTED`.
 - **Business acceptance rules.** Which visa/passport combinations are
   acceptable is human judgement in ops review; no automated policy exists.
-- **Scheduler drift / job durability.** `QueueService` is in-process
-  (`docs/12`); no cross-process guarantees.
+- **Provider retry contracts.** Repository code cannot prove Khalti callback
+  redelivery timing or Transatel's account-specific idempotency guarantees;
+  both require written production confirmation and failure-injection tests.
 
 ## Confirmed inconsistencies / rough edges
 
-1. **Payments webhook has no production signature verification.**
-   `webhooks.controller.ts:36-45` only verifies `x-visa-signature` when
-   `NODE_ENV !== 'production'` and the header is present; in production any
-   caller can post `{ eventId }`. The later `verifyCallback` still validates
-   order/amount/status invariants, but the endpoint itself is not
-   authenticated. Flagged in `docs/15`.
+1. **Payment provider callback contract must be certified.** The endpoint
+   requires an HMAC signature, accepts only Khalti, persists a durable inbox,
+   and validates reference/order/amount/currency before confirmation. The
+   exact production event names and dispute/refund callback contract still
+   require Khalti certification.
 2. **`CustomerSource` value `KHALTI` is never set.** The Prisma
    schema defines `CustomerSource` including `KHALTI`, but no code path
    sets it from the payment provider — orders created via payment flows use
@@ -35,13 +35,13 @@ documentation set had to make an assumption.
    `OPS_WEB_URL` even though `main.ts:17` uses those env vars for CORS.
 4. **`PAYMENT_MODE` semantics.** `payments.service.ts:25` selects the real
    gateway when `PAYMENT_MODE === 'sandbox'` **or** `NODE_ENV ===
-   'production'`; there is no explicit "simulator" string — any value other
+'production'`; there is no explicit "simulator" string — any value other
    than `sandbox` (outside production) selects the simulator. `.env.example`
    documents this, but it is a common misreading.
 5. **Rate limiter is per-process.** `rate-limit.guard.ts` keeps buckets in
-   memory (`docs/19`); multi-instance deployments need a shared store. The
-   health check reports Redis as `configured`/`not-configured`
-   (`health.controller.ts:29`) but Redis is not used by the limiter or queue.
+   memory (`docs/19`); multi-instance deployments need a shared store. Redis
+   does provide durable BullMQ transport and distributed reconciliation
+   leases, but it is not currently used by the HTTP rate limiter.
 6. **`safeNotify` trigger path for `DOCUMENT_REUPLOAD`.** `safeNotify` is
    defined in `notification.service.ts` and called during `requestReupload`
    / document transitions (`docs/07`, `docs/11`); the call site at
@@ -51,10 +51,10 @@ documentation set had to make an assumption.
 7. **Simulator inventory seeding is dev-only.** `inventory.service.ts:14`
    returns early when Prisma is disabled or in production, so seeded
    inventory only exists locally.
-8. **Email/WhatsApp simulation in non-prod.** `gmail.channel.ts:11` and
-   `whatsapp.channel.ts:8` return `simulated: true` payloads outside
-   production instead of sending — expected for dev, but means notification
-   delivery is untested against real providers here.
+8. **Email/WhatsApp simulation in non-prod.** `resend-email.channel.ts` and
+   `whatsapp.channel.ts` return `simulated: true` payloads when notification
+   mode is not live — expected for development, but live provider smoke tests
+   remain part of deployment verification.
 
 ## Confirmed inconsistencies / rough edges
 
@@ -63,9 +63,9 @@ documentation set had to make an assumption.
    require `20260806000200_inventory_batch_approval`. Until applied, the
    fields (and the audit rows they power) do not exist in a running DB.
 10. **`/metrics` is in-memory and resets on restart** (`metrics.service.ts`);
-   `/health/ready` Redis `PING` opens a short-lived connection per check
-   (`health.controller.ts`), which is fine at low volume but not a pooled
-   path.
+    `/health/ready` Redis `PING` opens a short-lived connection per check
+    (`health.controller.ts`), which is fine at low volume but not a pooled
+    path.
 
 ## Assumptions made in this documentation set
 

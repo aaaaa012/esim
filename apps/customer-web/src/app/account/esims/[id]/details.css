@@ -106,7 +106,7 @@
 }
 
 .timeline > div:not(:last-child):after {
-  content: '';
+  content: "";
   position: absolute;
   left: 14px;
   top: 32px;

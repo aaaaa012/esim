@@ -51,29 +51,42 @@ export const uploadSessionSchema = z.object({
         type: z.enum(DocumentType),
         fileName: z.string().trim().min(1).max(180),
         contentType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
-        sizeBytes: z.number().int().min(1).max(10 * 1024 * 1024),
+        sizeBytes: z
+          .number()
+          .int()
+          .min(1)
+          .max(10 * 1024 * 1024),
       }),
     )
     .min(2)
     .max(3)
     .refine(
-      (documents) => new Set(documents.map((item) => item.type)).size === documents.length,
+      (documents) =>
+        new Set(documents.map((item) => item.type)).size === documents.length,
       "Document types must be unique",
     )
-    .refine((documents) => [DocumentType.PASSPORT, DocumentType.TICKET].every((type) => documents.some((document) => document.type === type)), "Passport and ticket are required"),
+    .refine(
+      (documents) =>
+        [DocumentType.PASSPORT, DocumentType.TICKET].every((type) =>
+          documents.some((document) => document.type === type),
+        ),
+      "Passport and ticket are required",
+    ),
 });
 export const completeCreateSchema = z.object({
   externalOrderId: z.string().trim().min(1).max(120),
   externalCustomerId: z.string().trim().min(1).max(120),
   planId: z.string().uuid(),
-  settlement: z.discriminatedUnion("method", [
-    z.object({ method: z.literal("PARTNER_ACCOUNT") }),
-    z.object({
-      method: z.literal("HOSTED_PAYMENT"),
-      provider: z.enum(PaymentProvider),
-      redirectUrl: z.url(),
-    }),
-  ]).optional(),
+  settlement: z
+    .discriminatedUnion("method", [
+      z.object({ method: z.literal("PARTNER_ACCOUNT") }),
+      z.object({
+        method: z.literal("HOSTED_PAYMENT"),
+        provider: z.enum(PaymentProvider),
+        redirectUrl: z.url(),
+      }),
+    ])
+    .optional(),
   documentVerificationId: z.string().uuid(),
   consent: z.object({
     compatibilityAccepted: z.literal(true),
@@ -176,7 +189,11 @@ export class PartnersController {
     },
   })
   quote() {
-    throw new GoneException({ code: "QUOTES_DEPRECATED", message: "Quotes are no longer available. Place a complete order instead (POST /partners/orders)." });
+    throw new GoneException({
+      code: "QUOTES_DEPRECATED",
+      message:
+        "Quotes are no longer available. Place a complete order instead (POST /partners/orders).",
+    });
   }
 
   @Post("document-upload-sessions")
@@ -188,7 +205,11 @@ export class PartnersController {
       required: ["externalOrderId", "traveler", "documents"],
       properties: {
         externalOrderId: { type: "string", example: "agency-order-1042" },
-        traveler: { type: "object", description: "Traveller identity used for automatic passport OCR matching" },
+        traveler: {
+          type: "object",
+          description:
+            "Traveller identity used for automatic passport OCR matching",
+        },
         documents: {
           type: "array",
           minItems: 1,
@@ -223,7 +244,25 @@ export class PartnersController {
     @Param("verificationId") verificationId: string,
     @Req() request: PartnerRequest,
   ) {
-    return this.partners.documentVerification(request.partner!.id, verificationId);
+    return this.partners.documentVerification(
+      request.partner!.id,
+      verificationId,
+    );
+  }
+
+  @Post("document-verifications/:verificationId/documents/:documentId/confirm")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  confirmVerificationDocument(
+    @Param("verificationId") verificationId: string,
+    @Param("documentId") documentId: string,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.confirmVerificationDocument(
+      request.partner!.id,
+      verificationId,
+      documentId,
+    );
   }
 
   @Post("orders")
@@ -249,13 +288,21 @@ export class PartnersController {
             settlement: { type: "object" },
             documentVerificationId: { type: "string", format: "uuid" },
             consent: { type: "object" },
-            metadata: { type: "object", additionalProperties: { type: "string" } },
+            metadata: {
+              type: "object",
+              additionalProperties: { type: "string" },
+            },
           },
         },
         {
           type: "object",
           title: "Legacy quote order (deprecated)",
-          required: ["quoteId", "externalOrderId", "externalCustomerId", "compatibilityAccepted"],
+          required: [
+            "quoteId",
+            "externalOrderId",
+            "externalCustomerId",
+            "compatibilityAccepted",
+          ],
           properties: {
             quoteId: { type: "string", format: "uuid" },
             externalOrderId: { type: "string" },
@@ -276,10 +323,14 @@ export class PartnersController {
     if ("quoteId" in input)
       return this.partners.createOrder(request.partner!.id, input);
     const { settlement, ...rest } = input;
-    return this.partners.createCompleteOrder(request.partner!.id, { ...rest, ...(settlement ? { settlement } : {}) }, {
-      ipAddress,
-      userAgent: userAgent ?? "unknown",
-    });
+    return this.partners.createCompleteOrder(
+      request.partner!.id,
+      { ...rest, ...(settlement ? { settlement } : {}) },
+      {
+        ipAddress,
+        userAgent: userAgent ?? "unknown",
+      },
+    );
   }
 
   @Get("account")
@@ -302,10 +353,7 @@ export class PartnersController {
     description:
       "For partners that cannot integrate the full REST API. Creates a DRAFT order",
   })
-  hostedCheckoutSession(
-    @Body() body: unknown,
-    @Req() request: PartnerRequest,
-  ) {
+  hostedCheckoutSession(@Body() body: unknown, @Req() request: PartnerRequest) {
     return this.partners.createHostedCheckoutSession(
       request.partner!.id,
       hostedCheckoutSessionSchema.parse(body),
@@ -394,7 +442,11 @@ export class PartnersController {
   @PartnerMutation()
   @LegacyPartnerRoute()
   hosted() {
-    throw new GoneException({ code: "HOSTED_PAYMENT_DEPRECATED", message: "Hosted payments are no longer available. Include settlement.method = \"PARTNER_ACCOUNT\" when creating an order." });
+    throw new GoneException({
+      code: "HOSTED_PAYMENT_DEPRECATED",
+      message:
+        'Hosted payments are no longer available. Include settlement.method = "PARTNER_ACCOUNT" when creating an order.',
+    });
   }
 
   @Post("orders/:id/payment-session")
@@ -402,7 +454,11 @@ export class PartnersController {
   @PartnerMutation()
   @LegacyPartnerRoute()
   payment() {
-    throw new GoneException({ code: "HOSTED_PAYMENT_DEPRECATED", message: "Hosted payments are no longer available. Include settlement.method = \"PARTNER_ACCOUNT\" when creating an order." });
+    throw new GoneException({
+      code: "HOSTED_PAYMENT_DEPRECATED",
+      message:
+        'Hosted payments are no longer available. Include settlement.method = "PARTNER_ACCOUNT" when creating an order.',
+    });
   }
 
   @Post("orders/:id/cancel")

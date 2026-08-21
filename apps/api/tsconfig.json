@@ -10,5 +10,10 @@
     "rootDir": ".",
     "strictPropertyInitialization": false
   },
-  "include": ["src/**/*.ts", "prisma/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "prisma/seed.ts",
+    "prisma/sweep.ts",
+    "prisma/wipe.ts"
+  ]
 }

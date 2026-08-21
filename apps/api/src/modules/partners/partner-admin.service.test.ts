@@ -60,7 +60,9 @@ describe("PartnerAdminService workspace controls", () => {
     const transaction = vi.fn(async (callback: (tx: unknown) => unknown) =>
       callback({
         partnerAccount: {
-          upsert: vi.fn().mockResolvedValue({ id: "account-1", balancePaisa: 500 }),
+          upsert: vi
+            .fn()
+            .mockResolvedValue({ id: "account-1", balancePaisa: 500 }),
         },
       }),
     );

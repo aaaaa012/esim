@@ -27,7 +27,11 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
-    const req = ctx.getRequest<{ correlationId?: string; method?: string; url?: string }>();
+    const req = ctx.getRequest<{
+      correlationId?: string;
+      method?: string;
+      url?: string;
+    }>();
     const res = ctx.getResponse<{
       status(code: number): { json(body: unknown): void };
     }>();
@@ -63,12 +67,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
       const parsed =
         typeof raw === "string"
           ? { message: raw }
-          : (raw as { message?: string | string[]; code?: string } | null) ??
-            {};
-      code =
-        typeof parsed.code === "string"
-          ? parsed.code
-          : `HTTP_${status}`;
+          : ((raw as { message?: string | string[]; code?: string } | null) ??
+            {});
+      code = typeof parsed.code === "string" ? parsed.code : `HTTP_${status}`;
       message = Array.isArray(parsed.message)
         ? parsed.message.join("; ")
         : (parsed.message ?? apiErrorMessage(code));

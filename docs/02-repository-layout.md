@@ -36,17 +36,17 @@ gitignored (`README.md:60`, `.gitignore`); only `.env.example` is tracked.
 
 ## Root scripts (`package.json`)
 
-| Script | Command |
-| --- | --- |
-| `build` | `turbo build` |
-| `dev` | `turbo dev` |
-| `lint` | `turbo lint` |
-| `test` | `turbo test` |
-| `typecheck` | `turbo typecheck` |
-| `format` | `prettier --write .` |
+| Script        | Command                                           |
+| ------------- | ------------------------------------------------- |
+| `build`       | `turbo build`                                     |
+| `dev`         | `turbo dev`                                       |
+| `lint`        | `turbo lint`                                      |
+| `test`        | `turbo test`                                      |
+| `typecheck`   | `turbo typecheck`                                 |
+| `format`      | `prettier --write .`                              |
 | `db:generate` | `pnpm --filter @visa-compass/api prisma:generate` |
-| `db:migrate` | `pnpm --filter @visa-compass/api prisma:migrate` |
-| `db:seed` | `pnpm --filter @visa-compass/api prisma:seed` |
+| `db:migrate`  | `pnpm --filter @visa-compass/api prisma:migrate`  |
+| `db:seed`     | `pnpm --filter @visa-compass/api prisma:seed`     |
 
 ## `apps/api` layout
 
@@ -77,7 +77,7 @@ Source files under `apps/api/src`:
   - `integration/` — `connectivity.service.ts`, `connectivity-provider.ts`,
     `transatel.provider.ts`
   - `notification/` — `notification.service.ts`, `notification.controller.ts`,
-    `notification.templates.ts`, `gmail.channel.ts`, `whatsapp.channel.ts`,
+    `notification.templates.ts`, `email.channel.ts`, `resend-email.channel.ts`, `whatsapp.channel.ts`,
     `qr-pdf.service.ts`
   - `webhooks/` — `webhooks.controller.ts`
 - `observability/` — `health.controller.ts`
@@ -88,6 +88,7 @@ Tests are colocated as `*.test.ts` files.
 ## Frontend layout
 
 `apps/customer-web/src/app/`:
+
 - `layout.tsx`, `page.tsx`, `authenticated-api-provider.tsx`,
   `customer-header.tsx`, `catalog-plans.tsx`, `topup-lookup.tsx`
 - `sign-in/[[...sign-in]]/page.tsx`
@@ -98,6 +99,7 @@ Tests are colocated as `*.test.ts` files.
 - `account/notifications/page.tsx` + `notification-history.tsx`
 
 `apps/ops-web/src/app/`:
+
 - `layout.tsx`, `page.tsx`, `ops-shell.tsx`, `ops-sidebar.tsx`,
   `dashboard-client.tsx`, `theme-toggle.tsx`,
   `authenticated-api-provider.tsx`

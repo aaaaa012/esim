@@ -13,7 +13,6 @@ import {
   OperationsController,
 } from "./modules/orders/orders.controller.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
-import { PassportVerificationService } from "./modules/orders/passport-verification.service.js";
 import { GuestOrdersController } from "./modules/orders/guest-orders.controller.js";
 import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
@@ -24,7 +23,6 @@ import {
   OperationsIntegrationEventsController,
   OperationsIntegrationLogsController,
   OperationsProvisioningOperationsController,
-  OperationsLogsController,
   WebhooksController,
 } from "./modules/webhooks/webhooks.controller.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
@@ -49,14 +47,12 @@ import { AurigaMockProvider } from "./modules/integration/auriga-mock.provider.j
 import { TransatelProvider } from "./modules/integration/transatel.provider.js";
 import { NotificationController } from "./modules/notification/notification.controller.js";
 import { NotificationService } from "./modules/notification/notification.service.js";
-import { GmailChannel } from "./modules/notification/gmail.channel.js";
-import { ResendChannel } from "./modules/notification/resend.channel.js";
-import { EmailChannel } from "./modules/notification/email.channel.js";
+import { EMAIL_CHANNEL } from "./modules/notification/email.channel.js";
+import { ResendEmailChannel } from "./modules/notification/resend-email.channel.js";
 import { WhatsappChannel } from "./modules/notification/whatsapp.channel.js";
 import { QrPdfService } from "./modules/notification/qr-pdf.service.js";
 import { IntegrationProcessor } from "./jobs/integration.processor.js";
 import { ReconciliationService } from "./jobs/reconciliation.service.js";
-import { PassportOcrProcessor } from "./jobs/passport-ocr.processor.js";
 import { AuthController } from "./modules/identity/auth.controller.js";
 import { AccountGuard } from "./common/auth.guard.js";
 import { PassportVerificationRateLimitGuard } from "./common/passport-verification.rate-limit.guard.js";
@@ -65,10 +61,17 @@ import { CustomerEsimsController } from "./modules/esims/customer-esims.controll
 import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
 import { TransatelOperationsController } from "./modules/integration/transatel-operations.controller.js";
 import { TransatelOperationsService } from "./modules/integration/transatel-operations.service.js";
-import { PartnerShowcaseAdminController, PartnerShowcasePublicController } from "./modules/showcase/partner-showcase.controller.js";
+import {
+  PartnerShowcaseAdminController,
+  PartnerShowcasePublicController,
+} from "./modules/showcase/partner-showcase.controller.js";
 import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
 import { ManualRefundsController } from "./modules/payments/manual-refunds.controller.js";
 import { ManualRefundsService } from "./modules/payments/manual-refunds.service.js";
+import { PaymentDisputesController } from "./modules/payments/payment-disputes.controller.js";
+import { PaymentDisputesService } from "./modules/payments/payment-disputes.service.js";
+import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
+import { AttentionController } from "./modules/operations/attention.controller.js";
 
 @Module({
   imports: [
@@ -84,7 +87,7 @@ import { ManualRefundsService } from "./modules/payments/manual-refunds.service.
     AuthController,
     CatalogController,
     OrdersController,
-OperationsController,
+    OperationsController,
     GuestOrdersController,
     InventoryController,
     AdminController,
@@ -92,8 +95,7 @@ OperationsController,
     WebhooksController,
     OperationsIntegrationEventsController,
     OperationsIntegrationLogsController,
-OperationsProvisioningOperationsController,
-    OperationsLogsController,
+    OperationsProvisioningOperationsController,
     PartnersController,
     PartnerAdminController,
     PartnerCheckoutController,
@@ -103,6 +105,8 @@ OperationsProvisioningOperationsController,
     PartnerShowcaseAdminController,
     PartnerShowcasePublicController,
     ManualRefundsController,
+    PaymentDisputesController,
+    AttentionController,
   ],
   providers: [
     AccountGuard,
@@ -111,7 +115,6 @@ OperationsProvisioningOperationsController,
     CatalogService,
     OrdersService,
     OrdersPersistenceService,
-    PassportVerificationService,
     InventoryService,
     AdminService,
     PaymentsService,
@@ -130,20 +133,20 @@ OperationsProvisioningOperationsController,
     ProvisioningProcessor,
     IntegrationProcessor,
     ReconciliationService,
-    PassportOcrProcessor,
     MetricsService,
     ClerkSyncService,
     PartnerAuthGuard,
     NotificationService,
-    GmailChannel,
-    ResendChannel,
-    EmailChannel,
+    ResendEmailChannel,
+    { provide: EMAIL_CHANNEL, useExisting: ResendEmailChannel },
     WhatsappChannel,
     QrPdfService,
     CustomerEsimsService,
     TransatelOperationsService,
     PartnerShowcaseService,
     ManualRefundsService,
+    PaymentDisputesService,
+    ProductionResilienceService,
   ],
 })
 export class AppModule {}

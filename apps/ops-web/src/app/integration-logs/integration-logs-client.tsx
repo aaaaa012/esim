@@ -18,8 +18,21 @@ import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
 import ErrorDialog from "@/components/error-dialog";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -52,7 +65,8 @@ export default function IntegrationLogsClient() {
     return authFetch(`${API}/operations/integration-logs`, { headers })
       .then(async (response) => {
         const value = await response.json();
-        if (!response.ok) throw new Error(value.error?.message ?? "Could not load logs");
+        if (!response.ok)
+          throw new Error(value.error?.message ?? "Could not load logs");
         setItems(value.data ?? []);
         setError("");
       })
@@ -70,7 +84,10 @@ export default function IntegrationLogsClient() {
     () => Array.from(new Set(items.map((item) => item.operation))).sort(),
     [items],
   );
-  const visible = operation === "ALL" ? items : items.filter((item) => item.operation === operation);
+  const visible =
+    operation === "ALL"
+      ? items
+      : items.filter((item) => item.operation === operation);
   const stats = useMemo(() => {
     const ok = items.filter((item) => OK(item.status)).length;
     return { total: items.length, ok, failed: items.length - ok };
@@ -96,7 +113,9 @@ export default function IntegrationLogsClient() {
       "",
       ...lines,
     ].join("\n");
-    const url = URL.createObjectURL(new Blob([body], { type: "text/plain;charset=utf-8" }));
+    const url = URL.createObjectURL(
+      new Blob([body], { type: "text/plain;charset=utf-8" }),
+    );
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = `integration-logs-${new Date().toISOString().slice(0, 10)}.txt`;
@@ -115,7 +134,9 @@ export default function IntegrationLogsClient() {
             <Zap className="size-5" />
           </span>
           <div className="leading-tight">
-            <p className="text-2xl font-semibold tracking-tight tabular-nums">{stats.total}</p>
+            <p className="text-2xl font-semibold tracking-tight tabular-nums">
+              {stats.total}
+            </p>
             <p className="text-xs text-muted-foreground">Requests</p>
           </div>
         </div>
@@ -124,7 +145,9 @@ export default function IntegrationLogsClient() {
             <CircleCheck className="size-5" />
           </span>
           <div className="leading-tight">
-            <p className="text-2xl font-semibold tracking-tight tabular-nums">{stats.ok}</p>
+            <p className="text-2xl font-semibold tracking-tight tabular-nums">
+              {stats.ok}
+            </p>
             <p className="text-xs text-muted-foreground">Succeeded</p>
           </div>
         </div>
@@ -133,7 +156,9 @@ export default function IntegrationLogsClient() {
             <CircleX className="size-5" />
           </span>
           <div className="leading-tight">
-            <p className="text-2xl font-semibold tracking-tight tabular-nums">{stats.failed}</p>
+            <p className="text-2xl font-semibold tracking-tight tabular-nums">
+              {stats.failed}
+            </p>
             <p className="text-xs text-muted-foreground">Failed</p>
           </div>
         </div>
@@ -145,18 +170,34 @@ export default function IntegrationLogsClient() {
           <>
             <div className="w-52">
               <Select value={operation} onValueChange={setOperation}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ALL">All operations</SelectItem>
-                  {operations.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                  {operations.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
-            <Button variant="outline" size="sm" onClick={downloadTxt} disabled={!visible.length}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={downloadTxt}
+              disabled={!visible.length}
+            >
               <Download className="size-4" />
               Download .txt
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={refreshing}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void load(true)}
+              disabled={refreshing}
+            >
               {refreshing ? <Spinner /> : <RefreshCcw className="size-4" />}
               Refresh
             </Button>
@@ -166,7 +207,9 @@ export default function IntegrationLogsClient() {
       >
         {loading ? (
           <EmptyState loading>
-            <span className="text-sm text-muted-foreground">Loading activity…</span>
+            <span className="text-sm text-muted-foreground">
+              Loading activity…
+            </span>
           </EmptyState>
         ) : !visible.length ? (
           <EmptyState
@@ -187,7 +230,10 @@ export default function IntegrationLogsClient() {
             </TableHeader>
             <TableBody>
               {visible.map((log) => (
-                <TableRow key={log.id} className={cn(!OK(log.status) && "bg-destructive/[0.03]")}>
+                <TableRow
+                  key={log.id}
+                  className={cn(!OK(log.status) && "bg-destructive/[0.03]")}
+                >
                   <TableCell className="whitespace-nowrap text-muted-foreground">
                     {new Date(log.createdAt).toLocaleString()}
                   </TableCell>
@@ -214,7 +260,9 @@ export default function IntegrationLogsClient() {
                       label={OK(log.status) ? "SUCCESS" : "FAILED"}
                       tone={OK(log.status) ? "success" : "danger"}
                     />
-                    <span className="ml-2 text-xs tabular-nums text-muted-foreground">{log.status}</span>
+                    <span className="ml-2 text-xs tabular-nums text-muted-foreground">
+                      {log.status}
+                    </span>
                   </TableCell>
                   <TableCell className="whitespace-nowrap tabular-nums">
                     <span className="inline-flex items-center gap-1 text-muted-foreground">
@@ -224,7 +272,9 @@ export default function IntegrationLogsClient() {
                   </TableCell>
                   <TableCell className="max-w-[220px] text-xs text-muted-foreground">
                     {log.errorMessage ? (
-                      <span className="text-destructive">{log.errorMessage}</span>
+                      <span className="text-destructive">
+                        {log.errorMessage}
+                      </span>
                     ) : log.errorCode ? (
                       <span className="text-destructive">{log.errorCode}</span>
                     ) : (

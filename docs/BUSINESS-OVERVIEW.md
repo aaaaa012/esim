@@ -1,9 +1,9 @@
 # Visa Compass eSIM Platform — Plain-English Overview
 
-*Written for business stakeholders and non-developers, with a few "behind the
+_Written for business stakeholders and non-developers, with a few "behind the
 scenes" notes for the technical readers. If you need every field, API, error
 code and message spelled out, see
-[`docs/PLATFORM-SPECIFICATION.md`](./PLATFORM-SPECIFICATION.md).*
+[`docs/PLATFORM-SPECIFICATION.md`](./PLATFORM-SPECIFICATION.md)._
 
 ---
 
@@ -35,13 +35,14 @@ One customer journey: **browse → buy → verify → activate → use.**
 The customer opens the website and picks a country (for example **UAE**).
 
 **What happens:**
+
 - The website shows every plan available for that country — data allowance
   (e.g. 5 GB), validity (e.g. 15 days), and price in NPR.
 - The team can mark a plan as "popular" so it appears at the top.
 - If no plans exist for a country, the customer is politely told coverage is
   not available yet.
 
-*Behind the scenes:* the list of countries and plans comes from the database,
+_Behind the scenes:_ the list of countries and plans comes from the database,
 which is kept in sync with the telecom provider's official product catalogue
 (either automatically or by an admin pushing a CSV). The customer only ever
 sees plans marked "active".
@@ -55,7 +56,7 @@ eSIM and is carrier-unlocked.
 **no refund** in that case — so we record the customer's confirmation and
 keep it as evidence.
 
-*Behind the scenes:* the system stores a formal "consent record" (type, date,
+_Behind the scenes:_ the system stores a formal "consent record" (type, date,
 IP address, browser details) for compliance.
 
 ### Step 3 — Traveller details
@@ -68,7 +69,7 @@ The customer enters their details **exactly as on their passport**:
 - Passport number and passport expiry date
 - (Optional) employer/business name
 
-*Behind the scenes:* sensitive fields (date of birth, passport number, expiry
+_Behind the scenes:_ sensitive fields (date of birth, passport number, expiry
 date) are **encrypted** before being saved, so even someone with database
 access cannot read them in plain text. The rules on each field are enforced
 server-side (e.g. passport number 5–30 characters, dates must be valid).
@@ -79,6 +80,7 @@ Two documents are **required** — a **passport** and a **travel ticket**
 (flight/ferry booking). A visa is optional.
 
 **What happens:**
+
 - The website securely uploads the files directly to a private document
   service (Cloudinary).
 - The upload is "signed" — it is allowed only for a short window and only for
@@ -93,6 +95,7 @@ Two documents are **required** — a **passport** and a **travel ticket**
 The customer chooses **Khalti** (Nepal's digital wallet).
 
 **What happens:**
+
 - The customer is redirected to the wallet's page, pays, and returns.
 - The system **double-checks** the payment with the wallet provider before
   accepting it: the order number, the reference, and the **exact amount in
@@ -101,7 +104,7 @@ The customer chooses **Khalti** (Nepal's digital wallet).
 - Once the payment is verified, the order is **automatically approved and
   sent for activation** — there is no waiting on a human reviewer.
 
-*Behind the scenes:* if the wallet's confirmation is slow to arrive, the
+_Behind the scenes:_ if the wallet's confirmation is slow to arrive, the
 website keeps quietly checking until the payment is verified (up to ~90
 seconds). In development there is a fake "simulator" wallet so the whole flow
 can be tested without real money.
@@ -112,13 +115,14 @@ Orders are **approved automatically** as soon as the verified payment arrives.
 A paid customer should never wait on manual review.
 
 The human review step still exists, but only for **exceptions**:
+
 - If a staff member later flags a document (blurry photo, wrong document, name
   mismatch), the customer is asked to upload a replacement. They see a
   "replacement document required" banner on their order page, and once they
   upload it the order returns to the review queue for a human to approve.
 - Staff can still retry failed activations manually.
 
-*Behind the scenes:* every decision (who approved, when, what was said) is
+_Behind the scenes:_ every decision (who approved, when, what was said) is
 logged in an audit trail, and the customer never sees the reviewer's internal
 ID.
 
@@ -133,26 +137,25 @@ Once automatically approved, the system:
 3. When the provider confirms and hands over the **QR code**, the order
    becomes "Completed".
 4. Sends the customer an email: **"Your Visa Compass eSIM is ready"** with the
-   QR code attached as a **password-protected PDF**.
+   QR code attached as an **unencrypted PNG image**.
 
 If the provider is slow or fails, the system **tries again automatically**
 (up to 3 times). If it still fails, the order is flagged for the team to
 review or retry manually — the customer is told we are "reviewing it and will
 contact them", not given a scary technical error.
 
-*Behind the scenes:* activation is a background job — it does not block the
+_Behind the scenes:_ activation is a background job — it does not block the
 website. Every attempt (what was sent to the provider, what came back, the
 error) is recorded so the team can investigate failures precisely.
 
 ### Step 8 — Using the eSIM
 
-The customer opens the emailed PDF on their phone and enters the **mobile
-number they used at checkout** when prompted. The PDF unlocks and reveals the
-QR code, which they scan to activate the data plan at their destination.
+The customer opens the emailed QR image on another screen and scans it from
+their phone's eSIM settings to install the data plan.
 
-- The QR is **not** shown in the customer account area — it is only ever
-  delivered by email in the password-protected PDF, and the PDF password is
-  the customer's own mobile number.
+- The QR is delivered by email as an unencrypted PNG image and is also
+  recoverable by the authenticated customer. It remains sensitive and must not
+  be shared.
 - The customer can still see a timeline of every step of their order.
 
 ### Step 9 — Usage (bonus)
@@ -165,30 +168,30 @@ surfaced to customers later.
 
 ## 3. What the business team can do
 
-| Area | Capability |
-| --- | --- |
-| **Orders** | Dashboard with counts: awaiting review, awaiting customer documents, provisioning failures, completed today. Full order detail with document preview. |
-| **Review** | Orders are approved automatically after verified payment. Review is used for exceptions only: approve replacement documents and retry failed activations. Every action is audited. |
-| **Inventory** | See how many eSIM profiles are available/reserved/assigned/activated, low-stock warning (≤10), and **bulk upload stock from a CSV** (up to 5,000 profiles per file). |
-| **Plans** | Edit prices, mark popular, enable/disable plans, and **bulk import/update the whole catalogue from a CSV** — changes go live to customers immediately. |
-| **Integrations** | One screen showing whether each partner is connected (Khalti, Transatel, email, WhatsApp, document storage), test each one, sync the Transatel catalogue, and check whether a number is eligible for a plan. |
-| **Team & access** | Invite staff (invitation emails), assign Operations or Admin roles, disable users, and see the full audit log. |
-| **Observability** | Log of every call to the telecom provider (and any inbound provider messages) with success/failure, so problems are diagnosed in minutes. |
+| Area              | Capability                                                                                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Orders**        | Dashboard with counts: awaiting review, awaiting customer documents, provisioning failures, completed today. Full order detail with document preview.                                                        |
+| **Review**        | Orders are approved automatically after verified payment. Review is used for exceptions only: approve replacement documents and retry failed activations. Every action is audited.                           |
+| **Inventory**     | See how many eSIM profiles are available/reserved/assigned/activated, low-stock warning (≤10), and **bulk upload stock from a CSV** (up to 5,000 profiles per file).                                         |
+| **Plans**         | Edit prices, mark popular, enable/disable plans, and **bulk import/update the whole catalogue from a CSV** — changes go live to customers immediately.                                                       |
+| **Integrations**  | One screen showing whether each partner is connected (Khalti, Transatel, email, WhatsApp, document storage), test each one, sync the Transatel catalogue, and check whether a number is eligible for a plan. |
+| **Team & access** | Invite staff (invitation emails), assign Operations or Admin roles, disable users, and see the full audit log.                                                                                               |
+| **Observability** | Log of every call to the telecom provider (and any inbound provider messages) with success/failure, so problems are diagnosed in minutes.                                                                    |
 
 ---
 
 ## 4. The parts behind the scenes (and why they matter)
 
-| Component | Plain-English role |
-| --- | --- |
-| **Sign-in (Clerk)** | Handles logins/passwords/MFA so we don't store passwords ourselves. Customer and staff are **separate accounts** — staff can never see the customer website as a customer and vice versa. |
-| **Database (CockroachDB)** | The single source of truth: customers, orders, documents, payments, inventory, subscriptions, audit logs. |
-| **Telecom provider (Transatel)** | The company that actually turns on the eSIM in the destination network. |
-| **Wallets (Khalti)** | Collect the money in NPR. |
-| **Document storage (Cloudinary)** | Holds passport/ticket files privately, with short-lived access links. |
-| **Email (Gmail) + WhatsApp** | Send order updates. The activation QR is delivered by email as a **password-protected PDF** (password = the customer's mobile number). |
-| **Background jobs (Redis)** | A "to-do list" of tasks (activate this eSIM, verify this payment, send this email, refresh this usage). If a task fails it retries automatically. |
-| **The audit trail** | An unchangeable diary of every important action (who invited whom, who approved what, who changed a price). |
+| Component                         | Plain-English role                                                                                                                                                                        |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Sign-in (Clerk)**               | Handles logins/passwords/MFA so we don't store passwords ourselves. Customer and staff are **separate accounts** — staff can never see the customer website as a customer and vice versa. |
+| **Database (PostgreSQL)**        | The single source of truth: customers, orders, documents, payments, inventory, subscriptions, audit logs.                                                                                 |
+| **Telecom provider (Transatel)**  | The company that actually turns on the eSIM in the destination network.                                                                                                                   |
+| **Wallets (Khalti)**              | Collect the money in NPR.                                                                                                                                                                 |
+| **Document storage (Cloudinary)** | Holds passport/ticket files privately, with short-lived access links.                                                                                                                     |
+| **Email (Resend) + WhatsApp**     | Send order updates. The activation QR is delivered by email as an **unencrypted PNG image** and must be kept private.                                                                    |
+| **Background jobs (Redis)**       | A "to-do list" of tasks (activate this eSIM, verify this payment, send this email, refresh this usage). If a task fails it retries automatically.                                         |
+| **The audit trail**               | An unchangeable diary of every important action (who invited whom, who approved what, who changed a price).                                                                               |
 
 ---
 
@@ -232,20 +235,20 @@ agencies, etc.) sell Visa Compass eSIMs inside their own systems:
 
 ## 7. The tech stack at a glance (for the technical reader)
 
-| Layer | Technology |
-| --- | --- |
-| API | NestJS (TypeScript) |
-| Customer portal | Next.js App Router (React) |
-| Operations portal | Next.js App Router (React) |
-| Shared contracts/validation | Internal `@visa-compass/shared` package (zod schemas, enums, error codes) |
-| Database | CockroachDB via Prisma (enums, Decimal money, Json columns) |
-| Background jobs | BullMQ on Redis (3 attempts, exponential backoff) |
-| Auth | Clerk (JWT, authorized parties, MFA flag from session `fva`) |
-| Payments | Khalti adapter + local simulator |
-| Connectivity | Transatel adapter (OCS preload, inventory, catalog, SIM management, webhooks) |
-| Document storage | Cloudinary signed authenticated uploads |
-| Notifications | Gmail API (OAuth refresh) + WhatsApp Business Cloud API |
-| Security | helmet, CORS allow-list, rate limiting, AES-256-GCM at rest, HMAC webhook signatures, idempotency keys |
+| Layer                       | Technology                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ |
+| API                         | NestJS (TypeScript)                                                                                    |
+| Customer portal             | Next.js App Router (React)                                                                             |
+| Operations portal           | Next.js App Router (React)                                                                             |
+| Shared contracts/validation | Internal `@visa-compass/shared` package (zod schemas, enums, error codes)                              |
+| Database                    | PostgreSQL via Prisma (enums, Decimal money, Json columns)                                            |
+| Background jobs             | BullMQ on Redis (3 attempts, exponential backoff)                                                      |
+| Auth                        | Clerk (JWT, authorized parties, MFA flag from session `fva`)                                           |
+| Payments                    | Khalti adapter + local simulator                                                                       |
+| Connectivity                | Transatel adapter (OCS preload, inventory, catalog, SIM management, webhooks)                          |
+| Document storage            | Cloudinary signed authenticated uploads                                                                |
+| Notifications               | Resend API + WhatsApp Business Cloud API                                                               |
+| Security                    | helmet, CORS allow-list, rate limiting, AES-256-GCM at rest, HMAC webhook signatures, idempotency keys |
 
 ---
 
@@ -262,6 +265,6 @@ agencies, etc.) sell Visa Compass eSIMs inside their own systems:
 
 ---
 
-*For the complete technical specification, error catalog, API reference and
+_For the complete technical specification, error catalog, API reference and
 field-by-field validation rules, open
-[`docs/PLATFORM-SPECIFICATION.md`](./PLATFORM-SPECIFICATION.md).*
+[`docs/PLATFORM-SPECIFICATION.md`](./PLATFORM-SPECIFICATION.md)._

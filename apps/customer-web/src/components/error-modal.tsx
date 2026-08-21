@@ -1,40 +1,56 @@
-'use client';
+"use client";
 
-import { useEffect, useRef } from 'react';
-import { AlertCircle, X } from 'lucide-react';
+import { AlertCircle, X } from "lucide-react";
+import { useEffect, useId, useRef } from "react";
 
-export default function ErrorModal({ error, onClose }: { error: string | null; onClose: () => void }) {
+export default function ErrorModal({
+  error,
+  title = "We couldn't complete that",
+  onClose,
+}: {
+  error: string | null;
+  title?: string;
+  onClose: () => void;
+}) {
+  const titleId = useId();
+  const messageId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
-
   useEffect(() => {
     if (!error) return;
     closeRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
     };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
   }, [error, onClose]);
-
   if (!error) return null;
-
   return (
     <div
       className="error-modal-backdrop"
       role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className="error-modal" role="dialog" aria-modal="true" aria-labelledby="error-modal-title" aria-describedby="error-modal-message">
-        <button ref={closeRef} className="error-modal-close" onClick={onClose} aria-label="Dismiss error">
-          <X />
+      <div
+        className="error-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={messageId}
+      >
+        <button
+          ref={closeRef}
+          className="error-modal-close"
+          onClick={onClose}
+          aria-label="Dismiss message"
+        >
+          <X size={18} />
         </button>
-        <div className="error-modal-heading">
-          <span className="error-modal-icon"><AlertCircle /></span>
-          <h2 id="error-modal-title">Something went wrong</h2>
+        <span className="error-modal-icon"><AlertCircle size={22} /></span>
+        <div>
+          <h2 id={titleId}>{title}</h2>
+          <p id={messageId}>{error}</p>
         </div>
-        <p id="error-modal-message" className="error-modal-message">{error}</p>
       </div>
     </div>
   );

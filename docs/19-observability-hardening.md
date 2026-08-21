@@ -10,7 +10,7 @@ Primary sources: `apps/api/src/main.ts`, `common/{correlation,logging,idempotenc
   defaults `http://localhost:3000` / `http://localhost:3001` with credentials
   (`:17`).
 - Global prefix `api/v1` (`:18`); `ValidationPipe({ whitelist: true,
-  transform: true })` (`:19`).
+transform: true })` (`:19`).
 - Global filter `ApiExceptionFilter`; guard `RateLimitGuard`; interceptors
   `CorrelationInterceptor → LoggingInterceptor → IdempotencyInterceptor`
   (`:20-22`).

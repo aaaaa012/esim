@@ -1,11 +1,24 @@
 "use client";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { useAuth } from "@clerk/nextjs";
-import ErrorModal from "../../../components/error-modal";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import ErrorModal from "../../../components/error-modal";
 import Link from "next/link";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, LoaderCircle, LockKeyhole, QrCode, ShieldCheck, Signal, AlertTriangle } from "lucide-react";
+import {
+  Check,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  FileCheck2,
+  LoaderCircle,
+  LockKeyhole,
+  QrCode,
+  ShieldCheck,
+  Signal,
+  AlertTriangle,
+  Clock3,
+} from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import DatePicker from "./date-picker";
 import {
@@ -36,6 +49,15 @@ type Order = {
     method?: string;
     detail?: string;
   };
+  documentReviewStatus?:
+    | "NOT_STARTED"
+    | "OCR_PENDING"
+    | "OCR_BACKGROUND"
+    | "VERIFIED"
+    | "MANUAL_REVIEW"
+    | "REUPLOAD_REQUIRED"
+    | "MANUALLY_APPROVED"
+    | "SKIPPED";
   provisioningFailure?: { code: string; message: string };
 };
 type Payment = { reference: string; redirectUrl: string; expiresAt: string };
@@ -102,7 +124,7 @@ export default function CheckoutClient({
 }) {
   const authFetch = useAuthenticatedFetch();
   const { isLoaded, isSignedIn } = useAuth();
-  const tokenKey = (id?: string) => `vc_guest_token_${id || orderId || 'new'}`;
+  const tokenKey = (id?: string) => `vc_guest_token_${id || orderId || "new"}`;
   const readToken = (id?: string) => {
     let t = "";
     try {
@@ -166,13 +188,19 @@ export default function CheckoutClient({
     const makeInit = () => ({
       ...init,
       ...(body !== undefined ? { body } : {}),
-      headers: { "content-type": "application/json", "x-idempotency-key": crypto.randomUUID(), ...init?.headers },
+      headers: {
+        "content-type": "application/json",
+        "x-idempotency-key": crypto.randomUUID(),
+        ...init?.headers,
+      },
     });
     if (currentGuest) toGuest();
     let response = await authFetch(url, makeInit());
     let payload = (await response.json()) as Envelope<T>;
     if (
       !response.ok &&
+      isLoaded &&
+      isSignedIn !== true &&
       ["AUTHENTICATION_REQUIRED", "FORBIDDEN", "ACCOUNT_TYPE_FORBIDDEN"].includes(
         payload.error?.code ?? "",
       ) &&
@@ -188,7 +216,12 @@ export default function CheckoutClient({
       payload = (await response.json()) as Envelope<T>;
     }
     if (!response.ok) {
-      const error = new Error(apiErrorMessage(payload.error?.code ?? "", payload.error?.message ?? "Something went wrong")) as Error & { code?: string; status?: number };
+      const error = new Error(
+        apiErrorMessage(
+          payload.error?.code ?? "",
+          payload.error?.message ?? "Something went wrong",
+        ),
+      ) as Error & { code?: string; status?: number };
       if (payload.error?.code) error.code = payload.error.code;
       error.status = response.status;
       throw error;
@@ -201,17 +234,28 @@ export default function CheckoutClient({
     [traveler, setTraveler] = useState(initial);
   const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
-  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof Traveler,string>>>({});
-  const isTopUpIntent = Boolean((mobile || targetEsimId) && targetCountry && previewPlan?.countryCode === targetCountry) && !orderId;
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof Traveler, string>>
+  >({});
+  const isTopUpIntent =
+    Boolean(
+      (mobile || targetEsimId) &&
+      targetCountry &&
+      previewPlan?.countryCode === targetCountry,
+    ) && !orderId;
   useEffect(() => {
     if (!planId || orderId) return;
     let cancelled = false;
-    fetch(`${API}/public/plans`)
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("catalog unavailable"))))
-      .then((data: Envelope<PlanSummary[]>) => {
+    fetch(`${API}/public/plans/${encodeURIComponent(planId)}`)
+      .then((response) =>
+        response.ok
+          ? response.json()
+          : Promise.reject(new Error("catalog unavailable")),
+      )
+      .then((data: Envelope<PlanSummary>) => {
         if (cancelled) return;
-        const plan = data.data.find((item) => item.id === planId);
-        if (plan) setPreviewPlan(plan); else setPlanLoadFailed(true);
+        if (data.data) setPreviewPlan(data.data);
+        else setPlanLoadFailed(true);
       })
       .catch(() => setPlanLoadFailed(true));
     return () => {
@@ -231,12 +275,17 @@ export default function CheckoutClient({
     if (!order || uxResending) return;
     setUxResending(true);
     try {
-      await api(`/customer/orders/${order.id}/qr/resend`, { method: "POST" });
+      await api(`/customer/orders/${order.id}/resend-qr`, { method: "POST" });
     } finally {
       setUxResending(false);
     }
   };
-  useEffect(() => () => { verifyRunToken.current += 1; }, []);
+  useEffect(
+    () => () => {
+      verifyRunToken.current += 1;
+    },
+    [],
+  );
   // History-aware wizard: each user-driven step advance records the step in the
   // URL via pushState so the browser Back/Forward move between checkout steps
   // (instead of exiting the page), and the on-page Back button shares the same
@@ -291,38 +340,6 @@ export default function CheckoutClient({
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
   const [verifyingPassport, setVerifyingPassport] = useState(false);
-  // Returning from the payment provider triggers a fresh page load at
-  // `/esim/checkout?order=…&pidx=…&reference=…` with no `step` param. Restore
-  // the payment step synchronously (before first paint) so the user lands
-  // straight on the "Confirming your payment" screen instead of flashing the
-  // compatibility step until the resume fetch resolves.
-  const stepRestored = useRef(false);
-  useLayoutEffect(() => {
-    if (stepRestored.current) return;
-    stepRestored.current = true;
-    const s = stepFromUrl();
-    if (s !== 1) { setStep(s); return; }
-    const returningFromProvider = ["reference", "pidx", "simulated"].some((key) =>
-      new URLSearchParams(window.location.search).has(key),
-    );
-    if (returningFromProvider) {
-      setStep(4);
-      setVerifying(true);
-    }
-  }, []);
-  // Never lose a user mid-verification: block accidental refresh/leave while
-  // the payment is being confirmed or the order is activating.
-  useEffect(() => {
-    const inFlight =
-      verifying || ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(order?.status ?? "");
-    if (!inFlight) return;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [verifying, order?.status]);
   useEffect(() => {
     if (!isTopUpIntent) return;
     setCompatible(true);
@@ -334,21 +351,27 @@ export default function CheckoutClient({
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
       .then((value) => {
+        if (
+          ![
+            "DRAFT",
+            "PAYMENT_PENDING",
+            "PAYMENT_FAILED",
+            "PAYMENT_REVIEW_REQUIRED",
+          ].includes(value.status)
+        )
+          throw new Error("This order can no longer be resumed from checkout");
         setOrder(value);
         setCompatible(true);
         if (value.traveler) setTraveler({ ...initial, ...value.traveler });
-        // The Khalti webhook may have already confirmed the payment (and the
-        // order advanced to PAYMENT_CONFIRMED/PROVISIONING/QR_READY) before
-        // the provider redirects the browser back. Those must resume into the
-        // activation view / verifying flow — not be rejected as unresumable.
-        const settled = ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED", "PROVISIONING_FAILED"];
         if (value.purchaseType === "TOPUP") {
           setStep(4);
-          if (value.payment && (value.status === "PAYMENT_PENDING" || settled.includes(value.status))) {
-            setPayment({ reference: value.payment.reference, redirectUrl: "", expiresAt: "" });
+          if (value.status === "PAYMENT_PENDING" && value.payment) {
+            setPayment({
+              reference: value.payment.reference,
+              redirectUrl: "",
+              expiresAt: "",
+            });
             void verifyPayment(value);
-          } else if (!settled.includes(value.status)) {
-            setVerifying(false);
           }
           return;
         }
@@ -364,56 +387,56 @@ export default function CheckoutClient({
           });
           setStep(4);
           void verifyPayment(value);
-        } else if (settled.includes(value.status)) {
-          if (value.payment) {
-            setPayment({ reference: value.payment.reference, redirectUrl: "", expiresAt: "" });
-            setStep(4);
-            void verifyPayment(value);
-          } else {
-            setVerifying(false);
-            setStep(4);
-          }
-        } else if (value.status === "PAYMENT_FAILED" || value.status === "CANCELLED" || value.status === "REFUNDED") {
+        } else if (value.status === "PAYMENT_FAILED") {
           setPayment(null);
-          setVerifying(false);
           setStep(4);
-        } else if (!value.traveler) {
-          setVerifying(false);
-          setStep(2);
-        } else if (!hasRequiredDocs) {
-          setVerifying(false);
-          setStep(3);
-        } else {
-          setVerifying(false);
-          setStep(4);
-        }
+        } else if (!value.traveler) setStep(2);
+        else if (!hasRequiredDocs) setStep(3);
+        else setStep(4);
       })
-      .catch((cause) => {
-        setVerifying(false);
+      .catch((cause) =>
         setError(
           cause instanceof Error ? cause.message : "Order could not be resumed",
-        );
-      })
+        ),
+      )
       .finally(() => setBusy(false));
   }, [orderId, isLoaded, guestToken]);
-  const VERIFY_DELAYS = [0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000];
+  const VERIFY_DELAYS = [
+    0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000,
+  ];
   const VERIFY_BUDGET_MS = 120_000;
-  // Only true outcome states stop the verification poll. The transitional
-  // success/failed states (PAYMENT_CONFIRMED, REVIEW_PENDING, APPROVED,
-  // PROVISIONING) must keep polling so an order that later fails provisioning
-  // flips from "activating your eSIM" to the failure panel without a refresh.
-  const TERMINAL_STATUSES = ["QR_READY", "COMPLETED", "PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED", "REFUNDED"];
-  // Confirmed-but-not-yet-terminal states. While an order is in one of these we
-  // must stop POSTing `payment/verify` (it would re-provide/re-trigger) and
-  // switch to cheap GET status polls so the UI flips once provisioning resolves
-  // (e.g. PROVISIONING -> PROVISIONING_FAILED) instead of staying on a static
-  // "Payment verified — activating your eSIM" screen.
-  const CONFIRMED_IN_PROGRESS = ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"];
+  const TERMINAL_STATUSES = [
+    "PAYMENT_CONFIRMED",
+    "PAYMENT_REVIEW_REQUIRED",
+    "REVIEW_PENDING",
+    "APPROVED",
+    "PROVISIONING",
+    "QR_READY",
+    "ACTIVATION_ATTENTION",
+    "COMPLETED",
+    "PAYMENT_FAILED",
+    "PROVISIONING_FAILED",
+    "CANCELLED",
+  ];
   const stripReturnParams = () => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
-    if (!["reference", "pidx", "simulated"].some((key) => url.searchParams.has(key))) return;
-    for (const key of ["reference", "pidx", "simulated", "status", "purchase_order_id", "transaction_id", "amount"]) url.searchParams.delete(key);
+    if (
+      !["reference", "pidx", "simulated"].some((key) =>
+        url.searchParams.has(key),
+      )
+    )
+      return;
+    for (const key of [
+      "reference",
+      "pidx",
+      "simulated",
+      "status",
+      "purchase_order_id",
+      "transaction_id",
+      "amount",
+    ])
+      url.searchParams.delete(key);
     window.history.replaceState({}, "", url.toString());
   };
   const verifyPayment = async (initialOrder: Order) => {
@@ -424,38 +447,26 @@ export default function CheckoutClient({
     const started = Date.now();
     let current = initialOrder;
     let attempt = 0;
-    // Once the gateway has confirmed the payment the 120s budget below no
-    // longer applies: the remaining wait is for asynchronous provisioning to
-    // reach a terminal outcome, so keep light status polls until it does
-    // (otherwise the page freezes on "activating your eSIM" if QR readiness
-    // takes longer than the payment-verification window).
-    let confirmed = false;
-    while (confirmed || Date.now() - started < VERIFY_BUDGET_MS) {
+    while (Date.now() - started < VERIFY_BUDGET_MS) {
       if (verifyRunToken.current !== token) return;
-      const wait = VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
+      const wait =
+        VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
       if (wait > 0) {
         await new Promise((resolve) => setTimeout(resolve, wait));
         if (verifyRunToken.current !== token) return;
       }
       attempt += 1;
       try {
-        // While payment is still unconfirmed, retry the verification lookup
-        // itself (Khalti can report pending/initiated for a few seconds after
-        // the wallet redirect). Once the order is confirmed, stop POSTing
-        // `payment/verify` (it would re-provide/re-trigger) and switch to cheap
-        // GET polls until a terminal outcome flips the UI (e.g. PROVISIONING ->
-        // PROVISIONING_FAILED renders the failure panel instead of leaving a
-        // static "activating your eSIM" screen).
-        const alreadyConfirmed =
-          current.status !== "PAYMENT_PENDING" &&
-          (current.payment?.status === "COMPLETED" || CONFIRMED_IN_PROGRESS.includes(current.status));
-        if (alreadyConfirmed) confirmed = true;
-        const updated = alreadyConfirmed
-          ? await api<Order>(`/customer/orders/${current.id}`)
-          : await api<Order>(`/customer/orders/${current.id}/payment/verify`, {
-              method: "POST",
-              body: JSON.stringify({ reference: current.payment?.reference }),
-            });
+        // Retry the verification lookup itself (not just the order poll):
+        // Khalti can report pending/initiated for a few seconds after the
+        // wallet redirect, so a single attempt is not enough.
+        const updated = await api<Order>(
+          `/customer/orders/${current.id}/payment/verify`,
+          {
+            method: "POST",
+            body: JSON.stringify({ reference: current.payment?.reference }),
+          },
+        );
         setOrder(updated);
         current = updated;
         if (TERMINAL_STATUSES.includes(updated.status)) {
@@ -464,8 +475,14 @@ export default function CheckoutClient({
         }
       } catch (cause) {
         const code = (cause as { code?: string })?.code;
-        if (code === "PAYMENT_EXPIRED" || code === "PAYMENT_REFERENCE_MISMATCH" || code === "PAYMENT_NOT_CONFIRMED") {
-          const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(() => current);
+        if (
+          code === "PAYMENT_EXPIRED" ||
+          code === "PAYMENT_REFERENCE_MISMATCH" ||
+          code === "PAYMENT_NOT_CONFIRMED"
+        ) {
+          const refreshed = await api<Order>(
+            `/customer/orders/${current.id}`,
+          ).catch(() => current);
           setOrder(refreshed);
           current = refreshed;
           setVerifying(false);
@@ -473,7 +490,9 @@ export default function CheckoutClient({
         }
         // Transient network/provider errors retry; refresh the order so the
         // UI stays current without treating an unknown error as "pending".
-        const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(() => current);
+        const refreshed = await api<Order>(
+          `/customer/orders/${current.id}`,
+        ).catch(() => current);
         setOrder(refreshed);
         current = refreshed;
         if (TERMINAL_STATUSES.includes(refreshed.status)) {
@@ -482,49 +501,70 @@ export default function CheckoutClient({
         }
       }
     }
-    setOrder(await api<Order>(`/customer/orders/${current.id}`).catch(() => current));
-    setError("Your payment is still being confirmed. Check your eSIMs shortly.");
+    setOrder(
+      await api<Order>(`/customer/orders/${current.id}`).catch(() => current),
+    );
+    setError(
+      "Your payment is still being confirmed. Check your eSIMs shortly.",
+    );
     setVerifying(false);
   };
-  const update = (key: keyof Traveler, value: string) =>
-    { setTraveler((v) => ({ ...v, [key]: value })); setFieldErrors((current) => ({ ...current, [key]: undefined })); };
+  const update = (key: keyof Traveler, value: string) => {
+    setTraveler((v) => ({ ...v, [key]: value }));
+    setFieldErrors((current) => ({ ...current, [key]: undefined }));
+  };
   const verifyPassport = async (): Promise<Order | null> => {
     if (!order || verifyingPassport) return order;
     setVerifyingPassport(true);
     setError("");
     try {
-      const updated = await api<Order>(`/customer/orders/${order.id}/verify-passport`, { method: "POST", body: "{}" });
+      let updated = await api<Order>(
+        `/customer/orders/${order.id}/verify-passport`,
+        { method: "POST", body: "{}" },
+      );
+      const deadline = Date.now() + 8_500;
+      while (
+        updated.documentReviewStatus === "OCR_PENDING" &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        updated = await api<Order>(`/customer/orders/${order.id}`);
+      }
+      if (updated.documentReviewStatus === "OCR_PENDING")
+        updated = await api<Order>(
+          `/customer/orders/${order.id}/verify-passport`,
+          { method: "POST", body: "{}" },
+        );
       setOrder(updated);
       return updated;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "We could not verify your passport");
+      setError(
+        e instanceof Error ? e.message : "We could not verify your passport",
+      );
       return null;
     } finally {
       setVerifyingPassport(false);
     }
   };
   const passportGatePassed = (target: Order | null) =>
-    !target || isTopUp || target.passportVerification?.status === "VERIFIED" || target.passportVerification?.status === "SKIPPED";
+    !target ||
+    isTopUp ||
+    [
+      "VERIFIED",
+      "MANUAL_REVIEW",
+      "MANUALLY_APPROVED",
+      "SKIPPED",
+      "OCR_BACKGROUND",
+    ].includes(target.documentReviewStatus ?? "") ||
+    target.passportVerification?.status === "VERIFIED" ||
+    target.passportVerification?.status === "SKIPPED";
   useEffect(() => {
     if (step !== 4 || isTopUp) return;
     if (!order || order.passportVerification) return;
-    if (!order.documents?.some((document) => document.type === "PASSPORT")) return;
+    if (!order.documents?.some((document) => document.type === "PASSPORT"))
+      return;
     void verifyPassport();
   }, [step, order?.id, isTopUp]);
-  // Never lose a user mid-verification: block accidental refresh/leave while
-  // the payment is being confirmed or the order is activating.
-  useEffect(() => {
-    const inFlight =
-      verifying || ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(order?.status ?? "");
-    if (!inFlight) return;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [verifying, order?.status]);
-
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
     setError("");
@@ -546,19 +586,26 @@ export default function CheckoutClient({
         setStep(order.traveler ? 3 : 2);
         return;
       }
-      if (!isLoaded) throw new Error("Finishing secure sign-in. Please try again in a moment.");
+      if (!isLoaded)
+        throw new Error(
+          "Finishing secure sign-in. Please try again in a moment.",
+        );
       if (!planId) throw new Error("Choose a plan before checkout");
-      if (!compatible && !isTopUpIntent) throw new Error("Confirm device compatibility");
+      if (!compatible && !isTopUpIntent)
+        throw new Error("Confirm device compatibility");
       if (guest) {
-        const created = await api<{ order: Order; token: string }>("/customer/orders", {
-          method: "POST",
-          body: JSON.stringify({
-            planId,
-            compatibilityAccepted: true,
-            mobile: (mobile || traveler.mobile) || undefined,
-            lookupToken: lookupToken || undefined,
-          }),
-        });
+        const created = await api<{ order: Order; token: string }>(
+          "/customer/orders",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              planId,
+              compatibilityAccepted: true,
+              mobile: mobile || traveler.mobile || undefined,
+              lookupToken: lookupToken || undefined,
+            }),
+          },
+        );
         setOrder(created.order);
         storeGuestToken(created.token, created.order.id);
         if (created.order.purchaseType === "TOPUP") {
@@ -573,15 +620,23 @@ export default function CheckoutClient({
         { order: Order; token: string } | Order
       >("/customer/orders", {
         method: "POST",
-        body: JSON.stringify({ planId, compatibilityAccepted: true, ...(targetEsimId ? { targetEsimId } : {}) }),
+        body: JSON.stringify({
+          planId,
+          compatibilityAccepted: true,
+          ...(targetEsimId ? { targetEsimId } : {}),
+        }),
       });
       const isGuestPayload =
-        typeof payload === "object" && payload !== null && "order" in payload && "token" in payload;
+        typeof payload === "object" &&
+        payload !== null &&
+        "order" in payload &&
+        "token" in payload;
       const finalOrder: Order = isGuestPayload
         ? (payload as { order: Order }).order
         : (payload as Order);
       setOrder(finalOrder);
-      if (finalOrder.traveler) setTraveler({ ...initial, ...finalOrder.traveler });
+      if (finalOrder.traveler)
+        setTraveler({ ...initial, ...finalOrder.traveler });
       if (isGuestPayload) {
         storeGuestToken((payload as { token: string }).token, finalOrder.id);
       }
@@ -607,16 +662,29 @@ export default function CheckoutClient({
         ["email", "Email"],
         ["mobile", "Mobile / WhatsApp"],
       ];
-      const nextErrors: Partial<Record<keyof Traveler,string>> = {};
-      for (const [key,label] of required) if (!traveler[key].trim()) nextErrors[key]=`${label} is required`;
-      if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email)) nextErrors.email="Enter a valid email address";
-      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile)) nextErrors.mobile="Enter a valid mobile number";
-      if (traveler.passportNumber && traveler.passportNumber.length < 5) nextErrors.passportNumber="Passport number must be at least 5 characters";
-      if (traveler.dateOfBirth && new Date(traveler.dateOfBirth) >= new Date()) nextErrors.dateOfBirth="Date of birth must be in the past";
-      if (traveler.passportExpiryDate && new Date(traveler.passportExpiryDate) <= new Date()) nextErrors.passportExpiryDate="Passport must not be expired";
+      const nextErrors: Partial<Record<keyof Traveler, string>> = {};
+      for (const [key, label] of required)
+        if (!traveler[key].trim()) nextErrors[key] = `${label} is required`;
+      if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email))
+        nextErrors.email = "Enter a valid email address";
+      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile))
+        nextErrors.mobile = "Enter a valid mobile number";
+      if (traveler.passportNumber && traveler.passportNumber.length < 5)
+        nextErrors.passportNumber =
+          "Passport number must be at least 5 characters";
+      if (traveler.dateOfBirth && new Date(traveler.dateOfBirth) >= new Date())
+        nextErrors.dateOfBirth = "Date of birth must be in the past";
+      if (
+        traveler.passportExpiryDate &&
+        new Date(traveler.passportExpiryDate) <= new Date()
+      )
+        nextErrors.passportExpiryDate = "Passport must not be expired";
       setFieldErrors(nextErrors);
       const firstError = Object.keys(nextErrors)[0];
-      if (firstError) { document.querySelector<HTMLElement>(`[name="${firstError}"]`)?.focus(); throw new Error("Check the highlighted traveller details"); }
+      if (firstError) {
+        document.querySelector<HTMLElement>(`[name="${firstError}"]`)?.focus();
+        throw new Error("Check the highlighted traveller details");
+      }
       if (
         traveler.nationality.length !== 2 ||
         traveler.countryOfResidence.length !== 2
@@ -632,7 +700,8 @@ export default function CheckoutClient({
         body: JSON.stringify(body),
       });
       setOrder((o) =>
-        o && ["FAILED", "PARTIAL"].includes(o.passportVerification?.status ?? "")
+        o &&
+        ["FAILED", "PARTIAL"].includes(o.passportVerification?.status ?? "")
           ? (({ passportVerification: _drop, ...rest }) => rest)(o)
           : o,
       );
@@ -701,8 +770,14 @@ export default function CheckoutClient({
       let target = orderArg ?? order;
       if (target) {
         let verification = target.passportVerification;
-        if (!isTopUp && (verification?.status === "FAILED" || verification?.status === "PARTIAL")) {
-          throw new Error("We couldn't verify your passport against your traveller details. Review your details and re-check your passport before paying.");
+        if (
+          !isTopUp &&
+          (verification?.status === "FAILED" ||
+            verification?.status === "PARTIAL")
+        ) {
+          throw new Error(
+            "We couldn't verify your passport against your traveller details. Review your details and re-check your passport before paying.",
+          );
         }
         if (!isTopUp && !passportGatePassed(target)) {
           const updated = await verifyPassport();
@@ -710,13 +785,16 @@ export default function CheckoutClient({
           target = updated;
           verification = updated.passportVerification;
         }
-        if (!isTopUp && verification?.status !== "VERIFIED" && verification?.status !== "SKIPPED") {
+        if (!isTopUp && !passportGatePassed(target)) {
           throw new Error("Verify your passport before continuing to payment.");
         }
-        const value = await api<Payment>(`/customer/orders/${target.id}/payment`, {
-          method: "POST",
-          body: JSON.stringify({ provider }),
-        });
+        const value = await api<Payment>(
+          `/customer/orders/${target.id}/payment`,
+          {
+            method: "POST",
+            body: JSON.stringify({ provider }),
+          },
+        );
         setPayment(value);
         const external = (url: string) => {
           try {
@@ -737,20 +815,36 @@ export default function CheckoutClient({
           ? `/customer/orders/${order.id}/payment/simulate`
           : `/customer/orders/${order.id}/payment/simulate-complete`;
         setOrder(
-          await api<Order>(
-            endpoint,
-            {
-              method: "POST",
-              body: JSON.stringify({ reference: payment.reference }),
-            },
-          ),
+          await api<Order>(endpoint, {
+            method: "POST",
+            body: JSON.stringify({ reference: payment.reference }),
+          }),
         );
         return;
       }
       void verifyPayment(order);
     });
 
-  if ((!planId && !orderId) || planLoadFailed) return <main className="checkout-page"><div className="checkout-recovery"><QrCode/><h1>We could not load this checkout</h1><p>The plan link may be incomplete or no longer available.</p><div><Link className="button" href="/#plans">Choose a plan</Link>{isSignedIn === true && <Link className="button secondary" href="/account/orders">Order history</Link>}</div></div></main>;
+  if ((!planId && !orderId) || planLoadFailed)
+    return (
+      <main className="checkout-page">
+        <div className="checkout-recovery">
+          <QrCode />
+          <h1>We could not load this checkout</h1>
+          <p>The plan link may be incomplete or no longer available.</p>
+          <div>
+            <Link className="button" href="/#plans">
+              Choose a plan
+            </Link>
+            {isSignedIn === true && (
+              <Link className="button secondary" href="/account/orders">
+                Order history
+              </Link>
+            )}
+          </div>
+        </div>
+      </main>
+    );
   return (
     <main className="checkout-page">
       <div className="checkout-shell">
@@ -765,7 +859,7 @@ export default function CheckoutClient({
           <h1>{isTopUp ? "Top up your eSIM" : "Your travel eSIM"}</h1>
           <p>
             {isTopUp
-              ? "Recharge your existing eSIM. No verification needed — pay and activate in seconds."
+              ? "Recharge your existing eSIM. No verification needed. Pay and activate in seconds."
               : "Complete verification once. We’ll keep your order safe while our team reviews it."}
           </p>
         </div>
@@ -775,31 +869,30 @@ export default function CheckoutClient({
         <div className="checkout-layout">
           <section className="checkout-card">
             <div className="step-tabs">
-              {(isTopUp ? ["Payment"] : ["Compatibility", "Traveller", "Documents", "Payment"]).map(
-                (label, index) => {
-                  const current = step === index + 1;
-                  const passed = step > index + 1;
-                  const reachableBack = order !== null || index + 1 === 1;
-                  return (
-                    <div
-                      key={label}
-                      className={current ? "active" : passed ? "done" : ""}
-                    >
-                      {passed && reachableBack ? (
-                        <button type="button" onClick={() => jumpTo(index + 1)} title={`Go back to ${label}`}>
-                          <i>{<Check size={13} />}</i>
-                          <span>{label}</span>
-                        </button>
-                      ) : (
-                        <>
-                          <i>{passed ? <Check size={13} /> : index + 1}</i>
-                          <span>{label}</span>
-                        </>
-                      )}
-                    </div>
-                  );
-                },
-              )}
+              {(isTopUp
+                ? ["Payment"]
+                : ["Compatibility", "Traveller", "Documents", "Payment"]
+              ).map((label, index) => (
+                <div
+                  key={label}
+                  className={
+                    step === index + 1
+                      ? "active"
+                      : step > index + 1
+                        ? "done"
+                        : ""
+                  }
+                >
+                  <i>{step > index + 1 ? <Check size={13} /> : index + 1}</i>
+                  {step > index + 1 ? (
+                    <button type="button" onClick={() => jumpTo(index + 1)} title={`Go back to ${label}`}>
+                      <span>{label}</span>
+                    </button>
+                  ) : (
+                    <span>{label}</span>
+                  )}
+                </div>
+              ))}
             </div>
             {error && <ErrorModal error={error} onClose={() => setError("")} />}
             {step === 1 && (
@@ -826,12 +919,9 @@ export default function CheckoutClient({
                     </small>
                   </span>
                 </label>
-                <Action busy={busy} onClick={begin} disabled={!compatible && !isTopUpIntent && !order}>
+                <Action busy={busy} onClick={begin}>
                   Continue
                 </Action>
-                {!compatible && !isTopUpIntent && !order && (
-                  <p className="form-required">Tick the confirmation above to continue.</p>
-                )}
               </div>
             )}
             {step === 2 && (
@@ -854,7 +944,8 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="First name" error={fieldErrors.firstName}>
                     <input
-                      name="firstName" autoComplete="given-name"
+                      name="firstName"
+                      autoComplete="given-name"
                       value={traveler.firstName}
                       onChange={(e) => update("firstName", e.target.value)}
                     />
@@ -867,7 +958,8 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="Surname" error={fieldErrors.surname}>
                     <input
-                      name="surname" autoComplete="family-name"
+                      name="surname"
+                      autoComplete="family-name"
                       value={traveler.surname}
                       onChange={(e) => update("surname", e.target.value)}
                     />
@@ -876,12 +968,17 @@ export default function CheckoutClient({
                     <DatePicker
                       name="dateOfBirth"
                       value={traveler.dateOfBirth}
-                      max={new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)}
+                      max={new Date(Date.now() - 86_400_000)
+                        .toISOString()
+                        .slice(0, 10)}
                       placeholder="Choose date of birth"
                       onChange={(value) => update("dateOfBirth", value)}
                     />
                   </Field>
-                  <Field label="Passport number" error={fieldErrors.passportNumber}>
+                  <Field
+                    label="Passport number"
+                    error={fieldErrors.passportNumber}
+                  >
                     <input
                       name="passportNumber"
                       value={traveler.passportNumber}
@@ -890,18 +987,25 @@ export default function CheckoutClient({
                       }
                     />
                   </Field>
-                  <Field label="Passport expiry" error={fieldErrors.passportExpiryDate}>
+                  <Field
+                    label="Passport expiry"
+                    error={fieldErrors.passportExpiryDate}
+                  >
                     <DatePicker
                       name="passportExpiryDate"
                       value={traveler.passportExpiryDate}
-                      min={new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}
+                      min={new Date(Date.now() + 86_400_000)
+                        .toISOString()
+                        .slice(0, 10)}
                       placeholder="Choose passport expiry"
                       onChange={(value) => update("passportExpiryDate", value)}
                     />
                   </Field>
                   <Field label="Nationality" error={fieldErrors.nationality}>
                     <input
-                      name="nationality" placeholder="NP" list="country-codes"
+                      name="nationality"
+                      placeholder="NP"
+                      list="country-codes"
                       maxLength={2}
                       value={traveler.nationality}
                       onChange={(e) =>
@@ -911,14 +1015,21 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="City / district" error={fieldErrors.city}>
                     <input
-                      name="city" autoComplete="address-level2"
+                      name="city"
+                      autoComplete="address-level2"
                       value={traveler.city}
                       onChange={(e) => update("city", e.target.value)}
                     />
                   </Field>
-                  <Field label="Country of residence" error={fieldErrors.countryOfResidence}>
+                  <Field
+                    label="Country of residence"
+                    error={fieldErrors.countryOfResidence}
+                  >
                     <input
-                      name="countryOfResidence" placeholder="NP" list="country-codes" autoComplete="country"
+                      name="countryOfResidence"
+                      placeholder="NP"
+                      list="country-codes"
+                      autoComplete="country"
                       maxLength={2}
                       value={traveler.countryOfResidence}
                       onChange={(e) =>
@@ -931,7 +1042,8 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="Email" error={fieldErrors.email}>
                     <input
-                      name="email" autoComplete="email"
+                      name="email"
+                      autoComplete="email"
                       type="email"
                       value={traveler.email}
                       onChange={(e) => update("email", e.target.value)}
@@ -939,7 +1051,9 @@ export default function CheckoutClient({
                   </Field>
                   <Field label="Mobile / WhatsApp" error={fieldErrors.mobile}>
                     <input
-                      name="mobile" inputMode="tel" autoComplete="tel"
+                      name="mobile"
+                      inputMode="tel"
+                      autoComplete="tel"
                       value={traveler.mobile}
                       onChange={(e) => update("mobile", e.target.value)}
                     />
@@ -953,7 +1067,17 @@ export default function CheckoutClient({
                     />
                   </Field>
                 </div>
-                <datalist id="country-codes"><option value="NP">Nepal</option><option value="IN">India</option><option value="US">United States</option><option value="GB">United Kingdom</option><option value="AU">Australia</option><option value="CA">Canada</option><option value="AE">United Arab Emirates</option><option value="JP">Japan</option><option value="KR">South Korea</option></datalist>
+                <datalist id="country-codes">
+                  <option value="NP">Nepal</option>
+                  <option value="IN">India</option>
+                  <option value="US">United States</option>
+                  <option value="GB">United Kingdom</option>
+                  <option value="AU">Australia</option>
+                  <option value="CA">Canada</option>
+                  <option value="AE">United Arab Emirates</option>
+                  <option value="JP">Japan</option>
+                  <option value="KR">South Korea</option>
+                </datalist>
                 <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
               </div>
             )}
@@ -987,60 +1111,63 @@ export default function CheckoutClient({
                     capture
                   />
                 </div>
-                <Nav back={() => goBack()} busy={busy} next={saveDocuments} blocked={!files.passport || !files.ticket} />
-                {(!files.passport || !files.ticket) && (
-                  <p className="form-required">Add a passport and travel ticket to continue.</p>
-                )}
+                <Nav back={() => goBack()} busy={busy} next={saveDocuments} />
               </div>
             )}
             {step === 4 && (
               <div className="form-section">
                 <h2>
                   {order &&
-                  ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING", "QR_READY", "COMPLETED"].includes(
-                    order.status,
-                  )
+                  [
+                    "PAYMENT_CONFIRMED",
+                    "REVIEW_PENDING",
+                    "APPROVED",
+                    "PROVISIONING",
+                    "QR_READY",
+                    "ACTIVATION_ATTENTION",
+                    "COMPLETED",
+                  ].includes(order.status)
                     ? "Payment verified"
                     : order &&
-                        ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
-                          order.status,
-                        )
+                        [
+                          "PAYMENT_FAILED",
+                          "PROVISIONING_FAILED",
+                          "CANCELLED",
+                        ].includes(order.status)
                       ? "Payment issue"
                       : "Choose payment method"}
                 </h2>
-                {order?.status === "QR_READY" ? (
+                {order &&
+                ["QR_READY", "ACTIVATION_ATTENTION"].includes(order.status) ? (
                   <div className="success-panel">
                     <QrCode size={42} />
                     <b>Your activation QR has been sent</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Install your eSIM using the QR emailed to you as a
-                      password-protected PDF, then connect to the network once to
-                      activate it. Your order will complete automatically.
+                      Install your eSIM using the QR image emailed to you, then
+                      connect to the network once to activate it. Your order
+                      will complete automatically.
                     </p>
-                    {isSignedIn === true ? (
+                    {isSignedIn === true && (
                       <>
                         <Link className="button" href="/account/esims">
                           View my eSIMs
                         </Link>
-                        <Link className="button" href={`/account/esims/${order.id}`}>
+                        <Link
+                          className="button"
+                          href={`/account/esims/${order.id}`}
+                        >
                           Didn&apos;t get the QR? Recover it
                         </Link>
-                      </>
-                    ) : guest ? (
-                      <>
-                        <a
-                          className="button"
-                          href={`${API}/guest/orders/${order.id}/activation-qr?token=${encodeURIComponent(currentToken())}`}
-                          download
+                        <button
+                          className="button secondary"
+                          onClick={resendQrEmail}
+                          disabled={uxResending}
                         >
-                          Download QR PDF
-                        </a>
-                        <button className="button secondary" onClick={resendQrEmail} disabled={uxResending}>
                           {uxResending ? "Sending…" : "Re-send email"}
                         </button>
                       </>
-                    ) : null}
+                    )}
                   </div>
                 ) : order?.status === "COMPLETED" ? (
                   <div className="success-panel">
@@ -1048,60 +1175,85 @@ export default function CheckoutClient({
                     <b>Your eSIM is ready</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Your activation QR was emailed to you as a password-protected
-                      PDF. Open it on your phone and enter the mobile number shown
-                      in your email to reveal the QR.
+                      Your activation QR was emailed to you as an image. Open it
+                      on another screen and scan it from your phone&apos;s eSIM
+                      settings.
                     </p>
-                    {isSignedIn === true ? (
+                    {isSignedIn === true && (
                       <>
                         <Link className="button" href="/account/esims">
                           View my eSIMs
                         </Link>
-                        <Link className="button" href={`/account/esims/${order.id}`}>
+                        <Link
+                          className="button"
+                          href={`/account/esims/${order.id}`}
+                        >
                           Didn&apos;t get the QR? Recover it
                         </Link>
-                      </>
-                    ) : guest ? (
-                      <>
-                        <a
-                          className="button"
-                          href={`${API}/guest/orders/${order.id}/activation-qr?token=${encodeURIComponent(currentToken())}`}
-                          download
+                        <button
+                          className="button secondary"
+                          onClick={resendQrEmail}
+                          disabled={uxResending}
                         >
-                          Download QR PDF
-                        </a>
-                        <button className="button secondary" onClick={resendQrEmail} disabled={uxResending}>
                           {uxResending ? "Sending…" : "Re-send email"}
                         </button>
                       </>
-                    ) : null}
+                    )}
+                  </div>
+                ) : order?.status === "PAYMENT_REVIEW_REQUIRED" ? (
+                  <div className="info-panel">
+                    <AlertTriangle size={42} />
+                    <b>Your payment needs confirmation</b>
+                    <span>{order.orderNumber}</span>
+                    <p>
+                      We could not get a definitive response from the payment
+                      provider. Your order has not been cancelled or charged
+                      again. Our operations team can safely recheck it.
+                    </p>
+                    {isSignedIn === true && (
+                      <Link
+                        className="button secondary"
+                        href={`/account/esims/${order.id}`}
+                      >
+                        Check status
+                      </Link>
+                    )}
                   </div>
                 ) : order && order.status === "PROVISIONING_FAILED" ? (
                   <div className="error-panel">
                     <AlertTriangle size={42} />
                     <b>We could not activate your eSIM</b>
                     <span>{order.orderNumber}</span>
-                    <p>{order.provisioningFailure?.message ?? "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}</p>
+                    <p>
+                      {order.provisioningFailure?.message ??
+                        "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}
+                    </p>
                     <Link className="button" href="/#plans">
                       Choose another plan
                     </Link>
                     {isSignedIn === true && (
-                      <Link className="button secondary" href={`/account/esims/${order.id}`}>
+                      <Link
+                        className="button secondary"
+                        href={`/account/esims/${order.id}`}
+                      >
                         Check status
                       </Link>
                     )}
                   </div>
                 ) : order &&
-                  ["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(
-                    order.status,
-                  ) ? (
+                  [
+                    "PAYMENT_CONFIRMED",
+                    "REVIEW_PENDING",
+                    "APPROVED",
+                    "PROVISIONING",
+                  ].includes(order.status) ? (
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
-                    <b>Payment verified — activating your eSIM</b>
+                    <b>Payment verified. Activating your eSIM</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Your eSIM is being activated automatically. Your QR will be
-                      emailed to you as a password-protected PDF shortly.
+                      Your eSIM is being activated automatically. Your QR image
+                      will be emailed to you shortly.
                     </p>
                     {isSignedIn === true && (
                       <Link className="button" href="/account/esims">
@@ -1112,11 +1264,11 @@ export default function CheckoutClient({
                 ) : verifying ? (
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
-                    <b>Confirming your payment</b>
+                    <b>Checking payment status</b>
                     <span>{order?.orderNumber}</span>
                     <p>
-                      Your wallet confirmed the payment. We are verifying it
-                      securely — this takes a few seconds.
+                      We are checking with Khalti. Your order will only be
+                      marked as paid after the gateway confirms the transaction.
                     </p>
                   </div>
                 ) : (
@@ -1124,18 +1276,24 @@ export default function CheckoutClient({
                     {order && !isTopUp && (
                       <PassportCheck
                         result={order.passportVerification}
+                        reviewStatus={order.documentReviewStatus}
+                        {...(order.payment?.status
+                          ? { paymentStatus: order.payment.status }
+                          : {})}
                         busy={verifyingPassport}
                         onRecheck={() => void verifyPassport()}
                         onEdit={() => goBack()}
                       />
                     )}
                     {order &&
-                      ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
-                        order.status,
-                      ) && (
+                      [
+                        "PAYMENT_FAILED",
+                        "PROVISIONING_FAILED",
+                        "CANCELLED",
+                      ].includes(order.status) && (
                         <p>
-                          Your earlier payment could not be confirmed. You can try
-                          again below.
+                          Your earlier payment could not be confirmed. You can
+                          try again below.
                         </p>
                       )}
                     <p>
@@ -1153,15 +1311,27 @@ export default function CheckoutClient({
                         <div className="simulator-box">
                           <span>Local signed simulator</span>
                           <small>
-                            Reference: {payment.reference.slice(0, 14)}…
+                            Reference: {payment.reference.slice(0, 14)}...
                           </small>
-                          <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>
+                          <Action
+                            busy={busy}
+                            disabled={
+                              verifyingPassport || !passportGatePassed(order)
+                            }
+                            onClick={complete}
+                          >
                             Simulate verified payment
                           </Action>
                         </div>
                       ) : (
-                        <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>
-                          Confirm my payment
+                        <Action
+                          busy={busy}
+                          disabled={
+                            verifyingPassport || !passportGatePassed(order)
+                          }
+                          onClick={complete}
+                        >
+                          Check payment status
                         </Action>
                       )
                     ) : isTopUp && !order ? (
@@ -1169,7 +1339,13 @@ export default function CheckoutClient({
                         Continue to payment
                       </Action>
                     ) : (
-                      <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={() => void initiate()}>
+                      <Action
+                        busy={busy}
+                        disabled={
+                          verifyingPassport || !passportGatePassed(order)
+                        }
+                        onClick={() => void initiate()}
+                      >
                         Continue to Khalti
                       </Action>
                     )}
@@ -1181,29 +1357,44 @@ export default function CheckoutClient({
           <aside className="order-summary">
             <div className="summary-plan">
               <span className="summary-flag">
-                {summaryPlan ? flagEmoji(summaryPlan.countryCode) : <Signal size={22} />}
+                {summaryPlan ? (
+                  flagEmoji(summaryPlan.countryCode)
+                ) : (
+                  <Signal size={22} />
+                )}
               </span>
               <span className="summary-plan-info">
                 <span className="summary-label">Order summary</span>
                 <b>{summaryPlan?.name ?? "Selected eSIM plan"}</b>
                 <small>
-                  {summaryPlan ? `${summaryPlan.countryCode} · ${summaryPlan.dataAllowance}` : "Loaded securely"}
+                  {summaryPlan
+                    ? `${summaryPlan.countryCode} · ${summaryPlan.dataAllowance}`
+                    : "Loaded securely"}
                 </small>
               </span>
             </div>
             <div>
               <small>Destination</small>
-              <b>{summaryPlan?.countryCode ?? "—"}</b>
+              <b>{summaryPlan?.countryCode ?? "Not selected"}</b>
             </div>
             <div>
               <small>Data & validity</small>
               <b>
-                {summaryPlan ? `${summaryPlan.dataAllowance} · ${summaryPlan.validityDays} days` : "Loaded securely"}
+                {summaryPlan
+                  ? `${summaryPlan.dataAllowance} · ${summaryPlan.validityDays} days`
+                  : "Loaded securely"}
               </b>
             </div>
             <div className="summary-total">
               <small>Total</small>
-              <b>NPR {(order?.totalAmountNpr ?? summaryPlan?.sellingPriceNpr ?? 0).toLocaleString()}</b>
+              <b>
+                NPR{" "}
+                {(
+                  order?.totalAmountNpr ??
+                  summaryPlan?.sellingPriceNpr ??
+                  0
+                ).toLocaleString()}
+              </b>
             </div>
             <p>
               <LockKeyhole size={14} /> Price is frozen when your order is
@@ -1231,7 +1422,7 @@ function Field({
     <label className={`${full ? "full " : ""}${error ? "field-invalid" : ""}`}>
       {label}
       {children}
-      {error&&<small className="field-error">{error}</small>}
+      {error && <small className="field-error">{error}</small>}
     </label>
   );
 }
@@ -1247,7 +1438,11 @@ function Action({
   disabled?: boolean;
 }) {
   return (
-    <button className="button wide" disabled={busy || disabled} onClick={onClick}>
+    <button
+      className="button wide"
+      disabled={busy || disabled}
+      onClick={onClick}
+    >
       {busy ? (
         <LoaderCircle className="spin" size={18} />
       ) : (
@@ -1270,16 +1465,76 @@ const FIELD_LABELS: Record<string, string> = {
 
 function PassportCheck({
   result,
+  reviewStatus,
+  paymentStatus,
   busy,
   onRecheck,
   onEdit,
 }: {
   result: Order["passportVerification"];
+  reviewStatus?: Order["documentReviewStatus"];
+  paymentStatus?: string;
   busy: boolean;
   onRecheck: () => void;
   onEdit?: () => void;
 }) {
   const status = result?.status;
+  const paymentLabel =
+    paymentStatus === "PENDING"
+      ? "Payment awaiting confirmation"
+      : paymentStatus === "FAILED"
+        ? "No confirmed payment"
+        : "Payment not started";
+  if (reviewStatus === "OCR_BACKGROUND") {
+    return (
+      <div className="passport-check background" role="status">
+        <Clock3 size={20} />
+        <span>
+          <b>Document check continuing in the background</b>
+          <small>
+            You can continue to Khalti now. Verification is separate from
+            payment, and we will contact you only if a clearer document is
+            needed.
+          </small>
+        </span>
+        <span className="passport-check-tag">{paymentLabel}</span>
+      </div>
+    );
+  }
+  if (reviewStatus === "MANUAL_REVIEW") {
+    return (
+      <div className="passport-check manual" role="status">
+        <ShieldCheck size={20} />
+        <span>
+          <b>Documents saved for review</b>
+          <small>
+            You can continue to payment. Our team will review the documents
+            separately, without delaying eSIM activation after payment.
+          </small>
+        </span>
+        <span className="passport-check-tag">{paymentLabel}</span>
+      </div>
+    );
+  }
+  if (reviewStatus === "REUPLOAD_REQUIRED") {
+    return (
+      <div className="passport-check failed">
+        <AlertTriangle size={20} />
+        <span>
+          <b>A clearer passport image is needed</b>
+          <small>
+            We could not match the uploaded passport reliably. Replace it with a
+            sharp image of the information page before continuing.
+          </small>
+        </span>
+        {onEdit && (
+          <button className="button secondary" onClick={onEdit}>
+            Replace document
+          </button>
+        )}
+      </div>
+    );
+  }
   if (status === "VERIFIED") {
     return (
       <div className="passport-check verified">
@@ -1312,7 +1567,7 @@ function PassportCheck({
         <span>
           <b>Verifying your passport</b>
           <small>
-            Reading the document and comparing it with your traveller details…
+            Reading the document and comparing it with your traveller details.
           </small>
         </span>
       </div>
@@ -1386,20 +1641,17 @@ function Nav({
   back,
   busy,
   next,
-  blocked,
 }: {
   back: () => void;
   busy: boolean;
   next: () => void;
-  blocked?: boolean;
 }) {
-  const canNext = !busy && !blocked;
   return (
     <div className="form-actions">
-      <button className="button secondary" onClick={back} disabled={busy}>
+      <button className="button secondary" onClick={back}>
         Back
       </button>
-      <Action busy={busy} onClick={next} disabled={!canNext}>
+      <Action busy={busy} onClick={next}>
         Save and continue
       </Action>
     </div>

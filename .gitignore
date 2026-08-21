@@ -7,9 +7,14 @@ coverage
 .env.*
 !.env.example
 !.env.production.example
+Live-visa-compass-api.env
+graphify-out/
 *.log
 *.tsbuildinfo
 apps/api/prisma/dev.db
+apps/api/generated/cockroach-client/
+.postgres-transfer-checkpoint.json
+apps/api/.postgres-transfer-checkpoint.json
 .clerk/
 .opencode/
 apps/api/eng.traineddata

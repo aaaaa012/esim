@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
-export type StatusTone = "default" | "success" | "warning" | "danger" | "info" | "destructive";
+export type StatusTone =
+  "default" | "success" | "warning" | "danger" | "info" | "destructive";
 
 type StatusBadgeProps = {
   label: string;
@@ -11,7 +12,10 @@ type StatusBadgeProps = {
   children?: ReactNode;
 };
 
-const toneMap: Record<string, "success" | "warning" | "danger" | "info" | "destructive"> = {
+const toneMap: Record<
+  string,
+  "success" | "warning" | "danger" | "info" | "destructive"
+> = {
   success: "success",
   green: "success",
   healthy: "success",
@@ -58,6 +62,7 @@ const labelMap: Record<string, string> = {
   PAYMENT_PENDING: "Payment pending",
   PAYMENT_CONFIRMED: "Payment confirmed",
   PAYMENT_FAILED: "Payment failed",
+  PAYMENT_REVIEW_REQUIRED: "Payment needs confirmation",
   REVIEW_PENDING: "Awaiting review",
   AWAITING_CUSTOMER: "Awaiting customer",
   APPROVED: "Approved",
@@ -66,6 +71,7 @@ const labelMap: Record<string, string> = {
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
   PROVISIONING_FAILED: "Set-up failed",
+  ACTIVATION_ATTENTION: "Activation needs attention",
   SETUP_FAILED: "Set-up failed",
   REFUND_PENDING: "Refund pending",
   REFUNDED: "Refunded",
@@ -179,7 +185,12 @@ export function humane(label: string | null | undefined): string {
   return displayLabel(label == null ? "" : String(label));
 }
 
-export function StatusBadge({ label, tone, className, children }: StatusBadgeProps) {
+export function StatusBadge({
+  label,
+  tone,
+  className,
+  children,
+}: StatusBadgeProps) {
   const text = label == null ? "" : String(label);
   const resolved = toneFor(text, tone);
   return (
@@ -197,7 +208,10 @@ export function StatusBadge({ label, tone, className, children }: StatusBadgePro
       }
       className={cn("gap-1.5 pl-2", className)}
     >
-      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotMap[resolved])} />
+      <span
+        aria-hidden
+        className={cn("size-1.5 shrink-0 rounded-full", dotMap[resolved])}
+      />
       {children}
       {displayLabel(text)}
     </Badge>

@@ -163,17 +163,47 @@ export class PartnerAdminController {
   }
 
   @Get(":id/ledger")
-  ledger(@Param("id") id: string, @Query("from") from?: string, @Query("to") to?: string, @Query("type") type?: PartnerLedgerEntryType, @Query("q") q?: string, @Query("limit") limit?: string) {
-    return this.partners.ledger(id, { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(type ? { type } : {}), ...(q ? { q } : {}), ...(limit ? { limit: Number(limit) } : {}) });
+  ledger(
+    @Param("id") id: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+    @Query("type") type?: PartnerLedgerEntryType,
+    @Query("q") q?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.partners.ledger(id, {
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+      ...(type ? { type } : {}),
+      ...(q ? { q } : {}),
+      ...(limit ? { limit: Number(limit) } : {}),
+    });
   }
 
   @Get(":id/orders")
-  orders(@Param("id") id: string, @Query("from") from?: string, @Query("to") to?: string, @Query("status") status?: OrderStatus, @Query("q") q?: string, @Query("limit") limit?: string) {
-    return this.partners.orders(id, { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(status ? { status } : {}), ...(q ? { q } : {}), ...(limit ? { limit: Number(limit) } : {}) });
+  orders(
+    @Param("id") id: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+    @Query("status") status?: OrderStatus,
+    @Query("q") q?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.partners.orders(id, {
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+      ...(status ? { status } : {}),
+      ...(q ? { q } : {}),
+      ...(limit ? { limit: Number(limit) } : {}),
+    });
   }
 
   @Get(":id/summary")
-  summary(@Param("id") id: string, @Query("from") from?: string, @Query("to") to?: string) {
+  summary(
+    @Param("id") id: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
     return this.partners.summary(id, from, to);
   }
 

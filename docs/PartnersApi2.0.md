@@ -2,7 +2,7 @@
 
 Base URL: `/api/v1/partners`  
 Swagger UI: `/api/partner-docs`  
-OpenAPI JSON: `/api/partner-docs/openapi.json`  
+OpenAPI JSON: `/api/partner-docs/openapi.json`
 
 ---
 
@@ -11,21 +11,23 @@ OpenAPI JSON: `/api/partner-docs/openapi.json`
 The Visa Compass Partner API 2.0 provides commercial agencies and resellers with a unified, high-performance interface for discovering eSIM plans, generating secure document upload sessions, placing complete orders with automated provisioning, tracking data usage, and managing accounts.
 
 ### Authentication & Authorization
-* **Bearer Token Header:** Send `Authorization: Bearer vc_partner_<prefix>.<secret>` on all requests.
-* **Granular Scopes:** API credentials enforce fine-grained scope permissions:
-  * `catalog:read`: Plan and capability discovery.
-  * `orders:read`: Querying orders, timeline events, and account status.
-  * `orders:write`: Submitting new orders, notifications, and cancellations.
-  * `documents:write`: Requesting presigned document upload sessions.
-  * `payments:write`: Deprecated; hosted payments are disabled for the MVP.
-  * `esims:read`: Retrieving activation details after an order reaches `QR_READY`.
-  * `refunds:write`: Submitting formal refund requests.
-  * `usage:read`: Real-time eSIM data consumption queries.
+
+- **Bearer Token Header:** Send `Authorization: Bearer vc_partner_<prefix>.<secret>` on all requests.
+- **Granular Scopes:** API credentials enforce fine-grained scope permissions:
+  - `catalog:read`: Plan and capability discovery.
+  - `orders:read`: Querying orders, timeline events, and account status.
+  - `orders:write`: Submitting new orders, notifications, and cancellations.
+  - `documents:write`: Requesting presigned document upload sessions.
+  - `payments:write`: Deprecated; hosted payments are disabled for the MVP.
+  - `esims:read`: Retrieving activation details after an order reaches `QR_READY`.
+  - `refunds:write`: Submitting formal refund requests.
+  - `usage:read`: Real-time eSIM data consumption queries.
 
 ### Reliability & Standards
-* **Idempotency:** All mutation requests (`POST`) require an `Idempotency-Key` header (8–200 characters). Duplicate submissions with the same key safely return the cached response.
-* **Rate Limiting:** Responses contain `x-ratelimit-limit` and `x-ratelimit-remaining` headers based on partner tier rate limits.
-* **Standard Response Envelope:** All successful responses are returned in a standard envelope:
+
+- **Idempotency:** All mutation requests (`POST`) require an `Idempotency-Key` header (8–200 characters). Duplicate submissions with the same key safely return the cached response.
+- **Rate Limiting:** Responses contain `x-ratelimit-limit` and `x-ratelimit-remaining` headers based on partner tier rate limits.
+- **Standard Response Envelope:** All successful responses are returned in a standard envelope:
   ```json
   {
     "data": { ... },
@@ -35,7 +37,7 @@ The Visa Compass Partner API 2.0 provides commercial agencies and resellers with
     }
   }
   ```
-* **Error Envelope:**
+- **Error Envelope:**
   ```json
   {
     "data": null,
@@ -70,9 +72,11 @@ The primary 2.0 integration flow allows partners to create, verify, and provisio
 ### 3.1. Discovery & Catalogue
 
 #### `GET /api/v1/partners/capabilities`
+
 Returns API capabilities, supported settlement methods, enabled payment gateways, and connectivity provider health.
-* **Scope:** `catalog:read`
-* **Response Example:**
+
+- **Scope:** `catalog:read`
+- **Response Example:**
   ```json
   {
     "data": {
@@ -83,7 +87,11 @@ Returns API capabilities, supported settlement methods, enabled payment gateways
       "notifications": ["EMAIL", "WHATSAPP"],
       "connectivity": {
         "provider": "AURIGA_MOCK",
-        "capabilities": { "catalogSync": true, "provisioning": true, "usage": true },
+        "capabilities": {
+          "catalogSync": true,
+          "provisioning": true,
+          "usage": true
+        },
         "health": { "ok": true }
       },
       "idempotencyRequiredForMutations": true
@@ -92,10 +100,12 @@ Returns API capabilities, supported settlement methods, enabled payment gateways
   ```
 
 #### `GET /api/v1/partners/plans`
+
 Retrieves active eSIM destination plans.
-* **Scope:** `catalog:read`
-* **Query Parameters:** `country` (optional, e.g. `JP`, `AE`, `GB`)
-* **Response Example:**
+
+- **Scope:** `catalog:read`
+- **Query Parameters:** `country` (optional, e.g. `JP`, `AE`, `GB`)
+- **Response Example:**
   ```json
   {
     "data": [
@@ -119,20 +129,32 @@ Retrieves active eSIM destination plans.
 ### 3.2. Document Uploads & Order Execution
 
 #### `POST /api/v1/partners/document-upload-sessions`
+
 Requests presigned Cloudinary upload signatures for traveler documents.
-* **Scope:** `documents:write`
-* **Headers:** `Idempotency-Key: <unique-key>`
-* **Request Body:**
+
+- **Scope:** `documents:write`
+- **Headers:** `Idempotency-Key: <unique-key>`
+- **Request Body:**
   ```json
   {
     "externalOrderId": "flow-agency-order-3001",
     "documents": [
-      { "type": "PASSPORT", "fileName": "passport.pdf", "contentType": "application/pdf", "sizeBytes": 282 },
-      { "type": "TICKET", "fileName": "ticket.pdf", "contentType": "application/pdf", "sizeBytes": 282 }
+      {
+        "type": "PASSPORT",
+        "fileName": "passport.pdf",
+        "contentType": "application/pdf",
+        "sizeBytes": 282
+      },
+      {
+        "type": "TICKET",
+        "fileName": "ticket.pdf",
+        "contentType": "application/pdf",
+        "sizeBytes": 282
+      }
     ]
   }
   ```
-* **Response Example:**
+- **Response Example:**
   ```json
   {
     "data": {
@@ -154,11 +176,13 @@ Requests presigned Cloudinary upload signatures for traveler documents.
   }
   ```
 
-#### `POST /api/v1/partners/orders` *(Complete Order)*
+#### `POST /api/v1/partners/orders` _(Complete Order)_
+
 Submits a complete order. The server verifies uploaded document bytes, snapshots the plan's public selling price, atomically debits the partner's prepaid balance, and durably submits provisioning. It returns immediately with the current state (normally `APPROVED` or `PROVISIONING`) and never waits for `QR_READY` or `COMPLETED`. The optional `settlement` field defaults to `{ "method": "PARTNER_ACCOUNT" }`.
-* **Scope:** `orders:write`
-* **Headers:** `Idempotency-Key: <unique-key>`
-* **Request Body:**
+
+- **Scope:** `orders:write`
+- **Headers:** `Idempotency-Key: <unique-key>`
+- **Request Body:**
   ```json
   {
     "externalOrderId": "flow-agency-order-3001",
@@ -179,7 +203,10 @@ Submits a complete order. The server verifies uploaded document bytes, snapshots
       "passportExpiryDate": "2030-01-01"
     },
     "documents": [
-      { "type": "PASSPORT", "uploadId": "4c45d42e-a43d-4c96-93ef-6ae961182987" },
+      {
+        "type": "PASSPORT",
+        "uploadId": "4c45d42e-a43d-4c96-93ef-6ae961182987"
+      },
       { "type": "TICKET", "uploadId": "7e72d214-2bd1-496d-a793-3e436ca8e928" }
     ],
     "consent": {
@@ -190,7 +217,7 @@ Submits a complete order. The server verifies uploaded document bytes, snapshots
     }
   }
   ```
-* **Response Example:**
+- **Response Example:**
   ```json
   {
     "data": {
@@ -207,8 +234,18 @@ Submits a complete order. The server verifies uploaded document bytes, snapshots
       "esimDetailsAvailable": true,
       "timeline": [
         { "from": null, "to": "APPROVED", "at": "2026-08-08T22:07:17.517Z" },
-        { "from": "APPROVED", "to": "PROVISIONING", "reason": "Partner order auto-approved; inventory 899770100000000007 reserved", "at": "2026-08-08T22:07:19.980Z" },
-        { "from": "APPROVED", "to": "PROVISIONING", "reason": "Partner order auto-approved", "at": "2026-08-08T22:07:19.980Z" }
+        {
+          "from": "APPROVED",
+          "to": "PROVISIONING",
+          "reason": "Partner order auto-approved; inventory 899770100000000007 reserved",
+          "at": "2026-08-08T22:07:19.980Z"
+        },
+        {
+          "from": "APPROVED",
+          "to": "PROVISIONING",
+          "reason": "Partner order auto-approved",
+          "at": "2026-08-08T22:07:19.980Z"
+        }
       ]
     }
   }
@@ -219,29 +256,39 @@ Submits a complete order. The server verifies uploaded document bytes, snapshots
 ### 3.3. Order Queries & Usage Tracking
 
 #### `GET /api/v1/partners/orders`
+
 Lists orders created by the authenticated partner.
-* **Scope:** `orders:read`
-* **Query Parameters:** `cursor`, `status` (`APPROVED`, `PROVISIONING`, `QR_READY`, `COMPLETED`, `PROVISIONING_FAILED`, `CANCELLED`, `REFUND_PENDING`, `REFUNDED`), `externalOrderId`, `limit` (max 100)
+
+- **Scope:** `orders:read`
+- **Query Parameters:** `cursor`, `status` (`APPROVED`, `PROVISIONING`, `QR_READY`, `COMPLETED`, `PROVISIONING_FAILED`, `CANCELLED`, `REFUND_PENDING`, `REFUNDED`), `externalOrderId`, `limit` (max 100)
 
 `QR_READY` is the commercial fulfillment milestone: the partner may retrieve and deliver the eSIM. `COMPLETED` means the connectivity provider has confirmed activation.
 
 #### `GET /api/v1/partners/orders/:id/esim`
+
 Returns the protected activation package when the order is `QR_READY` or `COMPLETED`.
-* **Scope:** `esims:read`
-* Activation secrets are never included in order lists, ledger records, webhook payloads, or logs.
+
+- **Scope:** `esims:read`
+- Activation secrets are never included in order lists, ledger records, webhook payloads, or logs.
 
 #### `GET /api/v1/partners/orders/by-external-id/:externalOrderId`
+
 Fetches order status by external order reference ID.
-* **Scope:** `orders:read`
+
+- **Scope:** `orders:read`
 
 #### `GET /api/v1/partners/orders/:id`
+
 Fetches order status by Visa Compass internal UUID.
-* **Scope:** `orders:read`
+
+- **Scope:** `orders:read`
 
 #### `GET /api/v1/partners/orders/:id/usage`
+
 Returns real-time data consumption for provisioned active eSIM profiles.
-* **Scope:** `usage:read`
-* **Response Example:**
+
+- **Scope:** `usage:read`
+- **Response Example:**
   ```json
   {
     "data": {
@@ -252,17 +299,21 @@ Returns real-time data consumption for provisioned active eSIM profiles.
   ```
 
 #### `GET /api/v1/partners/orders/:id/events`
+
 Returns audit trail timeline events for an order.
-* **Scope:** `orders:read`
+
+- **Scope:** `orders:read`
 
 ---
 
 ### 3.4. Account Financials & Reconciliation
 
 #### `GET /api/v1/partners/account`
+
 Returns partner account balance, credit limit, and reserved funds.
-* **Scope:** `orders:read`
-* **Response Example:**
+
+- **Scope:** `orders:read`
+- **Response Example:**
   ```json
   {
     "data": {
@@ -277,22 +328,28 @@ Returns partner account balance, credit limit, and reserved funds.
   ```
 
 #### `GET /api/v1/partners/ledger`
+
 Lists financial ledger transactions (`CREDIT`, `DEBIT`, `RESERVATION`, `ADJUSTMENT`, `REFUND`).
-* **Scope:** `orders:read`
+
+- **Scope:** `orders:read`
 
 ---
 
 ### 3.5. Order Management & Refunds
 
 #### `POST /api/v1/partners/orders/:id/cancel`
+
 Cancels an un-provisioned order and refunds account funds.
-* **Scope:** `orders:write` | **Header:** `Idempotency-Key: <unique-key>`
-* **Request Body:** `{ "reason": "Traveler requested cancellation" }`
+
+- **Scope:** `orders:write` | **Header:** `Idempotency-Key: <unique-key>`
+- **Request Body:** `{ "reason": "Traveler requested cancellation" }`
 
 #### `POST /api/v1/partners/orders/:id/refund-requests`
+
 Submits a formal refund request to the operations review queue.
-* **Scope:** `refunds:write` | **Header:** `Idempotency-Key: <unique-key>`
-* **Request Body:** `{ "reason": "Connectivity issue reported" }`
+
+- **Scope:** `refunds:write` | **Header:** `Idempotency-Key: <unique-key>`
+- **Request Body:** `{ "reason": "Connectivity issue reported" }`
 
 ---
 
@@ -306,10 +363,11 @@ integration is required on the customer-facing side.
 
 ### 4.1. Create a hosted checkout session (portal / partner call)
 
-* **`POST /api/v1/partners/hosted-checkout-sessions`**
-* **Scope:** `orders:write` | **Header:** `Idempotency-Key`
+- **`POST /api/v1/partners/hosted-checkout-sessions`**
+- **Scope:** `orders:write` | **Header:** `Idempotency-Key`
 
 Request:
+
 ```json
 {
   "planId": "248d4a2b-8c12-4dfa-9c22-58652a92d372",
@@ -317,7 +375,9 @@ Request:
   "externalCustomerId": "cust-flow-3001"
 }
 ```
+
 Response:
+
 ```json
 {
   "data": {
@@ -331,9 +391,9 @@ Response:
 }
 ```
 
-* Creates a **DRAFT** order settled against the partner's prepaid
+- Creates a **DRAFT** order settled against the partner's prepaid
   `PARTNER_ACCOUNT` balance and a single-use, 24-hour checkout session.
-* The partner shares `checkoutUrl`. The traveller is identified relationally as a
+- The partner shares `checkoutUrl`. The traveller is identified relationally as a
   `PartnerCustomer(partnerId, externalCustomerId)`; no traveller account/login
   is required.
 
@@ -342,14 +402,14 @@ Response:
 The customer-facing page is served by Visa Compass at `checkoutUrl`, branded
 with the partner's name/logo:
 
-| Method | Path (`/api/v1/partner-checkout/:token`) | Purpose |
-| --- | --- | --- |
-| `GET` | `/:token` | Loads plan, amount, required docs + partner branding |
-| `POST` | `/:token/traveler` | Saves traveller details (`travelerSchema`) |
-| `POST` | `/:token/documents` | Requests a private Cloudinary upload for a document |
-| `POST` | `/:token/documents/:documentId/confirm` | Confirms the document was uploaded/verified |
-| `POST` | `/:token/verify-passport` | Runs the server-side passport OCR check |
-| `POST` | `/:token/complete` | Completes the order (requires verified passport) |
+| Method | Path (`/api/v1/partner-checkout/:token`) | Purpose                                              |
+| ------ | ---------------------------------------- | ---------------------------------------------------- |
+| `GET`  | `/:token`                                | Loads plan, amount, required docs + partner branding |
+| `POST` | `/:token/traveler`                       | Saves traveller details (`travelerSchema`)           |
+| `POST` | `/:token/documents`                      | Requests a private Cloudinary upload for a document  |
+| `POST` | `/:token/documents/:documentId/confirm`  | Confirms the document was uploaded/verified          |
+| `POST` | `/:token/verify-passport`                | Runs the server-side passport OCR check              |
+| `POST` | `/:token/complete`                       | Completes the order (requires verified passport)     |
 
 On `complete`, the server verifies the uploaded documents, requires a passport
 verification of `VERIFIED` (or `SKIPPED` in the local simulator), atomically
@@ -364,10 +424,11 @@ provisioning and webhook pipeline as an API-placed order.
 ## 5. Deprecated Legacy Routes
 
 The following v1 routes are marked `@deprecated` with `Deprecation: true` headers and will be retired:
-* `POST /api/v1/partners/quotes` $\rightarrow$ Use `POST /orders` (Complete Order).
-* `POST /api/v1/partners/orders/:id/traveler` $\rightarrow$ Include `traveler` payload in `POST /orders`.
-* `POST /api/v1/partners/orders/:id/documents` $\rightarrow$ Use `POST /document-upload-sessions`.
-* `POST /api/v1/partners/orders/:id/hosted-checkout-session` and `/payment-session`
+
+- `POST /api/v1/partners/quotes` $\rightarrow$ Use `POST /orders` (Complete Order).
+- `POST /api/v1/partners/orders/:id/traveler` $\rightarrow$ Include `traveler` payload in `POST /orders`.
+- `POST /api/v1/partners/orders/:id/documents` $\rightarrow$ Use `POST /document-upload-sessions`.
+- `POST /api/v1/partners/orders/:id/hosted-checkout-session` and `/payment-session`
   $\rightarrow$ Use `POST /hosted-checkout-sessions` (no-code hosted checkout, section 4).
-* Legacy hosted-payment settlements are retired; partners settle via prepaid
+- Legacy hosted-payment settlements are retired; partners settle via prepaid
   `PARTNER_ACCOUNT` balance.

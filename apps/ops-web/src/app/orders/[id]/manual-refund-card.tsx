@@ -2,11 +2,27 @@
 import { useEffect, useState } from "react";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { StatusBadge, humane } from "@/components/status-badge";
-import { REFUND_REASONS, type ManualRefund } from "../../manual-refunds/manual-refunds-client";
+import {
+  REFUND_REASONS,
+  type ManualRefund,
+} from "../../manual-refunds/manual-refunds-client";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -15,35 +31,57 @@ const apiError = (value: unknown, fallback: string) => {
   return body?.error?.message ?? fallback;
 };
 
-export function ManualRefundCard({ orderId, paid }: { orderId: string; paid: boolean }) {
+export function ManualRefundCard({
+  orderId,
+  paid,
+}: {
+  orderId: string;
+  paid: boolean;
+}) {
   const authFetch = useAuthenticatedFetch();
   const [refund, setRefund] = useState<ManualRefund | null>(null);
   const [open, setOpen] = useState(false);
-  const [reason, setReason] = useState<(typeof REFUND_REASONS)[number]>("PROVISIONING_FAILURE");
+  const [reason, setReason] = useState<(typeof REFUND_REASONS)[number]>(
+    "PROVISIONING_FAILURE",
+  );
   const [explanation, setExplanation] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
-    const response = await authFetch(`${API}/operations/manual-refunds?orderId=${orderId}`);
+    const response = await authFetch(
+      `${API}/operations/manual-refunds?orderId=${orderId}`,
+    );
     const value = await response.json();
-    if (!response.ok) throw new Error(apiError(value, "Manual refund status could not be loaded"));
+    if (!response.ok)
+      throw new Error(
+        apiError(value, "Manual refund status could not be loaded"),
+      );
     setRefund(value.data?.items?.[0] ?? null);
   };
 
   useEffect(() => {
-    void load().catch((cause) => setError(cause instanceof Error ? cause.message : "Manual refund status could not be loaded"));
+    void load().catch((cause) =>
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Manual refund status could not be loaded",
+      ),
+    );
   }, [orderId]);
 
   const submit = async () => {
     setBusy(true);
     setError("");
     try {
-      const response = await authFetch(`${API}/operations/manual-refunds/orders/${orderId}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason, explanation }),
-      });
+      const response = await authFetch(
+        `${API}/operations/manual-refunds/orders/${orderId}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason, explanation }),
+        },
+      );
       const value = await response.json();
       if (!response.ok) throw new Error(apiError(value, "Request failed"));
       setOpen(false);
@@ -73,7 +111,14 @@ export function ManualRefundCard({ orderId, paid }: { orderId: string; paid: boo
           ) : null}
         </div>
       ) : paid ? (
-        <Button className="w-full" variant="outline" onClick={() => { setError(""); setOpen(true); }}>
+        <Button
+          className="w-full"
+          variant="outline"
+          onClick={() => {
+            setError("");
+            setOpen(true);
+          }}
+        >
           Request manual refund
         </Button>
       ) : null}
@@ -82,17 +127,25 @@ export function ManualRefundCard({ orderId, paid }: { orderId: string; paid: boo
           <DialogHeader>
             <DialogTitle>Request manual refund</DialogTitle>
             <DialogDescription>
-              This records an exception for review. It does not send money or change the order.
+              This records an exception for review. It does not send money or
+              change the order.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
               <Label>What went wrong?</Label>
-              <Select value={reason} onValueChange={(value) => setReason(value as typeof reason)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select
+                value={reason}
+                onValueChange={(value) => setReason(value as typeof reason)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   {REFUND_REASONS.map((value) => (
-                    <SelectItem key={value} value={value}>{humane(value)}</SelectItem>
+                    <SelectItem key={value} value={value}>
+                      {humane(value)}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -109,8 +162,15 @@ export function ManualRefundCard({ orderId, paid }: { orderId: string; paid: boo
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button disabled={busy || explanation.trim().length < 10} onClick={() => void submit()}>Submit request</Button>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={busy || explanation.trim().length < 10}
+              onClick={() => void submit()}
+            >
+              Submit request
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

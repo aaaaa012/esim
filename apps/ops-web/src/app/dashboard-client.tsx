@@ -130,7 +130,8 @@ export default function DashboardClient() {
   ];
 
   const customerLabel = (order: Order) => {
-    if (order.traveler) return `${order.traveler.firstName} ${order.traveler.surname}`;
+    if (order.traveler)
+      return `${order.traveler.firstName} ${order.traveler.surname}`;
     return "Guest customer";
   };
 
@@ -218,53 +219,90 @@ export default function DashboardClient() {
           noPadding
         >
           {data.recentOrders.length === 0 ? (
-            <EmptyState title="No orders yet" description="New orders will appear here." />
+            <EmptyState
+              title="No orders yet"
+              description="New orders will appear here."
+            />
           ) : (
-            <><div className="divide-y sm:hidden">
-              {data.recentOrders.map((order) => (
-                <Link key={order.id} href={`/orders/${order.id}`} className="block space-y-2 px-4 py-4 active:bg-muted/60">
-                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold text-primary">{order.orderNumber}</p><p className="truncate text-sm text-muted-foreground">{customerLabel(order)}</p></div><StatusBadge label={order.status} /></div>
-                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground"><span className="truncate"><b className="text-foreground">{order.plan.countryCode}</b> · {order.plan.name}</span><span className="shrink-0">{new Date(order.createdAt).toLocaleDateString()}</span></div>
-                </Link>
-              ))}
-            </div><div className="hidden sm:block"><Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Order</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Destination</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              <div className="divide-y sm:hidden">
                 {data.recentOrders.map((order) => (
-                  <TableRow key={order.id}>
-                    <TableCell>
-                      <Link
-                        href={`/orders/${order.id}`}
-                        className="font-medium text-primary hover:underline"
-                      >
-                        {order.orderNumber}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="max-w-52 truncate" title={order.ownerId}>{customerLabel(order)}</TableCell>
-                    <TableCell>
-                      <span className="font-medium">
-                        {order.plan.countryCode}
-                      </span>{" "}
-                      · {order.plan.name}
-                    </TableCell>
-                    <TableCell>
+                  <Link
+                    key={order.id}
+                    href={`/orders/${order.id}`}
+                    className="block space-y-2 px-4 py-4 active:bg-muted/60"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-primary">
+                          {order.orderNumber}
+                        </p>
+                        <p className="truncate text-sm text-muted-foreground">
+                          {customerLabel(order)}
+                        </p>
+                      </div>
                       <StatusBadge label={order.status} />
-                    </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
-                      {new Date(order.createdAt).toLocaleDateString()}
-                    </TableCell>
-                  </TableRow>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span className="truncate">
+                        <b className="text-foreground">
+                          {order.plan.countryCode}
+                        </b>{" "}
+                        · {order.plan.name}
+                      </span>
+                      <span className="shrink-0">
+                        {new Date(order.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </Link>
                 ))}
-              </TableBody>
-            </Table></div></>
+              </div>
+              <div className="hidden sm:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Order</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Destination</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Created</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.recentOrders.map((order) => (
+                      <TableRow key={order.id}>
+                        <TableCell>
+                          <Link
+                            href={`/orders/${order.id}`}
+                            className="font-medium text-primary hover:underline"
+                          >
+                            {order.orderNumber}
+                          </Link>
+                        </TableCell>
+                        <TableCell
+                          className="max-w-52 truncate"
+                          title={order.ownerId}
+                        >
+                          {customerLabel(order)}
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium">
+                            {order.plan.countryCode}
+                          </span>{" "}
+                          · {order.plan.name}
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge label={order.status} />
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {new Date(order.createdAt).toLocaleDateString()}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </Panel>
       </div>

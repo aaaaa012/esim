@@ -1,5 +1,5 @@
-import ExcelJS from 'exceljs';
-import { csvToRecords } from './csv.util.js';
+import ExcelJS from "exceljs";
+import { csvToRecords } from "./csv.util.js";
 
 /**
  * Unified tabular importer for plan catalogue and inventory uploads.
@@ -17,10 +17,12 @@ export async function tabularToRecords(
   options?: { fileName?: string; maxRows?: number },
 ): Promise<{ records: TabularRecord[]; errors: string[] }> {
   if (content.length > MAX_CONTENT_CHARS)
-    return { records: [], errors: ['The uploaded file is too large'] };
-  const fileName = (options?.fileName ?? '').toLowerCase();
-  const looksLikeExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
-  if (looksLikeExcel) return recordsFromExcel(content, requiredHeaders, options?.maxRows);
+    return { records: [], errors: ["The uploaded file is too large"] };
+  const fileName = (options?.fileName ?? "").toLowerCase();
+  const looksLikeExcel =
+    fileName.endsWith(".xlsx") || fileName.endsWith(".xls");
+  if (looksLikeExcel)
+    return recordsFromExcel(content, requiredHeaders, options?.maxRows);
   return csvToRecords(content, requiredHeaders);
 }
 
@@ -37,27 +39,44 @@ async function recordsFromExcel(
   const errors: string[] = [];
   let buffer: Buffer;
   try {
-    buffer = Buffer.from(base64, 'base64');
+    buffer = Buffer.from(base64, "base64");
   } catch {
-    return { records: [], errors: ['The Excel file could not be decoded'] };
+    return { records: [], errors: ["The Excel file could not be decoded"] };
   }
-  if (buffer.length === 0) return { records: [], errors: ['The Excel file is empty'] };
+  if (buffer.length === 0)
+    return { records: [], errors: ["The Excel file is empty"] };
   let workbook: ExcelJS.Workbook;
   try {
     workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+    await workbook.xlsx.load(
+      buffer as unknown as Parameters<typeof workbook.xlsx.load>[0],
+    );
   } catch {
-    return { records: [], errors: ['The Excel file could not be read. Save it as .xlsx and try again.'] };
+    return {
+      records: [],
+      errors: [
+        "The Excel file could not be read. Save it as .xlsx and try again.",
+      ],
+    };
   }
   const worksheet = workbook.worksheets[0];
-  if (!worksheet) return { records: [], errors: ['The Excel file has no worksheets'] };
+  if (!worksheet)
+    return { records: [], errors: ["The Excel file has no worksheets"] };
 
   const headerRow = worksheet.getRow(1);
   const header = Array.isArray(headerRow.values)
-    ? (headerRow.values.slice(1) as unknown[]).map((cell) => cellText(cell).trim().toLowerCase())
+    ? (headerRow.values.slice(1) as unknown[]).map((cell) =>
+        cellText(cell).trim().toLowerCase(),
+      )
     : [];
-  const missing = requiredHeaders.filter((required) => !header.includes(required));
-  if (missing.length) return { records: [], errors: [`Missing required columns: ${missing.join(', ')}`] };
+  const missing = requiredHeaders.filter(
+    (required) => !header.includes(required),
+  );
+  if (missing.length)
+    return {
+      records: [],
+      errors: [`Missing required columns: ${missing.join(", ")}`],
+    };
 
   const records: TabularRecord[] = [];
   const rowCount = Math.min(worksheet.rowCount, (maxRows ?? 5000) + 1);
@@ -78,14 +97,18 @@ async function recordsFromExcel(
 }
 
 function cellText(value: unknown): string {
-  if (value === null || value === undefined) return '';
+  if (value === null || value === undefined) return "";
   if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object') {
-    const rich = value as { text?: unknown; hyperlink?: unknown; result?: unknown };
-    if (rich.hyperlink) return String(rich.text ?? rich.hyperlink ?? '');
+  if (typeof value === "object") {
+    const rich = value as {
+      text?: unknown;
+      hyperlink?: unknown;
+      result?: unknown;
+    };
+    if (rich.hyperlink) return String(rich.text ?? rich.hyperlink ?? "");
     if (rich.text !== undefined) return String(rich.text);
     if (rich.result !== undefined) return String(rich.result);
-    return '';
+    return "";
   }
   return String(value);
 }
