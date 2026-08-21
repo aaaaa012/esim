@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+**/.env
+**/.env.*
+node_modules
+**/node_modules
+**/.next
+**/.next-dev
+**/dist
+**/coverage
+*.log
+apps/api/prisma/_*.cjs
+apps/api/_*.cjs
+opencode*
