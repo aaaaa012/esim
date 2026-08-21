@@ -9,6 +9,7 @@ import { Panel } from "@/components/panel";
 import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
+import ErrorDialog from "@/components/error-dialog";
 import {
   Table,
   TableBody,
@@ -37,11 +38,38 @@ const recoverable = new Set([
   "MANUAL_REVIEW",
 ]);
 
+function humaniseTitle(value: string) {
+  return value
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function shortError(item: Operation) {
+  const raw = item.lastErrorMessage;
+  if (!raw)
+    return item.lastErrorCategory
+      ? humaniseTitle(item.lastErrorCategory)
+      : "Not recorded";
+  try {
+    const parsed = JSON.parse(raw) as { title?: string; detail?: string };
+    if (parsed.title) return humaniseTitle(parsed.title);
+    if (parsed.detail)
+      return parsed.detail.length > 120
+        ? `${parsed.detail.slice(0, 120)}...`
+        : parsed.detail;
+  } catch {
+    // Provider errors are not always JSON.
+  }
+  return raw.length > 120 ? `${raw.slice(0, 120)}...` : raw;
+}
+
 export default function ProvisioningOperationsClient() {
   const authFetch = useAuthenticatedFetch();
   const [items, setItems] = useState<Operation[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [viewError, setViewError] = useState<string | null>(null);
   const load = async () => {
     const response = await authFetch(
       `${API}/operations/provisioning-operations`,
@@ -49,7 +77,9 @@ export default function ProvisioningOperationsClient() {
     );
     const value = await response.json();
     if (!response.ok)
-      throw new Error(value.error?.message ?? "Could not load set-up recovery");
+      throw new Error(
+        value.error?.message ?? "Could not load pending activations",
+      );
     setItems(value.data ?? []);
   };
   useEffect(() => {
@@ -80,7 +110,7 @@ export default function ProvisioningOperationsClient() {
   return (
     <>
       <PageHeader
-        title="Set-up recovery"
+        title="Pending activations"
         description="Orders where the network set-up is stuck or uncertain. Use Check again to safely continue without creating a duplicate."
         actions={
           <Button variant="outline" onClick={() => void load()}>
@@ -89,11 +119,12 @@ export default function ProvisioningOperationsClient() {
           </Button>
         }
       />
-      {error ? (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      ) : null}
+      <ErrorDialog error={error} onClose={() => setError("")} />
+      <ErrorDialog
+        error={viewError}
+        title="Full problem details"
+        onClose={() => setViewError(null)}
+      />
       <Panel
         title="Orders needing attention"
         description="Set-ups that are delayed, uncertain, or waiting for review"
@@ -138,7 +169,20 @@ export default function ProvisioningOperationsClient() {
                     <code className="text-xs">{item.iccid}</code>
                   </TableCell>
                   <TableCell className="max-w-72 text-xs text-muted-foreground">
-                    {item.lastErrorMessage ?? item.lastErrorCategory ?? "—"}
+                    <span title={item.lastErrorMessage ?? undefined}>
+                      {shortError(item)}
+                    </span>
+                    {item.lastErrorMessage ? (
+                      <button
+                        type="button"
+                        className="ml-2 font-medium text-primary hover:underline"
+                        onClick={() =>
+                          setViewError(item.lastErrorMessage ?? null)
+                        }
+                      >
+                        View
+                      </button>
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {new Date(item.updatedAt).toLocaleString()}

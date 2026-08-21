@@ -9,6 +9,7 @@ import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
+import ErrorDialog from "@/components/error-dialog";
 import {
   Table,
   TableBody,
@@ -155,11 +156,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
           </Button>
         }
       />
-      {error && (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <ErrorDialog error={error} onClose={() => setError("")} />
       {!profile && !error ? (
         <div className="flex h-40 items-center justify-center">
           <Spinner />

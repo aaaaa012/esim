@@ -21,6 +21,7 @@ import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
+import ErrorDialog from "@/components/error-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -310,11 +311,7 @@ export default function TransatelDashboard() {
           </div>
         }
       />
-      {error ? (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      ) : null}
+      <ErrorDialog error={error} onClose={() => setError("")} />
       {!data && !error ? (
         <div className="flex h-48 items-center justify-center">
           <Spinner />
@@ -380,8 +377,10 @@ export default function TransatelDashboard() {
                         />
                       </div>
                       <p className="mt-1 text-muted-foreground">
-                        {check.durationMs ?? "—"} ms ·{" "}
-                        {formatDate(check.checkedAt)}
+                        {check.durationMs == null
+                          ? "Duration not recorded"
+                          : `${check.durationMs} ms`}{" "}
+                        · {formatDate(check.checkedAt)}
                       </p>
                     </div>
                   ))}
@@ -535,7 +534,7 @@ export default function TransatelDashboard() {
                             {formatDate(row.lastProviderCheckedAt)}
                           </TableCell>
                           <TableCell className="max-w-64 truncate text-xs text-destructive">
-                            {row.providerCheckError ?? "—"}
+                            {row.providerCheckError ?? "Not recorded"}
                           </TableCell>
                           <TableCell>
                             <Button
@@ -654,7 +653,7 @@ export default function TransatelDashboard() {
                             {row.reason}
                           </TableCell>
                           <TableCell className="font-mono text-xs">
-                            {row.providerTransactionId ?? "—"}
+                            {row.providerTransactionId ?? "Not recorded"}
                           </TableCell>
                         </TableRow>
                       ))}

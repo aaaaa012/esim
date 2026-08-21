@@ -5,7 +5,10 @@ import type { Request } from "express";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { QueueService } from "../../jobs/queue.service.js";
 import type { ClerkSyncService } from "../identity/clerk-sync.service.js";
-import { WebhooksController } from "./webhooks.controller.js";
+import {
+  sanitizeOperationsLog,
+  WebhooksController,
+} from "./webhooks.controller.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -124,5 +127,35 @@ describe("WebhooksController connectivity inbox", () => {
     );
     expect(result).toEqual({ accepted: true, duplicate: true });
     expect(queues.add).not.toHaveBeenCalled();
+  });
+});
+
+describe("Operations log sanitization", () => {
+  it("redacts credentials and customer document data recursively", () => {
+    expect(
+      sanitizeOperationsLog({
+        orderId: "order-1",
+        authorization: "Bearer secret-token",
+        traveler: {
+          email: "traveler@example.com",
+          passportNumber: "E00007730",
+        },
+        response: {
+          qrPayload: "LPA:1$consumer.example$activation-code",
+          status: "READY",
+        },
+      }),
+    ).toEqual({
+      orderId: "order-1",
+      authorization: "[REDACTED]",
+      traveler: {
+        email: "[REDACTED]",
+        passportNumber: "[REDACTED]",
+      },
+      response: {
+        qrPayload: "[REDACTED]",
+        status: "READY",
+      },
+    });
   });
 });

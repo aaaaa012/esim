@@ -27,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Spinner } from "@/components/spinner";
+import ErrorDialog from "@/components/error-dialog";
 import { cn } from "@/lib/utils";
 
 type Order = {
@@ -57,19 +58,47 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1",
 export default function DashboardClient() {
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Dashboard | null>(null);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     void authFetch(`${API}/operations/dashboard`, { headers })
-      .then((r) => r.json())
-      .then((v) => setData(v.data));
-  }, []);
+      .then(async (response) => {
+        const value = await response.json();
+        if (!response.ok)
+          throw new Error(
+            value?.error?.message ?? "Could not load the overview",
+          );
+        setData(value.data);
+      })
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not load the overview",
+        ),
+      );
+  }, [authFetch]);
 
   if (!data)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> Loading live overview…
+      <>
+        <ErrorDialog error={error} onClose={() => setError(null)} />
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            {error ? (
+              <Button
+                variant="outline"
+                onClick={() => window.location.reload()}
+              >
+                Try again
+              </Button>
+            ) : (
+              <>
+                <Spinner /> Loading live overview...
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      </>
     );
 
   const metrics = [
@@ -94,11 +123,11 @@ export default function DashboardClient() {
       value: data.counts.provisioningFailed,
       icon: <ServerCrash className="size-4" />,
       tone: "danger" as const,
-      hint: "Set-up failed — needs your attention",
+      hint: "Set-up failed and needs your attention",
       href: "/work-queue?status=PROVISIONING_FAILED",
     },
     {
-      label: "QR sent — awaiting activation",
+      label: "QR sent, awaiting activation",
       value: data.counts.qrReady,
       icon: <QrCode className="size-4" />,
       tone: "info" as const,
@@ -131,6 +160,7 @@ export default function DashboardClient() {
 
   return (
     <>
+      <ErrorDialog error={error} onClose={() => setError(null)} />
       <PageHeader
         title="Operations overview"
         description={`${new Intl.DateTimeFormat("en-NP", {
@@ -161,7 +191,7 @@ export default function DashboardClient() {
           title="Integration health"
           actions={
             <Link
-              href="/integration-events"
+              href="/logs"
               className="text-sm font-medium text-primary hover:underline"
             >
               View events

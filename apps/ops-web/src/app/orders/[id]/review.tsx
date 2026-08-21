@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/spinner";
 import { InfoRow } from "@/components/info-row";
 import { Panel } from "@/components/panel";
+import ErrorDialog from "@/components/error-dialog";
 import {
   Dialog,
   DialogContent,
@@ -147,11 +148,22 @@ export default function OrderReview({ id }: { id: string }) {
 
   if (!order)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> {error || "Loading secure order…"}
+      <>
+        <ErrorDialog error={error} onClose={() => setError("")} />
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            {error ? (
+              <Button variant="outline" onClick={() => void load()}>
+                Try again
+              </Button>
+            ) : (
+              <>
+                <Spinner /> Loading secure order...
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      </>
     );
 
   const canAdvanceOrder = order.status === "REVIEW_PENDING";
@@ -291,11 +303,7 @@ export default function OrderReview({ id }: { id: string }) {
         {order.topUpMobile ? ` · top-up for ${order.topUpMobile}` : ""}
       </p>
 
-      {error && (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <ErrorDialog error={error} onClose={() => setError("")} />
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
@@ -442,11 +450,11 @@ export default function OrderReview({ id }: { id: string }) {
                 <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                   <InfoRow
                     label="eSIM number"
-                    value={order.assignment.iccid ?? "—"}
+                    value={order.assignment.iccid ?? "Not available"}
                   />
                   <InfoRow
                     label="Mobile number"
-                    value={order.assignment.msisdn ?? "—"}
+                    value={order.assignment.msisdn ?? "Not available"}
                   />
                   <InfoRow
                     label="Network profile"
@@ -577,7 +585,7 @@ export default function OrderReview({ id }: { id: string }) {
               <StatusBadge label={order.payment?.status ?? "NOT STARTED"} />
             </div>
             <p className="text-xs text-muted-foreground">
-              Paid through {humane(order.payment?.provider ?? "—")}
+              Paid through {humane(order.payment?.provider ?? "Not available")}
             </p>
             <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5 text-sm">
               <span className="text-muted-foreground">Documents</span>

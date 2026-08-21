@@ -22,6 +22,7 @@ import { CryptoService } from "./infrastructure/crypto.service.js";
 import {
   OperationsIntegrationEventsController,
   OperationsIntegrationLogsController,
+  OperationsLogsController,
   OperationsProvisioningOperationsController,
   WebhooksController,
 } from "./modules/webhooks/webhooks.controller.js";
@@ -95,6 +96,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     WebhooksController,
     OperationsIntegrationEventsController,
     OperationsIntegrationLogsController,
+    OperationsLogsController,
     OperationsProvisioningOperationsController,
     PartnersController,
     PartnerAdminController,

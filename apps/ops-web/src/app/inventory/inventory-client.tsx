@@ -20,6 +20,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Panel } from "@/components/panel";
+import ErrorDialog from "@/components/error-dialog";
 import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -514,7 +515,7 @@ export default function InventoryClient() {
       if (!r.ok) throw new Error(v.error?.message);
       toast.success(
         approve
-          ? `Batch ${batch.batchReference} approved — ${batch.importedCount} profile(s) sellable`
+          ? `Batch ${batch.batchReference} approved. ${batch.importedCount} profile(s) sellable`
           : `Batch ${batch.batchReference} rejected`,
       );
       load();
@@ -576,11 +577,22 @@ export default function InventoryClient() {
 
   if (!data)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> Loading inventory…
+      <>
+        <ErrorDialog error={error} onClose={() => setError("")} />
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            {error ? (
+              <Button variant="outline" onClick={load}>
+                Try again
+              </Button>
+            ) : (
+              <>
+                <Spinner /> Loading inventory...
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      </>
     );
 
   const metrics = [
@@ -641,6 +653,7 @@ export default function InventoryClient() {
 
   return (
     <>
+      <ErrorDialog error={error} onClose={() => setError("")} />
       <PageHeader
         title="eSIM Inventory"
         description="Upload eSIM profiles and packages, review pending approvals, and track stock."
@@ -830,7 +843,7 @@ export default function InventoryClient() {
                       <TableCell>
                         <code className="text-xs">{profile.iccid}</code>
                         <p className="text-xs text-muted-foreground">
-                          {profile.batchReference ?? "—"}
+                          {profile.batchReference ?? "Not recorded"}
                         </p>
                       </TableCell>
                       <TableCell>
@@ -863,8 +876,8 @@ export default function InventoryClient() {
                             : profile.status === "PENDING_PROVIDER_CHECK"
                               ? "Provider verification is required before sale"
                               : profile.status === "QUARANTINED"
-                            ? `${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`
-                            : "—")}
+                                ? `${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`
+                                : "Not recorded")}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex flex-wrap justify-end gap-2">
@@ -1388,13 +1401,13 @@ export default function InventoryClient() {
                             </span>
                           ) : (
                             <span className="text-xs text-muted-foreground">
-                              —
+                              Not recorded
                             </span>
                           )}
                         </TableCell>
                         <TableCell>
                           <span className="text-xs">
-                            {p.batchReference ?? "—"}
+                            {p.batchReference ?? "Not recorded"}
                           </span>
                           {p.batchReference && (
                             <div className="text-[11px] text-muted-foreground">
@@ -1403,7 +1416,7 @@ export default function InventoryClient() {
                           )}
                         </TableCell>
                         <TableCell className="text-right text-xs">
-                          {p.smDpAddress ?? "—"}
+                          {p.smDpAddress ?? "Not recorded"}
                         </TableCell>
                       </TableRow>
                     ))}

@@ -15,6 +15,7 @@ import {
   PlugZap,
   RadioTower,
   Server,
+  ScrollText,
   RotateCw,
   Settings,
   Undo2,
@@ -40,11 +41,12 @@ const overviewItems: NavItem[] = [
   { href: "/transatel", label: "Network", icon: RadioTower },
   {
     href: "/provisioning-operations",
-    label: "Set-up recovery",
+    label: "Pending activations",
     icon: RotateCw,
   },
 ];
 const systemItems: NavItem[] = [
+  { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/manual-refunds", label: "Manual refunds", icon: Undo2 },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/integration-events", label: "Incoming updates", icon: PlugZap },

@@ -454,3 +454,297 @@ export class OperationsProvisioningOperationsController {
     return this.reconciliation.reconcileProvisioningOperationNow(id);
   }
 }
+
+type LogGroup = "all" | "provider" | "incoming" | "orders" | "staff";
+type OperationsLogEntry = {
+  group: Exclude<LogGroup, "all">;
+  id: string;
+  identifier?: string;
+  title: string;
+  detail: string;
+  status?: number;
+  statusLabel?: string;
+  createdAt: string;
+  durationMs?: number | null;
+  error?: string | null;
+  requestBody?: unknown;
+  responseBody?: unknown;
+};
+
+const SENSITIVE_LOG_KEY =
+  /authorization|cookie|password|secret|token|api.?key|signature|passport|document|email|phone|mobile|msisdn|qr|activation.?code|otp|pin|card|account.?number/i;
+
+export function sanitizeOperationsLog(value: unknown, depth = 0): unknown {
+  if (depth > 8) return "[TRUNCATED]";
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    if (/LPA:1\$/i.test(value)) return "[REDACTED QR CREDENTIAL]";
+    if (/^Bearer\s+/i.test(value)) return "[REDACTED AUTHORIZATION]";
+    return value.length > 4_000
+      ? `${value.slice(0, 4_000)} [TRUNCATED]`
+      : value;
+  }
+  if (typeof value !== "object") return value;
+  if (Array.isArray(value))
+    return value
+      .slice(0, 100)
+      .map((item) => sanitizeOperationsLog(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 200)
+      .map(([key, item]) => [
+        key,
+        SENSITIVE_LOG_KEY.test(key)
+          ? "[REDACTED]"
+          : sanitizeOperationsLog(item, depth + 1),
+      ]),
+  );
+}
+
+function sanitizeLogEndpoint(endpoint: string) {
+  const [path] = endpoint.split("?", 1);
+  return path ?? endpoint;
+}
+
+function sanitizeLogText(value: string | null | undefined) {
+  if (!value) return value ?? null;
+  return value
+    .replace(/LPA:1\$[^\s"']+/gi, "[REDACTED QR CREDENTIAL]")
+    .replace(/Bearer\s+[^\s"']+/gi, "[REDACTED AUTHORIZATION]")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[REDACTED EMAIL]")
+    .slice(0, 2_000);
+}
+
+@Controller("operations/logs")
+@UseGuards(AuthGuard, AccountGuard)
+@AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+export class OperationsLogsController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  @Get()
+  async list(
+    @Req() request: AuthenticatedRequest,
+    @Query("group") group?: string,
+    @Query("q") q?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ): Promise<{
+    total: number;
+    page: number;
+    pageSize: number;
+    items: OperationsLogEntry[];
+  }> {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    if (!this.prisma.enabled)
+      return { total: 0, page: 1, pageSize: 25, items: [] };
+    const selected: LogGroup = [
+      "provider",
+      "incoming",
+      "orders",
+      "staff",
+    ].includes(group ?? "")
+      ? (group as LogGroup)
+      : "all";
+    const parsedPage = Number.parseInt(page ?? "1", 10);
+    const pageNumber =
+      Number.isFinite(parsedPage) && parsedPage >= 1 ? parsedPage : 1;
+    const parsedSize = Number.parseInt(pageSize ?? "25", 10);
+    const size =
+      Number.isFinite(parsedSize) && parsedSize >= 1
+        ? Math.min(parsedSize, 50)
+        : 25;
+    const offset = (pageNumber - 1) * size;
+    const needle = q?.trim().toLowerCase();
+    const fetchCount = needle ? 1_000 : Math.min(offset + size, 1_000);
+    const [provider, incoming, orders, staff] = await Promise.all([
+      selected === "provider" || selected === "all"
+        ? this.providerLogs(fetchCount)
+        : [],
+      selected === "incoming" || selected === "all"
+        ? this.incomingLogs(fetchCount)
+        : [],
+      selected === "orders" || selected === "all"
+        ? this.orderLogs(fetchCount)
+        : [],
+      selected === "staff" || selected === "all"
+        ? this.staffLogs(fetchCount)
+        : [],
+    ]);
+    const counts = await Promise.all([
+      selected === "provider" || selected === "all"
+        ? this.prisma.integrationLog.count()
+        : Promise.resolve(0),
+      selected === "incoming" || selected === "all"
+        ? this.prisma.webhookEvent.count({
+            where: { NOT: { source: { startsWith: "idempotency:" } } },
+          })
+        : Promise.resolve(0),
+      selected === "orders" || selected === "all"
+        ? Promise.all([
+            this.prisma.provisioningAttempt.count(),
+            this.prisma.provisioningOperation.count(),
+          ]).then(([attempts, operations]) => attempts + operations)
+        : Promise.resolve(0),
+      selected === "staff" || selected === "all"
+        ? this.prisma.auditLog.count()
+        : Promise.resolve(0),
+    ]);
+    let items = [...provider, ...incoming, ...orders, ...staff].sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
+    if (needle) {
+      items = items.filter((item) =>
+        [
+          item.title,
+          item.detail,
+          item.statusLabel,
+          item.identifier,
+          String(item.status ?? ""),
+          item.error,
+        ]
+          .filter(Boolean)
+          .some((candidate) =>
+            String(candidate).toLowerCase().includes(needle),
+          ),
+      );
+    }
+    return {
+      total: needle
+        ? items.length
+        : counts.reduce((sum, count) => sum + count, 0),
+      page: pageNumber,
+      pageSize: size,
+      items: items.slice(offset, offset + size),
+    };
+  }
+
+  private async providerLogs(take: number): Promise<OperationsLogEntry[]> {
+    const rows = await this.prisma.integrationLog.findMany({
+      orderBy: { createdAt: "desc" },
+      take,
+    });
+    return rows.map((row) => ({
+      group: "provider",
+      id: row.id,
+      identifier: this.integrationIdentifier(row.operation, row.endpoint),
+      title: row.operation,
+      detail: `${row.method} ${sanitizeLogEndpoint(row.endpoint)}`,
+      status: row.status,
+      statusLabel: row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
+      createdAt: row.createdAt.toISOString(),
+      durationMs: row.durationMs,
+      error: sanitizeLogText(row.errorMessage ?? row.errorCode),
+    }));
+  }
+
+  private integrationIdentifier(operation: string, endpoint: string) {
+    const value = `${operation} ${endpoint}`.toLowerCase();
+    if (value.includes("khalti")) return "Khalti";
+    if (value.includes("cloudinary")) return "Cloudinary";
+    if (value.includes("resend")) return "Resend";
+    return "Transatel";
+  }
+
+  private async incomingLogs(take: number): Promise<OperationsLogEntry[]> {
+    const rows = await this.prisma.webhookEvent.findMany({
+      where: { NOT: { source: { startsWith: "idempotency:" } } },
+      orderBy: { createdAt: "desc" },
+      take,
+    });
+    const providerNames: Record<string, string> = {
+      transatel: "Transatel",
+      khalti: "Khalti",
+      clerk: "Clerk",
+    };
+    return rows.map((row) => ({
+      group: "incoming",
+      id: row.id,
+      identifier:
+        providerNames[row.source.toLowerCase()] ?? row.source.toUpperCase(),
+      title: `${row.source} callback`,
+      detail: row.eventId,
+      statusLabel: row.deadLetteredAt
+        ? "FAILED"
+        : row.processedAt
+          ? "PROCESSED"
+          : "QUEUED",
+      createdAt: row.createdAt.toISOString(),
+      error: sanitizeLogText(row.errorMessage),
+      responseBody: sanitizeOperationsLog(row.payload),
+    }));
+  }
+
+  private async orderLogs(take: number): Promise<OperationsLogEntry[]> {
+    const [attempts, operations] = await Promise.all([
+      this.prisma.provisioningAttempt.findMany({
+        orderBy: { createdAt: "desc" },
+        take,
+      }),
+      this.prisma.provisioningOperation.findMany({
+        orderBy: { updatedAt: "desc" },
+        take,
+        select: {
+          id: true,
+          state: true,
+          requestSnapshot: true,
+          responseSnapshot: true,
+          lastErrorMessage: true,
+          lastErrorCategory: true,
+          createdAt: true,
+          updatedAt: true,
+          order: { select: { orderNumber: true } },
+        },
+      }),
+    ]);
+    const attemptRows: OperationsLogEntry[] = attempts.map((row) => ({
+      group: "orders",
+      id: `attempt-${row.id}`,
+      title: "Activation attempt",
+      detail: `attempt ${row.attempt} for order ${row.orderId}`,
+      statusLabel: row.status,
+      createdAt: row.createdAt.toISOString(),
+      error: sanitizeLogText(row.errorCode),
+      requestBody: sanitizeOperationsLog(row.requestSnapshot),
+      responseBody: sanitizeOperationsLog(row.responseSnapshot),
+    }));
+    const operationRows: OperationsLogEntry[] = operations.map((row) => ({
+      group: "orders",
+      id: `operation-${row.id}`,
+      title: "eSIM activation",
+      detail: row.order?.orderNumber
+        ? `order ${row.order.orderNumber}`
+        : `operation ${row.id}`,
+      statusLabel: row.state,
+      createdAt: row.updatedAt.toISOString(),
+      error: row.lastErrorCategory
+        ? sanitizeLogText(
+            `${row.lastErrorCategory}: ${row.lastErrorMessage ?? ""}`,
+          )
+        : null,
+      requestBody: sanitizeOperationsLog(row.requestSnapshot),
+      responseBody: sanitizeOperationsLog(row.responseSnapshot),
+    }));
+    return [...attemptRows, ...operationRows].sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
+  }
+
+  private async staffLogs(take: number): Promise<OperationsLogEntry[]> {
+    const rows = await this.prisma.auditLog.findMany({
+      orderBy: { createdAt: "desc" },
+      take,
+      include: { performedBy: { select: { email: true } } },
+    });
+    return rows.map((row) => ({
+      group: "staff",
+      id: row.id,
+      title: row.action,
+      detail: `${row.module}: ${row.entity} ${row.entityId}${
+        row.performedBy?.email ? ` by ${row.performedBy.email}` : ""
+      }`,
+      createdAt: row.createdAt.toISOString(),
+      requestBody: sanitizeOperationsLog(row.previousValue),
+      responseBody: sanitizeOperationsLog(row.newValue),
+    }));
+  }
+}
