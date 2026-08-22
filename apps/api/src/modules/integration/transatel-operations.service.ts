@@ -613,6 +613,8 @@ export class TransatelOperationsService {
       ]);
       return {
         orderId,
+        // Kept for older/cached Ops clients that predate the split status UI.
+        providerStatus: observedSubscriptionStatus ?? observedProfileStatus,
         esimProfileStatus: observedProfileStatus,
         subscriptionStatus: observedSubscriptionStatus,
         usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
@@ -712,6 +714,8 @@ export class TransatelOperationsService {
     });
     return {
       orderId,
+      // Kept for older/cached Ops clients that predate the split status UI.
+      providerStatus: observedSubscriptionStatus ?? observedProfileStatus,
       esimProfileStatus: observedProfileStatus,
       subscriptionStatus: observedSubscriptionStatus,
       usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
