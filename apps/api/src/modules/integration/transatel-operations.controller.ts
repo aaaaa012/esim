@@ -47,6 +47,12 @@ export class TransatelOperationsController {
     return this.transatel.diagnostics();
   }
 
+  @Post("sync-usage")
+  syncUsage(@Req() request: AuthenticatedRequest) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.transatel.syncAllUsage();
+  }
+
   @Post("orders/:id/reconcile")
   reconcile(
     @Param("id") orderId: string,

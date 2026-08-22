@@ -13,6 +13,10 @@ import { tabularToRecords } from "../../common/tabular.util.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 import { ApiException } from "../../common/api-error.js";
+import {
+  SELLABLE_PROVIDER_STATUSES,
+  isSellableProviderStatus,
+} from "../../common/sellable-provider-statuses.js";
 import { ApiErrorCode } from "@visa-compass/shared";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
@@ -262,7 +266,7 @@ export class InventoryService implements OnModuleInit {
           assignedOrderId: null,
           providerSubscriptionId: null,
           providerStatus: {
-            in: ["available", "allocated", "AVAILABLE", "ALLOCATED"],
+            in: SELLABLE_PROVIDER_STATUSES,
           },
           lastProviderCheckedAt: { gte: freshAfter },
           OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
@@ -316,7 +320,7 @@ export class InventoryService implements OnModuleInit {
         assignedOrderId: null,
         providerSubscriptionId: null,
         providerStatus: {
-          in: ["available", "allocated", "AVAILABLE", "ALLOCATED"],
+          in: SELLABLE_PROVIDER_STATUSES,
         },
         lastProviderCheckedAt: {
           gte: new Date(Date.now() - freshnessHours * 60 * 60_000),
@@ -399,7 +403,7 @@ export class InventoryService implements OnModuleInit {
           assignedOrderId: null,
           providerSubscriptionId: null,
           providerStatus: {
-            in: ["available", "allocated", "AVAILABLE", "ALLOCATED"],
+            in: SELLABLE_PROVIDER_STATUSES,
           },
           lastProviderCheckedAt: { gte: freshAfter },
           OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
@@ -943,6 +947,7 @@ export class InventoryService implements OnModuleInit {
         | "OTHER";
       subscriptionId?: string;
       iccid?: string;
+      msisdn?: string;
       activatedAt?: string;
       expiresAt?: string;
     },
@@ -1021,6 +1026,7 @@ export class InventoryService implements OnModuleInit {
           ...(event.subscriptionId
             ? { providerSubscriptionId: event.subscriptionId }
             : {}),
+          ...(event.msisdn ? { msisdn: event.msisdn.replace(/\D/g, "") } : {}),
           ...(event.activatedAt
             ? { activatedAt: new Date(event.activatedAt) }
             : {}),
@@ -1205,9 +1211,7 @@ export class InventoryService implements OnModuleInit {
     if (!profile.assignedOrderId)
       return this.reconcileProviderProfile(profile.id);
     const details = await this.connectivity.getEsimDetails(profile.iccid);
-    const safe = ["available", "allocated"].includes(
-      details.status.toLowerCase(),
-    );
+    const safe = isSellableProviderStatus(details.status);
     if (
       safe &&
       !profile.providerSubscriptionId &&
@@ -1259,6 +1263,10 @@ export class InventoryService implements OnModuleInit {
         "No customer eSIM record exists for this order",
       );
     const usage = await this.connectivity.getUsage(inventory.iccid);
+    if (usage.usageAvailable === false)
+      throw new BadRequestException(
+        "Transatel found the subscription but has not published a usable data balance yet. Please retry shortly.",
+      );
     const checkedAt = new Date();
     if (usage.subscriptions?.length) {
       const balances = new Map(
@@ -1317,8 +1325,7 @@ export class InventoryService implements OnModuleInit {
     try {
       const details = await this.connectivity.getEsimDetails(profile.iccid);
       const observed = details.status.toLowerCase();
-      const safeUnassigned =
-        observed === "available" || observed === "allocated";
+      const safeUnassigned = isSellableProviderStatus(observed);
       const unexpectedUse = profile.assignedOrderId === null && !safeUnassigned;
       const updated = await this.prisma.esimInventory.update({
         where: { id },
@@ -1428,9 +1435,9 @@ export class InventoryService implements OnModuleInit {
 
     const details = await this.connectivity.getEsimDetails(profile.iccid);
     const providerStatus = details.status.toLowerCase();
-    if (providerStatus !== "available" && providerStatus !== "allocated")
+    if (!isSellableProviderStatus(providerStatus))
       throw new ConflictException(
-        `Transatel reports ${providerStatus}; only available or allocated inventory can be restored`,
+        `Transatel reports ${providerStatus}; only sellable stock (available, allocated or released) can be restored`,
       );
 
     const actor = await this.localUser(actorClerkId);

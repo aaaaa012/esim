@@ -390,7 +390,7 @@ describe("TransatelProvider", () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi
       .fn()
-      .mockResolvedValue({ iccid: "8988247076000000319" });
+      .mockResolvedValue({ iccid: "8988247076000000319", msisdn: "33612345678" });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -420,6 +420,7 @@ describe("TransatelProvider", () => {
     expect(usage).toEqual({
       usedMb: 4096,
       totalMb: 5120,
+      usageAvailable: true,
       subscriptions: [
         {
           providerSubscriptionId: "sub-1",
@@ -435,7 +436,7 @@ describe("TransatelProvider", () => {
         String(call[0]).includes("/api/subscriptions/products"),
       )![0],
     );
-    expect(url).toContain("msisdn=8988247076000000319");
+    expect(url).toContain("msisdn=33612345678");
     expect(url).toContain("withBalances=true");
   });
 
@@ -443,7 +444,7 @@ describe("TransatelProvider", () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi
       .fn()
-      .mockResolvedValue({ iccid: "8988247076000000319" });
+      .mockResolvedValue({ iccid: "8988247076000000319", msisdn: "33612345678" });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -495,7 +496,7 @@ describe("TransatelProvider", () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi
       .fn()
-      .mockResolvedValue({ iccid: "8988247076000000319" });
+      .mockResolvedValue({ iccid: "8988247076000000319", msisdn: "33612345678" });
     let tokenCalls = 0;
     let productCalls = 0;
     const provider = new TransatelProvider(prisma);
@@ -534,6 +535,7 @@ describe("TransatelProvider", () => {
     expect(usage).toEqual({
       usedMb: 0,
       totalMb: 1,
+      usageAvailable: true,
       subscriptions: [
         {
           providerSubscriptionId: "sub-1",

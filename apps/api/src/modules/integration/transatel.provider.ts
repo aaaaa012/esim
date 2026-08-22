@@ -451,9 +451,7 @@ export class TransatelProvider implements ConnectivityProvider {
         endpoint: path,
         status: response.status,
         durationMs,
-        ...(this.parseRequestBody(request.body) !== undefined
-          ? { requestBody: this.parseRequestBody(request.body)! }
-          : {}),
+        requestBody: this.requestLogPayload(url, request),
         responseBody: await this.logBody(response),
       });
     } else {
@@ -469,9 +467,7 @@ export class TransatelProvider implements ConnectivityProvider {
         durationMs,
         errorCode: `HTTP_${response.status}`,
         ...(errorMessage ? { errorMessage } : {}),
-        ...(this.parseRequestBody(request.body) !== undefined
-          ? { requestBody: this.parseRequestBody(request.body)! }
-          : {}),
+        requestBody: this.requestLogPayload(url, request),
         responseBody,
       });
     }
@@ -521,6 +517,20 @@ export class TransatelProvider implements ConnectivityProvider {
     }
   }
 
+  private requestLogPayload(
+    url: string,
+    request: { method: string; body?: string },
+  ): Prisma.InputJsonValue {
+    const body = this.parseRequestBody(request.body);
+    if (body !== undefined) return body;
+    const parsed = new URL(url);
+    return {
+      method: request.method,
+      path: parsed.pathname,
+      query: Object.fromEntries(parsed.searchParams.entries()),
+    };
+  }
+
   private async logBody(response: Response): Promise<Prisma.InputJsonValue> {
     try {
       const text = await response.clone().text();
@@ -545,7 +555,7 @@ export class TransatelProvider implements ConnectivityProvider {
       return Object.fromEntries(
         Object.entries(value as Record<string, unknown>).map(([key, item]) => [
           key,
-          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key)$/i.test(key)
+          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|activation_?code|matching_?id|qr_?(code|payload)|data_?url)$/i.test(key)
             ? "[REDACTED]"
             : this.redactLogBody(item),
         ]),
@@ -583,7 +593,22 @@ export class TransatelProvider implements ConnectivityProvider {
   private async resolveSubscriber(
     reference: string,
   ): Promise<{ iccid?: string; msisdn?: string }> {
-    if (/^\d{19,20}$/.test(reference)) return { iccid: reference };
+    const sanitizeMsisdn = (val?: string | null) =>
+      val && /^\d{6,15}$/.test(val.replace(/\D/g, ""))
+        ? val.replace(/\D/g, "")
+        : undefined;
+
+    if (/^\d{19,20}$/.test(reference)) {
+      if (this.prisma.enabled) {
+        const inventory = await this.prisma.esimInventory.findFirst({
+          where: { iccid: reference },
+          select: { iccid: true, msisdn: true },
+        });
+        const msisdn = sanitizeMsisdn(inventory?.msisdn);
+        return { iccid: reference, ...(msisdn ? { msisdn } : {}) };
+      }
+      return { iccid: reference };
+    }
 
     const uuidPattern =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -606,14 +631,19 @@ export class TransatelProvider implements ConnectivityProvider {
       });
 
     const inventory = await this.prisma.esimInventory.findFirst({
-      where: { OR: [{ assignedOrderId: reference }, { id: reference }] },
+      where: {
+        OR: [
+          { assignedOrderId: reference },
+          { id: reference },
+          { iccid: reference },
+        ],
+      },
       select: { iccid: true, msisdn: true },
     });
-    if (inventory?.iccid)
-      return {
-        iccid: inventory.iccid,
-        ...(inventory.msisdn ? { msisdn: inventory.msisdn } : {}),
-      };
+    if (inventory?.iccid) {
+      const msisdn = sanitizeMsisdn(inventory.msisdn);
+      return msisdn ? { iccid: inventory.iccid, msisdn } : { iccid: inventory.iccid };
+    }
 
     const subscription = await this.prisma.subscription.findUnique({
       where: { providerSubscriptionId: reference },
@@ -623,25 +653,23 @@ export class TransatelProvider implements ConnectivityProvider {
         },
       },
     });
-    if (subscription?.customerEsim?.inventory?.iccid)
-      return {
-        iccid: subscription.customerEsim.inventory.iccid,
-        ...(subscription.customerEsim.inventory.msisdn
-          ? { msisdn: subscription.customerEsim.inventory.msisdn }
-          : {}),
-      };
+    if (subscription?.customerEsim?.inventory?.iccid) {
+      const msisdn = sanitizeMsisdn(subscription.customerEsim.inventory.msisdn);
+      return msisdn
+        ? { iccid: subscription.customerEsim.inventory.iccid, msisdn }
+        : { iccid: subscription.customerEsim.inventory.iccid };
+    }
 
     const customerEsim = await this.prisma.customerEsim.findUnique({
       where: { orderId: reference },
       select: { inventory: { select: { iccid: true, msisdn: true } } },
     });
-    if (customerEsim?.inventory?.iccid)
-      return {
-        iccid: customerEsim.inventory.iccid,
-        ...(customerEsim.inventory.msisdn
-          ? { msisdn: customerEsim.inventory.msisdn }
-          : {}),
-      };
+    if (customerEsim?.inventory?.iccid) {
+      const msisdn = sanitizeMsisdn(customerEsim.inventory.msisdn);
+      return msisdn
+        ? { iccid: customerEsim.inventory.iccid, msisdn }
+        : { iccid: customerEsim.inventory.iccid };
+    }
 
     throw new ApiException({
       code: ApiErrorCode.USAGE_UNAVAILABLE,
@@ -695,7 +723,11 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `No allocated eSIM profile found for EID: ${request.eid}`,
       });
 
-    const bindMsisdn = profile.msisdn ?? profile.iccid;
+    const validMsisdn =
+      profile.msisdn && /^\d{6,15}$/.test(profile.msisdn.replace(/\D/g, ""))
+        ? profile.msisdn.replace(/\D/g, "")
+        : undefined;
+    const bindMsisdn = validMsisdn ?? profile.iccid;
     const existingOperation = this.prisma.enabled
       ? await this.prisma.provisioningOperation.findUnique({
           where: { orderId: request.orderId },
@@ -990,18 +1022,19 @@ export class TransatelProvider implements ConnectivityProvider {
 
   async getUsage(subscriptionId: string): Promise<UsageBreakdown> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
-    const msisdn = subscriber.msisdn ?? subscriber.iccid ?? "";
-    if (!msisdn)
+    const msisdn = subscriber.msisdn?.replace(/\D/g, "") ?? "";
+    if (!/^\d{6,15}$/.test(msisdn))
       throw new ApiException({
         code: ApiErrorCode.USAGE_UNAVAILABLE,
         message:
           "Usage details are not available yet. Please check back shortly.",
         status: 404,
-        details: "No subscriber identifier found for usage lookup",
+        details:
+          "No valid MSISDN is stored for this eSIM; usage lookup was skipped to avoid sending an ICCID as an MSISDN",
       });
     const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?msisdn=${encodeURIComponent(msisdn)}&withBalances=true`;
     this.logger.log(
-      `Fetching inventory usage for ${this.subscriberIdentifier()}: ${msisdn}`,
+      `Fetching inventory usage for MSISDN: ${msisdn}`,
     );
 
     const response = await this.authorizedFetch(url, {
@@ -1041,7 +1074,19 @@ export class TransatelProvider implements ConnectivityProvider {
           usage: { usedMb: number; totalMb: number };
         } => Boolean(entry.usage),
       );
-    if (!usage.length) return { usedMb: 0, totalMb: 0 };
+    if (!usage.length)
+      return {
+        usedMb: 0,
+        totalMb: 0,
+        usageAvailable: false,
+        subscriptions: subscriptions.map((item, index) => ({
+          providerSubscriptionId: item.subscriptionId,
+          status: item.status,
+          usedMb: 0,
+          totalMb: 0,
+          priority: index + 1,
+        })),
+      };
     const aggregate = usage.reduce(
       (acc, entry) => ({
         usedMb: acc.usedMb + entry.usage.usedMb,
@@ -1051,6 +1096,7 @@ export class TransatelProvider implements ConnectivityProvider {
     );
     return {
       ...aggregate,
+      usageAvailable: true,
       subscriptions: usage.map(({ item, usage: balance }, index) => ({
         providerSubscriptionId: item.subscriptionId,
         status: item.status,
@@ -1067,7 +1113,7 @@ export class TransatelProvider implements ConnectivityProvider {
       ? balances!.data!
       : [];
     const dataResources = entries.filter(
-      (entry) => entry.resourceUnit === "KB",
+      (entry) => String(entry.resourceUnit).toUpperCase() === "KB",
     );
     if (!dataResources.length) return null;
     const start = Math.max(
@@ -1566,6 +1612,7 @@ export class TransatelProvider implements ConnectivityProvider {
       eventType,
       orderId,
       iccid,
+      ...(envelope.msisdn ? { msisdn: envelope.msisdn } : {}),
       ...(envelope.externalReference
         ? { externalReference: envelope.externalReference }
         : {}),

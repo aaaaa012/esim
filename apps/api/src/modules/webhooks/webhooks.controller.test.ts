@@ -5,12 +5,33 @@ import type { Request } from "express";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { QueueService } from "../../jobs/queue.service.js";
 import type { ClerkSyncService } from "../identity/clerk-sync.service.js";
-import { WebhooksController } from "./webhooks.controller.js";
+import {
+  WebhooksController,
+  sanitizeOperationsLog,
+} from "./webhooks.controller.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.TRANSATEL_WEBHOOK_SECRET;
   delete process.env.PAYMENT_WEBHOOK_SECRET;
+});
+
+describe("sanitizeOperationsLog", () => {
+  it("redacts credentials, personal data, and QR installation material", () => {
+    expect(
+      sanitizeOperationsLog({
+        authorization: "Bearer credential",
+        msisdn: "9779800000000",
+        qrCode: { value: "LPA:1$consumer.rsp.world$secret" },
+        safe: "kept",
+      }),
+    ).toEqual({
+      authorization: "[REDACTED]",
+      msisdn: "[REDACTED]",
+      qrCode: "[REDACTED]",
+      safe: "kept",
+    });
+  });
 });
 
 describe("WebhooksController payment inbox", () => {

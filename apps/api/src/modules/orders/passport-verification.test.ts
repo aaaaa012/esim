@@ -3,6 +3,7 @@ import type { TravelerInput } from "@visa-compass/shared";
 import {
   comparePassport,
   dateVariants,
+  imageDimensions,
   normalizeText,
   verdictFor,
 } from "./passport-verification.service.js";
@@ -117,6 +118,21 @@ describe("comparePassport", () => {
   });
 });
 
+describe("imageDimensions", () => {
+  it("reads PNG dimensions from the IHDR header", () => {
+    const png = Buffer.alloc(24);
+    png.writeUInt32BE(0x89504e47, 0);
+    png.writeUInt32BE(640, 16);
+    png.writeUInt32BE(480, 20);
+    expect(imageDimensions(png)).toEqual({ width: 640, height: 480 });
+  });
+
+  it("returns null for buffers it cannot parse", () => {
+    expect(imageDimensions(Buffer.from("not an image"))).toBeNull();
+    expect(imageDimensions(Buffer.alloc(0))).toBeNull();
+  });
+});
+
 describe("verdictFor", () => {
   it("verifies when the passport number and another field match", () => {
     expect(verdictFor(["passportNumber", "surname"])).toBe("VERIFIED");
@@ -124,8 +140,15 @@ describe("verdictFor", () => {
   it("is partial when only the passport number matches", () => {
     expect(verdictFor(["passportNumber"])).toBe("PARTIAL");
   });
-  it("fails when the passport number does not match", () => {
-    expect(verdictFor(["surname", "dateOfBirth"])).toBe("FAILED");
+  it("is partial when a name plus the date of birth match but the number is unreadable", () => {
+    expect(verdictFor(["surname", "givenNames", "dateOfBirth"])).toBe(
+      "PARTIAL",
+    );
+    expect(verdictFor(["givenNames", "dateOfBirth"])).toBe("PARTIAL");
+  });
+  it("fails when no strong identity pair matches", () => {
+    expect(verdictFor(["surname"])).toBe("FAILED");
+    expect(verdictFor(["surname", "givenNames"])).toBe("FAILED");
     expect(verdictFor([])).toBe("FAILED");
   });
 });

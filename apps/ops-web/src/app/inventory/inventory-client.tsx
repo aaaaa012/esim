@@ -272,6 +272,7 @@ export default function InventoryClient() {
   }, [profilesQuery]);
 
   const load = () => {
+    setError("");
     const liveParams = new URLSearchParams({
       limit: "100",
       assignment: "UNASSIGNED",
@@ -578,11 +579,23 @@ export default function InventoryClient() {
 
   if (!data)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+      <>
+        <ErrorDialog error={error} onClose={() => setError("")} />
+        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
+          {error ? (
+            <>
+              <p className="max-w-md text-center text-sm text-muted-foreground">
+                Could not load inventory. Please try again.
+              </p>
+              <Button onClick={load}>Try again</Button>
+            </>
+          ) : (
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <Spinner /> Loading inventory…
+            </div>
+          )}
         </div>
-      </div>
+      </>
     );
 
   const metrics = [
@@ -866,7 +879,7 @@ export default function InventoryClient() {
                             {profile.providerCheckError}
                           </span>
                         ) : profile.status === "AVAILABLE" &&
-                          !["available", "allocated"].includes(
+                          !["available", "allocated", "released"].includes(
                             profile.providerStatus?.toLowerCase() ?? "",
                           )
                             ? (
@@ -910,7 +923,7 @@ export default function InventoryClient() {
                           </Button>
                           {isSuperAdmin &&
                           profile.status === "QUARANTINED" &&
-                          ["available", "allocated"].includes(
+                          ["available", "allocated", "released"].includes(
                             profile.providerStatus?.toLowerCase() ?? "",
                           ) ? (
                             <Button

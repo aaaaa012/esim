@@ -17,7 +17,6 @@ import {
   ShieldCheck,
   Signal,
   AlertTriangle,
-  Clock3,
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import DatePicker from "./date-picker";
@@ -229,7 +228,9 @@ export default function CheckoutClient({
     return payload.data;
   };
 
-  const [step, setStep] = useState(1),
+  // A payment-provider return already has an order to resume.  Start at payment
+  // so the compatibility screen never flashes while that order is loaded.
+  const [step, setStep] = useState(() => (orderId ? 4 : 1)),
     [compatible, setCompatible] = useState(false),
     [traveler, setTraveler] = useState(initial);
   const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
@@ -270,7 +271,10 @@ export default function CheckoutClient({
   const [order, setOrder] = useState<Order | null>(null),
     [payment, setPayment] = useState<Payment | null>(null),
     [uxResending, setUxResending] = useState(false);
+  const [resumingOrder, setResumingOrder] = useState(Boolean(orderId));
   const verifyRunToken = useRef(0);
+  const passportRetryNoBefore = useRef(0);
+  const passportRecoveryNoBefore = useRef(0);
   const resendQrEmail = async () => {
     if (!order || uxResending) return;
     setUxResending(true);
@@ -346,8 +350,12 @@ export default function CheckoutClient({
     setStep(4);
   }, [isTopUpIntent]);
   useEffect(() => {
-    if (!orderId) return;
+    if (!orderId) {
+      setResumingOrder(false);
+      return;
+    }
     if (!isLoaded && !guestToken) return;
+    setResumingOrder(true);
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
       .then((value) => {
@@ -399,7 +407,10 @@ export default function CheckoutClient({
           cause instanceof Error ? cause.message : "Order could not be resumed",
         ),
       )
-      .finally(() => setBusy(false));
+      .finally(() => {
+        setBusy(false);
+        setResumingOrder(false);
+      });
   }, [orderId, isLoaded, guestToken]);
   const VERIFY_DELAYS = [
     0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000,
@@ -417,6 +428,12 @@ export default function CheckoutClient({
     "PAYMENT_FAILED",
     "PROVISIONING_FAILED",
     "CANCELLED",
+  ];
+  const FULFILLMENT_IN_PROGRESS_STATUSES = [
+    "PAYMENT_CONFIRMED",
+    "REVIEW_PENDING",
+    "APPROVED",
+    "PROVISIONING",
   ];
   const stripReturnParams = () => {
     if (typeof window === "undefined") return;
@@ -515,29 +532,19 @@ export default function CheckoutClient({
   };
   const verifyPassport = async (): Promise<Order | null> => {
     if (!order || verifyingPassport) return order;
+    passportRecoveryNoBefore.current = Date.now() + 30_000;
     setVerifyingPassport(true);
     setError("");
     try {
-      let updated = await api<Order>(
+      const updated = await api<Order>(
         `/customer/orders/${order.id}/verify-passport`,
         { method: "POST", body: "{}" },
       );
-      const deadline = Date.now() + 8_500;
-      while (
-        updated.documentReviewStatus === "OCR_PENDING" &&
-        Date.now() < deadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 750));
-        updated = await api<Order>(`/customer/orders/${order.id}`);
-      }
-      if (updated.documentReviewStatus === "OCR_PENDING")
-        updated = await api<Order>(
-          `/customer/orders/${order.id}/verify-passport`,
-          { method: "POST", body: "{}" },
-        );
       setOrder(updated);
       return updated;
     } catch (e) {
+      if ((e as { code?: string }).code === "RATE_LIMITED")
+        passportRetryNoBefore.current = Date.now() + 60_000;
       setError(
         e instanceof Error ? e.message : "We could not verify your passport",
       );
@@ -549,15 +556,9 @@ export default function CheckoutClient({
   const passportGatePassed = (target: Order | null) =>
     !target ||
     isTopUp ||
-    [
-      "VERIFIED",
-      "MANUAL_REVIEW",
-      "MANUALLY_APPROVED",
-      "SKIPPED",
-      "OCR_BACKGROUND",
-    ].includes(target.documentReviewStatus ?? "") ||
-    target.passportVerification?.status === "VERIFIED" ||
-    target.passportVerification?.status === "SKIPPED";
+    ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+      target.documentReviewStatus ?? "",
+    );
   useEffect(() => {
     if (step !== 4 || isTopUp) return;
     if (!order || order.passportVerification) return;
@@ -565,6 +566,52 @@ export default function CheckoutClient({
       return;
     void verifyPassport();
   }, [step, order?.id, isTopUp]);
+  useEffect(() => {
+    if (step !== 4 || isTopUp || verifyingPassport) return;
+    if (
+      !order ||
+      !["OCR_PENDING", "OCR_BACKGROUND"].includes(
+        order.documentReviewStatus ?? "",
+      )
+    )
+      return;
+    if (Date.now() < passportRetryNoBefore.current) return;
+    if (Date.now() >= passportRecoveryNoBefore.current) {
+      void verifyPassport();
+      return;
+    }
+    // OCR is asynchronous. Polling the order is deliberately read-only so a
+    // slow worker never receives duplicate verification submissions.
+    const timer = setTimeout(() => {
+      void api<Order>(`/customer/orders/${order.id}`)
+        .then(setOrder)
+        .catch((cause) =>
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "We could not refresh passport verification",
+          ),
+        );
+    }, 3_000);
+    return () => clearTimeout(timer);
+  }, [step, order, isTopUp, verifyingPassport]);
+  useEffect(() => {
+    if (
+      verifying ||
+      !order ||
+      !FULFILLMENT_IN_PROGRESS_STATUSES.includes(order.status)
+    )
+      return;
+    // Payment confirmation hands work to a background provisioning queue. Keep
+    // the checkout current until that workflow reaches a customer-visible
+    // terminal state (for example QR_READY) instead of leaving a stale spinner.
+    const timer = setTimeout(() => {
+      void api<Order>(`/customer/orders/${order.id}`)
+        .then(setOrder)
+        .catch(() => undefined);
+    }, 3_000);
+    return () => clearTimeout(timer);
+  }, [order, verifying]);
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
     setError("");
@@ -711,57 +758,60 @@ export default function CheckoutClient({
     run(async () => {
       if (!order || !files.passport || !files.ticket)
         throw new Error("Passport and travel ticket are required");
-      for (const [key, file] of Object.entries(files)) {
-        if (!file) continue;
-        if (file.size > 10 * 1024 * 1024)
-          throw new Error(`${file.name} exceeds the 10 MB limit`);
-        const type =
-          key === "passport"
-            ? DocumentType.PASSPORT
-            : key === "ticket"
-              ? DocumentType.TICKET
-              : DocumentType.VISA;
-        const authorization = await api<DocumentAuthorization>(
-          `/customer/orders/${order.id}/documents`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              type,
-              fileName: file.name,
-              contentType: file.type || "application/pdf",
-            }),
-          },
-        );
-        if (authorization.upload.mode === "local-simulator") {
-          await api(
-            `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
-            { method: "POST", body: "{}" },
-          );
-          continue;
-        }
-        if (
-          authorization.upload.mode !== "cloudinary-signed" ||
-          !authorization.upload.endpoint
-        )
-          throw new Error("Private document storage is unavailable");
-        const form = new FormData();
-        form.append("file", file);
-        form.append("api_key", authorization.upload.apiKey!);
-        form.append("timestamp", String(authorization.upload.timestamp));
-        form.append("signature", authorization.upload.signature);
-        form.append("folder", authorization.upload.folder);
-        form.append("public_id", authorization.upload.publicId!);
-        form.append("type", authorization.upload.deliveryType!);
-        const uploaded = await authFetch(authorization.upload.endpoint, {
-          method: "POST",
-          body: form,
-        });
-        if (!uploaded.ok) throw new Error(`Upload failed for ${file.name}`);
-        await api(
-          `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
-          { method: "POST", body: "{}" },
-        );
-      }
+      await Promise.all(
+        Object.entries(files)
+          .filter((entry): entry is [string, File] => Boolean(entry[1]))
+          .map(async ([key, file]) => {
+            if (file.size > 10 * 1024 * 1024)
+              throw new Error(`${file.name} exceeds the 10 MB limit`);
+            const type =
+              key === "passport"
+                ? DocumentType.PASSPORT
+                : key === "ticket"
+                  ? DocumentType.TICKET
+                  : DocumentType.VISA;
+            const authorization = await api<DocumentAuthorization>(
+              `/customer/orders/${order.id}/documents`,
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  type,
+                  fileName: file.name,
+                  contentType: file.type || "application/pdf",
+                }),
+              },
+            );
+            if (authorization.upload.mode === "local-simulator") {
+              await api(
+                `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
+                { method: "POST", body: "{}" },
+              );
+              return;
+            }
+            if (
+              authorization.upload.mode !== "cloudinary-signed" ||
+              !authorization.upload.endpoint
+            )
+              throw new Error("Private document storage is unavailable");
+            const form = new FormData();
+            form.append("file", file);
+            form.append("api_key", authorization.upload.apiKey!);
+            form.append("timestamp", String(authorization.upload.timestamp));
+            form.append("signature", authorization.upload.signature);
+            form.append("folder", authorization.upload.folder);
+            form.append("public_id", authorization.upload.publicId!);
+            form.append("type", authorization.upload.deliveryType!);
+            const uploaded = await authFetch(authorization.upload.endpoint, {
+              method: "POST",
+              body: form,
+            });
+            if (!uploaded.ok) throw new Error(`Upload failed for ${file.name}`);
+            await api(
+              `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
+              { method: "POST", body: "{}" },
+            );
+          }),
+      );
       setOrder(await api<Order>(`/customer/orders/${order.id}`));
       advance(4);
     });
@@ -895,7 +945,19 @@ export default function CheckoutClient({
               ))}
             </div>
             {error && <ErrorModal error={error} onClose={() => setError("")} />}
-            {step === 1 && (
+            {resumingOrder && (
+              <div className="form-section" role="status" aria-live="polite">
+                <span className="form-icon">
+                  <LoaderCircle className="spin" />
+                </span>
+                <h2>Verifying your Khalti payment</h2>
+                <p>
+                  We are securely checking your payment and restoring your
+                  order. Please do not refresh or pay again.
+                </p>
+              </div>
+            )}
+            {!resumingOrder && step === 1 && (
               <div className="form-section">
                 <span className="form-icon">
                   <ShieldCheck />
@@ -924,7 +986,7 @@ export default function CheckoutClient({
                 </Action>
               </div>
             )}
-            {step === 2 && (
+            {!resumingOrder && step === 2 && (
               <div className="form-section">
                 <h2>Traveller information</h2>
                 <p>
@@ -1081,7 +1143,7 @@ export default function CheckoutClient({
                 <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
               </div>
             )}
-            {step === 3 && (
+            {!resumingOrder && step === 3 && (
               <div className="form-section">
                 <span className="form-icon">
                   <FileCheck2 />
@@ -1114,7 +1176,7 @@ export default function CheckoutClient({
                 <Nav back={() => goBack()} busy={busy} next={saveDocuments} />
               </div>
             )}
-            {step === 4 && (
+            {!resumingOrder && step === 4 && (
               <div className="form-section">
                 <h2>
                   {order &&
@@ -1485,16 +1547,15 @@ function PassportCheck({
       : paymentStatus === "FAILED"
         ? "No confirmed payment"
         : "Payment not started";
-  if (reviewStatus === "OCR_BACKGROUND") {
+  if (reviewStatus === "OCR_BACKGROUND" || reviewStatus === "OCR_PENDING") {
     return (
-      <div className="passport-check background" role="status">
-        <Clock3 size={20} />
+      <div className="passport-check checking" role="status">
+        <LoaderCircle className="spin" size={20} />
         <span>
-          <b>Document check continuing in the background</b>
+          <b>Verifying your passport</b>
           <small>
-            You can continue to Khalti now. Verification is separate from
-            payment, and we will contact you only if a clearer document is
-            needed.
+            Payment unlocks as soon as the check completes. This usually takes
+            only a few seconds.
           </small>
         </span>
         <span className="passport-check-tag">{paymentLabel}</span>
@@ -1508,8 +1569,8 @@ function PassportCheck({
         <span>
           <b>Documents saved for review</b>
           <small>
-            You can continue to payment. Our team will review the documents
-            separately, without delaying eSIM activation after payment.
+            Our team needs to review your document before payment. We will
+            notify you once it is approved — this page updates automatically.
           </small>
         </span>
         <span className="passport-check-tag">{paymentLabel}</span>
@@ -1578,11 +1639,11 @@ function PassportCheck({
       <div className="passport-check warning">
         <AlertTriangle size={20} />
         <span>
-          <b>Passport number matched</b>
+          <b>Passport partially matched</b>
           <small>
-            We found your passport number but couldn&apos;t confirm the name or
-            dates. Check your traveller details or try a clearer photo, then
-            re-check.
+            We could not confirm every detail on the document. Double-check the
+            traveller details you entered, or replace it with a sharper photo of
+            the information page, then re-check.
           </small>
         </span>
         {onEdit && (

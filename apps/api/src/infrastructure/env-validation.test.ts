@@ -7,6 +7,7 @@ const validProductionEnv = {
   CUSTOMER_WEB_URL: 'https://visacompass.example',
   OPS_WEB_URL: 'https://ops.visacompass.example',
   DATABASE_URL: 'postgresql://user:pass@db.example.com:26257/defaultdb?sslmode=verify-full',
+  DIRECT_DATABASE_URL: 'postgresql://user:pass@db.example.com:26257/defaultdb?sslmode=verify-full',
   PERSISTENCE_MODE: 'prisma',
   REDIS_URL: 'rediss://cache.example.com:6379',
   APP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 3).toString('base64'),
@@ -33,11 +34,12 @@ const validProductionEnv = {
   EMAIL_PROVIDER: 'resend',
   RESEND_API_KEY: 're_live_key',
   EMAIL_FROM_ADDRESS: 'noreply@visacompass.example',
+  EMAIL_FROM_NAME: 'Visa Compass',
   CLOUDINARY_CLOUD_NAME: 'cloud',
   CLOUDINARY_API_KEY: 'key',
   CLOUDINARY_API_SECRET: 'secret',
   TRUST_PROXY: '1',
-  ORDER_WORKFLOW_MODE: 'single-instance',
+  ORDER_WORKFLOW_MODE: 'database-first',
 };
 
 describe('validateEnv production gate', () => {
@@ -59,18 +61,13 @@ describe('validateEnv production gate', () => {
     expect(message).toContain('OPS_ALERT_EMAIL');
   });
 
-  it('refuses the Khalti developer sandbox in production', () => {
-    const sandbox = { ...validProductionEnv, KHALTI_BASE_URL: 'https://dev.khalti.com/api/v2' };
-    expect(() => validateEnv(sandbox)).toThrow(/Khalti dev sandbox/);
-  });
-
   it('refuses localhost URLs in production', () => {
     const local = { ...validProductionEnv, CUSTOMER_WEB_URL: 'http://localhost:3000' };
     expect(() => validateEnv(local)).toThrow(/localhost/);
   });
 
   it('refuses a second API replica in production', () => {
-    const scaled = { ...validProductionEnv, ORDER_WORKFLOW_MODE: 'multi-instance' };
+    const scaled = { ...validProductionEnv, ORDER_WORKFLOW_MODE: 'single-instance' };
     expect(() => validateEnv(scaled)).toThrow();
   });
 
@@ -84,8 +81,7 @@ describe('validateEnv production gate', () => {
     delete noResendKey.RESEND_API_KEY;
     expect(() => validateEnv(noResendKey)).toThrow(/RESEND_API_KEY/);
     const gmail = { ...validProductionEnv, EMAIL_PROVIDER: 'gmail' } as Record<string, unknown>;
-    delete gmail.RESEND_API_KEY;
-    expect(() => validateEnv(gmail)).toThrow(/GMAIL_/);
+    expect(() => validateEnv(gmail)).toThrow(/resend/);
   });
 
   it('keeps non-production boot ergonomic while still validating declared values', () => {

@@ -109,6 +109,10 @@ export class AdminController {
   syncCatalog() {
     return this.admin.syncTransatelCatalog();
   }
+  @Post("integrations/transatel/sync-usage")
+  syncUsage() {
+    return this.admin.syncTransatelUsage();
+  }
   @Post("integrations/transatel/catalog-export")
   @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
   exportCatalog(@Body() body: { cos?: string }) {

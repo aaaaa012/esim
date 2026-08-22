@@ -19,7 +19,7 @@ import {
   requireRole,
 } from "../../common/auth.guard.js";
 import { AccountGuard, AccountTypes } from "../../common/auth.guard.js";
-import { UserRoleName } from "@prisma/client";
+import { UserRoleName, Prisma } from "@prisma/client";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request } from "express";
 import { Webhook } from "svix";
@@ -396,6 +396,45 @@ export class OperationsIntegrationLogsController {
  * the integration-log endpoint: the latter is intentionally a narrow provider
  * diagnostic API used by the integrations workspace.
  */
+const SENSITIVE_LOG_KEY =
+  /authorization|cookie|password|secret|token|api.?key|signature|passport|document|email|phone|mobile|msisdn|qr|activation.?code|otp|pin|card|account.?number/i;
+
+export function sanitizeOperationsLog(value: unknown, depth = 0): unknown {
+  if (depth > 8) return "[TRUNCATED]";
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    if (/LPA:1\$/i.test(value)) return "[REDACTED QR CREDENTIAL]";
+    if (/^Bearer\s+/i.test(value)) return "[REDACTED AUTHORIZATION]";
+    return value.length > 4_000
+      ? `${value.slice(0, 4_000)} [TRUNCATED]`
+      : value;
+  }
+  if (typeof value !== "object") return value;
+  if (Array.isArray(value))
+    return value
+      .slice(0, 100)
+      .map((item) => sanitizeOperationsLog(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 200)
+      .map(([key, item]) => [
+        key,
+        SENSITIVE_LOG_KEY.test(key)
+          ? "[REDACTED]"
+          : sanitizeOperationsLog(item, depth + 1),
+      ]),
+  );
+}
+
+function sanitizeLogText(value: string | null | undefined) {
+  if (!value) return value ?? null;
+  return value
+    .replace(/LPA:1\$[^\s"']+/gi, "[REDACTED QR CREDENTIAL]")
+    .replace(/Bearer\s+[^\s"']+/gi, "[REDACTED AUTHORIZATION]")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[REDACTED EMAIL]")
+    .slice(0, 2_000);
+}
+
 @Controller("operations/logs")
 @UseGuards(AuthGuard, AccountGuard)
 @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
@@ -426,35 +465,118 @@ export class OperationsLogsController {
     const isOrderModule = (module: string) =>
       /ORDER|PAYMENT|VERIFICATION|TRANSATEL|INVENTORY|REFUND/i.test(module);
 
-    const [integrationRows, webhookRows, auditRows, orderRows, integrationTotal, webhookTotal, auditTotal, orderTotal] =
-      await Promise.all([
-        group === "all" || group === "provider"
-          ? this.prisma.integrationLog.findMany({ orderBy: { createdAt: "desc" }, take })
-          : Promise.resolve([]),
-        group === "all" || group === "incoming"
-          ? this.prisma.webhookEvent.findMany({
-              where: { NOT: { source: { startsWith: "idempotency:" } } },
-              orderBy: { createdAt: "desc" },
-              take,
-            })
-          : Promise.resolve([]),
-        group === "all" || group === "orders" || group === "staff"
-          ? this.prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take })
-          : Promise.resolve([]),
-        group === "all" || group === "orders"
-          ? this.prisma.order.findMany({
-              select: { id: true, orderNumber: true, channel: true, status: true, createdAt: true, partner: { select: { name: true } } },
-              orderBy: { createdAt: "desc" },
-              take,
-            })
-          : Promise.resolve([]),
-        group === "all" || group === "provider" ? this.prisma.integrationLog.count() : Promise.resolve(0),
-        group === "all" || group === "incoming"
-          ? this.prisma.webhookEvent.count({ where: { NOT: { source: { startsWith: "idempotency:" } } } })
-          : Promise.resolve(0),
-        group === "all" || group === "orders" || group === "staff" ? this.prisma.auditLog.count() : Promise.resolve(0),
-        group === "all" || group === "orders" ? this.prisma.order.count() : Promise.resolve(0),
-      ]);
+    const safeQuery = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await fn();
+      } catch {
+        return fallback;
+      }
+    };
+
+    let integrationRows: Array<{
+      id: string;
+      operation: string;
+      method: string;
+      endpoint: string;
+      status: number;
+      durationMs: number | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+      createdAt: Date;
+      requestBody: Prisma.JsonValue;
+      responseBody: Prisma.JsonValue;
+    }> = [];
+    let webhookRows: Array<{
+      id: string;
+      source: string;
+      eventId: string;
+      processedAt: Date | null;
+      signatureValid: boolean;
+      errorMessage: string | null;
+      createdAt: Date;
+      payload: Prisma.JsonValue;
+    }> = [];
+    let auditRows: Array<{
+      id: string;
+      module: string;
+      action: string;
+      entity: string;
+      entityId: string;
+      createdAt: Date;
+    }> = [];
+    let orderRows: Array<{
+      id: string;
+      orderNumber: string;
+      channel: string;
+      status: string;
+      createdAt: Date;
+      partner: { name: string } | null;
+    }> = [];
+    let integrationTotal = 0;
+    let webhookTotal = 0;
+    let auditTotal = 0;
+    let orderTotal = 0;
+
+    if (group === "all" || group === "provider") {
+      integrationRows = await safeQuery(
+        () => this.prisma.integrationLog.findMany({ orderBy: { createdAt: "desc" }, take }),
+        [],
+      );
+      integrationTotal = await safeQuery(
+        () => this.prisma.integrationLog.count(),
+        integrationRows.length,
+      );
+    }
+    if (group === "all" || group === "incoming") {
+      webhookRows = await safeQuery(
+        () =>
+          this.prisma.webhookEvent.findMany({
+            where: { NOT: { source: { startsWith: "idempotency:" } } },
+            orderBy: { createdAt: "desc" },
+            take,
+          }),
+        [],
+      );
+      webhookTotal = await safeQuery(
+        () =>
+          this.prisma.webhookEvent.count({
+            where: { NOT: { source: { startsWith: "idempotency:" } } },
+          }),
+        webhookRows.length,
+      );
+    }
+    if (group === "all" || group === "orders" || group === "staff") {
+      auditRows = await safeQuery(
+        () => this.prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take }),
+        [],
+      );
+      auditTotal = await safeQuery(
+        () => this.prisma.auditLog.count(),
+        auditRows.length,
+      );
+    }
+    if (group === "all" || group === "orders") {
+      orderRows = await safeQuery(
+        () =>
+          this.prisma.order.findMany({
+            select: {
+              id: true,
+              orderNumber: true,
+              channel: true,
+              status: true,
+              createdAt: true,
+              partner: { select: { name: true } },
+            },
+            orderBy: { createdAt: "desc" },
+            take,
+          }),
+        [],
+      );
+      orderTotal = await safeQuery(
+        () => this.prisma.order.count(),
+        orderRows.length,
+      );
+    }
 
     const items = [
       ...integrationRows.map((row) => ({
@@ -462,26 +584,26 @@ export class OperationsLogsController {
         id: row.id,
         identifier: row.operation,
         title: `${row.method} ${row.endpoint}`,
-        detail: row.errorMessage ?? row.errorCode ?? "Provider request completed",
+        detail: sanitizeLogText(row.errorMessage ?? row.errorCode) ?? "Provider request completed",
         status: row.status,
         statusLabel: row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
         createdAt: row.createdAt,
         durationMs: row.durationMs,
-        error: row.errorMessage,
-        requestBody: row.requestBody,
-        responseBody: row.responseBody,
+        error: sanitizeLogText(row.errorMessage),
+        requestBody: sanitizeOperationsLog(row.requestBody),
+        responseBody: sanitizeOperationsLog(row.responseBody),
       })),
       ...webhookRows.map((row) => ({
         group: "incoming",
         id: row.id,
         identifier: row.source,
         title: row.eventId,
-        detail: row.errorMessage ?? (row.processedAt ? "Callback processed" : "Callback queued"),
+        detail: sanitizeLogText(row.errorMessage) ?? (row.processedAt ? "Callback processed" : "Callback queued"),
         status: row.signatureValid ? (row.errorMessage ? 500 : 202) : 401,
         statusLabel: !row.signatureValid ? "REJECTED" : row.errorMessage ? "FAILED" : row.processedAt ? "PROCESSED" : "QUEUED",
         createdAt: row.createdAt,
-        error: row.errorMessage,
-        requestBody: row.payload,
+        error: sanitizeLogText(row.errorMessage),
+        requestBody: sanitizeOperationsLog(row.payload),
       })),
       ...orderRows.map((row) => ({
         group: "orders" as const,

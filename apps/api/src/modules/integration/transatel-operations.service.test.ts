@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TransatelOperationsService } from "./transatel-operations.service.js";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { ConnectivityService } from "./connectivity.service.js";
+import type { OrdersService } from "../orders/orders.service.js";
 
 function setup(
   providerResult: unknown = {
@@ -33,6 +34,7 @@ function setup(
     transatelLifecycleOperation: { update: lifecycleUpdate },
     order: { update: vi.fn().mockResolvedValue({}) },
     esimInventory: { update: vi.fn().mockResolvedValue({}) },
+    subscription: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     auditLog: { create: auditCreate },
   };
   const prisma = {
@@ -53,7 +55,10 @@ function setup(
             subscriptions: [{ providerSubscriptionId: "sub-1" }],
           },
         }),
+      update: vi.fn().mockResolvedValue({}),
     },
+    esimInventory: { update: vi.fn().mockResolvedValue({}) },
+    subscription: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     transatelLifecycleOperation: {
       create: lifecycleCreate,
       update: lifecycleUpdate,
@@ -70,14 +75,18 @@ function setup(
     suspend: vi.fn().mockResolvedValue(providerResult),
     terminate: vi.fn().mockResolvedValue(providerResult),
   } as unknown as ConnectivityService;
+  const orders = {
+    applyProviderEvent: vi.fn().mockResolvedValue({ accepted: true }),
+  } as unknown as OrdersService;
   return {
-    service: new TransatelOperationsService(prisma, connectivity),
+    service: new TransatelOperationsService(prisma, connectivity, orders),
     prisma,
     connectivity,
     lifecycleCreate,
     lifecycleUpdate,
     auditCreate,
     tx,
+    orders,
   };
 }
 
@@ -166,6 +175,95 @@ describe("TransatelOperationsService lifecycle", () => {
   });
 });
 
+describe("TransatelOperationsService reconciliation", () => {
+  it("activates an order only when its Transatel subscription is active", async () => {
+    const context = setup();
+    (
+      context.prisma.order.findUnique as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      id: "order-1",
+      status: "QR_READY",
+      providerStatus: "ENABLED",
+      providerSubscriptionId: "sub-1",
+      inventory: {
+        id: "inventory-1",
+        iccid: "8988247076000000319",
+        status: "ASSIGNED",
+      },
+      customerEsim: { id: "customer-esim-1", subscriptions: [] },
+      transatelLifecycleOperations: [],
+    });
+    context.connectivity.getEsimDetails = vi.fn().mockResolvedValue({
+      subscriptionId: "8988247076000000319",
+      status: "enabled",
+    });
+    context.connectivity.getUsage = vi.fn().mockResolvedValue({
+      usedMb: 100,
+      totalMb: 500,
+      usageAvailable: true,
+      subscriptions: [
+        {
+          providerSubscriptionId: "sub-1",
+          status: "active",
+          usedMb: 100,
+          totalMb: 500,
+        },
+      ],
+    });
+
+    await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      esimProfileStatus: "ENABLED",
+      subscriptionStatus: "ACTIVE",
+      usageAvailable: true,
+    });
+    expect(context.orders.applyProviderEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "ACTIVATED", subscriptionId: "sub-1" }),
+    );
+  });
+
+  it("does not activate an order from the eSIM profile status alone", async () => {
+    const context = setup();
+    (
+      context.prisma.order.findUnique as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      id: "order-1",
+      status: "QR_READY",
+      providerStatus: "ENABLED",
+      providerSubscriptionId: "sub-1",
+      inventory: {
+        id: "inventory-1",
+        iccid: "8988247076000000319",
+        status: "ASSIGNED",
+      },
+      customerEsim: { id: "customer-esim-1", subscriptions: [] },
+      transatelLifecycleOperations: [],
+    });
+    context.connectivity.getEsimDetails = vi.fn().mockResolvedValue({
+      subscriptionId: "8988247076000000319",
+      status: "enabled",
+    });
+    context.connectivity.getUsage = vi.fn().mockResolvedValue({
+      usedMb: 0,
+      totalMb: 500,
+      usageAvailable: true,
+      subscriptions: [
+        {
+          providerSubscriptionId: "sub-1",
+          status: "readyForUse",
+          usedMb: 0,
+          totalMb: 500,
+        },
+      ],
+    });
+
+    await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      esimProfileStatus: "ENABLED",
+      subscriptionStatus: "READYFORUSE",
+    });
+    expect(context.orders.applyProviderEvent).not.toHaveBeenCalled();
+  });
+});
+
 describe("TransatelOperationsService dashboard search", () => {
   it("applies each table search on the server before limiting results", async () => {
     const subscriptionFindMany = vi.fn().mockResolvedValue([]);
@@ -191,7 +289,11 @@ describe("TransatelOperationsService dashboard search", () => {
     const connectivity = {
       transatelHealth: vi.fn().mockResolvedValue({ ok: true }),
     } as unknown as ConnectivityService;
-    const service = new TransatelOperationsService(prisma, connectivity);
+    const service = new TransatelOperationsService(
+      prisma,
+      connectivity,
+      {} as OrdersService,
+    );
 
     await service.dashboard({ scope: "subscribers", q: "VC-2026-SEARCH" });
     expect(subscriptionFindMany).toHaveBeenLastCalledWith(
@@ -230,5 +332,59 @@ describe("TransatelOperationsService dashboard search", () => {
         take: 50,
       }),
     );
+  });
+});
+
+describe("TransatelOperationsService usage sync", () => {
+  it("persists the provider balance for each active subscription", async () => {
+    const subscriptionUpdate = vi.fn().mockResolvedValue({});
+    const prisma = {
+      enabled: true,
+      subscription: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "subscription-1",
+            providerSubscriptionId: "provider-subscription-1",
+            customerEsim: { inventory: { iccid: "8988247076000000319" } },
+          },
+        ]),
+        update: subscriptionUpdate,
+      },
+    } as unknown as PrismaService;
+    const connectivity = {
+      getUsage: vi.fn().mockResolvedValue({
+        usedMb: 1024,
+        totalMb: 5120,
+        subscriptions: [
+          {
+            providerSubscriptionId: "provider-subscription-1",
+            status: "active",
+            usedMb: 1024,
+            totalMb: 5120,
+            priority: 1,
+          },
+        ],
+      }),
+    } as unknown as ConnectivityService;
+    const service = new TransatelOperationsService(
+      prisma,
+      connectivity,
+      {} as OrdersService,
+    );
+
+    await expect(service.syncAllUsage()).resolves.toEqual({
+      synced: 1,
+      failed: 0,
+    });
+    expect(subscriptionUpdate).toHaveBeenCalledWith({
+      where: { id: "subscription-1" },
+      data: expect.objectContaining({
+        usedMb: 1024,
+        totalMb: 5120,
+        usageLastCheckedAt: expect.any(Date),
+        providerLastSeenAt: expect.any(Date),
+        assignmentVerificationStatus: "VERIFIED",
+      }),
+    });
   });
 });

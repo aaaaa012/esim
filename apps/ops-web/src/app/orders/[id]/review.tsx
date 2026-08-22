@@ -148,11 +148,36 @@ export default function OrderReview({ id }: { id: string }) {
 
   if (!order)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> {error || "Loading secure order…"}
+      <>
+        <ErrorDialog error={error} onClose={() => setError("")} />
+        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
+          {error ? (
+            <>
+              <p className="max-w-md text-center text-sm text-muted-foreground">
+                Could not load this order. Please try again.
+              </p>
+              <Button
+                onClick={() => {
+                  setError("");
+                  void load().catch((loadError: unknown) =>
+                    setError(
+                      loadError instanceof Error
+                        ? loadError.message
+                        : "Could not load this order",
+                    ),
+                  );
+                }}
+              >
+                Try again
+              </Button>
+            </>
+          ) : (
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <Spinner /> Loading secure order…
+            </div>
+          )}
         </div>
-      </div>
+      </>
     );
 
   const canAdvanceOrder = order.status === "REVIEW_PENDING";

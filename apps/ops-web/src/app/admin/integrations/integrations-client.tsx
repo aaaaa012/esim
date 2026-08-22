@@ -127,7 +127,9 @@ export default function IntegrationsClient() {
       setBusy("");
     }
   };
-  const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
+  const transatelAction = async (
+    action: "sync-catalog" | "sync-usage" | "ensure-webhook",
+  ) => {
     setBusy(`transatel:${action}`);
     try {
       await request(`/admin/integrations/transatel/${action}`, {
@@ -136,7 +138,9 @@ export default function IntegrationsClient() {
       toast.success(
         action === "sync-catalog"
           ? "Plans synced with the network provider"
-          : "Automatic notifications set up",
+          : action === "sync-usage"
+            ? "Data usage synchronized with network provider"
+            : "Automatic notifications set up",
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
@@ -276,6 +280,19 @@ export default function IntegrationsClient() {
                     <Button
                       size="sm"
                       variant="outline"
+                      onClick={() => transatelAction("sync-usage")}
+                      disabled={busy === "transatel:sync-usage"}
+                    >
+                      {busy === "transatel:sync-usage" ? (
+                        <Spinner />
+                      ) : (
+                        <RefreshCcw className="size-4" />
+                      )}
+                      Sync usage
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
                       onClick={() => transatelAction("ensure-webhook")}
                       disabled={busy === "transatel:ensure-webhook"}
                     >
@@ -344,67 +361,6 @@ export default function IntegrationsClient() {
           ))}
         </div>
       )}
-      <Panel
-        className="mt-6 hidden"
-        title="Integration call log"
-        description="Outbound integration requests and outcomes (most recent 200)."
-        actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void refreshLogs()}
-            disabled={logsBusy}
-          >
-            {logsBusy ? <Spinner /> : <History className="size-4" />}
-            Refresh
-          </Button>
-        }
-        noPadding
-      >
-        {!logs.length ? (
-          <EmptyState title="No integration calls recorded yet" />
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Time</TableHead>
-                <TableHead>Operation</TableHead>
-                <TableHead>Endpoint</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Duration</TableHead>
-                <TableHead>Error</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {logs.map((log) => (
-                <TableRow key={log.id}>
-                  <TableCell className="text-muted-foreground">
-                    {new Date(log.createdAt).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="font-medium">{log.operation}</TableCell>
-                  <TableCell>
-                    <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-                      {log.method} {log.endpoint}
-                    </code>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge
-                      label={log.status}
-                      tone={log.status === "SUCCESS" ? "success" : "warning"}
-                    />
-                  </TableCell>
-                  <TableCell className="tabular-nums">
-                    {log.durationMs != null ? `${log.durationMs}ms` : "—"}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {log.errorMessage ?? log.errorCode ?? "—"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </Panel>
     </>
   );
 }

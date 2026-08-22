@@ -11,10 +11,10 @@ describe('ErrorModal', () => {
 
   it('shows the customer-safe error message in an accessible dialog', () => {
     render(<ErrorModal error="Your activation QR could not be loaded." onClose={() => {}} />);
-    const dialog = screen.getByRole('dialog');
+    const dialog = screen.getByRole('alertdialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByText('Your activation QR could not be loaded.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /dismiss error/i })).toHaveFocus();
+    expect(screen.getByRole('button', { name: /dismiss message/i })).toHaveFocus();
   });
 
   it('closes on Escape and on backdrop click', () => {
@@ -29,7 +29,7 @@ describe('ErrorModal', () => {
   it('ignores clicks that originate inside the dialog itself', () => {
     const onClose = vi.fn();
     const { container } = render(<ErrorModal error="boom" onClose={onClose} />);
-    fireEvent.mouseDown(screen.getByRole('dialog'));
+    fireEvent.mouseDown(screen.getByRole('alertdialog'));
     expect(onClose).not.toHaveBeenCalled();
     void container;
   });

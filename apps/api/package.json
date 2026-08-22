@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "nest build",
-    "dev": "node --env-file-if-exists=../../.env node_modules/@nestjs/cli/bin/nest.js start --watch",
+    "dev": "node scripts/dev-with-ocr.mjs",
     "start": "node dist/src/main.js",
     "start:with-migrations": "pnpm prisma:deploy && node dist/src/main.js",
     "start:ocr-worker": "node dist/src/ocr-worker.js",

@@ -1736,17 +1736,13 @@ export class PartnerService {
         await this.verifyUploadedDocument(document.privateAssetId);
       }
       if (
-        ![
-          "VERIFIED",
-          "MANUAL_REVIEW",
-          "MANUALLY_APPROVED",
-          "SKIPPED",
-          "OCR_BACKGROUND",
-        ].includes(order.documentReviewStatus)
+        !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+          order.documentReviewStatus,
+        )
       )
         throw new BadRequestException({
           code: "PASSPORT_VERIFICATION_REQUIRED",
-          message: "Passport verification is required before completion",
+          message: "Passport verification must complete before payment",
         });
       await this.applicationOrders.assertInventoryAvailableForNewOrder();
     }

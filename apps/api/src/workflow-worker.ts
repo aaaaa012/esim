@@ -5,9 +5,7 @@ import { AppModule } from "./app.module.js";
 import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
 
 async function bootstrap() {
-  const app = await NestFactory.createApplicationContext(AppModule, {
-    bufferLogs: true,
-  });
+  const app = await NestFactory.createApplicationContext(AppModule);
   app.enableShutdownHooks();
   const resilience = app.get(ProductionResilienceService);
   const beat = () =>

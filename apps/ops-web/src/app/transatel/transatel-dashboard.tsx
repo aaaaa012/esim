@@ -303,10 +303,34 @@ export default function TransatelDashboard() {
         },
       ]
     : [];
+
+  const syncUsage = async () => {
+    setBusy("sync-usage");
+    try {
+      const response = await authFetch(
+        `${API}/operations/transatel/sync-usage`,
+        { method: "POST" },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Usage sync failed");
+      toast.success(
+        `Usage synchronization complete (${value.data?.synced ?? 0} active subscriptions updated)`,
+      );
+      void load();
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error ? cause.message : "Usage sync failed",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
   return (
     <>
       <PageHeader
-            title="Provider status"
+        title="Provider status"
         description="See the network status, customer plans, stock checks and any issues needing your attention."
         badge={
           data ? (
@@ -318,6 +342,18 @@ export default function TransatelDashboard() {
         }
         actions={
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              disabled={busy === "sync-usage"}
+              onClick={() => void syncUsage()}
+            >
+              {busy === "sync-usage" ? (
+                <Spinner />
+              ) : (
+                <RefreshCcw className="size-4" />
+              )}
+              Sync usage
+            </Button>
             <Button
               variant="outline"
               disabled={busy === "diagnostics"}
@@ -442,7 +478,7 @@ export default function TransatelDashboard() {
                         <TableHead>eSIM</TableHead>
                         <TableHead>Plan</TableHead>
                         <TableHead>Balance</TableHead>
-                        <TableHead>Status</TableHead>
+                        <TableHead>eSIM / Subscription</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -468,13 +504,21 @@ export default function TransatelDashboard() {
                             </p>
                           </TableCell>
                           <TableCell>
-                            <p className="font-medium">
-                              {row.remainingMb.toLocaleString()} MB left
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {row.usedMb.toLocaleString()} /{" "}
-                              {row.totalMb.toLocaleString()} MB
-                            </p>
+                            {row.usageLastCheckedAt ? (
+                              <>
+                                <p className="font-medium">
+                                  {row.remainingMb.toLocaleString()} MB left
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {row.usedMb.toLocaleString()} /{" "}
+                                  {row.totalMb.toLocaleString()} MB
+                                </p>
+                              </>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">
+                                Usage not available yet
+                              </p>
+                            )}
                             <Button
                               className="mt-1 h-7 px-2 text-xs"
                               variant="ghost"
@@ -485,9 +529,22 @@ export default function TransatelDashboard() {
                             </Button>
                           </TableCell>
                           <TableCell>
-                            <StatusBadge
-                              label={row.providerStatus ?? row.status}
-                            />
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="text-muted-foreground">
+                                  eSIM
+                                </span>
+                                <StatusBadge
+                                  label={row.providerStatus ?? "UNKNOWN"}
+                                />
+                              </div>
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="text-muted-foreground">
+                                  Plan
+                                </span>
+                                <StatusBadge label={row.status} />
+                              </div>
+                            </div>
                           </TableCell>
                           <TableCell className="text-right">
                             <LifecycleActions

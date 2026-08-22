@@ -163,13 +163,13 @@ export const parseMrz = (ocrText: string): ParsedMrz | null => {
 
   const splitName = (zone: string): { surname: string; givenNames: string } => {
     const separator = zone.indexOf("<<");
-    if (separator < 0) return { surname: zone, givenNames: "" };
+    if (separator < 0) return { surname: zone.replace(/<+$/g, "").trim(), givenNames: "" };
+    // ICAO fillers between name components stand for spaces; trailing fillers
+    // are padding only.
+    const clean = (value: string) => value.replace(/<+/g, " ").trim();
     return {
-      surname: zone.slice(0, separator).replace(/</g, "").trim(),
-      givenNames: zone
-        .slice(separator + 2)
-        .replace(/</g, "")
-        .trim(),
+      surname: clean(zone.slice(0, separator)),
+      givenNames: clean(zone.slice(separator + 2)),
     };
   };
 
@@ -177,10 +177,16 @@ export const parseMrz = (ocrText: string): ParsedMrz | null => {
   const passportNumber = field(1, 9, 10);
   const dateOfBirth = field(14, 6, 20);
   const expiryDate = field(22, 6, 28);
+  // ICAO 9303 part 4 section 4.3.2: the TD3 composite check digit in position
+  // 44 validates ONLY positions 1-10, 14-20 and 22-43 — nationality (11-13)
+  // and sex (21) are excluded. Concatenating those three runs keeps the 7-3-1
+  // weighting continuous across the joins.
+  const compositeSource =
+    line2.slice(0, 10) + line2.slice(13, 20) + line2.slice(21, 43);
   const compositeValid =
     line2[43] !== undefined &&
     /^\d$/.test(line2[43]) &&
-    mrzCheckDigit(line2.slice(0, 43)) === Number(line2[43]);
+    mrzCheckDigit(compositeSource) === Number(line2[43]);
 
   return {
     line1: line1 ?? "",

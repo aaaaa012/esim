@@ -95,9 +95,10 @@ export class PassportOcrProcessor implements OnModuleInit {
       );
     const verified =
       result.status === "VERIFIED" || result.status === "SKIPPED";
+    const partial = result.status === "PARTIAL";
     const reviewStatus = verified
       ? "VERIFIED"
-      : technicalFailure
+      : partial || technicalFailure
         ? "MANUAL_REVIEW"
         : "REUPLOAD_REQUIRED";
     await this.prisma.$transaction([
@@ -106,7 +107,7 @@ export class PassportOcrProcessor implements OnModuleInit {
         data: {
           status: verified
             ? "APPROVED"
-            : technicalFailure
+            : partial || technicalFailure
               ? "PENDING"
               : "REUPLOAD_REQUIRED",
           passportVerificationStatus: result.status,
@@ -127,9 +128,11 @@ export class PassportOcrProcessor implements OnModuleInit {
           toStatus: order.status,
           reason: verified
             ? "Passport verified automatically"
-            : technicalFailure
-              ? "OCR technical failure; routed to non-blocking manual review"
-              : "Passport verification failed; replacement requested",
+            : partial
+              ? "Passport partially matched; routed to manual review"
+              : technicalFailure
+                ? "OCR technical failure; routed to non-blocking manual review"
+                : "Passport verification failed; replacement requested",
           metadata: { documentReviewStatus: reviewStatus },
         },
       }),
@@ -144,19 +147,23 @@ export class PassportOcrProcessor implements OnModuleInit {
     } else {
       await this.resilience.attention({
         dedupeKey: `document-review:${order.id}`,
-        category: technicalFailure
-          ? "DOCUMENT_MANUAL_REVIEW"
-          : "DOCUMENT_REUPLOAD",
+        category:
+          partial || technicalFailure
+            ? "DOCUMENT_MANUAL_REVIEW"
+            : "DOCUMENT_REUPLOAD",
         entityType: "Order",
         entityId: order.id,
         orderId: order.id,
-        summary: technicalFailure
-          ? "Document processing needs manual review"
-          : "Document verification requires a clearer upload",
+        summary:
+          partial || technicalFailure
+            ? "Document processing needs manual review"
+            : "Document verification requires a clearer upload",
         ...(result.detail ? { detail: result.detail } : {}),
         failureCategory: technicalFailure
           ? "OCR_TECHNICAL_FAILURE"
-          : "OCR_MISMATCH",
+          : partial
+            ? "OCR_PARTIAL_MATCH"
+            : "OCR_MISMATCH",
         lastSuccessfulStep: "DOCUMENTS_UPLOADED",
         availableActions: [],
       });
@@ -256,12 +263,20 @@ export class PassportOcrProcessor implements OnModuleInit {
         );
       const accepted =
         result.status === "VERIFIED" || result.status === "SKIPPED";
+      // A partial read (identity matched, number unreadable) is not the
+      // traveller's fault; route it to manual review instead of rejecting it.
+      const partial = result.status === "PARTIAL";
+      const intentStatus = accepted
+        ? "VERIFIED"
+        : partial
+          ? "PENDING"
+          : "INVALID";
       await this.prisma.$transaction([
         this.prisma.partnerDocumentUploadIntent.update({
           where: { id: passport.id },
           data: {
-            verificationStatus: accepted ? "VERIFIED" : "INVALID",
-            verificationCode: accepted ? null : result.status,
+            verificationStatus: intentStatus,
+            verificationCode: accepted ? null : (result.status ?? null),
             verificationResult: {
               method: result.method,
               matchedFields: result.matchedFields,
@@ -273,8 +288,9 @@ export class PassportOcrProcessor implements OnModuleInit {
         this.prisma.partnerDocumentVerification.update({
           where: { id: verification.id },
           data: {
-            status: accepted ? "VERIFIED" : "INVALID",
-            failureCode: accepted ? null : "PASSPORT_REUPLOAD_REQUIRED",
+            status: accepted ? "VERIFIED" : partial ? "MANUAL_REVIEW" : "INVALID",
+            failureCode:
+              accepted || partial ? null : "PASSPORT_REUPLOAD_REQUIRED",
           },
         }),
       ]);
@@ -283,7 +299,11 @@ export class PassportOcrProcessor implements OnModuleInit {
           this.prisma.order.update({
             where: { id: verification.consumedOrderId },
             data: {
-              documentReviewStatus: accepted ? "VERIFIED" : "REUPLOAD_REQUIRED",
+              documentReviewStatus: accepted
+                ? "VERIFIED"
+                : partial
+                  ? "MANUAL_REVIEW"
+                  : "REUPLOAD_REQUIRED",
             },
           }),
           this.prisma.travelerDocument.updateMany({
@@ -292,7 +312,7 @@ export class PassportOcrProcessor implements OnModuleInit {
               type: DocumentType.PASSPORT,
             },
             data: {
-              status: accepted ? "APPROVED" : "REUPLOAD_REQUIRED",
+              status: accepted ? "APPROVED" : partial ? "PENDING" : "REUPLOAD_REQUIRED",
               passportVerificationStatus: result.status,
               passportVerificationMethod: result.method,
               passportMatchedFields:
@@ -305,12 +325,16 @@ export class PassportOcrProcessor implements OnModuleInit {
         if (!accepted)
           await this.resilience.attention({
             dedupeKey: `document-review:${verification.consumedOrderId}`,
-            category: "DOCUMENT_REUPLOAD",
+            category: partial
+              ? "DOCUMENT_MANUAL_REVIEW"
+              : "DOCUMENT_REUPLOAD",
             entityType: "Order",
             entityId: verification.consumedOrderId,
             orderId: verification.consumedOrderId,
-            summary: "Document verification requires a clearer upload",
-            failureCategory: "OCR_MISMATCH",
+            summary: partial
+              ? "Document processing needs manual review"
+              : "Document verification requires a clearer upload",
+            failureCategory: partial ? "OCR_PARTIAL_MATCH" : "OCR_MISMATCH",
             lastSuccessfulStep: "ORDER_ACCEPTED",
             availableActions: [],
           });
@@ -321,7 +345,9 @@ export class PassportOcrProcessor implements OnModuleInit {
         verification.externalOrderId,
         accepted
           ? "document.verification.verified"
-          : "document.verification.reupload_required",
+          : partial
+            ? "document.verification.manual_review"
+            : "document.verification.reupload_required",
       );
       return result;
     } catch (error) {

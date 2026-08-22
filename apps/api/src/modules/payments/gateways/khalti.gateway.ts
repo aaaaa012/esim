@@ -195,7 +195,7 @@ export class KhaltiGateway implements PaymentGateway {
       return Object.fromEntries(
         Object.entries(value as Record<string, unknown>).map(([key, item]) => [
           key,
-          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key)$/i.test(key)
+          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|pidx|purchase_?order_?id|transaction_?id)$/i.test(key)
             ? "[REDACTED]"
             : this.redactLogBody(item),
         ]),

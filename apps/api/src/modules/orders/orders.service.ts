@@ -196,7 +196,11 @@ export class OrdersService implements OnModuleInit {
       throw new NotFoundException("Order not found");
     return order;
   }
-  view(id: string, ownerId?: string) {
+  async view(id: string, ownerId?: string) {
+    // OCR workers update persistent orders directly. Refresh before serving a
+    // checkout view so a completed verification cannot remain hidden behind
+    // this process's in-memory order cache.
+    await this.refreshOne(id, true);
     return ownerId
       ? this.redact(this.get(id, ownerId))
       : this.expand(this.get(id));
@@ -482,6 +486,26 @@ export class OrdersService implements OnModuleInit {
         }
       : null;
   }
+  private topUpLookupWhere(mobile: string) {
+    const variants = [...msisdnVariants(mobile)];
+    return {
+      status: "COMPLETED" as const,
+      OR: [
+        { traveler: { is: { mobile: { in: variants } } } },
+        {
+          customerEsim: {
+            is: { inventory: { is: { msisdn: { in: variants } } } },
+          },
+        },
+      ],
+    };
+  }
+  private matchesTopUpLookup(
+    target: string,
+    values: Array<string | null | undefined>,
+  ) {
+    return values.some((value) => value && normalizeMsisdn(value) === target);
+  }
   private async hasCompletedOrderForOwner(ownerId: string) {
     const anyCompleted = [...this.orders.values()].some(
       (order) =>
@@ -665,6 +689,24 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException(
         "Confirmed passport and traveller details are required",
       );
+    const persistedPassportVerdict = order.passportVerification?.status;
+    if (
+      persistedPassportVerdict === "VERIFIED" ||
+      persistedPassportVerdict === "SKIPPED"
+    ) {
+      const terminalReviewStatus = persistedPassportVerdict;
+      if (order.documentReviewStatus !== terminalReviewStatus) {
+        order.documentReviewStatus = terminalReviewStatus;
+        await this.persistence.save(order);
+      }
+      return this.redact(order);
+    }
+    if (
+      ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        order.documentReviewStatus ?? "",
+      )
+    )
+      return this.redact(order);
     const config = this.prisma.enabled
       ? await this.prisma.platformConfiguration.upsert({
           where: { id: "platform" },
@@ -704,12 +746,29 @@ export class OrdersService implements OnModuleInit {
       await this.persistence.save(order);
       return this.redact(order);
     }
+    // A worker can be unavailable while an order transitions to OCR_BACKGROUND.
+    // A later customer recheck is a recovery signal: reset the bounded waiting
+    // window and submit a fresh, idempotent job rather than leaving the order
+    // permanently blocked on a job that was never consumed.
+    const reviewStartedAt = Date.parse(order.documentReviewStartedAt ?? "");
+    const recoveryDelayMs = Math.max(config.ocrCheckoutWaitMs * 4, 30_000);
+    const requeueBackgroundVerification =
+      order.documentReviewStatus === "OCR_BACKGROUND" ||
+      (order.documentReviewStatus === "OCR_PENDING" &&
+        Number.isFinite(reviewStartedAt) &&
+        now.getTime() - reviewStartedAt >= recoveryDelayMs);
     if (
       !["OCR_PENDING", "OCR_BACKGROUND"].includes(
         order.documentReviewStatus ?? "",
-      )
+      ) || requeueBackgroundVerification
     ) {
       order.documentReviewStatus = "OCR_PENDING";
+      if (requeueBackgroundVerification) {
+        order.documentReviewStartedAt = now.toISOString();
+        order.documentCheckoutReleaseAt = new Date(
+          now.getTime() + config.ocrCheckoutWaitMs,
+        ).toISOString();
+      }
       await this.persistence.save(order);
       try {
         await this.queues.add(
@@ -771,31 +830,19 @@ export class OrdersService implements OnModuleInit {
         document.uploadVerified = true;
       });
       const review = order.documentReviewStatus;
-      const timedOut = Boolean(
-        order.documentCheckoutReleaseAt &&
-        new Date(order.documentCheckoutReleaseAt) <= new Date(),
-      );
       if (review === "REUPLOAD_REQUIRED")
         throw new ApiException({
           code: "PASSPORT_VERIFICATION_REQUIRED",
           message: "Upload a clearer passport before payment",
         });
-      if (
-        ![
-          "VERIFIED",
-          "MANUAL_REVIEW",
-          "MANUALLY_APPROVED",
-          "SKIPPED",
-          "OCR_BACKGROUND",
-        ].includes(review ?? "") &&
-        !(review === "OCR_PENDING" && timedOut)
-      )
+      if (!["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(review ?? ""))
         throw new ApiException({
           code: "PASSPORT_VERIFICATION_REQUIRED",
-          message: "Passport verification is still processing",
+          message:
+            review === "OCR_PENDING" || review === "OCR_BACKGROUND"
+              ? "Passport verification must complete before payment"
+              : "Passport verification is required before payment",
         });
-      if (review === "OCR_PENDING" && timedOut)
-        order.documentReviewStatus = "OCR_BACKGROUND";
     }
     if (order.status !== OrderStatus.PAYMENT_PENDING)
       this.transition(order, OrderStatus.PAYMENT_PENDING);
@@ -1056,12 +1103,8 @@ export class OrdersService implements OnModuleInit {
         ...this.topUpSubscriber(fromOrders, includeIdentity),
       };
     if (this.prisma.enabled) {
-      const variants = [...msisdnVariants(mobile)];
       const dbOrder = await this.prisma.order.findFirst({
-        where: {
-          status: "COMPLETED",
-          traveler: { is: { mobile: { in: variants } } },
-        },
+        where: this.topUpLookupWhere(mobile),
         include: {
           plan: { include: { country: true } },
           customerEsim: { include: { inventory: true, subscriptions: true } },
@@ -1071,7 +1114,10 @@ export class OrdersService implements OnModuleInit {
       });
       if (
         dbOrder?.traveler &&
-        normalizeMsisdn(dbOrder.traveler.mobile) === target
+        this.matchesTopUpLookup(target, [
+          dbOrder.traveler.mobile,
+          dbOrder.customerEsim?.inventory?.msisdn,
+        ])
       ) {
         return {
           found: true,
@@ -1127,6 +1173,7 @@ export class OrdersService implements OnModuleInit {
       customerEsim?: {
         inventory: {
           iccid: string;
+          msisdn: string | null;
           status: string;
           activatedAt: Date | null;
           expiresAt: Date | null;
@@ -1247,12 +1294,8 @@ export class OrdersService implements OnModuleInit {
         inventory: null,
       };
     }
-    const variants = [...msisdnVariants(mobile)];
     const prior = await this.prisma.order.findFirst({
-      where: {
-        status: "COMPLETED",
-        traveler: { is: { mobile: { in: variants } } },
-      },
+      where: this.topUpLookupWhere(mobile),
       include: {
         plan: { include: { country: true } },
         customerEsim: { include: { inventory: true } },
@@ -1260,7 +1303,13 @@ export class OrdersService implements OnModuleInit {
       },
       orderBy: { createdAt: "desc" },
     });
-    if (!prior?.traveler || normalizeMsisdn(prior.traveler.mobile) !== target)
+    if (
+      !prior?.traveler ||
+      !this.matchesTopUpLookup(target, [
+        prior.traveler.mobile,
+        prior.customerEsim?.inventory?.msisdn,
+      ])
+    )
       return null;
     return {
       planCountryCode: prior.plan.country.isoCode,
@@ -1993,6 +2042,7 @@ export class OrdersService implements OnModuleInit {
     const lifecycle = {
       provider,
       ...(event.iccid ? { iccid: event.iccid } : {}),
+      ...(event.msisdn ? { msisdn: event.msisdn } : {}),
       ...(event.status ? { status: event.status } : {}),
       ...(event.subscriptionId ? { subscriptionId: event.subscriptionId } : {}),
       ...(event.activatedAt ? { activatedAt: event.activatedAt } : {}),
@@ -2189,10 +2239,10 @@ export class OrdersService implements OnModuleInit {
   }
   /**
    * Reconciliation sweep for QR_READY orders whose activation window has
-   * elapsed. Instead of failing immediately it re-queries the provider details
-   * endpoint a bounded number of times, so a dropped/lost ACTIVATED webhook is
-   * recovered when the provider now reports activation details; otherwise the
-   * order is failed and released after ACTIVATION_REFETCH_ATTEMPTS.
+   * elapsed. Transatel eSIM-profile state and OCS-subscription state are
+   * deliberately checked separately: an enabled profile is not proof that the
+   * data subscription has started. Only an active OCS subscription completes
+   * the order.
    */
   async reconcileStaleActivationOrders() {
     const now = Date.now();
@@ -2217,8 +2267,24 @@ export class OrdersService implements OnModuleInit {
           const details = await this.connectivity.getEsimDetails(
             await this.providerRefFor(order),
           );
-          const qrPayload = (details as { qrPayload?: string }).qrPayload;
-          if (qrPayload) {
+          const qrPayload =
+            (details as { qrPayload?: string }).qrPayload ?? order.qrPayload;
+          const provider = this.connectivity.descriptor().provider;
+          const subscriptionActive =
+            provider === "TRANSATEL"
+              ? (
+                  await this.connectivity.getUsage(
+                    await this.providerRefFor(order),
+                  )
+                ).subscriptions?.some(
+                  (subscription) =>
+                    (!order.providerSubscriptionId ||
+                      subscription.providerSubscriptionId ===
+                        order.providerSubscriptionId) &&
+                    subscription.status.toUpperCase() === "ACTIVE",
+                ) === true
+              : ["ACTIVE", "ACTIVATED"].includes(details.status.toUpperCase());
+          if (qrPayload && subscriptionActive) {
             await this.completeProviderActivation(order, {
               qrPayload,
               ...(order.providerSubscriptionId
@@ -2233,7 +2299,7 @@ export class OrdersService implements OnModuleInit {
             );
           } else {
             this.logger.debug(
-              `Order ${order.orderNumber} (${order.id}) not active at provider yet (re-fetch attempt ${attempt}/${this.maxActivationRefetches})`,
+              `Order ${order.orderNumber} (${order.id}) data subscription is not active at provider yet (re-fetch attempt ${attempt}/${this.maxActivationRefetches})`,
             );
           }
           continue;

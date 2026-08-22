@@ -7,6 +7,7 @@ import {
   DocumentReviewPolicy,
   PlanStatus,
   StaffInvitationStatus,
+  SubscriptionStatus,
   UserRoleName,
   UserStatus,
   Prisma,
@@ -671,6 +672,32 @@ export class AdminService {
   async syncTransatelCatalog() {
     this.requireTransatel();
     return this.connectivity.syncCatalog();
+  }
+
+  async syncTransatelUsage() {
+    this.requireTransatel();
+    if (!this.prisma.enabled) return { synced: 0, failed: 0 };
+    const subscriptions = await this.prisma.subscription.findMany({
+      where: { status: SubscriptionStatus.ACTIVE },
+      select: {
+        id: true,
+        customerEsim: { select: { inventory: { select: { iccid: true } } } },
+      },
+      take: 200,
+    });
+    let synced = 0;
+    let failed = 0;
+    for (const sub of subscriptions) {
+      const iccid = sub.customerEsim?.inventory?.iccid;
+      if (!iccid) continue;
+      try {
+        await this.connectivity.getUsage(iccid);
+        synced += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { synced, failed };
   }
 
   /**

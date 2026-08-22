@@ -137,15 +137,59 @@ export const comparePassport = (
 };
 
 /** The passport number is the primary signal; the order only passes when at
- *  least one more field (name, date of birth or expiry) also matches. */
+ *  least one more field (name, date of birth or expiry) also matches. When the
+ *  number could not be read but a strong identity pair did match (a name plus
+ *  the date of birth), the verdict is PARTIAL so ops can review instead of
+ *  trapping the traveller in a reupload loop their details cannot fix. */
 export const verdictFor = (
   matchedFields: PassportField[],
-): PassportVerificationStatus =>
-  matchedFields.includes("passportNumber")
-    ? matchedFields.length >= 2
-      ? "VERIFIED"
-      : "PARTIAL"
+): PassportVerificationStatus => {
+  if (matchedFields.includes("passportNumber"))
+    return matchedFields.length >= 2 ? "VERIFIED" : "PARTIAL";
+  const nameMatch =
+    matchedFields.includes("surname") || matchedFields.includes("givenNames");
+  const strongIdentityPair =
+    nameMatch && matchedFields.includes("dateOfBirth");
+  return strongIdentityPair && matchedFields.length >= 2
+    ? "PARTIAL"
     : "FAILED";
+};
+
+/** Reads JPEG (SOF marker) or PNG (IHDR) pixel dimensions without pulling in
+ *  an image dependency; used to aim the MRZ second pass at the bottom band of
+ *  the document photo. Returns null for anything it cannot parse. */
+export const imageDimensions = (
+  bytes: Buffer,
+): { width: number; height: number } | null => {
+  if (bytes.length >= 24 && bytes.readUInt32BE(0) === 0x89504e47)
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      const marker = bytes[offset + 1];
+      if (
+        marker !== undefined &&
+        marker >= 0xc0 &&
+        marker <= 0xcf &&
+        marker !== 0xc4 &&
+        marker !== 0xc8 &&
+        marker !== 0xcc
+      )
+        return {
+          height: bytes.readUInt16BE(offset + 5),
+          width: bytes.readUInt16BE(offset + 7),
+        };
+      const length = bytes.readUInt16BE(offset + 2);
+      if (!length) return null;
+      offset += 2 + length;
+    }
+  }
+  return null;
+};
 
 /**
  * Server-side passport verification used to gate checkout before payment.
@@ -172,6 +216,11 @@ export class PassportVerificationService implements OnModuleDestroy {
   private readonly timeoutMs = Number(
     process.env.PASSPORT_OCR_TIMEOUT_MS ?? 30_000,
   );
+  /** Fraction of the image height re-OCR'd when hunting for the MRZ band. */
+  private static readonly MRZ_BAND_RATIO = 0.25;
+  /** ICAO MRZ alphabet; also used as the second-pass Tesseract whitelist. */
+  private static readonly MRZ_ALPHABET =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
 
   constructor(private readonly storage: CloudinaryStorageService) {}
 
@@ -293,8 +342,23 @@ export class PassportVerificationService implements OnModuleDestroy {
         if (timeout) clearTimeout(timeout);
       });
       const { data } = result;
+      let text = data.text ?? "";
+      try {
+        const mrzText = await this.mrzBandPass(worker, image);
+        if (mrzText.trim()) text += `\n${mrzText}`;
+      } catch (bandError) {
+        // The band pass is best effort. A wedged restricted pass would poison
+        // every later request sharing this worker, so discard it — but keep
+        // the successful full-page reading for comparison.
+        this.logger.warn(
+          `MRZ band OCR failed (continuing with full-page text): ${bandError instanceof Error ? bandError.message : "unknown"}`,
+        );
+        await worker.terminate().catch(() => undefined);
+        this.worker = null;
+        this.workerPromise = null;
+      }
       return {
-        text: data.text ?? "",
+        text,
         confidence:
           typeof data.confidence === "number" ? data.confidence : undefined,
       };
@@ -307,6 +371,53 @@ export class PassportVerificationService implements OnModuleDestroy {
       throw error;
     } finally {
       this.recognizing = false;
+    }
+  }
+
+  /**
+   * Second recognition pass over the bottom band of the document where the
+   * ICAO machine-readable zone lives. Full-page OCR routinely mangles the MRZ
+   * ('<' fillers read as stray letters, digits merged together), which breaks
+   * check-digit parsing; restricting the page-segmentation mode and whitelisting
+   * the MRZ alphabet recovers clean 44-character lines. Best effort: any
+   * failure simply leaves the full-page text in place.
+   */
+  private async mrzBandPass(worker: Worker, image: Buffer): Promise<string> {
+    const dimensions = imageDimensions(image);
+    if (!dimensions || dimensions.height < 60) return "";
+    const bandHeight = Math.max(
+      40,
+      Math.round(dimensions.height * PassportVerificationService.MRZ_BAND_RATIO),
+    );
+    try {
+      await worker.setParameters({
+        tessedit_char_whitelist: PassportVerificationService.MRZ_ALPHABET,
+        preserve_interword_spaces: "1",
+      });
+      let timeout: NodeJS.Timeout | undefined;
+      const result = await Promise.race([
+        worker.recognize(image, {
+          rectangle: {
+            left: 0,
+            top: Math.max(0, dimensions.height - bandHeight),
+            width: dimensions.width,
+            height: bandHeight,
+          },
+        }),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("MRZ band OCR timed out")),
+            this.timeoutMs,
+          );
+        }),
+      ]).finally(() => {
+        if (timeout) clearTimeout(timeout);
+      });
+      return result.data.text ?? "";
+    } finally {
+      await worker
+        .setParameters({ tessedit_char_whitelist: "" })
+        .catch(() => undefined);
     }
   }
 

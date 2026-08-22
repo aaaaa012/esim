@@ -39,6 +39,8 @@ export type ConnectivityCapabilities = {
 export type UsageBreakdown = {
   usedMb: number;
   totalMb: number;
+  /** False means Transatel found the subscription but has not published a usable balance. */
+  usageAvailable?: boolean;
   subscriptions?: {
     providerSubscriptionId: string;
     status: string;
@@ -62,6 +64,7 @@ export type ProviderWebhookEvent = {
   eventType: string;
   orderId?: string;
   iccid?: string;
+  msisdn?: string;
   subscriptionId?: string;
   externalReference?: string;
   status?:

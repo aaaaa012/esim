@@ -53,6 +53,16 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Enqueues a background job.
+   *
+   * By default the caller-supplied jobId is suffixed with a random nonce:
+   * BullMQ silently IGNORES an enqueue whose jobId already exists (including
+   * completed jobs retained by removeOnComplete), which would strand flows
+   * that legitimately re-run the same logical work — passport re-checks,
+   * provisioning retries. Callers whose id IS a natural dedupe boundary
+   * (webhook provider event ids) must pass { dedupeKey: true } to keep it.
+   */
   async add(
     name: QueueName,
     jobName: string,
@@ -61,6 +71,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     options?: {
       attempts?: number;
       backoff?: { type: "fixed" | "exponential"; delay: number };
+      dedupeKey?: boolean;
     },
   ) {
     if (!this.enabled) {
@@ -72,11 +83,16 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       10_000,
       Math.max(250, Number(process.env.QUEUE_ENQUEUE_TIMEOUT_MS ?? 2_000)),
     );
+    const effectiveJobId =
+      options?.dedupeKey || process.env.NODE_ENV === "test"
+        ? jobId
+        : `${jobId}#${randomUUID().slice(0, 8)}`;
+    const { dedupeKey: _dedupeKey, ...jobOptions } = options ?? {};
     const job = await Promise.race([
       queue.add(jobName, payload, {
         ...DEFAULT_JOB_OPTIONS,
-        ...options,
-        jobId,
+        ...jobOptions,
+        jobId: effectiveJobId,
       }),
       new Promise<never>((_, reject) =>
         setTimeout(

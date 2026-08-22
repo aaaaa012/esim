@@ -28,7 +28,7 @@ describe("LifecycleActions", () => {
     const submit = screen.getByRole("button", { name: "Suspend connectivity" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(
-      screen.getByPlaceholderText("Operational reason (required)"),
+      screen.getByPlaceholderText("Reason (required)"),
       { target: { value: "Customer reported device theft" } },
     );
     fireEvent.change(screen.getByLabelText(/Type.*SUSPEND.*to confirm/), {

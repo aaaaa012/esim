@@ -6,6 +6,9 @@ import {
 import { AttentionCaseStatus, OutboxStatus, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../infrastructure/prisma.service.js";
+import {
+  SELLABLE_PROVIDER_STATUSES,
+} from "../common/sellable-provider-statuses.js";
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
 
@@ -300,7 +303,7 @@ export class ProductionResilienceService {
             { providerSubscriptionId: { not: null } },
             {
               providerStatus: {
-                notIn: ["available", "allocated", "AVAILABLE", "ALLOCATED"],
+                notIn: SELLABLE_PROVIDER_STATUSES,
               },
             },
             { lastProviderCheckedAt: null },

@@ -71,11 +71,23 @@ export default function DashboardClient() {
 
   if (!data)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> Loading live overview…
+      <>
+        <ErrorDialog error={error} onClose={() => setError(null)} />
+        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
+          {error ? (
+            <>
+              <p className="max-w-md text-center text-sm text-muted-foreground">
+                Could not load the operations overview. Please try again.
+              </p>
+              <Button onClick={() => window.location.reload()}>Try again</Button>
+            </>
+          ) : (
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <Spinner /> Loading live overview…
+            </div>
+          )}
         </div>
-      </div>
+      </>
     );
 
   const metrics = [

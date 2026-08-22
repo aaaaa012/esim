@@ -5,9 +5,7 @@ import { OcrWorkerModule } from "./ocr-worker.module.js";
 import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
 
 async function bootstrap() {
-  const app = await NestFactory.createApplicationContext(OcrWorkerModule, {
-    bufferLogs: true,
-  });
+  const app = await NestFactory.createApplicationContext(OcrWorkerModule);
   app.enableShutdownHooks();
   const resilience = app.get(ProductionResilienceService);
   const beat = () =>

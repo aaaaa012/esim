@@ -418,6 +418,28 @@ describe("InventoryService.reconcileProviderProfile", () => {
     );
   });
 
+  it("keeps unassigned stock sellable when Transatel reports released", async () => {
+    const prisma = reconciliationPrisma();
+    const connectivity = {
+      getEsimDetails: vi.fn().mockResolvedValue({
+        subscriptionId: "8988247076000000319",
+        status: "released",
+      }),
+    } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+    const result = await inventory.reconcileProviderProfile("inv-1");
+    expect(result).toMatchObject({
+      localStatus: "AVAILABLE",
+      providerStatus: "released",
+      inSync: true,
+    });
+    expect(prisma.esimInventory.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.not.objectContaining({ status: "QUARANTINED" }),
+      }),
+    );
+  });
+
   it("quarantines unassigned inventory that Transatel reports as already downloaded", async () => {
     const prisma = reconciliationPrisma();
     const connectivity = {
@@ -535,15 +557,35 @@ describe("InventoryService.restoreQuarantinedProfile", () => {
   it("refuses restoration while the provider still reports an unsafe state", async () => {
     const { prisma, updateMany, auditCreate } = restorePrisma();
     const connectivity = {
+      getEsimDetails: vi.fn().mockResolvedValue({ status: "downloaded" }),
+    } as unknown as ConnectivityService;
+    const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
+
+    await expect(
+      inventory.restoreQuarantinedProfile("inv-1", "user_clerk"),
+    ).rejects.toThrow("only sellable stock");
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("restores released stock because reseller profiles ship ready to download", async () => {
+    const { prisma, updateMany } = restorePrisma();
+    const connectivity = {
       getEsimDetails: vi.fn().mockResolvedValue({ status: "released" }),
     } as unknown as ConnectivityService;
     const inventory = new InventoryService(prisma, cryptoStub(), connectivity);
 
     await expect(
       inventory.restoreQuarantinedProfile("inv-1", "user_clerk"),
-    ).rejects.toThrow("only available or allocated inventory can be restored");
-    expect(updateMany).not.toHaveBeenCalled();
-    expect(auditCreate).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      localStatus: "AVAILABLE",
+      providerStatus: "released",
+    });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "AVAILABLE" }),
+      }),
+    );
   });
 });
 

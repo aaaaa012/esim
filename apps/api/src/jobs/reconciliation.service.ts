@@ -692,6 +692,10 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       const usage = await this.connectivity.getUsage(
         subscription.customerEsim.inventory.iccid,
       );
+      if (usage.usageAvailable === false)
+        throw new Error(
+          "Provider identified the subscription but did not return a usable balance",
+        );
       const own = usage.subscriptions?.find(
         (item) =>
           item.providerSubscriptionId === subscription.providerSubscriptionId,
