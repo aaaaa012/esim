@@ -9,7 +9,7 @@ describe("notification templates", () => {
     expect(value.text.toLowerCase()).not.toContain("pdf");
     expect(value.text).not.toContain("LPA:");
     expect(value.html).toContain("Visa Compass");
-    expect(value.html).toContain("View your eSIM");
+    expect(value.html).not.toContain("View your eSIM");
   });
   it("includes the operator reason in a re-upload request", () => {
     expect(

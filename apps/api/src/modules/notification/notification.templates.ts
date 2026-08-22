@@ -111,10 +111,6 @@ export function renderNotification(
         "Scan the attached QR image and follow the device instructions.",
         "Enable data roaming after arriving at your destination.",
       ],
-      cta: {
-        label: "View your eSIM",
-        href: webUrl("customer", "/account/esims"),
-      },
     });
   if (template === "DOCUMENT_REUPLOAD")
     return branded({
