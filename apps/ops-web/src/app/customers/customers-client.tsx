@@ -188,7 +188,9 @@ export default function CustomersClient() {
             </TableHeader>
             <TableBody>
               {items.map((c, index) => (
-                <TableRow key={`${c.ownerId}-${c.customerCode ?? c.email}-${index}`}>
+                <TableRow
+                  key={`${c.ownerId}-${c.customerCode ?? c.email}-${index}`}
+                >
                   <TableCell>
                     <p className="font-medium">{c.name}</p>
                     <p className="text-xs text-muted-foreground">

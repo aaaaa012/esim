@@ -1,10 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { KhaltiGateway } from "./khalti.gateway.js";
 
 describe("KhaltiGateway diagnostics", () => {
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.KHALTI_SECRET_KEY;
   const originalBase = process.env.KHALTI_BASE_URL;
+
+  function prismaWithLog(create = vi.fn().mockResolvedValue({})) {
+    return {
+      prisma: {
+        enabled: true,
+        integrationLog: { create },
+      } as unknown as PrismaService,
+      create,
+    };
+  }
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -50,6 +61,85 @@ describe("KhaltiGateway diagnostics", () => {
 
     await expect(new KhaltiGateway().diagnose()).rejects.toMatchObject({
       response: expect.objectContaining({ code: "PAYMENT_PROVIDER_ERROR" }),
+    });
+  });
+
+  it("records successful provider calls without request or response bodies", async () => {
+    process.env.KHALTI_SECRET_KEY = "sandbox-secret";
+    const { prisma, create } = prismaWithLog();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "Completed" }), { status: 200 }),
+    );
+
+    await new KhaltiGateway(prisma).diagnose();
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        operation: "khalti-diagnostic",
+        method: "POST",
+        endpoint: "/api/v2/epayment/lookup/",
+        status: 200,
+        durationMs: expect.any(Number),
+      }),
+    });
+    const data = create.mock.calls[0]?.[0]?.data;
+    expect(data).not.toHaveProperty("requestBody");
+    expect(data).not.toHaveProperty("responseBody");
+    expect(JSON.stringify(data)).not.toContain("sandbox-secret");
+    expect(String(data?.endpoint)).not.toContain("?");
+  });
+
+  it("records provider HTTP failures", async () => {
+    process.env.KHALTI_SECRET_KEY = "wrong-secret";
+    const { prisma, create } = prismaWithLog();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Invalid token." }), {
+        status: 401,
+      }),
+    );
+
+    await expect(new KhaltiGateway(prisma).diagnose()).rejects.toMatchObject({
+      response: expect.objectContaining({ code: "PAYMENT_PROVIDER_ERROR" }),
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        operation: "khalti-diagnostic",
+        status: 401,
+        errorCode: "HTTP_401",
+      }),
+    });
+  });
+
+  it("records network failures", async () => {
+    process.env.KHALTI_SECRET_KEY = "sandbox-secret";
+    const { prisma, create } = prismaWithLog();
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("connection reset"));
+
+    await expect(new KhaltiGateway(prisma).diagnose()).rejects.toMatchObject({
+      response: expect.objectContaining({ code: "PAYMENT_PROVIDER_ERROR" }),
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        operation: "khalti-diagnostic",
+        status: 0,
+        errorCode: "NETWORK_ERROR",
+        errorMessage: "connection reset",
+      }),
+    });
+  });
+
+  it("does not fail a provider request when log persistence fails", async () => {
+    process.env.KHALTI_SECRET_KEY = "sandbox-secret";
+    const { prisma } = prismaWithLog(
+      vi.fn().mockRejectedValue(new Error("database unavailable")),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Not found." }), { status: 400 }),
+    );
+
+    await expect(new KhaltiGateway(prisma).diagnose()).resolves.toMatchObject({
+      healthy: true,
+      providerStatus: 400,
     });
   });
 });
