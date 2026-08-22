@@ -420,6 +420,7 @@ describe("TransatelProvider", () => {
     expect(usage).toEqual({
       usedMb: 4096,
       totalMb: 5120,
+      usageAvailable: true,
       subscriptions: [
         {
           providerSubscriptionId: "sub-1",
@@ -437,6 +438,38 @@ describe("TransatelProvider", () => {
     );
     expect(url).toContain("msisdn=8988247076000000319");
     expect(url).toContain("withBalances=true");
+  });
+
+  it("keeps provider identity without reporting a false zero balance", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi
+      .fn()
+      .mockResolvedValue({ iccid: "8988247076000000319" });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/ocs/inventory/api/subscriptions/products": () =>
+        jsonResponse({
+          currentLocale: "en_US",
+          productSubscriptions: [{ subscriptionId: "sub-1", status: "active" }],
+        }),
+    });
+
+    await expect(provider.getUsage(ORDER_UUID)).resolves.toEqual({
+      usedMb: 0,
+      totalMb: 0,
+      usageAvailable: false,
+      subscriptions: [
+        {
+          providerSubscriptionId: "sub-1",
+          status: "active",
+          usedMb: 0,
+          totalMb: 0,
+          priority: 1,
+        },
+      ],
+    });
   });
 
   it("returns the QR payload and SM-DP+ address from eSIM details", async () => {
@@ -534,6 +567,7 @@ describe("TransatelProvider", () => {
     expect(usage).toEqual({
       usedMb: 0,
       totalMb: 1,
+      usageAvailable: true,
       subscriptions: [
         {
           providerSubscriptionId: "sub-1",

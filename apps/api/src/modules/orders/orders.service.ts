@@ -130,9 +130,7 @@ export class OrdersService implements OnModuleInit {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
   })();
   private readonly maxProvisioningProfileSwaps = (() => {
-    const configured = Number(
-      process.env.MAX_PROVISIONING_PROFILE_SWAPS ?? 2,
-    );
+    const configured = Number(process.env.MAX_PROVISIONING_PROFILE_SWAPS ?? 2);
     return Number.isFinite(configured) ? Math.max(0, configured) : 2;
   })();
   constructor(
@@ -2189,10 +2187,10 @@ export class OrdersService implements OnModuleInit {
   }
   /**
    * Reconciliation sweep for QR_READY orders whose activation window has
-   * elapsed. Instead of failing immediately it re-queries the provider details
-   * endpoint a bounded number of times, so a dropped/lost ACTIVATED webhook is
-   * recovered when the provider now reports activation details; otherwise the
-   * order is failed and released after ACTIVATION_REFETCH_ATTEMPTS.
+   * elapsed. Transatel eSIM-profile state and OCS-subscription state are
+   * deliberately checked separately: an enabled profile is not proof that the
+   * data subscription has started. Only an active OCS subscription completes
+   * the order.
    */
   async reconcileStaleActivationOrders() {
     const now = Date.now();
@@ -2217,8 +2215,24 @@ export class OrdersService implements OnModuleInit {
           const details = await this.connectivity.getEsimDetails(
             await this.providerRefFor(order),
           );
-          const qrPayload = (details as { qrPayload?: string }).qrPayload;
-          if (qrPayload) {
+          const qrPayload =
+            (details as { qrPayload?: string }).qrPayload ?? order.qrPayload;
+          const provider = this.connectivity.descriptor().provider;
+          const subscriptionActive =
+            provider === "TRANSATEL"
+              ? (
+                  await this.connectivity.getUsage(
+                    await this.providerRefFor(order),
+                  )
+                ).subscriptions?.some(
+                  (subscription) =>
+                    (!order.providerSubscriptionId ||
+                      subscription.providerSubscriptionId ===
+                        order.providerSubscriptionId) &&
+                    subscription.status.toUpperCase() === "ACTIVE",
+                ) === true
+              : ["ACTIVE", "ACTIVATED"].includes(details.status.toUpperCase());
+          if (qrPayload && subscriptionActive) {
             await this.completeProviderActivation(order, {
               qrPayload,
               ...(order.providerSubscriptionId
@@ -2233,7 +2247,7 @@ export class OrdersService implements OnModuleInit {
             );
           } else {
             this.logger.debug(
-              `Order ${order.orderNumber} (${order.id}) not active at provider yet (re-fetch attempt ${attempt}/${this.maxActivationRefetches})`,
+              `Order ${order.orderNumber} (${order.id}) data subscription is not active at provider yet (re-fetch attempt ${attempt}/${this.maxActivationRefetches})`,
             );
           }
           continue;

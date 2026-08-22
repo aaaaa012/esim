@@ -72,6 +72,10 @@ export class CustomerEsimsService {
         "Usage is unavailable until the eSIM is provisioned",
       );
     const usage = await this.connectivity.getUsage(row.iccid);
+    if (usage.usageAvailable === false)
+      throw new BadRequestException(
+        "Transatel found the subscription but has not published a usable data balance yet. Please retry shortly.",
+      );
     const subscriptions = row.customerEsims
       .flatMap((item) => item.subscriptions)
       .filter((item) => item.status === "ACTIVE" || item.status === "PENDING");

@@ -14,6 +14,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "./connectivity.service.js";
+import { OrdersService } from "../orders/orders.service.js";
 
 type LifecycleInput = {
   orderId: string;
@@ -28,18 +29,17 @@ export class TransatelOperationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
+    private readonly orders: OrdersService,
   ) {}
 
   async dashboard(params?: {
     scope?: "subscribers" | "inventory" | "failures" | "actions";
     q?: string;
   }) {
-    const health = await this.connectivity
-      .transatelHealth()
-      .catch((error) => ({
-        ok: false,
-        error: error instanceof Error ? error.message : "Health check failed",
-      }));
+    const health = await this.connectivity.transatelHealth().catch((error) => ({
+      ok: false,
+      error: error instanceof Error ? error.message : "Health check failed",
+    }));
     if (!this.prisma.enabled)
       return {
         health,
@@ -545,43 +545,136 @@ export class TransatelOperationsService {
     const details = await this.connectivity.getEsimDetails(
       order.inventory.iccid,
     );
-    const observed = details.status.toUpperCase();
+    const observedProfileStatus = details.status.toUpperCase();
+    const usage = await this.connectivity
+      .getUsage(order.inventory.iccid)
+      .catch(() => null);
+    const providerSubscription = usage?.subscriptions?.find(
+      (subscription) =>
+        !order.providerSubscriptionId ||
+        subscription.providerSubscriptionId === order.providerSubscriptionId,
+    );
+    const observedSubscriptionStatus =
+      providerSubscription?.status.toUpperCase() ?? null;
+    const activationConfirmed = observedSubscriptionStatus === "ACTIVE";
+    const checkedAt = new Date();
+    if (
+      activationConfirmed &&
+      ["PROVISIONING", "QR_READY", "ACTIVATION_ATTENTION"].includes(
+        order.status,
+      )
+    ) {
+      await this.orders.applyProviderEvent({
+        eventType: "OPERATIONS/ESIM_STATUS_RECONCILED",
+        orderId: order.id,
+        iccid: order.inventory.iccid,
+        ...(order.providerSubscriptionId
+          ? { subscriptionId: order.providerSubscriptionId }
+          : {}),
+        status: "ACTIVATED",
+        activatedAt: checkedAt.toISOString(),
+      });
+      await this.prisma.$transaction([
+        this.prisma.order.update({
+          where: { id: order.id },
+          data: { providerStatus: "ACTIVE", version: { increment: 1 } },
+        }),
+        this.prisma.esimInventory.update({
+          where: { id: order.inventory.id },
+          data: {
+            providerStatus: observedProfileStatus,
+            lastProviderCheckedAt: checkedAt,
+            providerCheckError: null,
+            version: { increment: 1 },
+          },
+        }),
+        ...(order.customerEsim && providerSubscription
+          ? [
+              this.prisma.subscription.updateMany({
+                where: {
+                  customerEsimId: order.customerEsim.id,
+                  providerSubscriptionId:
+                    providerSubscription.providerSubscriptionId,
+                },
+                data: {
+                  status: "ACTIVE",
+                  providerLastSeenAt: checkedAt,
+                  ...(usage?.usageAvailable !== false
+                    ? {
+                        usedMb: providerSubscription.usedMb,
+                        totalMb: providerSubscription.totalMb,
+                        usageLastCheckedAt: checkedAt,
+                      }
+                    : {}),
+                },
+              }),
+            ]
+          : []),
+      ]);
+      return {
+        orderId,
+        esimProfileStatus: observedProfileStatus,
+        subscriptionStatus: observedSubscriptionStatus,
+        usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
+        operationState: null,
+        checkedAt: checkedAt.toISOString(),
+      };
+    }
     const latest = order.transatelLifecycleOperations[0];
     const confirmed =
       latest &&
       ((latest.action === TransatelLifecycleAction.SUSPEND &&
-        observed === "SUSPENDED") ||
+        observedSubscriptionStatus === "SUSPENDED") ||
         (latest.action === TransatelLifecycleAction.TERMINATE &&
-          observed === "TERMINATED"));
+          observedSubscriptionStatus === "TERMINATED"));
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: order.id },
-        data: { providerStatus: observed, version: { increment: 1 } },
+        data: {
+          ...(observedSubscriptionStatus
+            ? { providerStatus: observedSubscriptionStatus }
+            : {}),
+          version: { increment: 1 },
+        },
       });
       await tx.esimInventory.update({
         where: { id: order.inventory!.id },
         data: {
-          providerStatus: observed,
-          lastProviderCheckedAt: new Date(),
+          providerStatus: observedProfileStatus,
+          lastProviderCheckedAt: checkedAt,
           providerCheckError: null,
-          ...(observed === "TERMINATED" ? { status: "TERMINATED" } : {}),
+          ...(observedProfileStatus === "DELETED"
+            ? { status: "TERMINATED" }
+            : {}),
           version: { increment: 1 },
         },
       });
-      if (order.customerEsim) {
+      if (order.customerEsim && providerSubscription) {
         const subscriptionStatus =
-          observed === "SUSPENDED"
+          observedSubscriptionStatus === "SUSPENDED"
             ? ("SUSPENDED" as const)
-            : observed === "TERMINATED"
+            : observedSubscriptionStatus === "TERMINATED"
               ? ("TERMINATED" as const)
-              : observed === "ACTIVE" || observed === "ACTIVATED"
+              : observedSubscriptionStatus === "ACTIVE"
                 ? ("ACTIVE" as const)
-                : null;
+                : observedSubscriptionStatus
+                  ? ("PENDING" as const)
+                  : null;
         await tx.subscription.updateMany({
-          where: { customerEsimId: order.customerEsim.id },
+          where: {
+            customerEsimId: order.customerEsim.id,
+            providerSubscriptionId: providerSubscription.providerSubscriptionId,
+          },
           data: {
             ...(subscriptionStatus ? { status: subscriptionStatus } : {}),
-            providerLastSeenAt: new Date(),
+            providerLastSeenAt: checkedAt,
+            ...(usage?.usageAvailable !== false
+              ? {
+                  usedMb: providerSubscription.usedMb,
+                  totalMb: providerSubscription.totalMb,
+                  usageLastCheckedAt: checkedAt,
+                }
+              : {}),
           },
         });
       }
@@ -591,8 +684,9 @@ export class TransatelOperationsService {
           data: {
             state: TransatelLifecycleState.CONFIRMED,
             responseSnapshot: {
-              observedStatus: observed,
-              checkedAt: new Date().toISOString(),
+              observedProfileStatus,
+              observedSubscriptionStatus,
+              checkedAt: checkedAt.toISOString(),
             },
           },
         });
@@ -609,7 +703,8 @@ export class TransatelOperationsService {
             providerStatus: order.providerStatus,
           } as Prisma.InputJsonValue,
           newValue: {
-            providerStatus: observed,
+            esimProfileStatus: observedProfileStatus,
+            subscriptionStatus: observedSubscriptionStatus,
             operationId: latest?.id ?? null,
           } as Prisma.InputJsonValue,
         },
@@ -617,11 +712,13 @@ export class TransatelOperationsService {
     });
     return {
       orderId,
-      providerStatus: observed,
+      esimProfileStatus: observedProfileStatus,
+      subscriptionStatus: observedSubscriptionStatus,
+      usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
       operationState: confirmed
         ? TransatelLifecycleState.CONFIRMED
         : (latest?.state ?? null),
-      checkedAt: new Date().toISOString(),
+      checkedAt: checkedAt.toISOString(),
     };
   }
 

@@ -39,6 +39,8 @@ export type ConnectivityCapabilities = {
 export type UsageBreakdown = {
   usedMb: number;
   totalMb: number;
+  /** False means the provider identified the subscription but supplied no usable balance. */
+  usageAvailable?: boolean;
   subscriptions?: {
     providerSubscriptionId: string;
     status: string;
