@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { activityLabel } from "./log-activity";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -89,7 +90,7 @@ function serialise(entry: LogEntry): string {
   lines.push(`When:     ${new Date(entry.createdAt).toLocaleString()}`);
   lines.push(`Type:     ${GROUP_LABELS[entry.group]}`);
   if (entry.identifier) lines.push(`Provider: ${entry.identifier}`);
-  lines.push(`Action:   ${entry.title}`);
+  lines.push(`Action:   ${activityLabel(entry)}`);
   lines.push(`Details:  ${entry.detail}`);
   if (entry.status != null) lines.push(`Status:   ${entry.status}`);
   if (entry.statusLabel) lines.push(`Result:   ${entry.statusLabel}`);
@@ -346,6 +347,9 @@ export default function LogsClient() {
                           {entry.identifier}
                         </span>
                       )}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {activityLabel(entry)}
+                      </p>
                     </TableCell>
                     <TableCell>
                       {entry.statusLabel ? (

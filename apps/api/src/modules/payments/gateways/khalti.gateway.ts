@@ -1,6 +1,7 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
+import { PrismaService } from "../../../infrastructure/prisma.service.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -23,6 +24,9 @@ import type {
 @Injectable()
 export class KhaltiGateway implements PaymentGateway {
   readonly provider = "KHALTI";
+  private readonly logger = new Logger(KhaltiGateway.name);
+
+  constructor(@Optional() private readonly prisma?: PrismaService) {}
 
   private get baseUrl(): string {
     return (
@@ -88,10 +92,36 @@ export class KhaltiGateway implements PaymentGateway {
     init: RequestInit,
     operation: string,
   ): Promise<Response> {
+    const startedAt = Date.now();
+    const method = init.method ?? "POST";
+    const endpoint = this.logEndpoint(url);
     try {
-      return await fetch(url, init);
+      const response = await fetch(url, init);
+      await this.record({
+        operation: `khalti-${operation}`,
+        method,
+        endpoint,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        ...(response.ok
+          ? {}
+          : {
+              errorCode: `HTTP_${response.status}`,
+              errorMessage: `Khalti returned HTTP ${response.status}`,
+            }),
+      });
+      return response;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      await this.record({
+        operation: `khalti-${operation}`,
+        method,
+        endpoint,
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        errorCode: "NETWORK_ERROR",
+        errorMessage: detail,
+      });
       throw new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
         message:
@@ -99,6 +129,34 @@ export class KhaltiGateway implements PaymentGateway {
         status: 502,
         details: `Khalti ${operation} failed on the network layer: ${detail}`,
       });
+    }
+  }
+
+  private logEndpoint(url: string): string {
+    try {
+      return new URL(url).pathname;
+    } catch {
+      return url.split("?", 1)[0] ?? url;
+    }
+  }
+
+  private async record(entry: {
+    operation: string;
+    method: string;
+    endpoint: string;
+    status: number;
+    durationMs: number;
+    errorCode?: string;
+    errorMessage?: string;
+  }): Promise<void> {
+    if (!this.prisma?.enabled) return;
+    try {
+      await this.prisma.integrationLog.create({ data: entry });
+    } catch (error) {
+      this.logger.error(
+        `Failed to persist integration log for ${entry.operation}`,
+        error,
+      );
     }
   }
 
