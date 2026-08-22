@@ -569,12 +569,6 @@ export class TransatelProvider implements ConnectivityProvider {
     }
   }
 
-  private subscriberIdentifier(): "iccid" | "msisdn" {
-    return process.env.TRANSATEL_SUBSCRIBER_IDENTIFIER === "msisdn"
-      ? "msisdn"
-      : "iccid";
-  }
-
   /**
    * Resolves an internal reference (ICCID, order id or OCS subscription id) to
    * the inventory row backing the subscriber. Transatel binds orders via the
@@ -989,10 +983,22 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   async getUsage(subscriptionId: string): Promise<UsageBreakdown> {
-    const subscriber = await this.resolveSubscriber(subscriptionId);
-    const identifier = this.subscriberIdentifier();
-    const identifierValue =
-      identifier === "msisdn" ? subscriber.msisdn : subscriber.iccid;
+    let subscriber = await this.resolveSubscriber(subscriptionId);
+    if (subscriber.iccid && !subscriber.msisdn && this.prisma.enabled) {
+      const inventory = await this.prisma.esimInventory.findUnique({
+        where: { iccid: subscriber.iccid },
+        select: { iccid: true, msisdn: true },
+      });
+      if (inventory)
+        subscriber = {
+          iccid: inventory.iccid,
+          ...(inventory.msisdn ? { msisdn: inventory.msisdn } : {}),
+        };
+    }
+    // Preloading binds the OCS product to profile.msisdn when available and
+    // falls back to ICCID. Usage must use that exact same identifier.
+    const identifier = subscriber.msisdn ? "msisdn" : "iccid";
+    const identifierValue = subscriber.msisdn ?? subscriber.iccid;
     if (!identifierValue)
       throw new ApiException({
         code: ApiErrorCode.USAGE_UNAVAILABLE,

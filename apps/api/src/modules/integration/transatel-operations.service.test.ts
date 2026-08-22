@@ -204,6 +204,7 @@ describe("TransatelOperationsService lifecycle", () => {
     });
 
     await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      providerStatus: "ACTIVE",
       esimProfileStatus: "ENABLED",
       subscriptionStatus: "ACTIVE",
       usageAvailable: true,
@@ -254,6 +255,7 @@ describe("TransatelOperationsService lifecycle", () => {
     });
 
     await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      providerStatus: "READYFORUSE",
       esimProfileStatus: "ENABLED",
       subscriptionStatus: "READYFORUSE",
     });

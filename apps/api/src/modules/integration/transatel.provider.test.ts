@@ -440,6 +440,49 @@ describe("TransatelProvider", () => {
     expect(url).toContain("withBalances=true");
   });
 
+  it("uses the inventory MSISDN that provisioning binds to OCS", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "882470010272211",
+    });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/ocs/inventory/api/subscriptions/products": () =>
+        jsonResponse({
+          currentLocale: "en_US",
+          productSubscriptions: [
+            {
+              subscriptionId: "sub-1",
+              status: "active",
+              balances: {
+                data: [
+                  {
+                    resourceName: "DATA",
+                    resourceUnit: "KB",
+                    resourceStartValue: 512000,
+                    resourceValue: 409600,
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+    });
+
+    await provider.getUsage("8988247076000000319");
+
+    const url = String(
+      fetchMock.mock.calls.find((call) =>
+        String(call[0]).includes("/api/subscriptions/products"),
+      )![0],
+    );
+    expect(url).toContain("msisdn=882470010272211");
+    expect(url).not.toContain("8988247076000000319");
+  });
+
   it("keeps provider identity without reporting a false zero balance", async () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi
