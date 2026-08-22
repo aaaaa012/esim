@@ -399,7 +399,7 @@ export class OperationsIntegrationLogsController {
 @Controller("operations/logs")
 @UseGuards(AuthGuard, AccountGuard)
 @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
-export class OperationsLogsController {
+class DetailedOperationsLogsController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get()
