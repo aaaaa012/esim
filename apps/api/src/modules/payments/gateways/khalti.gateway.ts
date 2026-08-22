@@ -1,6 +1,8 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
+import { PrismaService } from "../../../infrastructure/prisma.service.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -23,6 +25,8 @@ import type {
 @Injectable()
 export class KhaltiGateway implements PaymentGateway {
   readonly provider = "KHALTI";
+
+  constructor(@Optional() private readonly prisma?: PrismaService) {}
 
   private get baseUrl(): string {
     return (
@@ -87,11 +91,36 @@ export class KhaltiGateway implements PaymentGateway {
     url: string,
     init: RequestInit,
     operation: string,
+    requestBody: Prisma.InputJsonValue,
   ): Promise<Response> {
+    const startedAt = Date.now();
     try {
-      return await fetch(url, init);
+      const response = await fetch(url, init);
+      await this.record({
+        operation: `khalti-${operation}`,
+        method: init.method ?? "POST",
+        endpoint: new URL(url).pathname,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        requestBody,
+        responseBody: await this.logBody(response),
+        ...(response.ok
+          ? {}
+          : { errorCode: `HTTP_${response.status}`, errorMessage: `Khalti returned HTTP ${response.status}` }),
+      });
+      return response;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      await this.record({
+        operation: `khalti-${operation}`,
+        method: init.method ?? "POST",
+        endpoint: new URL(url).pathname,
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        requestBody,
+        errorCode: "NETWORK_ERROR",
+        errorMessage: detail,
+      });
       throw new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
         message:
@@ -120,7 +149,60 @@ export class KhaltiGateway implements PaymentGateway {
         signal: AbortSignal.timeout(this.timeoutMs()),
       },
       operation,
+      this.redactLogBody(body),
     );
+  }
+
+  private async record(entry: {
+    operation: string;
+    method: string;
+    endpoint: string;
+    status: number;
+    durationMs: number;
+    requestBody: Prisma.InputJsonValue;
+    responseBody?: Prisma.InputJsonValue;
+    errorCode?: string;
+    errorMessage?: string;
+  }) {
+    if (!this.prisma?.enabled) return;
+    await this.prisma.integrationLog.create({
+      data: {
+        ...entry,
+        ...(entry.responseBody === undefined ? {} : { responseBody: entry.responseBody }),
+        ...(entry.errorCode === undefined ? {} : { errorCode: entry.errorCode }),
+        ...(entry.errorMessage === undefined ? {} : { errorMessage: entry.errorMessage }),
+      },
+    });
+  }
+
+  private async logBody(response: Response): Promise<Prisma.InputJsonValue> {
+    try {
+      const text = await response.clone().text();
+      if (!text) return "";
+      try {
+        return this.redactLogBody(JSON.parse(text));
+      } catch {
+        return text.slice(0, 20_000);
+      }
+    } catch {
+      return "Response body could not be read";
+    }
+  }
+
+  private redactLogBody(value: unknown): Prisma.InputJsonValue {
+    if (Array.isArray(value)) return value.map((item) => this.redactLogBody(item));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+          key,
+          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key)$/i.test(key)
+            ? "[REDACTED]"
+            : this.redactLogBody(item),
+        ]),
+      );
+    }
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+    return "";
   }
 
   /**

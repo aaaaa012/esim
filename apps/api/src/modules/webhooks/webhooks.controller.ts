@@ -390,6 +390,133 @@ export class OperationsIntegrationLogsController {
   }
 }
 
+/**
+ * The operations log screen combines the durable records produced by provider
+ * calls, inbound callbacks, and staff/audit actions.  Keep this separate from
+ * the integration-log endpoint: the latter is intentionally a narrow provider
+ * diagnostic API used by the integrations workspace.
+ */
+@Controller("operations/logs")
+@UseGuards(AuthGuard, AccountGuard)
+@AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+export class OperationsLogsController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  @Get()
+  async list(
+    @Req() request: AuthenticatedRequest,
+    @Query("group") group = "all",
+    @Query("q") query = "",
+    @Query("page") pageInput = "1",
+    @Query("pageSize") pageSizeInput = "25",
+  ) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    const allowedGroups = new Set(["all", "provider", "incoming", "orders", "staff"]);
+    if (!allowedGroups.has(group)) throw new BadRequestException("Invalid log group");
+    const page = Math.max(1, Number.parseInt(pageInput, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number.parseInt(pageSizeInput, 10) || 25));
+    if (!this.prisma.enabled) return { items: [], total: 0, page, pageSize };
+
+    // Pull only enough records to serve the requested page from each source,
+    // then merge deterministically by timestamp. The counts remain exact.
+    const take = page * pageSize;
+    const normalizedQuery = query.trim().toLowerCase();
+    const matches = (...values: Array<string | null | undefined>) =>
+      !normalizedQuery || values.some((value) => value?.toLowerCase().includes(normalizedQuery));
+    const isOrderModule = (module: string) =>
+      /ORDER|PAYMENT|VERIFICATION|TRANSATEL|INVENTORY|REFUND/i.test(module);
+
+    const [integrationRows, webhookRows, auditRows, orderRows, integrationTotal, webhookTotal, auditTotal, orderTotal] =
+      await Promise.all([
+        group === "all" || group === "provider"
+          ? this.prisma.integrationLog.findMany({ orderBy: { createdAt: "desc" }, take })
+          : Promise.resolve([]),
+        group === "all" || group === "incoming"
+          ? this.prisma.webhookEvent.findMany({
+              where: { NOT: { source: { startsWith: "idempotency:" } } },
+              orderBy: { createdAt: "desc" },
+              take,
+            })
+          : Promise.resolve([]),
+        group === "all" || group === "orders" || group === "staff"
+          ? this.prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take })
+          : Promise.resolve([]),
+        group === "all" || group === "orders"
+          ? this.prisma.order.findMany({
+              select: { id: true, orderNumber: true, channel: true, status: true, createdAt: true, partner: { select: { name: true } } },
+              orderBy: { createdAt: "desc" },
+              take,
+            })
+          : Promise.resolve([]),
+        group === "all" || group === "provider" ? this.prisma.integrationLog.count() : Promise.resolve(0),
+        group === "all" || group === "incoming"
+          ? this.prisma.webhookEvent.count({ where: { NOT: { source: { startsWith: "idempotency:" } } } })
+          : Promise.resolve(0),
+        group === "all" || group === "orders" || group === "staff" ? this.prisma.auditLog.count() : Promise.resolve(0),
+        group === "all" || group === "orders" ? this.prisma.order.count() : Promise.resolve(0),
+      ]);
+
+    const items = [
+      ...integrationRows.map((row) => ({
+        group: "provider",
+        id: row.id,
+        identifier: row.operation,
+        title: `${row.method} ${row.endpoint}`,
+        detail: row.errorMessage ?? row.errorCode ?? "Provider request completed",
+        status: row.status,
+        statusLabel: row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
+        createdAt: row.createdAt,
+        durationMs: row.durationMs,
+        error: row.errorMessage,
+        requestBody: row.requestBody,
+        responseBody: row.responseBody,
+      })),
+      ...webhookRows.map((row) => ({
+        group: "incoming",
+        id: row.id,
+        identifier: row.source,
+        title: row.eventId,
+        detail: row.errorMessage ?? (row.processedAt ? "Callback processed" : "Callback queued"),
+        status: row.signatureValid ? (row.errorMessage ? 500 : 202) : 401,
+        statusLabel: !row.signatureValid ? "REJECTED" : row.errorMessage ? "FAILED" : row.processedAt ? "PROCESSED" : "QUEUED",
+        createdAt: row.createdAt,
+        error: row.errorMessage,
+        requestBody: row.payload,
+      })),
+      ...orderRows.map((row) => ({
+        group: "orders" as const,
+        id: `order-${row.id}`,
+        identifier: row.channel === "PARTNER_HOSTED" ? "Hosted checkout" : row.channel === "PARTNER_API" ? "API partner" : "Visa Compass checkout",
+        title: row.channel === "PARTNER_HOSTED" ? "Hosted checkout order created" : row.channel === "PARTNER_API" ? "API partner order created" : "Visa Compass checkout order created",
+        detail: `${row.orderNumber} is ${row.status.toLowerCase().replaceAll("_", " ")}${row.partner ? ` · ${row.partner.name}` : ""}`,
+        statusLabel: "RECORDED",
+        createdAt: row.createdAt,
+      })),
+      ...auditRows
+        .filter((row) => group === "all" || (group === "orders" ? isOrderModule(row.module) : !isOrderModule(row.module)))
+        .map((row) => ({
+          group: isOrderModule(row.module) ? "orders" : "staff",
+          id: row.id,
+          identifier: row.module,
+          title: row.action,
+          detail: `${row.entity} ${row.entityId}`,
+          statusLabel: "RECORDED",
+          createdAt: row.createdAt,
+        })),
+    ]
+      .filter((row) => matches(row.identifier, row.title, row.detail))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    const total = integrationTotal + webhookTotal + auditTotal + orderTotal;
+    return {
+      items: items.slice((page - 1) * pageSize, page * pageSize),
+      total: normalizedQuery ? items.length : total,
+      page,
+      pageSize,
+    };
+  }
+}
+
 @Controller("operations/provisioning-operations")
 @UseGuards(AuthGuard, AccountGuard)
 @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)

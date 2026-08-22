@@ -345,7 +345,7 @@ export default function IntegrationsClient() {
         </div>
       )}
       <Panel
-        className="mt-6"
+        className="mt-6 hidden"
         title="Integration call log"
         description="Outbound integration requests and outcomes (most recent 200)."
         actions={

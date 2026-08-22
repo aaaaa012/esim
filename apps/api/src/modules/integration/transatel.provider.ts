@@ -333,7 +333,8 @@ export class TransatelProvider implements ConnectivityProvider {
         signal: AbortSignal.timeout(this.timeoutMs()),
       });
       if (!response.ok) {
-        const detail = await this.errorText(response);
+        const responseBody = await this.logBody(response);
+        const detail = this.bodyText(responseBody);
         if (response.status === 429 || response.status >= 500)
           this.providerFailed();
         await this.record({
@@ -344,6 +345,8 @@ export class TransatelProvider implements ConnectivityProvider {
           durationMs: Date.now() - startedAt,
           errorCode: "CONNECTIVITY_UNAVAILABLE",
           errorMessage: detail.slice(0, 2000),
+          requestBody: { grant_type: "client_credentials" },
+          responseBody,
         });
         throw new ApiException({
           code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
@@ -368,6 +371,8 @@ export class TransatelProvider implements ConnectivityProvider {
         endpoint: "/authentication/api/token",
         status: 200,
         durationMs: Date.now() - startedAt,
+        requestBody: { grant_type: "client_credentials" },
+        responseBody: this.redactLogBody(data),
       });
       this.accessToken = data.access_token;
       this.tokenExpiry = Date.now() + data.expires_in * 1000;
@@ -446,16 +451,16 @@ export class TransatelProvider implements ConnectivityProvider {
         endpoint: path,
         status: response.status,
         durationMs,
+        ...(this.parseRequestBody(request.body) !== undefined
+          ? { requestBody: this.parseRequestBody(request.body)! }
+          : {}),
+        responseBody: await this.logBody(response),
       });
     } else {
       if (response.status === 429 || response.status >= 500)
         this.providerFailed();
-      let errorMessage: string | undefined;
-      try {
-        errorMessage = (await response.clone().text()).slice(0, 2000);
-      } catch {
-        /* body already consumed */
-      }
+      const responseBody = await this.logBody(response);
+      const errorMessage = this.bodyText(responseBody).slice(0, 2000);
       await this.record({
         operation,
         method: request.method,
@@ -464,6 +469,10 @@ export class TransatelProvider implements ConnectivityProvider {
         durationMs,
         errorCode: `HTTP_${response.status}`,
         ...(errorMessage ? { errorMessage } : {}),
+        ...(this.parseRequestBody(request.body) !== undefined
+          ? { requestBody: this.parseRequestBody(request.body)! }
+          : {}),
+        responseBody,
       });
     }
     return response;
@@ -477,6 +486,8 @@ export class TransatelProvider implements ConnectivityProvider {
     durationMs: number;
     errorCode?: string;
     errorMessage?: string;
+    requestBody?: Prisma.InputJsonValue;
+    responseBody?: Prisma.InputJsonValue;
   }) {
     if (!this.prisma.enabled) return;
     try {
@@ -489,6 +500,8 @@ export class TransatelProvider implements ConnectivityProvider {
           durationMs: entry.durationMs,
           ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
           ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
+          ...(entry.requestBody !== undefined ? { requestBody: entry.requestBody } : {}),
+          ...(entry.responseBody !== undefined ? { responseBody: entry.responseBody } : {}),
         },
       });
     } catch (error) {
@@ -497,6 +510,49 @@ export class TransatelProvider implements ConnectivityProvider {
         error,
       );
     }
+  }
+
+  private parseRequestBody(body?: string): Prisma.InputJsonValue | undefined {
+    if (!body) return undefined;
+    try {
+      return this.redactLogBody(JSON.parse(body));
+    } catch {
+      return body;
+    }
+  }
+
+  private async logBody(response: Response): Promise<Prisma.InputJsonValue> {
+    try {
+      const text = await response.clone().text();
+      if (!text) return "";
+      try {
+        return this.redactLogBody(JSON.parse(text));
+      } catch {
+        return text.slice(0, 20_000);
+      }
+    } catch {
+      return "Response body could not be read";
+    }
+  }
+
+  private bodyText(body: Prisma.InputJsonValue): string {
+    return typeof body === "string" ? body : JSON.stringify(body);
+  }
+
+  private redactLogBody(value: unknown): Prisma.InputJsonValue {
+    if (Array.isArray(value)) return value.map((item) => this.redactLogBody(item));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+          key,
+          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key)$/i.test(key)
+            ? "[REDACTED]"
+            : this.redactLogBody(item),
+        ]),
+      );
+    }
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+    return "";
   }
 
   private async errorText(response: Response): Promise<string> {

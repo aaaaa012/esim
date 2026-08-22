@@ -69,6 +69,32 @@ function dump(value: unknown): string {
   }
 }
 
+function activityLabel(entry: Pick<LogEntry, "group" | "identifier" | "title">): string {
+  if (entry.group === "incoming") {
+    const source = entry.identifier?.toLowerCase() ?? "";
+    if (source.includes("khalti")) return "Khalti payment callback received";
+    if (source.includes("transatel")) return "Transatel network update received";
+    return "External callback received";
+  }
+  if (entry.group !== "provider") return entry.title;
+
+  const operation = entry.identifier?.toLowerCase() ?? "";
+  const endpoint = entry.title.toLowerCase();
+  const provider = operation.startsWith("khalti") || endpoint.includes("epayment") ? "Khalti" : "Transatel";
+  if (operation.includes("token") || endpoint.includes("/token")) return `${provider} access token request`;
+  if (operation.includes("initiat") || endpoint.includes("/initiate")) return "Khalti payment initiation";
+  if (operation.includes("lookup") || endpoint.includes("/lookup")) return "Khalti payment lookup";
+  if (operation.includes("provision")) return "Transatel eSIM provisioning";
+  if (operation.includes("usage")) return "Transatel data-usage lookup";
+  if (operation.includes("esim-details")) return "Transatel eSIM details lookup";
+  if (operation.includes("subscriber-suspend")) return "Transatel eSIM suspension";
+  if (operation.includes("subscriber-terminate")) return "Transatel eSIM termination";
+  if (operation.includes("catalog")) return "Transatel plan catalog lookup";
+  if (operation.includes("eligibility")) return "Transatel eligibility check";
+  if (operation.includes("webhook")) return "Transatel webhook setup";
+  return `${provider} service request`;
+}
+
 function serialise(entry: LogEntry): string {
   const lines: string[] = [];
   lines.push("Visa Compass — Log record");
@@ -76,7 +102,7 @@ function serialise(entry: LogEntry): string {
   lines.push(`When:     ${new Date(entry.createdAt).toLocaleString()}`);
   lines.push(`Type:     ${GROUP_LABELS[entry.group]}`);
   if (entry.identifier) lines.push(`Provider: ${entry.identifier}`);
-  lines.push(`Action:   ${entry.title}`);
+  lines.push(`Action:   ${activityLabel(entry)}`);
   lines.push(`Details:  ${entry.detail}`);
   if (entry.status != null) lines.push(`Status:   ${entry.status}`);
   if (entry.statusLabel) lines.push(`Result:   ${entry.statusLabel}`);
@@ -291,6 +317,7 @@ export default function LogsClient() {
                           {entry.identifier}
                         </span>
                       )}
+                      <p className="mt-1 text-xs text-muted-foreground">{activityLabel(entry)}</p>
                     </TableCell>
                     <TableCell>
                       {entry.statusLabel ? (
