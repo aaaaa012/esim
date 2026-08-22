@@ -356,7 +356,8 @@ export class InventoryService implements OnModuleInit {
         status: InventoryStatus.PENDING_PROVIDER_CHECK,
         assignedOrderId: null,
         lastProviderCheckedAt: null,
-        providerCheckError: "Provider recheck required after reservation release",
+        providerCheckError:
+          "Provider recheck required after reservation release",
         version: { increment: 1 },
       },
     });
@@ -381,7 +382,9 @@ export class InventoryService implements OnModuleInit {
         where: { assignedOrderId: orderId },
       });
       if (!rejected)
-        throw new ConflictException("The order has no reserved eSIM to replace");
+        throw new ConflictException(
+          "The order has no reserved eSIM to replace",
+        );
       if (rejected.providerSubscriptionId)
         throw new ConflictException(
           "The rejected eSIM is provider-bound and cannot be replaced automatically",
@@ -1259,6 +1262,10 @@ export class InventoryService implements OnModuleInit {
         "No customer eSIM record exists for this order",
       );
     const usage = await this.connectivity.getUsage(inventory.iccid);
+    if (usage.usageAvailable === false)
+      throw new BadRequestException(
+        "Transatel found the subscription but has not published a usable data balance yet. Please retry shortly.",
+      );
     const checkedAt = new Date();
     if (usage.subscriptions?.length) {
       const balances = new Map(

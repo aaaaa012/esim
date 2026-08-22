@@ -990,8 +990,10 @@ export class TransatelProvider implements ConnectivityProvider {
 
   async getUsage(subscriptionId: string): Promise<UsageBreakdown> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
-    const msisdn = subscriber.msisdn ?? subscriber.iccid ?? "";
-    if (!msisdn)
+    const identifier = this.subscriberIdentifier();
+    const identifierValue =
+      identifier === "msisdn" ? subscriber.msisdn : subscriber.iccid;
+    if (!identifierValue)
       throw new ApiException({
         code: ApiErrorCode.USAGE_UNAVAILABLE,
         message:
@@ -999,9 +1001,11 @@ export class TransatelProvider implements ConnectivityProvider {
         status: 404,
         details: "No subscriber identifier found for usage lookup",
       });
-    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?msisdn=${encodeURIComponent(msisdn)}&withBalances=true`;
+    // Transatel's OCS contract always names this query parameter `msisdn`,
+    // even when the configured subscriber value is the ICCID.
+    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?msisdn=${encodeURIComponent(identifierValue)}&withBalances=true`;
     this.logger.log(
-      `Fetching inventory usage for ${this.subscriberIdentifier()}: ${msisdn}`,
+      `Fetching inventory usage for ${identifier}: ${identifierValue}`,
     );
 
     const response = await this.authorizedFetch(url, {
@@ -1041,7 +1045,19 @@ export class TransatelProvider implements ConnectivityProvider {
           usage: { usedMb: number; totalMb: number };
         } => Boolean(entry.usage),
       );
-    if (!usage.length) return { usedMb: 0, totalMb: 0 };
+    if (!usage.length)
+      return {
+        usedMb: 0,
+        totalMb: 0,
+        usageAvailable: false,
+        subscriptions: subscriptions.map((item, index) => ({
+          providerSubscriptionId: item.subscriptionId,
+          status: item.status,
+          usedMb: 0,
+          totalMb: 0,
+          priority: index + 1,
+        })),
+      };
     const aggregate = usage.reduce(
       (acc, entry) => ({
         usedMb: acc.usedMb + entry.usage.usedMb,
@@ -1051,6 +1067,7 @@ export class TransatelProvider implements ConnectivityProvider {
     );
     return {
       ...aggregate,
+      usageAvailable: true,
       subscriptions: usage.map(({ item, usage: balance }, index) => ({
         providerSubscriptionId: item.subscriptionId,
         status: item.status,
@@ -1067,7 +1084,7 @@ export class TransatelProvider implements ConnectivityProvider {
       ? balances!.data!
       : [];
     const dataResources = entries.filter(
-      (entry) => entry.resourceUnit === "KB",
+      (entry) => String(entry.resourceUnit).toUpperCase() === "KB",
     );
     if (!dataResources.length) return null;
     const start = Math.max(

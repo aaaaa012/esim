@@ -432,7 +432,7 @@ describe("OrdersService.reconcileStaleActivationOrders", () => {
       }),
       getEsimDetails: vi.fn().mockResolvedValue({
         subscriptionId: "sub-1",
-        status: "downloaded",
+        status: "active",
         qrPayload: "LPA:1$recovered",
       }),
     } as unknown as ConnectivityService;
