@@ -1,5 +1,7 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { UserRole } from "@visa-compass/shared";
+import { UserRoleName, UserStatus } from "@prisma/client";
 import type { RawBodyRequest } from "@nestjs/common";
 import type { Request } from "express";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
@@ -7,6 +9,7 @@ import type { QueueService } from "../../jobs/queue.service.js";
 import type { ClerkSyncService } from "../identity/clerk-sync.service.js";
 import {
   WebhooksController,
+  OperationsLogsController,
   sanitizeOperationsLog,
 } from "./webhooks.controller.js";
 
@@ -31,6 +34,151 @@ describe("sanitizeOperationsLog", () => {
       qrCode: "[REDACTED]",
       safe: "kept",
     });
+  });
+});
+
+describe("OperationsLogsController", () => {
+  it("combines sanitized provider, dead-letter, provisioning, order, and attributed staff logs", async () => {
+    const createdAt = new Date("2026-08-23T00:00:00.000Z");
+    const prisma = {
+      enabled: true,
+      integrationLog: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "integration-1",
+            operation: "usage",
+            method: "GET",
+            endpoint: "/usage?msisdn=9779800000000",
+            status: 200,
+            durationMs: 12,
+            errorCode: null,
+            errorMessage: null,
+            createdAt,
+            requestBody: { msisdn: "9779800000000" },
+            responseBody: { accessToken: "secret", safe: true },
+          },
+        ]),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      webhookEvent: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "webhook-1",
+            source: "transatel",
+            eventId: "event-1",
+            processedAt: null,
+            deadLetteredAt: createdAt,
+            signatureValid: true,
+            errorMessage: "delivery failed",
+            createdAt,
+            payload: { msisdn: "9779800000000" },
+          },
+        ]),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      auditLog: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "audit-1",
+            module: "STAFF",
+            action: "UPDATED",
+            entity: "Order",
+            entityId: "order-1",
+            performedById: "11111111-1111-4111-8111-111111111111",
+            performedBy: { email: "operator@example.com" },
+            previousValue: { email: "old@example.com" },
+            newValue: { email: "new@example.com" },
+            createdAt,
+          },
+        ]),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      order: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "order-1",
+            orderNumber: "VC-1",
+            channel: "CUSTOMER_WEB",
+            status: "PROVISIONING",
+            createdAt,
+            partner: null,
+          },
+        ]),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      provisioningAttempt: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "attempt-1",
+            orderId: "order-1",
+            provider: "TRANSATEL",
+            status: "FAILED",
+            attempt: 1,
+            requestSnapshot: { activationCode: "secret" },
+            responseSnapshot: null,
+            errorCode: "TIMEOUT",
+            createdAt,
+          },
+        ]),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      provisioningOperation: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "operation-1",
+            state: "RECONCILE_REQUIRED",
+            requestSnapshot: { msisdn: "9779800000000" },
+            responseSnapshot: null,
+            lastErrorCategory: "NETWORK",
+            lastErrorMessage: "timeout",
+            updatedAt: createdAt,
+            order: { orderNumber: "VC-1" },
+          },
+        ]),
+        count: vi.fn().mockResolvedValue(1),
+      },
+    } as unknown as PrismaService;
+    const request = {
+      headers: {},
+      user: {
+        id: "clerk-1",
+        localUserId: "11111111-1111-4111-8111-111111111111",
+        email: "operator@example.com",
+        accountType: UserRoleName.OPERATIONS,
+        roles: [UserRole.OPERATIONS],
+        capabilities: [],
+        status: UserStatus.ACTIVE,
+        mfaVerified: true,
+        mustChangePassword: false,
+      },
+    };
+
+    const result = await new OperationsLogsController(prisma).list(request);
+
+    expect(result.total).toBe(6);
+    expect(result.items).toHaveLength(6);
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "integration-1",
+          title: "GET /usage",
+          requestBody: { msisdn: "[REDACTED]" },
+          responseBody: { accessToken: "[REDACTED]", safe: true },
+        }),
+        expect.objectContaining({
+          id: "webhook-1",
+          statusLabel: "FAILED",
+        }),
+        expect.objectContaining({ id: "attempt-attempt-1" }),
+        expect.objectContaining({ id: "operation-operation-1" }),
+        expect.objectContaining({
+          id: "audit-1",
+          detail: expect.stringContaining(
+            "staff 11111111-1111-4111-8111-111111111111",
+          ),
+        }),
+      ]),
+    );
   });
 });
 

@@ -1023,18 +1023,20 @@ export class TransatelProvider implements ConnectivityProvider {
   async getUsage(subscriptionId: string): Promise<UsageBreakdown> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
     const msisdn = subscriber.msisdn?.replace(/\D/g, "") ?? "";
-    if (!/^\d{6,15}$/.test(msisdn))
+    const iccid = subscriber.iccid?.replace(/\D/g, "") ?? "";
+    const identifier = /^\d{6,15}$/.test(msisdn) ? "msisdn" : "iccid";
+    const identifierValue = identifier === "msisdn" ? msisdn : iccid;
+    if (!identifierValue)
       throw new ApiException({
         code: ApiErrorCode.USAGE_UNAVAILABLE,
         message:
           "Usage details are not available yet. Please check back shortly.",
         status: 404,
-        details:
-          "No valid MSISDN is stored for this eSIM; usage lookup was skipped to avoid sending an ICCID as an MSISDN",
+        details: "No valid MSISDN or ICCID is stored for this eSIM",
       });
-    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?msisdn=${encodeURIComponent(msisdn)}&withBalances=true`;
+    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?${identifier}=${encodeURIComponent(identifierValue)}&withBalances=true`;
     this.logger.log(
-      `Fetching inventory usage for MSISDN: ${msisdn}`,
+      `Fetching inventory usage for ${identifier.toUpperCase()}: ${identifierValue}`,
     );
 
     const response = await this.authorizedFetch(url, {

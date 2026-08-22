@@ -435,6 +435,11 @@ function sanitizeLogText(value: string | null | undefined) {
     .slice(0, 2_000);
 }
 
+function sanitizeLogEndpoint(endpoint: string) {
+  const [path] = endpoint.split("?", 1);
+  return path ?? endpoint;
+}
+
 @Controller("operations/logs")
 @UseGuards(AuthGuard, AccountGuard)
 @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
@@ -491,6 +496,7 @@ export class OperationsLogsController {
       source: string;
       eventId: string;
       processedAt: Date | null;
+      deadLetteredAt: Date | null;
       signatureValid: boolean;
       errorMessage: string | null;
       createdAt: Date;
@@ -502,7 +508,11 @@ export class OperationsLogsController {
       action: string;
       entity: string;
       entityId: string;
+      performedById: string | null;
       createdAt: Date;
+      performedBy: { email: string } | null;
+      previousValue: Prisma.JsonValue | null;
+      newValue: Prisma.JsonValue | null;
     }> = [];
     let orderRows: Array<{
       id: string;
@@ -512,10 +522,33 @@ export class OperationsLogsController {
       createdAt: Date;
       partner: { name: string } | null;
     }> = [];
+    let provisioningAttemptRows: Array<{
+      id: string;
+      orderId: string;
+      provider: string;
+      status: string;
+      attempt: number;
+      requestSnapshot: Prisma.JsonValue;
+      responseSnapshot: Prisma.JsonValue | null;
+      errorCode: string | null;
+      createdAt: Date;
+    }> = [];
+    let provisioningOperationRows: Array<{
+      id: string;
+      state: string;
+      requestSnapshot: Prisma.JsonValue;
+      responseSnapshot: Prisma.JsonValue | null;
+      lastErrorCategory: string | null;
+      lastErrorMessage: string | null;
+      updatedAt: Date;
+      order: { orderNumber: string };
+    }> = [];
     let integrationTotal = 0;
     let webhookTotal = 0;
     let auditTotal = 0;
     let orderTotal = 0;
+    let provisioningAttemptTotal = 0;
+    let provisioningOperationTotal = 0;
 
     if (group === "all" || group === "provider") {
       integrationRows = await safeQuery(
@@ -547,7 +580,12 @@ export class OperationsLogsController {
     }
     if (group === "all" || group === "orders" || group === "staff") {
       auditRows = await safeQuery(
-        () => this.prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take }),
+        () =>
+          this.prisma.auditLog.findMany({
+            orderBy: { createdAt: "desc" },
+            take,
+            include: { performedBy: { select: { email: true } } },
+          }),
         [],
       );
       auditTotal = await safeQuery(
@@ -576,6 +614,40 @@ export class OperationsLogsController {
         () => this.prisma.order.count(),
         orderRows.length,
       );
+      provisioningAttemptRows = await safeQuery(
+        () =>
+          this.prisma.provisioningAttempt.findMany({
+            orderBy: { createdAt: "desc" },
+            take,
+          }),
+        [],
+      );
+      provisioningOperationRows = await safeQuery(
+        () =>
+          this.prisma.provisioningOperation.findMany({
+            orderBy: { updatedAt: "desc" },
+            take,
+            select: {
+              id: true,
+              state: true,
+              requestSnapshot: true,
+              responseSnapshot: true,
+              lastErrorCategory: true,
+              lastErrorMessage: true,
+              updatedAt: true,
+              order: { select: { orderNumber: true } },
+            },
+          }),
+        [],
+      );
+      provisioningAttemptTotal = await safeQuery(
+        () => this.prisma.provisioningAttempt.count(),
+        provisioningAttemptRows.length,
+      );
+      provisioningOperationTotal = await safeQuery(
+        () => this.prisma.provisioningOperation.count(),
+        provisioningOperationRows.length,
+      );
     }
 
     const items = [
@@ -583,7 +655,7 @@ export class OperationsLogsController {
         group: "provider",
         id: row.id,
         identifier: row.operation,
-        title: `${row.method} ${row.endpoint}`,
+        title: `${row.method} ${sanitizeLogEndpoint(row.endpoint)}`,
         detail: sanitizeLogText(row.errorMessage ?? row.errorCode) ?? "Provider request completed",
         status: row.status,
         statusLabel: row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
@@ -599,8 +671,18 @@ export class OperationsLogsController {
         identifier: row.source,
         title: row.eventId,
         detail: sanitizeLogText(row.errorMessage) ?? (row.processedAt ? "Callback processed" : "Callback queued"),
-        status: row.signatureValid ? (row.errorMessage ? 500 : 202) : 401,
-        statusLabel: !row.signatureValid ? "REJECTED" : row.errorMessage ? "FAILED" : row.processedAt ? "PROCESSED" : "QUEUED",
+        status: row.signatureValid
+          ? row.deadLetteredAt || row.errorMessage
+            ? 500
+            : 202
+          : 401,
+        statusLabel: !row.signatureValid
+          ? "REJECTED"
+          : row.deadLetteredAt
+            ? "FAILED"
+            : row.processedAt
+              ? "PROCESSED"
+              : "QUEUED",
         createdAt: row.createdAt,
         error: sanitizeLogText(row.errorMessage),
         requestBody: sanitizeOperationsLog(row.payload),
@@ -614,6 +696,34 @@ export class OperationsLogsController {
         statusLabel: "RECORDED",
         createdAt: row.createdAt,
       })),
+      ...provisioningAttemptRows.map((row) => ({
+        group: "orders" as const,
+        id: `attempt-${row.id}`,
+        identifier: row.provider,
+        title: "Activation attempt",
+        detail: `Attempt ${row.attempt} for order ${row.orderId}`,
+        statusLabel: row.status,
+        createdAt: row.createdAt,
+        error: sanitizeLogText(row.errorCode),
+        requestBody: sanitizeOperationsLog(row.requestSnapshot),
+        responseBody: sanitizeOperationsLog(row.responseSnapshot),
+      })),
+      ...provisioningOperationRows.map((row) => ({
+        group: "orders" as const,
+        id: `operation-${row.id}`,
+        identifier: "Transatel",
+        title: "eSIM activation",
+        detail: `Order ${row.order.orderNumber}`,
+        statusLabel: row.state,
+        createdAt: row.updatedAt,
+        error: row.lastErrorCategory
+          ? sanitizeLogText(
+              `${row.lastErrorCategory}: ${row.lastErrorMessage ?? ""}`,
+            )
+          : null,
+        requestBody: sanitizeOperationsLog(row.requestSnapshot),
+        responseBody: sanitizeOperationsLog(row.responseSnapshot),
+      })),
       ...auditRows
         .filter((row) => group === "all" || (group === "orders" ? isOrderModule(row.module) : !isOrderModule(row.module)))
         .map((row) => ({
@@ -621,15 +731,23 @@ export class OperationsLogsController {
           id: row.id,
           identifier: row.module,
           title: row.action,
-          detail: `${row.entity} ${row.entityId}`,
+          detail: `${row.entity} ${row.entityId}${row.performedById ? ` by staff ${row.performedById}` : row.performedBy?.email ? ` by ${sanitizeLogText(row.performedBy.email)}` : ""}`,
           statusLabel: "RECORDED",
           createdAt: row.createdAt,
+          requestBody: sanitizeOperationsLog(row.previousValue),
+          responseBody: sanitizeOperationsLog(row.newValue),
         })),
     ]
       .filter((row) => matches(row.identifier, row.title, row.detail))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    const total = integrationTotal + webhookTotal + auditTotal + orderTotal;
+    const total =
+      integrationTotal +
+      webhookTotal +
+      auditTotal +
+      orderTotal +
+      provisioningAttemptTotal +
+      provisioningOperationTotal;
     return {
       items: items.slice((page - 1) * pageSize, page * pageSize),
       total: normalizedQuery ? items.length : total,

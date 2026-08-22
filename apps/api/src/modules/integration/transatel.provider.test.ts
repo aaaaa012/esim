@@ -440,6 +440,49 @@ describe("TransatelProvider", () => {
     expect(url).toContain("withBalances=true");
   });
 
+  it("falls back to ICCID when an inventory profile has no MSISDN", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: null,
+    });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/ocs/inventory/api/subscriptions/products": () =>
+        jsonResponse({
+          currentLocale: "en_US",
+          productSubscriptions: [
+            {
+              subscriptionId: "sub-1",
+              status: "active",
+              balances: {
+                data: [
+                  {
+                    resourceName: "DATA",
+                    resourceUnit: "KB",
+                    resourceStartValue: 1024,
+                    resourceValue: 1024,
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+    });
+
+    await provider.getUsage(ORDER_UUID);
+
+    const url = String(
+      fetchMock.mock.calls.find((call) =>
+        String(call[0]).includes("/api/subscriptions/products"),
+      )![0],
+    );
+    expect(url).toContain("iccid=8988247076000000319");
+    expect(url).not.toContain("msisdn=");
+  });
+
   it("returns the QR payload and SM-DP+ address from eSIM details", async () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi
