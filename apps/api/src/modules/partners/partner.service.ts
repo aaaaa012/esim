@@ -1776,7 +1776,7 @@ export class PartnerService {
   }
 
   async confirmHostedDocument(token: string, documentId: string) {
-    const order = await this.sessionOrder(token);
+    const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
     const document = await this.prisma.travelerDocument.findFirst({
       where: { id: documentId, orderId: order.id },
     });
@@ -1803,7 +1803,7 @@ export class PartnerService {
    * triggers a full order re-save.
    */
   async verifyHostedPassport(token: string) {
-    const order = await this.sessionOrder(token);
+    const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
     const passport = order.documents.find(
       (document) => document.type === DocumentType.PASSPORT,
     );
@@ -1981,7 +1981,11 @@ export class PartnerService {
       );
       const updated = await tx.order.updateMany({
         where: { id: order.id, version: order.version },
-        data: { status: OrderStatus.APPROVED, version: { increment: 1 } },
+        data: {
+          status: OrderStatus.APPROVED,
+          compatibilityAcceptedAt: new Date(),
+          version: { increment: 1 },
+        },
       });
       if (updated.count !== 1)
         throw new ApiException({
