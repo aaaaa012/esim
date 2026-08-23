@@ -92,7 +92,10 @@ All handlers call `requireRole(OPERATIONS, SUPER_ADMIN)` in addition to
 | POST   | `/operations/transatel/orders/:id/suspend`                      | Idempotent audited suspension. Body `{ reason, idempotencyKey }`; Operations or Super Admin                           |
 | POST   | `/operations/transatel/orders/:id/terminate`                    | Irreversible idempotent termination. Body `{ reason, idempotencyKey }`; Super Admin only                              |
 
-## Guest orders (no auth; HMAC token)
+## Guest orders (no login; HMAC header)
+
+After creation, every order-specific guest endpoint requires
+`x-guest-order-token`. The token is never accepted in the URL or JSON body.
 
 From `apps/api/src/modules/orders/guest-orders.controller.ts:12-61`.
 All mutations require a per-order HMAC `token` bound to `GUEST_ORDER_SECRET`.
@@ -100,15 +103,15 @@ All mutations require a per-order HMAC `token` bound to `GUEST_ORDER_SECRET`.
 | Method | Path                                              | Behavior                                                                                                   |
 | ------ | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | POST   | `/guest/orders`                                   | Create order without an owner; returns `{ order, token }`. Optional `mobile`, `email`                      |
-| GET    | `/guest/orders/:id?token=`                        | Full order view                                                                                            |
-| PATCH  | `/guest/orders/:id/traveler`                      | Body `{ token, traveler }`                                                                                 |
-| POST   | `/guest/orders/:id/documents`                     | Body `{ token, type, fileName, contentType? }`                                                             |
-| POST   | `/guest/orders/:id/documents/:documentId/confirm` | Body `{ token }`                                                                                           |
-| POST   | `/guest/orders/:id/payment`                       | Body `{ token, provider }`                                                                                 |
-| POST   | `/guest/orders/:id/payment/verify`                | Body `{ token, reference }`                                                                                |
-| POST   | `/guest/orders/:id/payment/simulate`              | Body `{ token, reference, scenario? }` (scenario: SUCCESS/CANCELLED/PENDING/WRONG_AMOUNT/REFUNDED/TIMEOUT) |
-| POST   | `/guest/orders/:id/payment/abandon`               | Body `{ token, reason? }`                                                                                  |
-| POST   | `/guest/orders/:id/cancel`                        | Body `{ token, reason? }`                                                                                  |
+| GET    | `/guest/orders/:id`                               | Customer-redacted order view                                                                               |
+| PATCH  | `/guest/orders/:id/traveler`                      | Traveler body                                                                                              |
+| POST   | `/guest/orders/:id/documents`                     | Body `{ type, fileName, contentType? }`                                                                     |
+| POST   | `/guest/orders/:id/documents/:documentId/confirm` | Empty body                                                                                                 |
+| POST   | `/guest/orders/:id/payment`                       | Body `{ provider }`                                                                                        |
+| POST   | `/guest/orders/:id/payment/verify`                | Body `{ reference }`                                                                                       |
+| POST   | `/guest/orders/:id/payment/simulate`              | Body `{ reference, scenario? }` (scenario: SUCCESS/CANCELLED/PENDING/WRONG_AMOUNT/REFUNDED/TIMEOUT)       |
+| POST   | `/guest/orders/:id/payment/abandon`               | Body `{ reason? }`                                                                                         |
+| POST   | `/guest/orders/:id/cancel`                        | Body `{ reason? }`                                                                                         |
 | POST   | `/guest/orders/topup-lookup`                      | Body `{ mobile }` — subscriber lookup (no token)                                                           |
 
 ## Payments (auth: CUSTOMER)

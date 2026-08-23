@@ -32,9 +32,9 @@ token = HMAC-SHA256(GUEST_ORDER_SECRET, orderId)
 - `POST /guest/orders` `{ planId, compatibilityAccepted, mobile? }` →
   `{ order, token }`. The token is kept in `sessionStorage` (`vc_guest_token`) so the
   same browser can resume an interrupted checkout.
-- Every subsequent mutation is sent to `/guest/orders/:id/…` and must include the token
-  (body for POST/PATCH, `?token=` query for GET). Wrong/missing tokens are rejected with
-  `403`.
+- Every subsequent request is sent to `/guest/orders/:id/…` with the token in
+  `x-guest-order-token`. Tokens are never accepted in URLs or JSON bodies;
+  wrong/missing tokens are rejected with `403`.
 - Signed-in customers use the existing `/customer/orders` routes; the checkout client
   auto-detects the session via Clerk and picks the matching API surface.
 

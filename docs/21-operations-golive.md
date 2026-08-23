@@ -130,6 +130,11 @@ When a provisioning run exhausts its retries (`PROVISIONING_FAILED`), the API:
 Reconciliation failures increment
 `vc_failures_total{kind="reconciliation",label="usage"}` and are logged. Set
 `OPS_ALERT_EMAIL` to a monitored mailbox to receive the provisioning alerts.
+Set `ADMIN_ALERT_EMAIL` to a separately monitored administration distribution
+list. A Redis rate-limit outage opens one deduplicated Ops attention incident
+and sends direct Resend alerts to both addresses without using BullMQ. API
+requests temporarily use a stricter local limiter and a recovery email is sent
+when shared limiting is restored.
 
 ---
 
@@ -185,7 +190,7 @@ point-in-time recovery complement these dumps; they do not replace restore tests
 ## 7. Go-live checklist
 
 - [ ] Apply migrations to a real PostgreSQL: `pnpm --filter api prisma:migrate`.
-- [ ] Set `NODE_ENV=production`, `TRUST_PROXY`, `REDIS_URL`, `OPS_ALERT_EMAIL`.
+- [ ] Set `NODE_ENV=production`, `TRUST_PROXY`, `REDIS_URL`, `OPS_ALERT_EMAIL`, and `ADMIN_ALERT_EMAIL`.
 - [ ] Configure real secrets: `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`,
       `BOOTSTRAP_SUPER_ADMIN_TOKEN`, Khalti, Transatel, Cloudinary, Resend.
 - [ ] Set `STAFF_EMAIL_DOMAIN` (default `visacompassnepal.com`) — staff accounts are

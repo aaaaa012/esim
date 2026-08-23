@@ -47,6 +47,10 @@ the reading code.
 
 ## Guest checkout
 
+Guest order capability tokens are transported in `x-guest-order-token` and
+kept only in browser session storage. Closing the browser intentionally ends
+local guest-order continuity.
+
 | Variable             | Default                       | Used by                                                      |
 | -------------------- | ----------------------------- | ------------------------------------------------------------ |
 | `GUEST_ORDER_SECRET` | `local-guest-checkout-secret` | HMAC token for guest orders (`guest-orders.controller.ts:7`) |
@@ -121,6 +125,7 @@ blocking payment, matching the local-simulator flow.
 | `EMAIL_PROVIDER`                                                        | Must be `resend`; the provider-neutral channel is ready for a future SES adapter                                            |
 | `RESEND_API_KEY`                                                        | Sending-only Resend API key                                                                                                 |
 | `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`               | Verified-domain sender, display name, and optional reply-to address                                                         |
+| `OPS_ALERT_EMAIL`, `ADMIN_ALERT_EMAIL`                                  | Monitored distribution addresses for direct infrastructure and operational alerts                                           |
 | `WHATSAPP_API_URL`                                                      | WhatsApp Graph URL, default `https://graph.facebook.com/v21.0` (`whatsapp.channel.ts:7`)                                    |
 | `WHATSAPP_ACCESS_TOKEN`                                                 | WhatsApp auth (`whatsapp.channel.ts:7`)                                                                                     |
 | `WHATSAPP_PHONE_NUMBER_ID`                                              | WhatsApp sender (`whatsapp.channel.ts:7`)                                                                                   |

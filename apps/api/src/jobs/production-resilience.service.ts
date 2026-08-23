@@ -264,13 +264,13 @@ export class ProductionResilienceService {
         where: { status: { not: AttentionCaseStatus.RESOLVED } },
       }),
       this.prisma.outboxMessage.count({
-        where: { status: { not: OutboxStatus.DISPATCHED } },
+        where: { status: { not: OutboxStatus.PROCESSED } },
       }),
       this.prisma.webhookEvent.count({
         where: { deadLetteredAt: { not: null } },
       }),
       this.prisma.outboxMessage.findFirst({
-        where: { status: { not: OutboxStatus.DISPATCHED } },
+        where: { status: { not: OutboxStatus.PROCESSED } },
         orderBy: { createdAt: "asc" },
         select: { createdAt: true },
       }),
