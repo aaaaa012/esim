@@ -1430,6 +1430,7 @@ export class PartnerService {
         fileName: input.fileName,
         privateAssetId: signed.assetId,
         status: DocumentStatus.PENDING,
+        uploadVerified: false,
         reviewedAt: null,
         reviewedById: null,
         ...(input.type === DocumentType.PASSPORT
@@ -1473,6 +1474,10 @@ export class PartnerService {
         status: 404,
       });
     await this.verifyUploadedDocument(document.privateAssetId);
+    await this.prisma.travelerDocument.update({
+      where: { id: document.id },
+      data: { uploadVerified: true },
+    });
     if (document.type === DocumentType.PASSPORT)
       await this.enqueuePassportOcr(orderId, documentId);
     return {
@@ -1656,7 +1661,7 @@ export class PartnerService {
 
   async hostedCheckout(token: string) {
     const session = await this.hostedCheckoutSession(token);
-    const order = await this.prisma.order.findUnique({
+    let order = await this.prisma.order.findUnique({
       where: { id: session.orderId },
       include: {
         plan: { include: { country: true } },
@@ -1679,6 +1684,64 @@ export class PartnerService {
         message: "Hosted checkout not found",
         status: 404,
       });
+    const requiredDocuments =
+      order.orderType === "TOPUP"
+        ? []
+        : this.requiredDocuments(order.plan.country.isoCode);
+    const currentDocuments = order.documents;
+    const allRequiredManuallyApproved =
+      requiredDocuments.length > 0 &&
+      requiredDocuments.every((type) =>
+        currentDocuments.some(
+          (document) =>
+            document.type === type && document.status === DocumentStatus.APPROVED,
+        ),
+      );
+    if (
+      allRequiredManuallyApproved &&
+      !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        order.documentReviewStatus,
+      )
+    ) {
+      const repaired = await this.prisma.order.updateMany({
+        where: {
+          id: order.id,
+          version: order.version,
+          documentReviewStatus: {
+            notIn: ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"],
+          },
+        },
+        data: {
+          documentReviewStatus: "MANUALLY_APPROVED",
+          version: { increment: 1 },
+        },
+      });
+      if (repaired.count === 1)
+        order = {
+          ...order,
+          documentReviewStatus: "MANUALLY_APPROVED",
+          version: order.version + 1,
+        };
+      else
+        order =
+          (await this.prisma.order.findUnique({
+            where: { id: session.orderId },
+            include: {
+              plan: { include: { country: true } },
+              traveler: { select: { id: true } },
+              documents: {
+                select: {
+                  id: true,
+                  type: true,
+                  status: true,
+                  fileName: true,
+                  passportVerificationStatus: true,
+                },
+              },
+              partner: { select: { name: true, slug: true, brand: true } },
+            },
+          })) ?? order;
+    }
     return {
       sessionId: session.id,
       expiresAt: session.expiresAt,
@@ -1706,10 +1769,7 @@ export class PartnerService {
         travelerComplete: Boolean(order.traveler),
         documents: order.documents,
         documentReviewStatus: order.documentReviewStatus,
-        requiredDocuments:
-          order.orderType === "TOPUP"
-            ? []
-            : this.requiredDocuments(order.plan.country.isoCode),
+        requiredDocuments,
       },
     };
   }
@@ -1762,6 +1822,7 @@ export class PartnerService {
         fileName: input.fileName,
         privateAssetId: signed.assetId,
         status: DocumentStatus.PENDING,
+        uploadVerified: false,
         reviewedAt: null,
         reviewedById: null,
         ...(input.type === DocumentType.PASSPORT
@@ -1802,6 +1863,10 @@ export class PartnerService {
         status: 404,
       });
     await this.verifyUploadedDocument(document.privateAssetId);
+    await this.prisma.travelerDocument.update({
+      where: { id: document.id },
+      data: { uploadVerified: true },
+    });
     return {
       id: document.id,
       type: document.type,
@@ -1832,6 +1897,20 @@ export class PartnerService {
             ? "manual"
             : "asynchronous",
       };
+    const missingRequiredDocuments = this.requiredDocuments(
+      order.plan.country.isoCode,
+    ).filter(
+      (type) =>
+        !order.documents.some(
+          (document) => document.type === type && document.uploadVerified,
+        ),
+    );
+    if (missingRequiredDocuments.length)
+      throw new ApiException({
+        code: "DOCUMENT_UPLOADS_INCOMPLETE",
+        message: `Confirm all required documents before verification: ${missingRequiredDocuments.map(documentTypeLabel).join(", ")}`,
+        status: 409,
+      });
     const passport = order.documents.find(
       (document) => document.type === DocumentType.PASSPORT,
     );

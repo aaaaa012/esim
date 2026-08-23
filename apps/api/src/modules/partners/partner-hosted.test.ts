@@ -226,6 +226,89 @@ describe("partner hosted checkout", () => {
     expect(orderUpdate).not.toHaveBeenCalled();
   });
 
+  it("does not start hosted OCR until every required upload is confirmed", async () => {
+    const orderUpdate = vi.fn();
+    const instance = service({
+      partnerHostedCheckoutSession: {
+        findUnique: vi.fn().mockResolvedValue(session),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...order([
+            {
+              id: "passport-1",
+              type: "PASSPORT",
+              status: "PENDING",
+              uploadVerified: true,
+            },
+          ]),
+          documentReviewStatus: "NOT_STARTED",
+        }),
+        update: orderUpdate,
+      },
+    });
+
+    await expect(
+      instance.verifyHostedPassport("abcdefghijklmnopqrstuvwxyz012345"),
+    ).rejects.toMatchObject({
+      response: { code: "DOCUMENT_UPLOADS_INCOMPLETE" },
+    });
+    expect(orderUpdate).not.toHaveBeenCalled();
+  });
+
+  it("repairs a legacy hosted order when every required document is approved", async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const instance = service({
+      partnerHostedCheckoutSession: {
+        findUnique: vi.fn().mockResolvedValue(session),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...order([
+            {
+              id: "passport-1",
+              type: "PASSPORT",
+              status: "APPROVED",
+              fileName: "passport.jpg",
+              passportVerificationStatus: null,
+            },
+            {
+              id: "ticket-1",
+              type: "TICKET",
+              status: "APPROVED",
+              fileName: "ticket.jpg",
+              passportVerificationStatus: null,
+            },
+          ]),
+          orderType: "INITIAL_PURCHASE",
+          documentReviewStatus: "MANUAL_REVIEW",
+          partner: { name: "Test partner", slug: "test", brand: {} },
+          plan: {
+            id: "plan-1",
+            name: "India 500MB",
+            dataAllowance: "500 MB",
+            validityDays: 1,
+            country: { name: "India", isoCode: "IN" },
+          },
+        }),
+        updateMany,
+      },
+    });
+
+    await expect(
+      instance.hostedCheckout("abcdefghijklmnopqrstuvwxyz012345"),
+    ).resolves.toMatchObject({
+      order: { documentReviewStatus: "MANUALLY_APPROVED" },
+    });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          documentReviewStatus: "MANUALLY_APPROVED",
+        }),
+      }),
+    );
+  });
+
   it("rejects completion when a required document is missing", async () => {
     const instance = service({
       partnerHostedCheckoutSession: {

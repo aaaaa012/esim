@@ -739,6 +739,19 @@ export class OrdersService implements OnModuleInit {
       )
     )
       return this.redact(order);
+    const missingRequiredDocuments = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].filter(
+      (type) =>
+        !order.documents.some(
+          (document) => document.type === type && document.uploadVerified,
+        ),
+    );
+    if (missingRequiredDocuments.length)
+      throw new BadRequestException(
+        `Confirm all required documents before verification: ${missingRequiredDocuments.join(", ")}`,
+      );
     const config = this.prisma.enabled
       ? await this.prisma.platformConfiguration.upsert({
           where: { id: "platform" },
@@ -1440,27 +1453,28 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id);
     const document = order.documents.find((item) => item.id === documentId);
     if (!document) throw new NotFoundException("Document not found");
+    let recordDecision = true;
     if (decision === "APPROVE") {
-      if (document.status === DocumentStatus.APPROVED)
-        return this.redact(order);
+      const alreadyApproved = document.status === DocumentStatus.APPROVED;
+      recordDecision = !alreadyApproved;
       document.status = DocumentStatus.APPROVED;
-      if (
-        order.documents
-          .filter((item) =>
-            [DocumentType.PASSPORT, DocumentType.TICKET].includes(item.type),
-          )
-          .every(
-            (item) =>
-              item.id === documentId || item.status === DocumentStatus.APPROVED,
-          )
-      )
+      const requiredTypes = [DocumentType.PASSPORT, DocumentType.TICKET];
+      const allRequiredApproved = requiredTypes.every((type) =>
+        order.documents.some(
+          (item) =>
+            item.type === type && item.status === DocumentStatus.APPROVED,
+        ),
+      );
+      if (allRequiredApproved)
         order.documentReviewStatus = "MANUALLY_APPROVED";
-      order.timeline.push({
-        from: order.status,
-        to: order.status,
-        at: new Date().toISOString(),
-        reason: `${document.type} received final manual approval from ${actorId}`,
-      });
+      if (!alreadyApproved)
+        order.timeline.push({
+          from: order.status,
+          to: order.status,
+          at: new Date().toISOString(),
+          reason: `${document.type} received final manual approval from ${actorId}`,
+        });
+      else if (!allRequiredApproved) return this.redact(order);
     } else {
       if (document.status === DocumentStatus.APPROVED)
         throw new BadRequestException(
@@ -1478,13 +1492,14 @@ export class OrdersService implements OnModuleInit {
       });
     }
     await this.persistence.save(order);
-    await this.persistence.recordReview(
-      order.id,
-      documentId,
-      actorId,
-      decision,
-      reason,
-    );
+    if (recordDecision)
+      await this.persistence.recordReview(
+        order.id,
+        documentId,
+        actorId,
+        decision,
+        reason,
+      );
     if (decision === "REUPLOAD")
       await this.safeNotify(order, "DOCUMENT_REUPLOAD", reason!.trim());
     if (order.documentReviewStatus === "MANUALLY_APPROVED")

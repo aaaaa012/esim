@@ -371,12 +371,18 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           "PASSPORT",
           "TICKET",
         ];
+        const missing = required.filter((type) => !files[type]);
+        if (missing.length)
+          throw new Error(
+            `Upload your ${missing
+              .map((type) =>
+                type === "PASSPORT" ? "passport" : type.toLowerCase(),
+              )
+              .join(" and ")} to continue`,
+          );
         for (const type of required) {
           const file = files[type];
-          if (!file)
-            throw new Error(
-              `Upload your ${type === "PASSPORT" ? "passport" : type.toLowerCase()} to continue`,
-            );
+          if (!file) continue;
           if (file.size > 10 * 1024 * 1024)
             throw new Error(`${file.name} exceeds the 10 MB limit`);
           const authorization = await api<{
