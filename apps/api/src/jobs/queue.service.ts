@@ -16,6 +16,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueService.name);
   private connection?: Redis;
   private coordination?: Redis;
+  private rateLimit?: Redis;
   private readonly queues = new Map<QueueName, Queue>();
   private readonly workers = new Map<QueueName, Worker>();
   readonly enabled = Boolean(process.env.REDIS_URL);
@@ -167,11 +168,14 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ count: number; retryAfterSeconds: number }> {
     if (!this.enabled)
       return { count: 1, retryAfterSeconds: Math.ceil(windowMs / 1000) };
-    const redis = this.coordinationConnection();
+    const redis = this.rateLimitConnection();
     const key = `visa-compass:rate:${bucket}`;
-    const count = await redis.incr(key);
-    if (count === 1) await redis.pexpire(key, windowMs);
-    const ttl = await redis.pttl(key);
+    const [count, ttl] = (await redis.eval(
+      "local count = redis.call('incr', KEYS[1]); if count == 1 or redis.call('pttl', KEYS[1]) < 0 then redis.call('pexpire', KEYS[1], ARGV[1]); end; return { count, redis.call('pttl', KEYS[1]) }",
+      1,
+      key,
+      String(windowMs),
+    )) as [number, number];
     return {
       count,
       retryAfterSeconds: Math.max(
@@ -258,6 +262,17 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     return this.coordination;
   }
 
+  private rateLimitConnection() {
+    this.rateLimit ??= new Redis(process.env.REDIS_URL!, {
+      maxRetriesPerRequest: 1,
+      enableReadyCheck: true,
+      connectTimeout: Number(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS ?? 400),
+      commandTimeout: Number(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS ?? 400),
+      lazyConnect: false,
+    });
+    return this.rateLimit;
+  }
+
   async onModuleDestroy() {
     await Promise.all([...this.queues.values()].map((queue) => queue.close()));
     await Promise.all(
@@ -265,5 +280,6 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     );
     await this.connection?.quit();
     await this.coordination?.quit();
+    await this.rateLimit?.quit();
   }
 }

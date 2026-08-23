@@ -173,4 +173,47 @@ describe("RateLimitGuard", () => {
     for (let i = 0; i < 1000; i++)
       await expect(guard.canActivate(context)).resolves.toBe(true);
   });
+
+  it("falls back locally when shared Redis limiting fails", async () => {
+    vi.stubEnv("RATE_LIMIT_PER_MINUTE", "20");
+    const queues = {
+      enabled: true,
+      consumeRateLimit: vi.fn().mockRejectedValue(new Error("redis down")),
+    };
+    const incident = { degraded: vi.fn(), recovered: vi.fn() };
+    const guard = new RateLimitGuard(queues as never, incident as never);
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => ({
+          ip: "1.2.3.4",
+          method: "GET",
+          path: "/api/v1/catalog/plans",
+        }),
+        getResponse: () => ({ setHeader() {} }),
+      }),
+    } as never;
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(incident.degraded).toHaveBeenCalledOnce();
+    vi.unstubAllEnvs();
+  });
+
+  it("exempts health endpoints from shared Redis limiting", async () => {
+    const queues = {
+      enabled: true,
+      consumeRateLimit: vi.fn().mockRejectedValue(new Error("redis down")),
+    };
+    const guard = new RateLimitGuard(queues as never);
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => ({
+          ip: "127.0.0.1",
+          method: "GET",
+          path: "/api/v1/health/ready",
+        }),
+        getResponse: () => ({ setHeader() {} }),
+      }),
+    } as never;
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(queues.consumeRateLimit).not.toHaveBeenCalled();
+  });
 });

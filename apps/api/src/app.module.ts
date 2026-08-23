@@ -59,6 +59,7 @@ import { AuthController } from "./modules/identity/auth.controller.js";
 import { AccountGuard } from "./common/auth.guard.js";
 import { PassportVerificationRateLimitGuard } from "./common/passport-verification.rate-limit.guard.js";
 import { RateLimitGuard } from "./common/rate-limit.guard.js";
+import { RedisRateLimitIncidentService } from "./common/redis-rate-limit-incident.service.js";
 import { CustomerEsimsController } from "./modules/esims/customer-esims.controller.js";
 import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
 import { TransatelOperationsController } from "./modules/integration/transatel-operations.controller.js";
@@ -114,6 +115,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
   providers: [
     AccountGuard,
     RateLimitGuard,
+    RedisRateLimitIncidentService,
     PassportVerificationRateLimitGuard,
     CatalogService,
     OrdersService,

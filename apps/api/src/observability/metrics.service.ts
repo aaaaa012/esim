@@ -26,6 +26,7 @@ export class MetricsService {
   private statuses = new Map<string, number>();
   private durations = new Map<string, number>();
   private failures = new Map<string, number>();
+  private redisRateLimitDegraded = false;
 
   recordRequest(
     method: string,
@@ -44,6 +45,10 @@ export class MetricsService {
     this.failures.set(key, (this.failures.get(key) ?? 0) + 1);
   }
 
+  setRedisRateLimitDegraded(degraded: boolean) {
+    this.redisRateLimitDegraded = degraded;
+  }
+
   render(): string {
     const lines: string[] = [];
     const uptime = Math.floor((Date.now() - this.started) / 1000);
@@ -52,6 +57,13 @@ export class MetricsService {
     );
     lines.push("# TYPE vc_process_uptime_seconds gauge");
     lines.push(`vc_process_uptime_seconds ${uptime}`);
+    lines.push(
+      "# HELP vc_redis_rate_limit_degraded Whether API rate limiting is using the local fallback",
+    );
+    lines.push("# TYPE vc_redis_rate_limit_degraded gauge");
+    lines.push(
+      `vc_redis_rate_limit_degraded ${this.redisRateLimitDegraded ? 1 : 0}`,
+    );
     lines.push(
       "# HELP vc_http_requests_total HTTP requests by route and method",
     );

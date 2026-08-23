@@ -18,6 +18,7 @@ const validProductionEnv = {
   BOOTSTRAP_SUPER_ADMIN_TOKEN: 'bootstrap-token-with-length-over-32-chars',
   GUEST_ORDER_SECRET: 'guest-order-secret-with-length-over-32',
   OPS_ALERT_EMAIL: 'ops@visacompass.example',
+  ADMIN_ALERT_EMAIL: 'admin-alerts@visacompass.example',
   PAYMENT_MODE: 'khalti',
   PAYMENT_WEBHOOK_SECRET: 'khalti-webhook-secret-value-16+',
   KHALTI_SECRET_KEY: 'live_khalti_secret',
