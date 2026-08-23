@@ -18,6 +18,9 @@ import {
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { assertSafeWebhookUrl } from "../../jobs/partner-webhook.processor.js";
+
+const MAX_WEBHOOK_ENDPOINTS_PER_PARTNER = 20;
 
 export const PARTNER_SCOPES = [
   "catalog:read",
@@ -556,6 +559,18 @@ export class PartnerAdminService {
   ) {
     await this.requirePartner(partnerId);
     const url = this.validateWebhookUrl(input.url);
+    await assertSafeWebhookUrl(url).catch((error: unknown) => {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : "Webhook URL is not allowed",
+      );
+    });
+    const endpointCount = await this.prisma.partnerWebhookEndpoint.count({
+      where: { partnerId },
+    });
+    if (endpointCount >= MAX_WEBHOOK_ENDPOINTS_PER_PARTNER)
+      throw new BadRequestException(
+        `A partner can have at most ${MAX_WEBHOOK_ENDPOINTS_PER_PARTNER} webhook endpoints`,
+      );
     const secret = randomBytes(32).toString("base64url");
     const endpoint = await this.prisma.partnerWebhookEndpoint.create({
       data: {
@@ -686,10 +701,15 @@ export class PartnerAdminService {
     if (refund.status !== PartnerRefundStatus.REQUESTED)
       throw new BadRequestException("Refund request is already decided");
     return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.partnerRefundRequest.update({
-        where: { id },
-        data: { status, decidedById: actor.id, decidedAt: new Date() },
+      const decidedAt = new Date();
+      const decision = await tx.partnerRefundRequest.updateMany({
+        where: { id, status: PartnerRefundStatus.REQUESTED },
+        data: { status, decidedById: actor.id, decidedAt },
       });
+      if (decision.count !== 1)
+        throw new ConflictException(
+          "Refund request was already decided by another request; reload and retry",
+        );
       if (
         status === PartnerRefundStatus.APPROVED &&
         refund.order.partnerSettlementMethod ===
@@ -781,7 +801,17 @@ export class PartnerAdminService {
         "DECIDED",
         { status, reason },
       );
-      return updated;
+      return {
+        id: refund.id,
+        partnerId: refund.partnerId,
+        orderId: refund.orderId,
+        amountPaisa: refund.amountPaisa,
+        reason: refund.reason,
+        status,
+        decidedById: actor.id,
+        decidedAt,
+        createdAt: refund.createdAt,
+      };
     });
   }
 

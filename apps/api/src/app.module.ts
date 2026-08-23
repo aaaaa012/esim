@@ -38,6 +38,7 @@ import { AdminService } from "./modules/admin/admin.service.js";
 import { ProvisioningProcessor } from "./jobs/provisioning.processor.js";
 import { PartnersController } from "./modules/partners/partners.controller.js";
 import { PartnerAuthGuard } from "./modules/partners/partner-auth.guard.js";
+import { PartnerApiLoggingInterceptor } from "./modules/partners/partner-api-logging.interceptor.js";
 import { PartnerService } from "./modules/partners/partner.service.js";
 import { PartnerAdminController } from "./modules/partners/partner-admin.controller.js";
 import { PartnerAdminService } from "./modules/partners/partner-admin.service.js";
@@ -138,6 +139,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     MetricsService,
     ClerkSyncService,
     PartnerAuthGuard,
+    PartnerApiLoggingInterceptor,
     NotificationService,
     ResendEmailChannel,
     { provide: EMAIL_CHANNEL, useExisting: ResendEmailChannel },

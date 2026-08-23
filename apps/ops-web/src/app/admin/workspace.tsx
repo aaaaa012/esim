@@ -150,7 +150,13 @@ export default function AdminWorkspace() {
       headers: { ...headers, ...init?.headers },
     });
     const v = await r.json();
-    if (!r.ok) throw new Error(v.error?.message ?? "Request failed");
+    if (!r.ok) {
+      const error = new Error(v.error?.message ?? "Request failed") as Error & {
+        code?: string;
+      };
+      error.code = v.error?.code;
+      throw error;
+    }
     return v.data as T;
   };
   const [tab, setTab] = useState("Plans");
@@ -192,6 +198,9 @@ export default function AdminWorkspace() {
     topUpStatus?: "BOUND" | "UNAVAILABLE";
   } | null>(null);
   const [hostedLinkBusy, setHostedLinkBusy] = useState(false);
+  const [topUpFallback, setTopUpFallback] = useState<{ mobile: string } | null>(
+    null,
+  );
   const [lookupState, setLookupState] = useState<{
     status: "idle" | "checking" | "ok" | "error";
     message?: string | undefined;
@@ -582,7 +591,7 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
-  const generateCheckoutLink = async () => {
+  const generateCheckoutLink = async (allowInitialPurchaseFallback = false) => {
     if (!hostedLinkFor || !hostedLinkPlanId) {
       toast.error("Choose a plan first");
       return;
@@ -602,6 +611,9 @@ export default function AdminWorkspace() {
           ...(hostedLinkMobile.trim()
             ? { topUpMobile: hostedLinkMobile.trim() }
             : {}),
+          ...(allowInitialPurchaseFallback
+            ? { allowInitialPurchaseFallback: true }
+            : {}),
         }),
       });
       setHostedLinkResult({
@@ -617,6 +629,13 @@ export default function AdminWorkspace() {
       });
       toast.success("Checkout link generated");
     } catch (error) {
+      if (
+        (error as { code?: unknown }).code === "TOPUP_NOT_ELIGIBLE" &&
+        hostedLinkMobile.trim()
+      ) {
+        setTopUpFallback({ mobile: hostedLinkMobile.trim() });
+        return;
+      }
       toast.error(
         error instanceof Error ? error.message : "Link generation failed",
       );
@@ -1888,6 +1907,40 @@ export default function AdminWorkspace() {
                       </div>
                     </div>
                   )}
+                </DialogContent>
+              </Dialog>
+              <Dialog
+                open={Boolean(topUpFallback)}
+                onOpenChange={(open) => {
+                  if (!open) setTopUpFallback(null);
+                }}
+              >
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Top-up could not be confirmed</DialogTitle>
+                    <DialogDescription>
+                      {topUpFallback?.mobile} does not have an eligible eSIM
+                      for the selected plan. Do not create a new eSIM unless
+                      the customer has explicitly agreed to an initial
+                      purchase.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => setTopUpFallback(null)}
+                    >
+                      Try another number
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setTopUpFallback(null);
+                        void generateCheckoutLink(true);
+                      }}
+                    >
+                      Continue as initial purchase
+                    </Button>
+                  </DialogFooter>
                 </DialogContent>
               </Dialog>
               <Dialog

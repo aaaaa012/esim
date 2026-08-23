@@ -90,7 +90,8 @@ type CompleteOrderInput = {
           }
       )
     | undefined;
-  documentVerificationId: string;
+  documentVerificationId?: string | undefined;
+  topUpMobile?: string | undefined;
   consent: {
     compatibilityAccepted: true;
     termsAccepted: true;
@@ -218,20 +219,42 @@ export class PartnerService {
 
   async createUploadSessions(partnerId: string, input: UploadSessionInput) {
     await this.partner(partnerId);
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60_000);
+    const activeExternalOrderKey = `${partnerId}:${input.externalOrderId}`;
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 24 * 60 * 60_000);
     const config = await this.prisma.platformConfiguration.upsert({
       where: { id: "platform" },
       update: {},
       create: { id: "platform" },
     });
-    const checkoutReleaseAt = new Date(Date.now() + config.ocrCheckoutWaitMs);
+    const checkoutReleaseAt = new Date(now.getTime() + config.ocrCheckoutWaitMs);
     const verificationId = randomUUID();
-    const response = await this.prisma.$transaction(async (tx) => {
+    const create = async () => this.prisma.$transaction(async (tx) => {
+      const existing = await tx.partnerDocumentVerification.findUnique({
+        where: { activeExternalOrderKey },
+        include: { documents: true },
+      });
+      if (existing) {
+        const resumable =
+          !existing.consumedAt &&
+          existing.expiresAt > now &&
+          !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
+        if (resumable)
+          return this.uploadSessionResponse(existing, true);
+        await tx.partnerDocumentVerification.update({
+          where: { id: existing.id },
+          data: {
+            activeExternalOrderKey: null,
+            ...(existing.expiresAt <= now ? { status: "EXPIRED" } : {}),
+          },
+        });
+      }
       await tx.partnerDocumentVerification.create({
         data: {
           id: verificationId,
           partnerId,
           externalOrderId: input.externalOrderId,
+          activeExternalOrderKey,
           travelerSnapshot: this.travelerData(
             input.traveler,
           ) as unknown as Prisma.InputJsonValue,
@@ -286,9 +309,60 @@ export class PartnerService {
         expiresAt,
         checkoutReleaseAt,
         documents: items,
+        resumed: false,
       };
     });
-    return response;
+    try {
+      return await create();
+    } catch (error) {
+      if (
+        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+        error.code !== "P2002"
+      )
+        throw error;
+      const existing = await this.prisma.partnerDocumentVerification.findUnique({
+        where: { activeExternalOrderKey },
+        include: { documents: true },
+      });
+      if (!existing) throw error;
+      return this.uploadSessionResponse(existing, true);
+    }
+  }
+
+  private uploadSessionResponse(
+    verification: {
+      id: string;
+      externalOrderId: string;
+      status: string;
+      expiresAt: Date;
+      checkoutReleaseAt: Date | null;
+      documents: Array<{
+        id: string;
+        type: DocumentType;
+        fileName: string;
+        expiresAt: Date;
+      }>;
+    },
+    resumed: boolean,
+  ) {
+    return {
+      verificationId: verification.id,
+      externalOrderId: verification.externalOrderId,
+      status: verification.status,
+      expiresAt: verification.expiresAt,
+      checkoutReleaseAt: verification.checkoutReleaseAt,
+      resumed,
+      documents: verification.documents.map((document) => ({
+        id: document.id,
+        type: document.type,
+        fileName: document.fileName,
+        expiresAt: document.expiresAt,
+        upload: this.storage.createPartnerDocumentUpload(
+          document.id,
+          document.type as unknown as SharedDocumentType,
+        ).upload,
+      })),
+    };
   }
 
   async documentVerification(partnerId: string, verificationId: string) {
@@ -456,6 +530,18 @@ export class PartnerService {
         code: "PLAN_UNAVAILABLE",
         message: "Plan is unavailable",
       });
+    if (input.topUpMobile)
+      return this.createCompleteTopUpOrder(
+        partner,
+        { ...input, topUpMobile: input.topUpMobile },
+        plan,
+        requestContext,
+      );
+    if (!input.documentVerificationId)
+      throw new BadRequestException({
+        code: "DOCUMENT_VERIFICATION_REQUIRED",
+        message: "Document verification is required for an initial purchase",
+      });
     const verification =
       await this.prisma.partnerDocumentVerification.findFirst({
         where: { id: input.documentVerificationId, partnerId },
@@ -565,6 +651,7 @@ export class PartnerService {
               : {}),
             consumedAt: new Date(),
             consumedOrderId: orderId,
+            activeExternalOrderKey: null,
           },
         });
       if (consumedVerification.count !== 1)
@@ -721,6 +808,143 @@ export class PartnerService {
       );
     }
     return this.order(partnerId, orderId);
+  }
+
+  private async createCompleteTopUpOrder(
+    partner: { id: string; code: string },
+    input: CompleteOrderInput & { topUpMobile: string },
+    plan: Prisma.PlanGetPayload<{ include: { country: true } }>,
+    requestContext: { ipAddress: string; userAgent: string },
+  ) {
+    const target = await this.applicationOrders.resolveSubscriber(input.topUpMobile);
+    const inventory = target?.inventory;
+    if (
+      !inventory ||
+      !target ||
+      target.planCountryCode.toUpperCase() !== plan.country.isoCode.toUpperCase()
+    )
+      throw new ApiException({
+        code: "TOPUP_NOT_ELIGIBLE",
+        message:
+          "This number cannot be used for a top-up with the selected plan. Create a documented initial purchase only after customer consent.",
+        status: 422,
+      });
+
+    const amountPaisa = Math.round(Number(plan.sellingPrice) * 100);
+    const orderId = randomUUID();
+    const acceptedAt = new Date(input.consent.acceptedAt);
+    await this.prisma.$transaction(async (tx) => {
+      const duplicate = await tx.order.findFirst({
+        where: { partnerId: partner.id, externalOrderId: input.externalOrderId },
+      });
+      if (duplicate)
+        throw new ApiException({
+          code: "EXTERNAL_ORDER_ID_EXISTS",
+          message: "External order ID already exists",
+          status: 409,
+        });
+      const partnerCustomer = await this.ensurePartnerCustomer(
+        tx,
+        partner.code,
+        partner.id,
+        input.externalCustomerId,
+      );
+      await tx.order.create({
+        data: {
+          id: orderId,
+          orderNumber: `VC-${new Date().getUTCFullYear()}-${orderId.slice(0, 8).toUpperCase()}`,
+          channel: OrderChannel.PARTNER_API,
+          customerId: partnerCustomer.customerId,
+          partnerId: partner.id,
+          partnerCustomerId: partnerCustomer.id,
+          externalOrderId: input.externalOrderId,
+          partnerSettlementMethod: PartnerSettlementMethod.PARTNER_ACCOUNT,
+          partnerPaymentProvider: null,
+          partnerMetadata: input.metadata ?? Prisma.JsonNull,
+          planId: plan.id,
+          orderType: "TOPUP",
+          status: OrderStatus.APPROVED,
+          subtotal: amountPaisa / 100,
+          totalAmount: amountPaisa / 100,
+          pricingSnapshot: {
+            pricingSource: "PUBLIC_CATALOGUE",
+            planId: plan.id,
+            name: plan.name,
+            countryCode: plan.country.isoCode,
+            dataAllowance: plan.dataAllowance,
+            validityDays: plan.validityDays,
+            amountPaisa,
+            currency: "NPR",
+            capturedAt: new Date().toISOString(),
+            topUpMobile: input.topUpMobile,
+            targetEsimId: inventory.id,
+            ...(target.traveler?.email
+              ? { topUpEmail: target.traveler.email }
+              : {}),
+          },
+          compatibilityAcceptedAt: acceptedAt,
+          events: { create: { fromStatus: null, toStatus: OrderStatus.APPROVED } },
+        },
+      });
+      await tx.customerConsent.createMany({
+        data: ["COMPATIBILITY", "TERMS", "PRIVACY"].map((type) => ({
+          customerId: partnerCustomer.customerId,
+          type,
+          version: "1.0",
+          ipAddress: requestContext.ipAddress,
+          userAgent: requestContext.userAgent.slice(0, 500),
+          acceptedAt,
+        })),
+      });
+      await this.debitAccount(
+        tx,
+        partner.id,
+        orderId,
+        amountPaisa,
+        input.externalOrderId,
+      );
+      await this.createEvent(tx, partner.id, orderId, "order.accepted", orderId, {
+        orderId,
+        externalOrderId: input.externalOrderId,
+        status: OrderStatus.APPROVED,
+        fulfillmentStatus: "PENDING",
+        amountPaisa,
+        currency: "NPR",
+      });
+      await tx.outboxMessage.create({
+        data: {
+          dedupeKey: `partner-fulfillment-${orderId}`,
+          topic: "provisioning",
+          jobName: "advance-approved-order",
+          payload: { orderId },
+          orderId,
+        },
+      });
+    });
+    const handoff = await Promise.allSettled([
+      this.applicationOrders.refreshFromPersistence(orderId),
+      this.partnerWebhooks.enqueuePending(),
+    ]);
+    for (const result of handoff)
+      if (result.status === "rejected")
+        this.logger.error(
+          result.reason instanceof Error
+            ? result.reason.message
+            : "Partner top-up post-commit handoff failed",
+        );
+    try {
+      await this.applicationOrders.approveToProvisioning(
+        orderId,
+        "Partner top-up auto-approved",
+      );
+    } catch (error) {
+      this.logger.error(
+        `Partner top-up provision handoff failed for ${orderId}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
+    return this.order(partner.id, orderId);
   }
 
   async createQuote(
@@ -1164,12 +1388,14 @@ export class PartnerService {
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),
       pointOfSaleCode: traveler.pointOfSaleCode ?? null,
     };
-    await this.prisma.traveler.upsert({
-      where: { orderId },
-      update: data,
-      create: { orderId, ...data },
+    await this.prisma.$transaction(async (tx) => {
+      await this.bumpInTransaction(tx, order.id, order.version);
+      await tx.traveler.upsert({
+        where: { orderId },
+        update: data,
+        create: { orderId, ...data },
+      });
     });
-    await this.bump(order.id, order.version);
     return this.order(partnerId, orderId);
   }
 
@@ -1186,9 +1412,11 @@ export class PartnerService {
       orderId,
       input.type as unknown as SharedDocumentType,
     );
-    const document = await this.prisma.travelerDocument.upsert({
-      where: { orderId_type: { orderId, type: input.type } },
-      update: {
+    const document = await this.prisma.$transaction(async (tx) => {
+      await this.bumpInTransaction(tx, order.id, order.version);
+      return tx.travelerDocument.upsert({
+        where: { orderId_type: { orderId, type: input.type } },
+        update: {
         fileName: input.fileName,
         privateAssetId: signed.assetId,
         status: DocumentStatus.PENDING,
@@ -1203,15 +1431,15 @@ export class PartnerService {
               passportVerifiedAt: null,
             }
           : {}),
-      },
-      create: {
+        },
+        create: {
         orderId,
         type: input.type,
         fileName: input.fileName,
         privateAssetId: signed.assetId,
-      },
+        },
+      });
     });
-    await this.bump(order.id, order.version);
     return {
       id: document.id,
       type: document.type,
@@ -1267,6 +1495,7 @@ export class PartnerService {
       externalOrderId: string;
       externalCustomerId: string;
       topUpMobile?: string | undefined;
+      allowInitialPurchaseFallback?: true | undefined;
     },
   ) {
     const partner = await this.partner(partnerId);
@@ -1301,16 +1530,17 @@ export class PartnerService {
       topUp !== null &&
       topUp.planCountryCode.toUpperCase() ===
         plan.country.isoCode.toUpperCase();
-    // A top-up is only valid when we can bind to a real eSIM. If the subscriber
-    // resolved by mobile but has no persisted inventory (e.g. an older order
-    // without a customerEsim row) we fall back to a clean new purchase rather
-    // than charging a "top-up" that would silently provision a fresh profile.
+    // A top-up is only valid when we can bind to a real eSIM. A fallback to a
+    // new purchase is deliberately opt-in: callers must obtain consent before
+    // changing the requested product from a top-up to a new eSIM.
     const isTopUp = correctCountry && Boolean(topUp?.inventory);
-    // When a top-up was requested but could not be bound, surface the reason to
-    // the client so it can ask the operator to proceed as a new purchase rather
-    // than silently downgrading without any signal.
-    const topUpUnavailable =
-      Boolean(input.topUpMobile) && !isTopUp && topUp !== null;
+    if (input.topUpMobile && !isTopUp && !input.allowInitialPurchaseFallback)
+      throw new ApiException({
+        code: "TOPUP_NOT_ELIGIBLE",
+        message:
+          "This number cannot be used for a top-up with the selected plan. Ask the customer whether they want a new eSIM purchase instead.",
+        status: 422,
+      });
     if (!isTopUp)
       await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const token = randomBytes(24).toString("base64url");
@@ -1406,17 +1636,7 @@ export class PartnerService {
               : {}),
             status: "BOUND",
           }
-        : topUpUnavailable
-          ? {
-              mobile: input.topUpMobile,
-              ...(topUp?.traveler
-                ? {
-                    subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}`,
-                  }
-                : {}),
-              status: "UNAVAILABLE",
-            }
-          : undefined,
+        : undefined,
     };
   }
 
@@ -1496,12 +1716,14 @@ export class PartnerService {
 
   async setHostedTraveler(token: string, traveler: TravelerInput) {
     const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
-    await this.prisma.traveler.upsert({
-      where: { orderId: order.id },
-      update: this.travelerData(traveler),
-      create: { orderId: order.id, ...this.travelerData(traveler) },
+    await this.prisma.$transaction(async (tx) => {
+      await this.bumpInTransaction(tx, order.id, order.version);
+      await tx.traveler.upsert({
+        where: { orderId: order.id },
+        update: this.travelerData(traveler),
+        create: { orderId: order.id, ...this.travelerData(traveler) },
+      });
     });
-    await this.bump(order.id, order.version);
     return this.hostedCheckout(token);
   }
 
@@ -1517,9 +1739,11 @@ export class PartnerService {
       order.id,
       input.type as unknown as SharedDocumentType,
     );
-    const document = await this.prisma.travelerDocument.upsert({
-      where: { orderId_type: { orderId: order.id, type: input.type } },
-      update: {
+    const document = await this.prisma.$transaction(async (tx) => {
+      await this.bumpInTransaction(tx, order.id, order.version);
+      return tx.travelerDocument.upsert({
+        where: { orderId_type: { orderId: order.id, type: input.type } },
+        update: {
         fileName: input.fileName,
         privateAssetId: signed.assetId,
         status: DocumentStatus.PENDING,
@@ -1534,15 +1758,15 @@ export class PartnerService {
               passportVerifiedAt: null,
             }
           : {}),
-      },
-      create: {
+        },
+        create: {
         orderId: order.id,
         type: input.type,
         fileName: input.fileName,
         privateAssetId: signed.assetId,
-      },
+        },
+      });
     });
-    await this.bump(order.id, order.version);
     return {
       id: document.id,
       type: document.type,
@@ -1773,6 +1997,21 @@ export class PartnerService {
           reason: "Hosted checkout completed",
         },
       });
+      await this.createEvent(
+        tx,
+        order.partnerId!,
+        order.id,
+        "order.accepted",
+        order.id,
+        {
+          orderId: order.id,
+          externalOrderId: order.externalOrderId,
+          status: OrderStatus.APPROVED,
+          fulfillmentStatus: "PENDING",
+          amountPaisa,
+          currency: "NPR",
+        },
+      );
       await tx.customerConsent.createMany({
         data: ["COMPATIBILITY", "TERMS", "PRIVACY"].map((type) => ({
           customerId: order.customerId,
@@ -1898,10 +2137,16 @@ export class PartnerService {
       const refund = await tx.partnerRefundRequest.create({
         data: { partnerId, orderId, amountPaisa, reason },
       });
-      await tx.order.updateMany({
+      const updated = await tx.order.updateMany({
         where: { id: orderId, version: order.version },
         data: { status: OrderStatus.REFUND_PENDING, version: { increment: 1 } },
       });
+      if (updated.count !== 1)
+        throw new ApiException({
+          code: "ORDER_CONFLICT",
+          message: "Order was changed by another request; reload and retry",
+          status: 409,
+        });
       await tx.orderEvent.create({
         data: {
           orderId,
@@ -2135,6 +2380,23 @@ export class PartnerService {
 
   private async bump(id: string, version: number) {
     const result = await this.prisma.order.updateMany({
+      where: { id, version },
+      data: { version: { increment: 1 } },
+    });
+    if (result.count !== 1)
+      throw new ApiException({
+        code: "ORDER_CONFLICT",
+        message: "Order was changed by another request; reload and retry",
+        status: 409,
+      });
+  }
+
+  private async bumpInTransaction(
+    tx: Prisma.TransactionClient,
+    id: string,
+    version: number,
+  ) {
+    const result = await tx.order.updateMany({
       where: { id, version },
       data: { version: { increment: 1 } },
     });

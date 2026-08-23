@@ -47,11 +47,14 @@ export class PartnerAuthGuard implements CanActivate {
       .switchToHttp()
       .getResponse<{ setHeader(name: string, value: string): void }>();
     const token = this.bearer(request.headers.authorization);
-    const [keyPrefix, secret] = token.split(".");
+    const parts = token.split(".");
+    const [keyPrefix, secret] = parts;
     if (
+      parts.length !== 2 ||
       !keyPrefix ||
       !secret ||
-      !/^vc_partner_[A-Za-z0-9_-]{8,32}$/.test(keyPrefix)
+      !/^vc_partner_[A-Za-z0-9_-]{8,32}$/.test(keyPrefix) ||
+      !/^[A-Za-z0-9_-]{32,128}$/.test(secret)
     )
       throw PARTNER_UNAUTHORIZED("Your API key is invalid.");
     const credential = await this.prisma.partnerCredential.findUnique({

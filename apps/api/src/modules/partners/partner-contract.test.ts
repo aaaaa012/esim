@@ -54,6 +54,23 @@ describe("simplified partner order contract", () => {
     if (result.success) expect(result.data.settlement).toBeUndefined();
   });
 
+  it("accepts a direct top-up without document verification", () => {
+    expect(
+      completeCreateSchema.safeParse({
+        externalOrderId: "agency-topup-1044",
+        externalCustomerId: "customer-91",
+        planId: "f17d6006-69fe-42ed-9ec8-47777f7569f1",
+        topUpMobile: "+9779800000000",
+        consent: {
+          compatibilityAccepted: true,
+          termsAccepted: true,
+          privacyAccepted: true,
+          acceptedAt: "2026-08-08T00:00:00.000Z",
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects the former direct traveler and document order contract", () => {
     expect(
       completeCreateSchema.safeParse({

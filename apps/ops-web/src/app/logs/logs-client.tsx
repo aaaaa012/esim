@@ -77,6 +77,7 @@ const ACTION_FILTER_OPTIONS = [
   { value: "khalti-initiate", label: "Khalti Payment Initiation" },
   { value: "khalti-callback", label: "Khalti Payment Callback Received" },
   { value: "transatel-callback", label: "Transatel Network Update Received" },
+  { value: "partner-api", label: "Partner API Request" },
 ];
 
 function dump(value: unknown): string {
@@ -114,6 +115,7 @@ function activityLabel(entry: Pick<LogEntry, "group" | "identifier" | "title">):
 
   const operation = entry.identifier?.toLowerCase() ?? "";
   const endpoint = entry.title.toLowerCase();
+  if (operation === "partner-api") return "Partner API Request";
   const provider = operation.startsWith("khalti") || endpoint.includes("epayment") ? "Khalti" : "Transatel";
   if (operation.includes("token") || endpoint.includes("/token")) return `${provider} Access Token Request`;
   if (operation.includes("initiat") || endpoint.includes("/initiate")) return "Khalti Payment Initiation";
