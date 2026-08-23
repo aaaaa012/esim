@@ -32,6 +32,7 @@ type DocumentAuthorization = {
     apiKey?: string;
     publicId?: string;
     deliveryType?: string;
+    allowedFormats?: string;
     timestamp: number;
     signature: string;
     folder: string;
@@ -130,6 +131,8 @@ export default function EsimDetails({ id }: { id: string }) {
       form.append("folder", authorization.upload.folder);
       form.append("public_id", authorization.upload.publicId!);
       form.append("type", authorization.upload.deliveryType!);
+      if (authorization.upload.allowedFormats)
+        form.append("allowed_formats", authorization.upload.allowedFormats);
       const uploaded = await authFetch(authorization.upload.endpoint, {
         method: "POST",
         body: form,

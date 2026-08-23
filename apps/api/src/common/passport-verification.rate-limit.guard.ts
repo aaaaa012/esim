@@ -22,25 +22,22 @@ export class PassportVerificationRateLimitGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const key = clientIp(request);
     if (this.queues?.enabled) {
-      const shared = await this.queues.consumeRateLimit(
-        `passport-ocr:${key}`,
-        60_000,
-      );
-      if (shared.count <= this.limit) return true;
-      const response = context
-        .switchToHttp()
-        .getResponse<{
-          setHeader(name: string, value: string | number): void;
-        }>();
-      response.setHeader("retry-after", shared.retryAfterSeconds);
-      throw new HttpException(
-        {
-          code: "RATE_LIMITED",
-          message:
-            "Too many passport verification attempts. Please wait a minute and try again.",
-        },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+      try {
+        const shared = await this.queues.consumeRateLimit(
+          `passport-ocr:${key}`,
+          60_000,
+        );
+        if (shared.count <= this.limit) return true;
+        const response = context
+          .switchToHttp()
+          .getResponse<{ setHeader(name: string, value: string | number): void }>();
+        response.setHeader("retry-after", shared.retryAfterSeconds);
+        throw this.rejected();
+      } catch (error) {
+        if (error instanceof HttpException) throw error;
+        // The global guard already opens the Redis incident. Keep this
+        // expensive endpoint protected by its stricter local bucket.
+      }
     }
     const now = Date.now();
     const bucket = this.hits.get(key);
@@ -50,7 +47,11 @@ export class PassportVerificationRateLimitGuard implements CanActivate {
     }
     bucket.count += 1;
     if (bucket.count <= this.limit) return true;
-    throw new HttpException(
+    throw this.rejected();
+  }
+
+  private rejected() {
+    return new HttpException(
       {
         code: "RATE_LIMITED",
         message:

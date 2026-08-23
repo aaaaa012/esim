@@ -6,6 +6,7 @@ import {
   Injectable,
 } from "@nestjs/common";
 import { clientIp } from "./client-ip.js";
+import { QueueService } from "../jobs/queue.service.js";
 
 type Bucket = { attempts: number; resetAt: number };
 
@@ -30,7 +31,9 @@ export class BootstrapRateLimitGuard implements CanActivate {
   );
   private readonly windowMs = 60_000;
 
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly queues?: QueueService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context
       .switchToHttp()
       .getRequest<{
@@ -42,6 +45,30 @@ export class BootstrapRateLimitGuard implements CanActivate {
     const userId = request.user?.localUserId ?? ip;
     const now = Date.now();
     this.prune(now);
+
+    if (this.queues?.enabled) {
+      try {
+        const [userBucket, ipBucket] = await Promise.all([
+          this.queues.consumeRateLimit(`bootstrap:user:${userId}`, this.windowMs),
+          this.queues.consumeRateLimit(`bootstrap:ip:${ip}`, this.windowMs),
+        ]);
+        if (
+          userBucket.count <= this.perUserLimit &&
+          ipBucket.count <= this.perIpLimit
+        )
+          return true;
+        const response = context
+          .switchToHttp()
+          .getResponse<{ setHeader(name: string, value: string | number): void }>();
+        response.setHeader(
+          "retry-after",
+          Math.max(userBucket.retryAfterSeconds, ipBucket.retryAfterSeconds),
+        );
+        throw this.rejected();
+      } catch (error) {
+        if (error instanceof HttpException) throw error;
+      }
+    }
 
     const consume = (key: string, capacity: number): boolean => {
       let bucket = this.buckets.get(key);
@@ -64,16 +91,20 @@ export class BootstrapRateLimitGuard implements CanActivate {
           setHeader(name: string, value: string | number): void;
         }>();
       response.setHeader("retry-after", Math.ceil(this.windowMs / 1000));
-      throw new HttpException(
+      throw this.rejected();
+    }
+    return true;
+  }
+
+  private rejected() {
+    return new HttpException(
         {
           code: "RATE_LIMITED",
           message:
             "Too many bootstrap attempts. Please wait a minute and try again.",
         },
         HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-    return true;
+    );
   }
 
   private prune(now: number) {

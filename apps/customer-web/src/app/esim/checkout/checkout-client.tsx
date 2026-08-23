@@ -69,6 +69,7 @@ type DocumentAuthorization = {
     apiKey?: string;
     publicId?: string;
     deliveryType?: string;
+    allowedFormats?: string;
     timestamp: number;
     signature: string;
     folder: string;
@@ -133,11 +134,7 @@ export default function CheckoutClient({
       t = "";
     }
     if (t) return t;
-    try {
-      return localStorage.getItem(tokenKey(id)) ?? "";
-    } catch {
-      return "";
-    }
+    return "";
   };
   const [guestToken, setGuestToken] = useState(readToken);
   const guestTokenRef = useRef(guestToken);
@@ -150,11 +147,6 @@ export default function CheckoutClient({
       sessionStorage.setItem(tokenKey(id), t);
     } catch {
       /* sessionStorage unavailable */
-    }
-    try {
-      localStorage.setItem(tokenKey(id), t);
-    } catch {
-      /* localStorage unavailable */
     }
   };
   const [guest, setGuest] = useState<boolean>(() => Boolean(readToken()));
@@ -193,18 +185,12 @@ export default function CheckoutClient({
     let body = init?.body as BodyInit | null | undefined;
     const isGet = !init?.method || init.method.toUpperCase() === "GET";
     const currentGuest = guestRef.current;
+    let guestHeaderToken = currentGuest ? currentToken() : "";
     const toGuest = () => {
       const token = currentToken();
+      guestHeaderToken = token;
       url = url.replace(`${API}/customer/orders`, `${API}/guest/orders`);
-      if (isGet) {
-        url += `${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
-      } else if (typeof body === "string") {
-        const parsed = JSON.parse(body);
-        parsed.token = token;
-        body = JSON.stringify(parsed);
-      } else if (!body) {
-        body = JSON.stringify({ token });
-      }
+      return token;
     };
     const method = init?.method?.toUpperCase() ?? "GET";
     let mutation = isGet
@@ -216,6 +202,9 @@ export default function CheckoutClient({
       headers: {
         "content-type": "application/json",
         ...(mutation ? { "x-idempotency-key": mutation.key } : {}),
+        ...(guestHeaderToken
+          ? { "x-guest-order-token": guestHeaderToken }
+          : {}),
         ...init?.headers,
       },
     });
@@ -600,13 +589,16 @@ export default function CheckoutClient({
     if (step !== 4 || isTopUp || verifyingPassport) return;
     if (
       !order ||
-      !["OCR_PENDING", "OCR_BACKGROUND"].includes(
+      !["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
         order.documentReviewStatus ?? "",
       )
     )
       return;
     if (Date.now() < passportRetryNoBefore.current) return;
-    if (Date.now() >= passportRecoveryNoBefore.current) {
+    if (
+      order.documentReviewStatus !== "MANUAL_REVIEW" &&
+      Date.now() >= passportRecoveryNoBefore.current
+    ) {
       void verifyPassport();
       return;
     }
@@ -791,6 +783,14 @@ export default function CheckoutClient({
       await submitCheckoutDocumentsSequentially(
         files,
         async ({ file, type }) => {
+          if (file.size > 10 * 1024 * 1024)
+            throw new Error(`${file.name} exceeds the 10 MB limit`);
+          if (
+            !["application/pdf", "image/jpeg", "image/png"].includes(
+              file.type || "application/pdf",
+            )
+          )
+            throw new Error(`${file.name} must be a PDF, JPG or PNG`);
           const authorization = await api<DocumentAuthorization>(
             `/customer/orders/${order.id}/documents`,
             {
@@ -822,6 +822,8 @@ export default function CheckoutClient({
           form.append("folder", authorization.upload.folder);
           form.append("public_id", authorization.upload.publicId!);
           form.append("type", authorization.upload.deliveryType!);
+          if (authorization.upload.allowedFormats)
+            form.append("allowed_formats", authorization.upload.allowedFormats);
           const uploaded = await authFetch(authorization.upload.endpoint, {
             method: "POST",
             body: form,

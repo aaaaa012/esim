@@ -205,6 +205,10 @@ export class OrdersService implements OnModuleInit {
       ? this.redact(this.get(id, ownerId))
       : this.expand(this.get(id));
   }
+  async guestView(id: string) {
+    await this.refreshOne(id, true);
+    return this.redact(this.get(id));
+  }
   async customerProfile(ownerId: string) {
     if (!this.prisma.enabled) {
       const orders = this.list(ownerId);
@@ -732,9 +736,6 @@ export class OrdersService implements OnModuleInit {
     const now = new Date();
     order.documentReviewPolicy = config.documentReviewPolicy;
     order.documentReviewStartedAt ??= now.toISOString();
-    order.documentCheckoutReleaseAt ??= new Date(
-      now.getTime() + config.ocrCheckoutWaitMs,
-    ).toISOString();
     if (config.documentReviewPolicy === "NO_REVIEW") {
       order.documentReviewStatus = "SKIPPED";
       order.passportVerification = {
@@ -756,15 +757,13 @@ export class OrdersService implements OnModuleInit {
         checkedAt: now.toISOString(),
         method: "ocr-error",
         detail:
-          "Documents will be reviewed manually without delaying fulfillment",
+          "Documents require manual approval before payment can continue",
       };
       await this.persistence.save(order);
       return this.redact(order);
     }
-    // A worker can be unavailable while an order transitions to OCR_BACKGROUND.
-    // A later customer recheck is a recovery signal: reset the bounded waiting
-    // window and submit a fresh, idempotent job rather than leaving the order
-    // permanently blocked on a job that was never consumed.
+    // A later customer recheck is a recovery signal. Legacy OCR_BACKGROUND
+    // orders are moved back to the strictly blocking OCR_PENDING state.
     const reviewStartedAt = Date.parse(order.documentReviewStartedAt ?? "");
     const recoveryDelayMs = Math.max(config.ocrCheckoutWaitMs * 4, 30_000);
     const requeueBackgroundVerification =
@@ -780,9 +779,7 @@ export class OrdersService implements OnModuleInit {
       order.documentReviewStatus = "OCR_PENDING";
       if (requeueBackgroundVerification) {
         order.documentReviewStartedAt = now.toISOString();
-        order.documentCheckoutReleaseAt = new Date(
-          now.getTime() + config.ocrCheckoutWaitMs,
-        ).toISOString();
+        delete order.documentCheckoutReleaseAt;
       }
       await this.persistence.save(order);
       try {
@@ -804,13 +801,6 @@ export class OrdersService implements OnModuleInit {
         };
         await this.persistence.save(order);
       }
-    } else if (
-      order.documentCheckoutReleaseAt &&
-      new Date(order.documentCheckoutReleaseAt) <= now &&
-      order.documentReviewStatus === "OCR_PENDING"
-    ) {
-      order.documentReviewStatus = "OCR_BACKGROUND";
-      await this.persistence.save(order);
     }
     return this.redact(order);
   }

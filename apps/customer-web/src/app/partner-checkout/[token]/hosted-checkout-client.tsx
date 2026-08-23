@@ -385,6 +385,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             timestamp?: number;
             signature?: string;
             folder?: string;
+            allowedFormats?: string;
           };
           if (upload.mode === "local-simulator") {
             await api(
@@ -408,6 +409,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           form.append("folder", upload.folder!);
           form.append("public_id", upload.publicId!);
           form.append("type", upload.deliveryType!);
+          if (upload.allowedFormats)
+            form.append("allowed_formats", upload.allowedFormats);
           const uploaded = await fetch(upload.endpoint, {
             method: "POST",
             body: form,

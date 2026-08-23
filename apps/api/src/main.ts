@@ -13,6 +13,7 @@ import { LoggingInterceptor } from "./common/logging.interceptor.js";
 import { RateLimitGuard } from "./common/rate-limit.guard.js";
 import { MetricsService } from "./observability/metrics.service.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
+import { webhookIngressMiddleware } from "./common/webhook-ingress.middleware.js";
 
 const BOOT_DB_RETRIES = Number(process.env.BOOT_DB_RETRIES ?? 12);
 const BOOT_DB_RETRY_BASE_MS = Number(process.env.BOOT_DB_RETRY_BASE_MS ?? 1500);
@@ -66,6 +67,7 @@ async function bootOnce() {
     credentials: true,
   });
   app.set("trust proxy", trustProxySetting());
+  app.use(webhookIngressMiddleware());
 
   const bodyLimit = process.env.BODY_LIMIT ?? "5mb";
   app.useBodyParser("json", { limit: bodyLimit });

@@ -8,6 +8,7 @@ import {
 import { createHash } from "node:crypto";
 import { normalizeMsisdn } from "./msisdn.util.js";
 import { clientIp } from "./client-ip.js";
+import { QueueService } from "../jobs/queue.service.js";
 
 type Bucket = { tokens: number; lastRefill: number };
 
@@ -31,7 +32,9 @@ export class GuestLookupRateLimitGuard implements CanActivate {
   );
   private readonly windowMs = 60_000;
 
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly queues?: QueueService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context
       .switchToHttp()
       .getRequest<{
@@ -52,6 +55,36 @@ export class GuestLookupRateLimitGuard implements CanActivate {
       .getResponse<{ setHeader(name: string, value: string | number): void }>();
     const now = Date.now();
     this.prune(now);
+
+    if (this.queues?.enabled) {
+      try {
+        const [ipBucket, numberBucket] = await Promise.all([
+          this.queues.consumeRateLimit(`topup-lookup:ip:${ip}`, this.windowMs),
+          this.queues.consumeRateLimit(
+            `topup-lookup:num:${ip}:${mobileHash}`,
+            this.windowMs,
+          ),
+        ]);
+        const allowed =
+          ipBucket.count <= this.perIpLimit &&
+          numberBucket.count <= this.perNumberLimit;
+        response.setHeader("x-ratelimit-limit", this.perNumberLimit);
+        response.setHeader(
+          "x-ratelimit-remaining",
+          Math.max(0, this.perNumberLimit - numberBucket.count),
+        );
+        if (!allowed) {
+          response.setHeader(
+            "retry-after",
+            Math.max(ipBucket.retryAfterSeconds, numberBucket.retryAfterSeconds),
+          );
+          throw this.rejected();
+        }
+        return true;
+      } catch (error) {
+        if (error instanceof HttpException) throw error;
+      }
+    }
 
     const consume = (key: string, capacity: number): boolean => {
       let bucket = this.buckets.get(key);
@@ -88,16 +121,20 @@ export class GuestLookupRateLimitGuard implements CanActivate {
     );
     if (!allowed) {
       response.setHeader("retry-after", Math.ceil(this.windowMs / 1000));
-      throw new HttpException(
+      throw this.rejected();
+    }
+    return true;
+  }
+
+  private rejected() {
+    return new HttpException(
         {
           code: "RATE_LIMITED",
           message:
             "Too many lookup attempts. Please wait a moment and try again.",
         },
         HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-    return true;
+    );
   }
 
   private prune(now: number) {

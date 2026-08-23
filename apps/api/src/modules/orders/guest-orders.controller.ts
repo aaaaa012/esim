@@ -4,10 +4,10 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
-  Query,
   Req,
   NotFoundException,
   UseGuards,
@@ -133,31 +133,34 @@ export class GuestOrdersController {
     return { order, token: tokenFor(order.id) };
   }
 
-  @Get(":id") get(@Param("id") id: string, @Query("token") token: string) {
+  @Get(":id") get(
+    @Param("id") id: string,
+    @Headers("x-guest-order-token") token: string,
+  ) {
     this.assert(id, token);
-    return this.orders.view(id);
+    return this.orders.guestView(id);
   }
 
   @Patch(":id/traveler") traveler(
     @Param("id") id: string,
     @Body() body: Record<string, unknown>,
+    @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, typeof body.token === "string" ? body.token : "");
-    const { token: _token, ...traveler } = body;
-    return this.orders.setTraveler(id, null, travelerSchema.parse(traveler));
+    this.assert(id, token);
+    return this.orders.setTraveler(id, null, travelerSchema.parse(body));
   }
 
   @Post(":id/documents") document(
     @Param("id") id: string,
     @Body()
     body: {
-      token: string;
       type: unknown;
       fileName: string;
       contentType?: string;
     },
+    @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, body.token);
+    this.assert(id, token);
     return this.orders.addDocument(
       id,
       null,
@@ -172,7 +175,7 @@ export class GuestOrdersController {
   @Post(":id/documents/:documentId/confirm") confirmDocument(
     @Param("id") id: string,
     @Param("documentId") documentId: string,
-    @Body("token") token: string,
+    @Headers("x-guest-order-token") token: string,
   ) {
     this.assert(id, token);
     return this.orders.confirmDocument(id, documentId, null);
@@ -180,25 +183,30 @@ export class GuestOrdersController {
 
   @Post(":id/verify-passport")
   @UseGuards(PassportVerificationRateLimitGuard)
-  verifyPassport(@Param("id") id: string, @Body() body: { token: string }) {
-    this.assert(id, body.token);
+  verifyPassport(
+    @Param("id") id: string,
+    @Headers("x-guest-order-token") token: string,
+  ) {
+    this.assert(id, token);
     return this.orders.verifyPassport(id, null);
   }
 
   @Post(":id/payment") payment(
     @Param("id") id: string,
-    @Body() body: { token: string; provider: unknown },
+    @Body() body: { provider: unknown },
+    @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, body.token);
+    this.assert(id, token);
     const input = initiatePaymentSchema.parse({ provider: body.provider });
     return this.payments.initiate(id, null, input.provider);
   }
 
   @Post(":id/payment/verify") verify(
     @Param("id") id: string,
-    @Body() body: { token: string; reference: string },
+    @Body() body: { reference: string },
+    @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, body.token);
+    this.assert(id, token);
     return this.payments.verify(id, null, body.reference);
   }
 
@@ -206,7 +214,6 @@ export class GuestOrdersController {
     @Param("id") id: string,
     @Body()
     body: {
-      token: string;
       reference: string;
       scenario?:
         | "SUCCESS"
@@ -216,16 +223,18 @@ export class GuestOrdersController {
         | "REFUNDED"
         | "TIMEOUT";
     },
+    @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, body.token);
+    this.assert(id, token);
     return this.payments.simulate(id, null, body.reference, body.scenario);
   }
 
   @Post(":id/payment/abandon") abandon(
     @Param("id") id: string,
-    @Body() body: { token: string; reason?: string },
+    @Body() body: { reason?: string },
+    @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, body.token);
+    this.assert(id, token);
     return this.orders.resolvePaymentFailure(
       id,
       null,
@@ -235,9 +244,10 @@ export class GuestOrdersController {
 
   @Post(":id/cancel") cancel(
     @Param("id") id: string,
-    @Body() body: { token: string; reason?: string },
+    @Body() body: { reason?: string },
+    @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, body.token);
+    this.assert(id, token);
     return this.orders.cancel(id, null, body.reason ?? "Cancelled by guest");
   }
 

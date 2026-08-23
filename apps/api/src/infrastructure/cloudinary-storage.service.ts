@@ -16,6 +16,7 @@ export type SignedDocumentUpload = {
     apiKey?: string;
     publicId?: string;
     deliveryType?: "authenticated";
+    allowedFormats?: string;
     timestamp: number;
     signature: string;
     folder: string;
@@ -86,8 +87,15 @@ export class CloudinaryStorageService {
       secure: true,
     });
     const publicId = `${type.toLowerCase()}-${assetId}`;
+    const allowedFormats = "pdf,jpg,jpeg,png";
     const signature = cloudinary.utils.api_sign_request(
-      { timestamp, folder, public_id: publicId, type: "authenticated" },
+      {
+        timestamp,
+        folder,
+        public_id: publicId,
+        type: "authenticated",
+        allowed_formats: allowedFormats,
+      },
       apiSecret,
     );
     return {
@@ -99,6 +107,7 @@ export class CloudinaryStorageService {
         apiKey,
         publicId,
         deliveryType: "authenticated",
+        allowedFormats,
         timestamp,
         signature,
         folder,
