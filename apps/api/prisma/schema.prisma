@@ -311,6 +311,12 @@ enum PartnerIdempotencyStatus {
   FAILED
 }
 
+enum ApiIdempotencyStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model User {
   id                           String                        @id @default(uuid()) @db.Uuid
   clerkId                      String                        @unique
@@ -954,6 +960,26 @@ model PartnerIdempotencyRecord {
   updatedAt      DateTime                 @updatedAt
 
   @@unique([partnerId, method, route, key])
+  @@index([expiresAt])
+}
+
+model ApiIdempotencyRecord {
+  id             String               @id @default(uuid()) @db.Uuid
+  principalId    String
+  method         String
+  route          String
+  key            String
+  requestHash    String
+  status         ApiIdempotencyStatus @default(PROCESSING)
+  responseStatus Int?
+  response       Json?
+  claimExpiresAt DateTime
+  expiresAt      DateTime
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@unique([principalId, method, route, key])
+  @@index([status, claimExpiresAt])
   @@index([expiresAt])
 }
 

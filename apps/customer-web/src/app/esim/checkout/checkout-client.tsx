@@ -167,6 +167,27 @@ export default function CheckoutClient({
     guestRef.current = next;
   }, [isLoaded, isSignedIn]);
 
+  const mutationKey = (scope: string) => {
+    const storageKey = `vc_mutation_${scope}`;
+    try {
+      const existing = sessionStorage.getItem(storageKey);
+      if (existing) return { key: existing, storageKey };
+      const key = crypto.randomUUID();
+      sessionStorage.setItem(storageKey, key);
+      return { key, storageKey };
+    } catch {
+      return { key: crypto.randomUUID(), storageKey: "" };
+    }
+  };
+  const releaseMutationKey = (storageKey: string) => {
+    if (!storageKey) return;
+    try {
+      sessionStorage.removeItem(storageKey);
+    } catch {
+      /* sessionStorage unavailable */
+    }
+  };
+
   const api = async <T,>(path: string, init?: RequestInit) => {
     let url = `${API}${path}`;
     let body = init?.body as BodyInit | null | undefined;
@@ -185,18 +206,23 @@ export default function CheckoutClient({
         body = JSON.stringify({ token });
       }
     };
+    const method = init?.method?.toUpperCase() ?? "GET";
+    let mutation = isGet
+      ? null
+      : mutationKey(`${currentGuest ? "guest" : "customer"}:${method}:${path}`);
     const makeInit = () => ({
       ...init,
       ...(body !== undefined ? { body } : {}),
       headers: {
         "content-type": "application/json",
-        "x-idempotency-key": crypto.randomUUID(),
+        ...(mutation ? { "x-idempotency-key": mutation.key } : {}),
         ...init?.headers,
       },
     });
     if (currentGuest) toGuest();
     let response = await authFetch(url, makeInit());
     let payload = (await response.json()) as Envelope<T>;
+    if (mutation) releaseMutationKey(mutation.storageKey);
     if (
       !response.ok &&
       isLoaded &&
@@ -207,6 +233,7 @@ export default function CheckoutClient({
       currentToken()
     ) {
       toGuest();
+      mutation = isGet ? null : mutationKey(`guest:${method}:${path}`);
       setGuest((g) => {
         const next = g || true;
         guestRef.current = next;
@@ -214,6 +241,7 @@ export default function CheckoutClient({
       });
       response = await authFetch(url, makeInit());
       payload = (await response.json()) as Envelope<T>;
+      if (mutation) releaseMutationKey(mutation.storageKey);
     }
     if (!response.ok) {
       const error = new Error(
