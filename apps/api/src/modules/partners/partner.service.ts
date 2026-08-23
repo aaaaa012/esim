@@ -818,15 +818,23 @@ export class PartnerService {
   ) {
     const target = await this.applicationOrders.resolveSubscriber(input.topUpMobile);
     const inventory = target?.inventory;
-    if (
-      !inventory ||
-      !target ||
-      target.planCountryCode.toUpperCase() !== plan.country.isoCode.toUpperCase()
-    )
+    if (!inventory || !target)
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
         message:
           "This number cannot be used for a top-up with the selected plan. Create a documented initial purchase only after customer consent.",
+        status: 422,
+      });
+    const eligibility = await this.applicationOrders.checkTopUpEligibility(
+      input.topUpMobile,
+      plan.id,
+    );
+    if (!eligibility.allowed)
+      throw new ApiException({
+        code: "TOPUP_NOT_ELIGIBLE",
+        message:
+          eligibility.errorMessage ??
+          "This eSIM cannot subscribe to the selected plan.",
         status: 422,
       });
 
@@ -1526,18 +1534,22 @@ export class PartnerService {
     const topUp = input.topUpMobile
       ? await this.applicationOrders.resolveSubscriber(input.topUpMobile)
       : null;
-    const correctCountry =
-      topUp !== null &&
-      topUp.planCountryCode.toUpperCase() ===
-        plan.country.isoCode.toUpperCase();
     // A top-up is only valid when we can bind to a real eSIM. A fallback to a
     // new purchase is deliberately opt-in: callers must obtain consent before
     // changing the requested product from a top-up to a new eSIM.
-    const isTopUp = correctCountry && Boolean(topUp?.inventory);
+    const eligibility =
+      input.topUpMobile && topUp?.inventory
+        ? await this.applicationOrders.checkTopUpEligibility(
+            input.topUpMobile,
+            plan.id,
+          )
+        : null;
+    const isTopUp = Boolean(topUp?.inventory && eligibility?.allowed);
     if (input.topUpMobile && !isTopUp && !input.allowInitialPurchaseFallback)
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
         message:
+          eligibility?.errorMessage ??
           "This number cannot be used for a top-up with the selected plan. Ask the customer whether they want a new eSIM purchase instead.",
         status: 422,
       });

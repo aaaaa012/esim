@@ -328,9 +328,24 @@ export class OrdersService implements OnModuleInit {
     const mobileTarget =
       !target && meta?.mobile ? await this.targetForMobile(meta.mobile) : null;
     const selectedTarget = target ?? mobileTarget;
-    const purchaseType = selectedTarget?.countryCodes.includes(plan.countryCode)
+    const purchaseType = selectedTarget
       ? ("TOPUP" as const)
       : ("INITIAL_PURCHASE" as const);
+    // Existing eSIMs may buy packages for any destination. Transatel decides
+    // whether the specific provider product can be subscribed to by that
+    // eSIM's MSISDN; do not infer eligibility from the original plan country.
+    if (meta?.mobile) {
+      const eligibility = await this.checkTopUpEligibility(meta.mobile, planId);
+      if (!eligibility.allowed)
+        throw new BadRequestException(
+          eligibility.errorMessage ??
+            "This eSIM cannot subscribe to the selected plan.",
+        );
+    }
+    if (meta?.mobile && purchaseType !== "TOPUP")
+      throw new BadRequestException(
+        "This number is not linked to an active Visa Compass eSIM.",
+      );
     if (purchaseType === "INITIAL_PURCHASE")
       await this.assertInventoryAvailableForNewOrder();
     const topUpEmail =
@@ -1138,6 +1153,7 @@ export class OrdersService implements OnModuleInit {
         : undefined;
     const subscriber: Record<string, unknown> = {
       currentPlan: {
+        id: order.plan.id,
         name: order.plan.name,
         dataAllowance: order.plan.dataAllowance,
         validityDays: order.plan.validityDays,
@@ -1165,6 +1181,7 @@ export class OrdersService implements OnModuleInit {
   private dbTopUpSubscriber(
     dbOrder: {
       plan: {
+        id: string;
         name: string;
         dataAllowance: string;
         validityDays: number;
@@ -1230,6 +1247,7 @@ export class OrdersService implements OnModuleInit {
     })();
     const subscriber: Record<string, unknown> = {
       currentPlan: {
+        id: dbOrder.plan.id,
         name: dbOrder.plan.name,
         dataAllowance: dbOrder.plan.dataAllowance,
         validityDays: dbOrder.plan.validityDays,
@@ -1323,9 +1341,10 @@ export class OrdersService implements OnModuleInit {
       },
       inventory: prior.customerEsim?.inventory
         ? {
-            id: prior.customerEsim.inventory.id,
-            eid: prior.customerEsim.inventory.eid,
-            iccid: prior.customerEsim.inventory.iccid,
+          id: prior.customerEsim.inventory.id,
+          eid: prior.customerEsim.inventory.eid,
+          iccid: prior.customerEsim.inventory.iccid,
+          msisdn: prior.customerEsim.inventory.msisdn,
           }
         : null,
     };
@@ -1355,6 +1374,25 @@ export class OrdersService implements OnModuleInit {
       };
     }
     return this.priorCompletedOrderFor(mobile);
+  }
+
+  /**
+   * Validates a recharge against the provider before money is collected.
+   * The customer's entered number can match either their traveller record or
+   * the eSIM MSISDN, but Transatel must always receive the stored MSISDN.
+   */
+  async checkTopUpEligibility(mobile: string, planId: string) {
+    const target = await this.resolveSubscriber(mobile);
+    const msisdn = target?.inventory?.msisdn;
+    if (!target?.inventory || !msisdn)
+      return {
+        allowed: false,
+        errorKey: "ESIM_NOT_AVAILABLE",
+        errorMessage:
+          "We could not find an active eSIM for this mobile number.",
+      };
+    const provider = await this.connectivity.checkEligibility(planId, msisdn);
+    return provider;
   }
   async requestReupload(id: string, reason: string) {
     await this.refreshOne(id, true);

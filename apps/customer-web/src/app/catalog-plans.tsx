@@ -47,22 +47,7 @@ export default function CatalogPlans() {
   const [coverage, setCoverage] = useState<Record<string, string>>({});
   const [plansBusy, setPlansBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [topUpMobile, setTopUpMobile] = useState("");
-  const [topUpCountry, setTopUpCountry] = useState("");
-  const [topUpToken, setTopUpToken] = useState("");
   const [showAllDestinations, setShowAllDestinations] = useState(false);
-
-  useEffect(() => {
-    try {
-      setTopUpMobile(sessionStorage.getItem("vc_topup_mobile") ?? "");
-      setTopUpCountry(sessionStorage.getItem("vc_topup_country") ?? "");
-      setTopUpToken(sessionStorage.getItem("vc_topup_token") ?? "");
-    } catch {
-      setTopUpMobile("");
-      setTopUpCountry("");
-      setTopUpToken("");
-    }
-  }, []);
 
   useEffect(() => {
     if (targetCountry) setSelected(targetCountry);
@@ -93,17 +78,6 @@ export default function CatalogPlans() {
       cancelled = true;
     };
   }, []);
-
-  // When a top-up lookup has pinned a destination, default to it so only that
-  // country's plans are offered (the ones that can recharge the existing eSIM).
-  useEffect(() => {
-    if (
-      topUpCountry &&
-      countries.some((country) => country.code === topUpCountry)
-    ) {
-      setSelected(topUpCountry);
-    }
-  }, [topUpCountry, countries]);
 
   useEffect(() => {
     if (!selected) return;
@@ -213,17 +187,6 @@ export default function CatalogPlans() {
               Type a country name to quickly find your plan.
             </small>
           ) : null}
-          {topUpMobile && selected && (
-            <small className="topup-context">
-              Recharging{" "}
-              {selected
-                ? (countryList.find((country) => country.code === selected)
-                    ?.name ?? selected)
-                : ""}{" "}
-              for
-              {` ${topUpMobile}`}.
-            </small>
-          )}
         </div>
 
         {!plans && !error ? (
@@ -345,10 +308,9 @@ export default function CatalogPlans() {
                 <b>{npr(plan.sellingPriceNpr)}</b>
                 <Link
                   className="button"
-                  href={`/esim/checkout?plan=${plan.id}${topUpMobile ? `&mobile=${encodeURIComponent(topUpMobile)}&lookup=${encodeURIComponent(topUpToken)}&country=${encodeURIComponent(topUpCountry)}` : ""}${targetEsimId ? `&esim=${encodeURIComponent(targetEsimId)}&country=${encodeURIComponent(targetCountry)}` : ""}`}
+                  href={`/esim/checkout?plan=${plan.id}${targetEsimId ? `&esim=${encodeURIComponent(targetEsimId)}&country=${encodeURIComponent(targetCountry)}` : ""}`}
                 >
-                  {topUpMobile ||
-                  (targetEsimId && plan.countryCode === targetCountry)
+                  {(targetEsimId && plan.countryCode === targetCountry)
                     ? "Recharge"
                     : "Choose"}
                 </Link>

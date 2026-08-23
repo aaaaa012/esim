@@ -238,12 +238,13 @@ export default function CheckoutClient({
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof Traveler, string>>
   >({});
+  // A top-up lookup supplies a short-lived token, mobile number, and the
+  // eSIM's country. Treat that as a top-up from the first render so the
+  // normal purchase form never flashes while the plan preview is loading.
+  // The API independently verifies that the selected plan is valid for this
+  // eSIM before it creates the order.
   const isTopUpIntent =
-    Boolean(
-      (mobile || targetEsimId) &&
-      targetCountry &&
-      previewPlan?.countryCode === targetCountry,
-    ) && !orderId;
+    Boolean(mobile && lookupToken && targetCountry) && !orderId;
   useEffect(() => {
     if (!planId || orderId) return;
     let cancelled = false;
@@ -1284,18 +1285,18 @@ export default function CheckoutClient({
                 ) : order && order.status === "PROVISIONING_FAILED" ? (
                   <div className="error-panel">
                     <AlertTriangle size={42} />
-                    <b>We could not activate your eSIM</b>
+                    <b>Your recharge needs attention</b>
                     <span>{order.orderNumber}</span>
                     <p>
                       {order.provisioningFailure?.message ??
-                        "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}
+                        "Your payment was received, but we could not complete the recharge with the network provider. Our team is reviewing it and will contact you."}
                     </p>
-                    <Link className="button" href="/#plans">
-                      Choose another plan
+                    <Link className="button secondary" href="/">
+                      Return home
                     </Link>
                     {isSignedIn === true && (
                       <Link
-                        className="button secondary"
+                        className="button"
                         href={`/account/esims/${order.id}`}
                       >
                         Check status
