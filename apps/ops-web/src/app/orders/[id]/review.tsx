@@ -533,7 +533,7 @@ export default function OrderReview({ id }: { id: string }) {
                       onClick={() => {
                         if (
                           window.confirm(
-                            `Approve this ${humane(document.type)} document?`,
+                            `Give final manual approval to this ${humane(document.type)} document? This Operations/Admin decision overrides the OCR result and is audited.`,
                           )
                         )
                           action(`documents/${document.id}/approve`);
@@ -547,7 +547,7 @@ export default function OrderReview({ id }: { id: string }) {
                       Approve
                     </Button>
                   )}
-                  {canReviewDocuments && (
+                  {canReviewDocuments && document.status !== "APPROVED" && (
                     <Button
                       size="sm"
                       variant="outline"

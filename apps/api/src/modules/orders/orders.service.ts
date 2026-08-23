@@ -1441,6 +1441,8 @@ export class OrdersService implements OnModuleInit {
     const document = order.documents.find((item) => item.id === documentId);
     if (!document) throw new NotFoundException("Document not found");
     if (decision === "APPROVE") {
+      if (document.status === DocumentStatus.APPROVED)
+        return this.redact(order);
       document.status = DocumentStatus.APPROVED;
       if (
         order.documents
@@ -1457,9 +1459,13 @@ export class OrdersService implements OnModuleInit {
         from: order.status,
         to: order.status,
         at: new Date().toISOString(),
-        reason: `${document.type} approved by ${actorId}`,
+        reason: `${document.type} received final manual approval from ${actorId}`,
       });
     } else {
+      if (document.status === DocumentStatus.APPROVED)
+        throw new BadRequestException(
+          "A final manual approval cannot be replaced by a re-upload request",
+        );
       if (!reason?.trim())
         throw new BadRequestException("Re-upload reason is required");
       document.status = DocumentStatus.REUPLOAD_REQUIRED;

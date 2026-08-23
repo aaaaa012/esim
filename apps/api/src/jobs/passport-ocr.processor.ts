@@ -13,6 +13,8 @@ import { ProductionResilienceService } from "./production-resilience.service.js"
 type PassportOcrJob =
   { orderId: string; documentId: string } | { verificationId: string };
 
+class ManualDocumentDecisionWon extends Error {}
+
 /**
  * Processes passport OCR for partner orders in the background. Triggered after
  * a partner confirms a PASSPORT document upload (or after a complete order is
@@ -107,42 +109,59 @@ export class PassportOcrProcessor implements OnModuleInit {
       : partial || technicalFailure
         ? "MANUAL_REVIEW"
         : "REUPLOAD_REQUIRED";
-    await this.prisma.$transaction([
-      this.prisma.travelerDocument.update({
-        where: { id: passport.id },
-        data: {
-          status: verified
-            ? "APPROVED"
-            : partial || technicalFailure
-              ? "PENDING"
-              : "REUPLOAD_REQUIRED",
-          passportVerificationStatus: result.status,
-          passportVerificationMethod: result.method,
-          passportMatchedFields: result.matchedFields as Prisma.InputJsonValue,
-          passportConfidence: result.confidence ?? null,
-          passportVerifiedAt: new Date(result.checkedAt),
-        },
-      }),
-      this.prisma.order.update({
-        where: { id: order.id },
-        data: { documentReviewStatus: reviewStatus, version: { increment: 1 } },
-      }),
-      this.prisma.orderEvent.create({
-        data: {
-          orderId: order.id,
-          fromStatus: order.status,
-          toStatus: order.status,
-          reason: verified
-            ? "Passport verified automatically"
-            : partial
-              ? "Passport partially matched; routed to manual review"
-              : technicalFailure
-                ? "OCR technical failure; routed to non-blocking manual review"
-                : "Passport verification failed; replacement requested",
-          metadata: { documentReviewStatus: reviewStatus },
-        },
-      }),
-    ]);
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const orderClaim = await tx.order.updateMany({
+          where: {
+            id: order.id,
+            documentReviewStatus: { in: ["OCR_PENDING", "OCR_BACKGROUND"] },
+          },
+          data: {
+            documentReviewStatus: reviewStatus,
+            version: { increment: 1 },
+          },
+        });
+        if (orderClaim.count === 0) throw new ManualDocumentDecisionWon();
+
+        const documentClaim = await tx.travelerDocument.updateMany({
+          where: { id: passport.id, status: { not: "APPROVED" } },
+          data: {
+            status: verified
+              ? "APPROVED"
+              : partial || technicalFailure
+                ? "PENDING"
+                : "REUPLOAD_REQUIRED",
+            passportVerificationStatus: result.status,
+            passportVerificationMethod: result.method,
+            passportMatchedFields:
+              result.matchedFields as Prisma.InputJsonValue,
+            passportConfidence: result.confidence ?? null,
+            passportVerifiedAt: new Date(result.checkedAt),
+          },
+        });
+        if (documentClaim.count === 0) throw new ManualDocumentDecisionWon();
+
+        await tx.orderEvent.create({
+          data: {
+            orderId: order.id,
+            fromStatus: order.status,
+            toStatus: order.status,
+            reason: verified
+              ? "Passport verified automatically"
+              : partial
+                ? "Passport partially matched; routed to manual review"
+                : technicalFailure
+                  ? "OCR technical failure; routed to non-blocking manual review"
+                  : "Passport verification failed; replacement requested",
+            metadata: { documentReviewStatus: reviewStatus },
+          },
+        });
+      });
+    } catch (error) {
+      if (error instanceof ManualDocumentDecisionWon)
+        return { skipped: true, manualDecisionWon: true };
+      throw error;
+    }
 
     if (verified) {
       await this.resilience.resolve(
