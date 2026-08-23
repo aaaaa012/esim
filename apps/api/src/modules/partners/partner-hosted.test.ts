@@ -194,6 +194,38 @@ describe("partner hosted checkout", () => {
     });
   });
 
+  it("returns final manual approval without depending on OCR or workflow queues", async () => {
+    const orderUpdate = vi.fn();
+    const instance = service({
+      partnerHostedCheckoutSession: {
+        findUnique: vi.fn().mockResolvedValue(session),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...order([
+            {
+              id: "passport-1",
+              type: "PASSPORT",
+              status: "APPROVED",
+              passportVerificationStatus: "FAILED",
+            },
+            { id: "ticket-1", type: "TICKET", status: "APPROVED" },
+          ]),
+          documentReviewStatus: "MANUALLY_APPROVED",
+        }),
+        update: orderUpdate,
+      },
+    });
+
+    await expect(
+      instance.verifyHostedPassport("abcdefghijklmnopqrstuvwxyz012345"),
+    ).resolves.toMatchObject({
+      status: "MANUALLY_APPROVED",
+      method: "manual",
+    });
+    expect(orderUpdate).not.toHaveBeenCalled();
+  });
+
   it("rejects completion when a required document is missing", async () => {
     const instance = service({
       partnerHostedCheckoutSession: {

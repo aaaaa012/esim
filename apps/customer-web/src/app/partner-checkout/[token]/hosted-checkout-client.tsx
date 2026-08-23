@@ -44,6 +44,7 @@ type Session = {
       validityDays: number;
     };
     travelerComplete: boolean;
+    documentReviewStatus?: string;
     documents: {
       id: string;
       type: string;
@@ -180,7 +181,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         const passport = value.order.documents.find(
           (doc) => doc.type === "PASSPORT",
         );
-        if (passport?.passportVerificationStatus) {
+        if (
+          ["MANUALLY_APPROVED", "SKIPPED"].includes(
+            value.order.documentReviewStatus ?? "",
+          )
+        ) {
+          setVerification({
+            status: value.order.documentReviewStatus!,
+            method: "manual",
+          });
+        } else if (passport?.passportVerificationStatus) {
           setVerification({
             status: passport.passportVerificationStatus,
             method: "tesseract-ocr",
@@ -315,7 +325,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       { method: "POST", body: "{}" },
     );
     setVerification(result);
-    const ok = result.status === "VERIFIED" || result.status === "SKIPPED";
+    const ok = ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+      result.status,
+    );
     const waiting = ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
       result.status,
     );
@@ -444,6 +456,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     !session ||
     session.order.orderType === "TOPUP" ||
     verification?.status === "VERIFIED" ||
+    verification?.status === "MANUALLY_APPROVED" ||
     verification?.status === "SKIPPED";
 
   const complete = () =>
@@ -969,11 +982,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                 <b id="verify-modal-title">
                   {verification?.status === "SKIPPED"
                     ? "Verification skipped"
+                    : verification?.status === "MANUALLY_APPROVED"
+                      ? "Documents approved"
                     : "Passport verified"}
                 </b>
                 <p>
                   {verification?.status === "SKIPPED"
                     ? "Document verification is disabled in this environment."
+                    : verification?.status === "MANUALLY_APPROVED"
+                      ? "Your documents were reviewed and approved. You can now review and confirm your order."
                     : verification?.status === "VERIFIED"
                       ? "Your passport matches the details you provided. You can now review and confirm your order."
                       : "Your passport matched your traveller details."}
@@ -1137,6 +1154,16 @@ function PassportCheck({
         <span>
           <b>Passport verified</b>
           <small>Your passport matches your traveller details.</small>
+        </span>
+      </div>
+    );
+  if (status === "MANUALLY_APPROVED")
+    return (
+      <div className="passport-check verified">
+        <CheckCircle2 size={20} />
+        <span>
+          <b>Documents approved</b>
+          <small>Your documents were reviewed and approved.</small>
         </span>
       </div>
     );

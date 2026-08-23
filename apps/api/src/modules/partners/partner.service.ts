@@ -1705,6 +1705,7 @@ export class PartnerService {
         },
         travelerComplete: Boolean(order.traveler),
         documents: order.documents,
+        documentReviewStatus: order.documentReviewStatus,
         requiredDocuments:
           order.orderType === "TOPUP"
             ? []
@@ -1818,6 +1819,19 @@ export class PartnerService {
    */
   async verifyHostedPassport(token: string) {
     const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    if (
+      ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        order.documentReviewStatus,
+      )
+    )
+      return {
+        status: order.documentReviewStatus,
+        checkedAt: new Date().toISOString(),
+        method:
+          order.documentReviewStatus === "MANUALLY_APPROVED"
+            ? "manual"
+            : "asynchronous",
+      };
     const passport = order.documents.find(
       (document) => document.type === DocumentType.PASSPORT,
     );
@@ -1833,7 +1847,6 @@ export class PartnerService {
       });
     if (
       [
-        "VERIFIED",
         "MANUAL_REVIEW",
         "OCR_BACKGROUND",
         "REUPLOAD_REQUIRED",

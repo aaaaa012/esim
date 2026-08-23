@@ -845,6 +845,7 @@ export default function CheckoutClient({
         let verification = target.passportVerification;
         if (
           !isTopUp &&
+          !passportGatePassed(target) &&
           (verification?.status === "FAILED" ||
             verification?.status === "PARTIAL")
         ) {
@@ -1616,6 +1617,20 @@ function PassportCheck({
             Replace document
           </button>
         )}
+      </div>
+    );
+  }
+  if (reviewStatus === "MANUALLY_APPROVED") {
+    return (
+      <div className="passport-check verified">
+        <CheckCircle2 size={20} />
+        <span>
+          <b>Documents approved</b>
+          <small>
+            Our team reviewed and approved your documents. You can continue to
+            payment.
+          </small>
+        </span>
       </div>
     );
   }
