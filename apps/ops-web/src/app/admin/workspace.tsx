@@ -1,6 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Building2,
@@ -76,6 +76,11 @@ type Plan = {
   popular: boolean;
   status: "DRAFT" | "ACTIVE" | "DISABLED" | "ARCHIVED";
 };
+type HostedLinkPlan = Pick<
+  Plan,
+  "id" | "name" | "countryCode" | "countryName" | "sellingPriceNpr"
+>;
+type CatalogCountry = { code: string; name: string; popular: boolean };
 type Integration = {
   id: string;
   name: string;
@@ -189,6 +194,14 @@ export default function AdminWorkspace() {
   );
   const [hostedLinkFor, setHostedLinkFor] = useState<Partner | null>(null);
   const [hostedLinkPlanId, setHostedLinkPlanId] = useState("");
+  const [hostedLinkCountry, setHostedLinkCountry] = useState("");
+  const [hostedLinkCountries, setHostedLinkCountries] = useState<
+    CatalogCountry[]
+  >([]);
+  const [hostedLinkPlans, setHostedLinkPlans] = useState<HostedLinkPlan[]>([]);
+  const [hostedLinkPlansBusy, setHostedLinkPlansBusy] = useState(false);
+  const hostedLinkPlanCache = useRef<Record<string, HostedLinkPlan[]>>({});
+  const hostedLinkPlanRequestId = useRef(0);
   const [hostedLinkMobile, setHostedLinkMobile] = useState("");
   const [hostedLinkResult, setHostedLinkResult] = useState<{
     partnerName: string;
@@ -262,6 +275,58 @@ export default function AdminWorkspace() {
       );
     } finally {
       setPlanLoading(false);
+    }
+  };
+  const loadHostedLinkCountries = async () => {
+    if (hostedLinkCountries.length) return;
+    try {
+      setHostedLinkCountries(
+        await request<CatalogCountry[]>("/public/countries"),
+      );
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : "Checkout countries could not be loaded",
+      );
+    }
+  };
+  const loadHostedLinkPlans = async (countryCode: string) => {
+    const requestId = ++hostedLinkPlanRequestId.current;
+    setHostedLinkPlansBusy(false);
+    setHostedLinkCountry(countryCode);
+    setHostedLinkPlanId("");
+    setLookupState(null);
+    if (!countryCode) {
+      setHostedLinkPlans([]);
+      return;
+    }
+    const cached = hostedLinkPlanCache.current[countryCode];
+    if (cached) {
+      setHostedLinkPlans(cached);
+      return;
+    }
+    setHostedLinkPlansBusy(true);
+    try {
+      const value = await request<HostedLinkPlan[]>(
+        `/public/plans?country=${encodeURIComponent(countryCode)}`,
+      );
+      hostedLinkPlanCache.current[countryCode] = value;
+      if (requestId === hostedLinkPlanRequestId.current) {
+        setHostedLinkPlans(value);
+      }
+    } catch (cause) {
+      if (requestId === hostedLinkPlanRequestId.current) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : "Checkout plans could not be loaded",
+        );
+      }
+    } finally {
+      if (requestId === hostedLinkPlanRequestId.current) {
+        setHostedLinkPlansBusy(false);
+      }
     }
   };
   useEffect(() => {
@@ -645,7 +710,7 @@ export default function AdminWorkspace() {
   };
   const validateMobile = async () => {
     const mobile = hostedLinkMobile.trim();
-    const plan = plans.find((plan) => plan.id === hostedLinkPlanId);
+    const plan = hostedLinkPlans.find((plan) => plan.id === hostedLinkPlanId);
     if (!mobile) {
       setLookupState(null);
       return;
@@ -1665,10 +1730,13 @@ export default function AdminWorkspace() {
                                 disabled={busy === `link-${partner.id}`}
                                 onClick={() => {
                                   setHostedLinkPlanId("");
+                                  setHostedLinkCountry("");
+                                  setHostedLinkPlans([]);
                                   setHostedLinkMobile("");
                                   setHostedLinkResult(null);
                                   setLookupState(null);
                                   setHostedLinkFor(partner);
+                                  void loadHostedLinkCountries();
                                 }}
                               >
                                 <Link2 className="size-4" />
@@ -1742,24 +1810,56 @@ export default function AdminWorkspace() {
                     <div className="space-y-4 pt-1">
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">
+                          Country
+                        </Label>
+                        <Select
+                          value={hostedLinkCountry}
+                          onValueChange={(countryCode) =>
+                            void loadHostedLinkPlans(countryCode)
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose a country" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {hostedLinkCountries.map((country) => (
+                              <SelectItem
+                                key={country.code}
+                                value={country.code}
+                              >
+                                {country.name} ({country.code})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">
                           Plan
                         </Label>
                         <Select
                           value={hostedLinkPlanId}
                           onValueChange={setHostedLinkPlanId}
+                          disabled={!hostedLinkCountry || hostedLinkPlansBusy}
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder="Choose a plan" />
+                            <SelectValue
+                              placeholder={
+                                hostedLinkPlansBusy
+                                  ? "Loading plans…"
+                                  : hostedLinkCountry
+                                    ? "Choose a plan"
+                                    : "Choose a country first"
+                              }
+                            />
                           </SelectTrigger>
                           <SelectContent>
-                            {plans
-                              .filter((plan) => plan.status === "ACTIVE")
-                              .map((plan) => (
-                                <SelectItem key={plan.id} value={plan.id}>
-                                  {plan.countryName} · {plan.name} · NPR{" "}
-                                  {plan.sellingPriceNpr.toLocaleString()}
-                                </SelectItem>
-                              ))}
+                            {hostedLinkPlans.map((plan) => (
+                              <SelectItem key={plan.id} value={plan.id}>
+                                {plan.countryName} · {plan.name} · NPR{" "}
+                                {plan.sellingPriceNpr.toLocaleString()}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>
