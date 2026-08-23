@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import DatePicker from "./date-picker";
+import { submitCheckoutDocumentsSequentially } from "./document-submission";
 import {
   DocumentType,
   PaymentProvider,
@@ -759,59 +760,50 @@ export default function CheckoutClient({
     run(async () => {
       if (!order || !files.passport || !files.ticket)
         throw new Error("Passport and travel ticket are required");
-      await Promise.all(
-        Object.entries(files)
-          .filter((entry): entry is [string, File] => Boolean(entry[1]))
-          .map(async ([key, file]) => {
-            if (file.size > 10 * 1024 * 1024)
-              throw new Error(`${file.name} exceeds the 10 MB limit`);
-            const type =
-              key === "passport"
-                ? DocumentType.PASSPORT
-                : key === "ticket"
-                  ? DocumentType.TICKET
-                  : DocumentType.VISA;
-            const authorization = await api<DocumentAuthorization>(
-              `/customer/orders/${order.id}/documents`,
-              {
-                method: "POST",
-                body: JSON.stringify({
-                  type,
-                  fileName: file.name,
-                  contentType: file.type || "application/pdf",
-                }),
-              },
-            );
-            if (authorization.upload.mode === "local-simulator") {
-              await api(
-                `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
-                { method: "POST", body: "{}" },
-              );
-              return;
-            }
-            if (
-              authorization.upload.mode !== "cloudinary-signed" ||
-              !authorization.upload.endpoint
-            )
-              throw new Error("Private document storage is unavailable");
-            const form = new FormData();
-            form.append("file", file);
-            form.append("api_key", authorization.upload.apiKey!);
-            form.append("timestamp", String(authorization.upload.timestamp));
-            form.append("signature", authorization.upload.signature);
-            form.append("folder", authorization.upload.folder);
-            form.append("public_id", authorization.upload.publicId!);
-            form.append("type", authorization.upload.deliveryType!);
-            const uploaded = await authFetch(authorization.upload.endpoint, {
+      await submitCheckoutDocumentsSequentially(
+        files,
+        async ({ file, type }) => {
+          const authorization = await api<DocumentAuthorization>(
+            `/customer/orders/${order.id}/documents`,
+            {
               method: "POST",
-              body: form,
-            });
-            if (!uploaded.ok) throw new Error(`Upload failed for ${file.name}`);
+              body: JSON.stringify({
+                type,
+                fileName: file.name,
+                contentType: file.type || "application/pdf",
+              }),
+            },
+          );
+          if (authorization.upload.mode === "local-simulator") {
             await api(
               `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
               { method: "POST", body: "{}" },
             );
-          }),
+            return;
+          }
+          if (
+            authorization.upload.mode !== "cloudinary-signed" ||
+            !authorization.upload.endpoint
+          )
+            throw new Error("Private document storage is unavailable");
+          const form = new FormData();
+          form.append("file", file);
+          form.append("api_key", authorization.upload.apiKey!);
+          form.append("timestamp", String(authorization.upload.timestamp));
+          form.append("signature", authorization.upload.signature);
+          form.append("folder", authorization.upload.folder);
+          form.append("public_id", authorization.upload.publicId!);
+          form.append("type", authorization.upload.deliveryType!);
+          const uploaded = await authFetch(authorization.upload.endpoint, {
+            method: "POST",
+            body: form,
+          });
+          if (!uploaded.ok) throw new Error(`Upload failed for ${file.name}`);
+          await api(
+            `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
+            { method: "POST", body: "{}" },
+          );
+        },
       );
       setOrder(await api<Order>(`/customer/orders/${order.id}`));
       advance(4);
