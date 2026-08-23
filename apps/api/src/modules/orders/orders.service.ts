@@ -31,6 +31,7 @@ import { OrdersPersistenceService } from "./orders-persistence.service.js";
 import { InventoryService } from "../inventory/inventory.service.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
+import { ocrJobOptions } from "../../jobs/ocr-recovery.config.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { QrPdfService } from "../notification/qr-pdf.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
@@ -662,10 +663,13 @@ export class OrdersService implements OnModuleInit {
           "verify-order-passport",
           { orderId: order.id, documentId: document.id },
           `order-passport-${order.id}-${document.id}`,
-          { attempts: 3, backoff: { type: "exponential", delay: 2_000 } },
+          ocrJobOptions(),
         );
       } catch (error) {
-        order.documentReviewStatus = "MANUAL_REVIEW";
+        // Keep the durable request pending. The independent workflow
+        // reconciler retries queue delivery during the OCR grace window and
+        // moves it to manual review only after that window expires.
+        order.documentReviewStatus = "OCR_PENDING";
         await this.persistence.save(order);
         this.logger.warn(
           `Replacement OCR handoff failed for ${order.id}: ${error instanceof Error ? error.message : "unknown"}`,
@@ -797,16 +801,18 @@ export class OrdersService implements OnModuleInit {
           "verify-order-passport",
           { orderId: order.id, documentId: passport.id },
           `order-passport-${order.id}-${passport.id}`,
-          { attempts: 3, backoff: { type: "exponential", delay: 2_000 } },
+          ocrJobOptions(),
         );
       } catch (error) {
-        order.documentReviewStatus = "MANUAL_REVIEW";
+        // Queue transport may recover before the OCR grace window expires.
+        // The workflow reconciler owns the eventual manual-review fallback.
+        order.documentReviewStatus = "OCR_PENDING";
         order.passportVerification = {
           status: "NOT_READY",
           matchedFields: [],
           checkedAt: now.toISOString(),
           method: "ocr-error",
-          detail: `OCR queue unavailable; routed to manual review (${error instanceof Error ? error.message : "unknown error"})`,
+          detail: `OCR queue is temporarily unavailable; retrying during the recovery window (${error instanceof Error ? error.message : "unknown error"})`,
         };
         await this.persistence.save(order);
       }

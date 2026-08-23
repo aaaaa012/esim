@@ -61,6 +61,9 @@ const baseSchema = z.object({
     .positive()
     .optional(),
   REFUND_ATTENTION_HOURS: z.coerce.number().int().positive().optional(),
+  OCR_FAILURE_GRACE_SECONDS: z.coerce.number().int().positive().optional(),
+  OCR_TECHNICAL_RETRY_SECONDS: z.coerce.number().int().positive().optional(),
+  OCR_RECOVERY_SWEEP_SECONDS: z.coerce.number().int().positive().optional(),
 });
 
 const productionSchema = baseSchema.extend({

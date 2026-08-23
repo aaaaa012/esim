@@ -19,6 +19,10 @@ import { ProductionResilienceService } from "./production-resilience.service.js"
 import { ManualRefundsService } from "../modules/payments/manual-refunds.service.js";
 import { ApiException } from "../common/api-error.js";
 import { ApiErrorCode } from "@visa-compass/shared";
+import {
+  ocrJobOptions,
+  ocrRecoveryConfig,
+} from "./ocr-recovery.config.js";
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -33,6 +37,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ReconciliationService.name);
   private timer?: ReturnType<typeof setInterval>;
   private pendingPaymentTimer?: ReturnType<typeof setInterval>;
+  private ocrRecoveryTimer?: ReturnType<typeof setInterval>;
   private repairedReusableInventory = false;
 
   constructor(
@@ -126,11 +131,23 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     void this.pendingPaymentsAsLeader().catch((error) =>
       this.recordRunFailure(error, "pending-payments"),
     );
+    const { sweepMs } = ocrRecoveryConfig();
+    this.ocrRecoveryTimer = setInterval(
+      () =>
+        void this.ocrRecoveryAsLeader().catch((error) =>
+          this.recordRunFailure(error, "ocr-recovery"),
+        ),
+      sweepMs,
+    );
+    void this.ocrRecoveryAsLeader().catch((error) =>
+      this.recordRunFailure(error, "ocr-recovery"),
+    );
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
     if (this.pendingPaymentTimer) clearInterval(this.pendingPaymentTimer);
+    if (this.ocrRecoveryTimer) clearInterval(this.ocrRecoveryTimer);
   }
 
   private async runAsLeader() {
@@ -157,6 +174,144 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         "Skipped pending-payment reconciliation; another replica holds the lease",
       );
     return result.value;
+  }
+
+  private async ocrRecoveryAsLeader() {
+    const { sweepMs } = ocrRecoveryConfig();
+    const result = await this.queues.withDistributedLock(
+      "ocr-recovery",
+      Math.max(sweepMs, 5_000),
+      () => this.reconcileOcrAvailability(),
+    );
+    if (!result.acquired)
+      this.logger.debug("Skipped OCR recovery; another replica holds the lease");
+    return result.value;
+  }
+
+  /**
+   * This sweep is intentionally owned by the workflow worker, not the OCR
+   * worker. It can therefore wait for a dead OCR process to recover, retry a
+   * missed queue handoff, and still make the deterministic manual-review
+   * decision when the grace window expires.
+   */
+  private async reconcileOcrAvailability() {
+    if (!this.prisma.enabled) return { retried: 0, manual: 0 };
+    const now = new Date();
+    const { graceMs } = ocrRecoveryConfig();
+    const cutoff = new Date(now.getTime() - graceMs);
+    let retried = 0;
+    let manual = 0;
+    const orders = await this.prisma.order.findMany({
+      where: {
+        documentReviewStatus: { in: ["OCR_PENDING", "OCR_BACKGROUND"] },
+        documentReviewStartedAt: { not: null },
+      },
+      select: {
+        id: true,
+        status: true,
+        documentReviewStartedAt: true,
+        documents: {
+          where: { type: "PASSPORT" },
+          select: { id: true },
+          take: 1,
+        },
+      },
+      take: 100,
+      orderBy: { documentReviewStartedAt: "asc" },
+    });
+    for (const order of orders) {
+      const startedAt = order.documentReviewStartedAt!;
+      if (startedAt <= cutoff) {
+        const updated = await this.prisma.order.updateMany({
+          where: {
+            id: order.id,
+            documentReviewStatus: { in: ["OCR_PENDING", "OCR_BACKGROUND"] },
+          },
+          data: { documentReviewStatus: "MANUAL_REVIEW" },
+        });
+        if (!updated.count) continue;
+        manual += 1;
+        await this.prisma.orderEvent.create({
+          data: {
+            orderId: order.id,
+            fromStatus: order.status,
+            toStatus: order.status,
+            reason:
+              "Automated verification remained unavailable through the recovery window; manual review is required before payment",
+            metadata: {
+              documentReviewStatus: "MANUAL_REVIEW",
+              failureCategory: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
+            },
+          },
+        });
+        await this.resilience.attention({
+          dedupeKey: `document-review:${order.id}`,
+          category: "DOCUMENT_MANUAL_REVIEW",
+          entityType: "Order",
+          entityId: order.id,
+          orderId: order.id,
+          summary: "OCR remained unavailable; documents need manual review",
+          localState: order.status,
+          failureCategory: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
+          lastSuccessfulStep: "DOCUMENTS_UPLOADED",
+          availableActions: [],
+        });
+        continue;
+      }
+      const passport = order.documents[0];
+      if (!passport) continue;
+      try {
+        await this.queues.add(
+          QUEUES.documents,
+          "verify-order-passport",
+          { orderId: order.id, documentId: passport.id },
+          `order-passport-${order.id}-${passport.id}`,
+          ocrJobOptions(),
+        );
+        retried += 1;
+      } catch (error) {
+        this.logger.warn(
+          `OCR queue retry deferred for ${order.id}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
+
+    const partnerVerifications =
+      await this.prisma.partnerDocumentVerification.findMany({
+        where: { status: "PROCESSING" },
+        select: { id: true, updatedAt: true },
+        take: 100,
+        orderBy: { updatedAt: "asc" },
+      });
+    for (const verification of partnerVerifications) {
+      if (verification.updatedAt <= cutoff) {
+        const updated =
+          await this.prisma.partnerDocumentVerification.updateMany({
+            where: { id: verification.id, status: "PROCESSING" },
+            data: {
+              status: "MANUAL_REVIEW",
+              failureCode: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
+            },
+          });
+        manual += updated.count;
+        continue;
+      }
+      try {
+        await this.queues.add(
+          QUEUES.documents,
+          "verify-partner-documents",
+          { verificationId: verification.id },
+          `document-verification-${verification.id}`,
+          ocrJobOptions(),
+        );
+        retried += 1;
+      } catch (error) {
+        this.logger.warn(
+          `Partner OCR queue retry deferred for ${verification.id}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
+    return { retried, manual };
   }
 
   private async run(signal: AbortSignal) {

@@ -36,6 +36,7 @@ import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
+import { ocrJobOptions } from "../../jobs/ocr-recovery.config.js";
 import { OrdersService } from "../orders/orders.service.js";
 
 /** Opaque, deterministic composite cursor for (createdAt, id) keyset pagination. */
@@ -474,12 +475,12 @@ export class PartnerService {
         "verify-partner-documents",
         { verificationId },
         `document-verification-${verificationId}`,
-        { attempts: 3, backoff: { type: "exponential", delay: 2_000 } },
+        ocrJobOptions(),
       );
     } catch (error) {
       await this.prisma.partnerDocumentVerification.update({
         where: { id: verificationId },
-        data: { status: "MANUAL_REVIEW", failureCode: "QUEUE_UNAVAILABLE" },
+        data: { status: "PROCESSING", failureCode: "QUEUE_UNAVAILABLE" },
       });
       this.logger.error(
         `Could not queue document verification ${verificationId}: ${error instanceof Error ? error.message : "unknown"}`,
@@ -488,7 +489,8 @@ export class PartnerService {
         id: document.id,
         uploadVerified: true,
         verificationQueued: false,
-        manualReview: true,
+        manualReview: false,
+        retrying: true,
         remaining: 0,
       };
     }
@@ -1898,7 +1900,7 @@ export class PartnerService {
         "verify-order-passport",
         { orderId: order.id, documentId: passport.id },
         `order-passport-${order.id}-${passport.id}`,
-        { attempts: 3, backoff: { type: "exponential", delay: 2_000 } },
+        ocrJobOptions(),
       );
       return {
         status: "OCR_PENDING",
@@ -1906,17 +1908,13 @@ export class PartnerService {
         method: "asynchronous",
       };
     } catch {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: {
-          documentReviewStatus: "MANUAL_REVIEW",
-          version: { increment: 1 },
-        },
-      });
+      // Preserve OCR_PENDING during the recovery window. The workflow
+      // reconciler retries the handoff and performs the eventual strict manual
+      // fallback even if the dedicated OCR process is completely offline.
       return {
-        status: "MANUAL_REVIEW",
+        status: "OCR_PENDING",
         checkedAt: now.toISOString(),
-        method: "manual-failover",
+        method: "recovery-pending",
       };
     }
   }
@@ -2735,7 +2733,8 @@ export class PartnerService {
         QUEUES.documents,
         "verify-passport",
         { orderId, documentId: id },
-        `ocr-${id}-${Date.now()}`,
+        `order-passport-${orderId}-${id}`,
+        ocrJobOptions(),
       );
     } catch (error) {
       this.logger.warn(

@@ -55,6 +55,12 @@ export class PassportOcrProcessor implements OnModuleInit {
       },
     });
     if (!order) return { skipped: true };
+    if (
+      ["MANUAL_REVIEW", "MANUALLY_APPROVED", "REUPLOAD_REQUIRED"].includes(
+        order.documentReviewStatus,
+      )
+    )
+      return { skipped: true, reviewAlreadyDecided: true };
     const passport = order.documents.find(
       (document) =>
         document.type === DocumentType.PASSPORT && document.id === documentId,
