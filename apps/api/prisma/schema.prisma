@@ -169,6 +169,8 @@ enum AttentionCaseStatus {
 enum OutboxStatus {
   PENDING
   DISPATCHED
+  ENQUEUED
+  PROCESSED
   FAILED
 }
 

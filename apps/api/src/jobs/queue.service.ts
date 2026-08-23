@@ -8,6 +8,7 @@ import { Queue, Worker, type Job } from "bullmq";
 import { Redis } from "ioredis";
 import { randomUUID } from "node:crypto";
 import { DEFAULT_JOB_OPTIONS, QUEUES } from "./queues.js";
+import { PrismaService } from "../infrastructure/prisma.service.js";
 
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
@@ -21,7 +22,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   private readonly workers = new Map<QueueName, Worker>();
   readonly enabled = Boolean(process.env.REDIS_URL);
 
-  constructor() {
+  constructor(private readonly prisma?: PrismaService) {
     if (process.env.NODE_ENV === "production" && !this.enabled)
       throw new Error(
         "REDIS_URL is required in production for durable order processing",
@@ -57,12 +58,8 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   /**
    * Enqueues a background job.
    *
-   * By default the caller-supplied jobId is suffixed with a random nonce:
-   * BullMQ silently IGNORES an enqueue whose jobId already exists (including
-   * completed jobs retained by removeOnComplete), which would strand flows
-   * that legitimately re-run the same logical work — passport re-checks,
-   * provisioning retries. Callers whose id IS a natural dedupe boundary
-   * (webhook provider event ids) must pass { dedupeKey: true } to keep it.
+   * Caller-supplied job ids are stable deduplication boundaries by default.
+   * A caller must explicitly opt into a nonce for a genuinely new attempt.
    */
   async add(
     name: QueueName,
@@ -72,7 +69,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     options?: {
       attempts?: number;
       backoff?: { type: "fixed" | "exponential"; delay: number };
-      dedupeKey?: boolean;
+      allowDuplicate?: boolean;
     },
   ) {
     if (!this.enabled) {
@@ -80,29 +77,15 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       return { id: jobId, simulated: true };
     }
     const queue = this.getQueue(name);
-    const timeoutMs = Math.min(
-      10_000,
-      Math.max(250, Number(process.env.QUEUE_ENQUEUE_TIMEOUT_MS ?? 2_000)),
-    );
-    const effectiveJobId =
-      options?.dedupeKey || process.env.NODE_ENV === "test"
-        ? jobId
-        : `${jobId}#${randomUUID().slice(0, 8)}`;
-    const { dedupeKey: _dedupeKey, ...jobOptions } = options ?? {};
-    const job = await Promise.race([
-      queue.add(jobName, payload, {
-        ...DEFAULT_JOB_OPTIONS,
-        ...jobOptions,
-        jobId: effectiveJobId,
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(new Error(`Queue enqueue timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        ),
-      ),
-    ]);
+    const effectiveJobId = options?.allowDuplicate
+      ? `${jobId}#${randomUUID().slice(0, 8)}`
+      : jobId;
+    const { allowDuplicate: _allowDuplicate, ...jobOptions } = options ?? {};
+    const job = await queue.add(jobName, payload, {
+      ...DEFAULT_JOB_OPTIONS,
+      ...jobOptions,
+      jobId: effectiveJobId,
+    });
     return { id: job.id, simulated: false };
   }
 
@@ -115,12 +98,14 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   async withDistributedLock<T>(
     name: string,
     ttlMs: number,
-    work: () => Promise<T>,
+    work: (signal: AbortSignal) => Promise<T>,
   ): Promise<{ acquired: boolean; value?: T }> {
-    if (!this.enabled) return { acquired: true, value: await work() };
+    if (!this.enabled)
+      return { acquired: true, value: await work(new AbortController().signal) };
     const redis = this.coordinationConnection();
     const key = `visa-compass:lease:${name}`;
     const token = randomUUID();
+    const ownership = new AbortController();
     const acquired = await redis.set(key, token, "PX", ttlMs, "NX");
     if (acquired !== "OK") return { acquired: false };
     const renewal = setInterval(
@@ -133,16 +118,23 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
             token,
             String(ttlMs),
           )
-          .catch((error) =>
+          .then((renewed) => {
+            if (Number(renewed) !== 1) ownership.abort();
+          })
+          .catch((error) => {
+            ownership.abort();
             this.logger.warn(
               `Could not renew distributed lease ${name}: ${error instanceof Error ? error.message : "unknown"}`,
-            ),
-          );
+            );
+          });
       },
       Math.max(1_000, Math.floor(ttlMs / 3)),
     );
     try {
-      return { acquired: true, value: await work() };
+      const value = await work(ownership.signal);
+      if (ownership.signal.aborted)
+        throw new Error(`Distributed lease ${name} was lost while work was running`);
+      return { acquired: true, value };
     } finally {
       clearInterval(renewal);
       await redis
@@ -214,9 +206,21 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
         `Worker error on ${name}: ${error instanceof Error ? error.message : error}`,
       ),
     );
-    worker.on("completed", (job) =>
-      this.logger.debug(`Job ${job.id} completed`),
-    );
+    worker.on("completed", (job) => {
+      this.logger.debug(`Job ${job.id} completed`);
+      const outboxId = (job.data as { outboxId?: unknown }).outboxId;
+      if (typeof outboxId === "string" && this.prisma?.enabled)
+        void this.prisma.outboxMessage
+          .updateMany({
+            where: { id: outboxId, status: { in: ["ENQUEUED", "DISPATCHED"] } },
+            data: { status: "PROCESSED" },
+          })
+          .catch((error) =>
+            this.logger.error(
+              `Could not acknowledge outbox ${outboxId}: ${error instanceof Error ? error.message : "unknown"}`,
+            ),
+          );
+    });
     this.workers.set(name, worker);
     return true;
   }
@@ -225,9 +229,10 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     const current = this.queues.get(name);
     if (current) return current;
     this.connection ??= new Redis(process.env.REDIS_URL!, {
-      maxRetriesPerRequest: 2,
+      maxRetriesPerRequest: 1,
       enableReadyCheck: true,
       connectTimeout: 2_000,
+      commandTimeout: Number(process.env.QUEUE_ENQUEUE_TIMEOUT_MS ?? 2_000),
     });
     const queue = new Queue(name, { connection: this.connection });
     this.queues.set(name, queue);

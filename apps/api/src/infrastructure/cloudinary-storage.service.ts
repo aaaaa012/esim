@@ -143,6 +143,16 @@ export class CloudinaryStorageService {
     }
   }
 
+  async deleteDocument(assetId: string) {
+    if (!this.isConfigured()) return;
+    this.configure();
+    await cloudinary.uploader.destroy(assetId, {
+      type: "authenticated",
+      resource_type: "image",
+      invalidate: true,
+    });
+  }
+
   signedReadUrl(assetId: string) {
     if (!this.isConfigured())
       throw new ServiceUnavailableException(

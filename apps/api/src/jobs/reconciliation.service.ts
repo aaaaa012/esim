@@ -8,6 +8,7 @@ import { PrismaService } from "../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../modules/integration/connectivity.service.js";
 import { NotificationService } from "../modules/notification/notification.service.js";
 import { MetricsService } from "../observability/metrics.service.js";
+import { CloudinaryStorageService } from "../infrastructure/cloudinary-storage.service.js";
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
 import { OrdersService } from "../modules/orders/orders.service.js";
@@ -45,6 +46,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly transatelOperations: TransatelOperationsService,
     private readonly resilience: ProductionResilienceService,
     private readonly refunds: ManualRefundsService,
+    private readonly storage: CloudinaryStorageService,
     private readonly metrics?: MetricsService,
   ) {}
 
@@ -95,10 +97,10 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const intervalMs =
       Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 15 * 60_000;
     this.timer = setInterval(
-      () => void this.runAsLeader().catch(() => undefined),
+      () => void this.runAsLeader().catch((error) => this.recordRunFailure(error)),
       intervalMs,
     );
-    void this.runAsLeader().catch(() => undefined);
+    void this.runAsLeader().catch((error) => this.recordRunFailure(error));
     // Separate, faster sweep for pending payments that are still inside their
     // payment window (PAYMENT_RECONCILE_INTERVAL_SECONDS, default 45s). This is
     // a backstop for browser verification: it confirms Completed payments and
@@ -115,10 +117,15 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         ? pendingSeconds * 1000
         : 45_000;
     this.pendingPaymentTimer = setInterval(
-      () => void this.pendingPaymentsAsLeader().catch(() => undefined),
+      () =>
+        void this.pendingPaymentsAsLeader().catch((error) =>
+          this.recordRunFailure(error, "pending-payments"),
+        ),
       pendingMs,
     );
-    void this.pendingPaymentsAsLeader().catch(() => undefined);
+    void this.pendingPaymentsAsLeader().catch((error) =>
+      this.recordRunFailure(error, "pending-payments"),
+    );
   }
 
   onModuleDestroy() {
@@ -130,7 +137,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const result = await this.queues.withDistributedLock(
       "reconciliation",
       10 * 60_000,
-      () => this.run(),
+      (signal) => this.run(signal),
     );
     if (!result.acquired)
       this.logger.debug(
@@ -152,45 +159,62 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     return result.value;
   }
 
-  private async run() {
-    await this.resilience.dispatchOutbox();
-    await this.requeueUnprocessedWebhooks();
-    await this.reconcileStaleDocumentReviews();
-    await this.retryFailedNotifications();
-    await this.reconcileProvisioningOperations();
-    await this.reconcileLifecycleOperations();
-    await this.orders.reconcileStaleActivationOrders();
-    await this.orders.recoverStuckProvisioningOrders();
-    await this.orders.recoverApprovedOrders();
-    await this.payments.reconcilePendingPayments();
-    await this.inventory.reconcileStaleReservations();
-    await this.refunds.reconcilePending();
+  private async run(signal: AbortSignal) {
+    const steps: Array<[string, () => Promise<unknown>]> = [
+      ["outbox", () => this.resilience.dispatchOutbox()],
+      ["webhooks", () => this.requeueUnprocessedWebhooks()],
+      ["documents", () => this.reconcileStaleDocumentReviews()],
+      ["notifications", () => this.retryFailedNotifications()],
+      ["provisioning-operations", () => this.reconcileProvisioningOperations()],
+      ["lifecycle-operations", () => this.reconcileLifecycleOperations()],
+      ["activation", () => this.orders.reconcileStaleActivationOrders()],
+      ["stuck-provisioning", () => this.orders.recoverStuckProvisioningOrders()],
+      ["approved-orders", () => this.orders.recoverApprovedOrders()],
+      ["payments", () => this.payments.reconcilePendingPayments()],
+      ["reservations", () => this.inventory.reconcileStaleReservations()],
+      ["refunds", () => this.refunds.reconcilePending()],
+      ["expired-records", () => this.cleanupExpiredRecords()],
+    ];
+    for (const [name, step] of steps) await this.runStep(name, signal, step);
     if (!this.prisma.enabled) {
       await this.markReconciliationSuccess();
       return;
     }
     if (!this.repairedReusableInventory) {
-      await this.repairReusableEsims();
-      this.repairedReusableInventory = true;
+      const repaired = await this.runStep("repair-reusable-inventory", signal, () =>
+        this.repairReusableEsims(),
+      );
+      this.repairedReusableInventory = repaired;
     }
-    await this.sweepLifecycle();
-    await this.queueInventoryReconciliation();
+    await this.runStep("subscription-lifecycle", signal, () => this.sweepLifecycle());
+    await this.runStep("inventory-reconciliation", signal, () =>
+      this.queueInventoryReconciliation(),
+    );
+    if (signal.aborted) throw new Error("Reconciliation lease was lost");
+    const minutes = Number(process.env.RECONCILIATION_INTERVAL_MINUTES ?? 15);
+    const stalenessMs =
+      (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
+    const staleBefore = new Date(Date.now() - stalenessMs);
     const subscriptions = await this.prisma.subscription.findMany({
-      where: { status: "ACTIVE" },
+      where: {
+        status: "ACTIVE",
+        OR: [
+          { usageLastCheckedAt: null },
+          { usageLastCheckedAt: { lte: staleBefore } },
+        ],
+      },
       select: {
         id: true,
         usageLastCheckedAt: true,
         customerEsim: { select: { inventory: { select: { iccid: true } } } },
       },
+      orderBy: [{ usageLastCheckedAt: "asc" }, { id: "asc" }],
       take: 500,
     });
     if (!subscriptions.length) {
       await this.markReconciliationSuccess();
       return;
     }
-    const minutes = Number(process.env.RECONCILIATION_INTERVAL_MINUTES ?? 15);
-    const stalenessMs =
-      (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
     const now = Date.now();
     let queued = 0;
     for (const subscription of subscriptions) {
@@ -201,7 +225,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         QUEUES.reconciliation,
         "reconcile-usage",
         { id: subscription.id },
-        `reconcile-${subscription.id}-${now}`,
+        `reconcile-${subscription.id}-${subscription.usageLastCheckedAt?.getTime() ?? 0}`,
       );
       queued += 1;
       if (!this.queues.enabled) await this.reconcile(subscription.id);
@@ -211,6 +235,90 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         `Queued ${queued} subscription usage reconciliation job(s)`,
       );
     await this.markReconciliationSuccess();
+  }
+
+  private async runStep(
+    name: string,
+    signal: AbortSignal,
+    work: () => Promise<unknown>,
+  ) {
+    if (signal.aborted) throw new Error("Reconciliation lease was lost");
+    try {
+      await work();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown";
+      this.logger.error(`Reconciliation step ${name} failed: ${message}`);
+      this.metrics?.recordFailure("reconciliation", name);
+      await this.resilience.attention({
+        dedupeKey: `reconciliation-step:${name}`,
+        category: "RECONCILIATION",
+        entityType: "ReconciliationStep",
+        entityId: name,
+        severity: "WARNING",
+        summary: `Reconciliation step ${name} failed`,
+        detail: message.slice(0, 1000),
+        failureCategory: "RECONCILIATION_STEP_FAILED",
+      }).catch((attentionError) =>
+        this.logger.error(
+          `Could not persist reconciliation attention for ${name}: ${attentionError instanceof Error ? attentionError.message : "unknown"}`,
+        ),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  private async recordRunFailure(error: unknown, run = "full") {
+    const message = error instanceof Error ? error.message : "unknown";
+    this.logger.error(`Reconciliation ${run} run failed: ${message}`);
+    this.metrics?.recordFailure("reconciliation-run", run);
+    await this.resilience.attention({
+      dedupeKey: `reconciliation-run:${run}`,
+      category: "RECONCILIATION",
+      entityType: "ReconciliationRun",
+      entityId: run,
+      severity: "CRITICAL",
+      summary: `Reconciliation ${run} run failed`,
+      detail: message.slice(0, 1000),
+      failureCategory: "RECONCILIATION_RUN_FAILED",
+    }).catch((attentionError) =>
+      this.logger.error(
+        `Could not persist reconciliation run attention: ${attentionError instanceof Error ? attentionError.message : "unknown"}`,
+      ),
+    );
+  }
+
+  private async cleanupExpiredRecords() {
+    if (!this.prisma.enabled) return;
+    const now = new Date();
+    await this.prisma.apiIdempotencyRecord.deleteMany({
+      where: { expiresAt: { lte: now } },
+    });
+    const staleDocuments = await this.prisma.travelerDocument.findMany({
+      where: {
+        uploadVerified: false,
+        status: "PENDING",
+        createdAt: { lte: new Date(Date.now() - 60 * 60_000) },
+      },
+      select: { id: true, orderId: true, privateAssetId: true },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    });
+    for (const document of staleDocuments) {
+      await this.storage.deleteDocument(document.privateAssetId).catch((error) =>
+        this.logger.warn(
+          `Could not delete expired document asset: ${error instanceof Error ? error.message : "unknown"}`,
+        ),
+      );
+      const removed = await this.prisma.travelerDocument.deleteMany({
+        where: { id: document.id, uploadVerified: false, status: "PENDING" },
+      });
+      if (removed.count)
+        await this.prisma.order.update({
+          where: { id: document.orderId },
+          data: { version: { increment: 1 } },
+        });
+    }
   }
 
   private markReconciliationSuccess() {

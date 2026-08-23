@@ -176,13 +176,13 @@ export class ProductionResilienceService {
         await this.queues.add(
           QUEUES[topic],
           row.jobName,
-          row.payload as object,
+          { ...(row.payload as object), outboxId: row.id },
           row.dedupeKey,
         );
         await this.prisma.outboxMessage.update({
           where: { id: row.id },
           data: {
-            status: OutboxStatus.DISPATCHED,
+            status: OutboxStatus.ENQUEUED,
             dispatchedAt: new Date(),
             errorMessage: null,
             attemptCount: { increment: 1 },
