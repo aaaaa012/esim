@@ -12,6 +12,15 @@ import { PaymentSimulatorGateway } from "./gateways/simulator.gateway.js";
 import { MetricsService } from "../../observability/metrics.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { PaymentInitiationStatus, Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+
+type InitiationResult = {
+  reference: string;
+  correlationId?: string;
+  expiresAt?: string;
+  redirectUrl?: string;
+};
 
 type VerifySource =
   "verify" | "callback" | "recent-reconcile" | "expiry-reconcile";
@@ -50,6 +59,7 @@ export class PaymentsService {
     ownerId: string | null,
     provider: PaymentProvider,
   ) {
+    await this.orders.refreshOne?.(orderId, true);
     const order = this.orders.get(orderId, ownerId ?? undefined);
     if (order.purchaseType !== "TOPUP")
       await this.orders.assertInventoryAvailableForNewOrder();
@@ -71,17 +81,123 @@ export class PaymentsService {
       };
     }
     const returnUrl = `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/esim/checkout?order=${orderId}`;
-    const result = await this.gateway().initiate({
-      orderId,
-      orderNumber: order.orderNumber,
-      amountNpr: order.totalAmountNpr,
-      returnUrl,
-    });
+    const result = this.prisma?.enabled
+      ? await this.initiatePersisted(order, provider, returnUrl)
+      : await this.gateway().initiate({
+          orderId,
+          orderNumber: order.orderNumber,
+          amountNpr: order.totalAmountNpr,
+          returnUrl,
+        });
     await this.orders.beginPayment(orderId, ownerId, provider, {
       ...result,
       returnUrl,
     });
     return result;
+  }
+
+  private async initiatePersisted(
+    order: DemoOrder,
+    provider: PaymentProvider,
+    returnUrl: string,
+  ): Promise<InitiationResult> {
+    const prisma = this.prisma!;
+    const claimToken = randomUUID();
+    const leaseExpiresAt = new Date(Date.now() + 2 * 60_000);
+    let owned = false;
+    try {
+      await prisma.paymentInitiation.create({
+        data: {
+          orderId: order.id,
+          provider,
+          amountNpr: order.totalAmountNpr,
+          claimToken,
+          leaseExpiresAt,
+        },
+      });
+      owned = true;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "P2002") throw error;
+    }
+
+    const deadline = Date.now() + 15_000;
+    while (!owned && Date.now() < deadline) {
+      const record = await prisma.paymentInitiation.findUnique({ where: { orderId: order.id } });
+      if (!record) continue;
+      if (record.provider !== provider || record.amountNpr !== order.totalAmountNpr)
+        throw new BadRequestException("Payment initiation conflicts with the current order amount or provider");
+      if (record.status === PaymentInitiationStatus.COMPLETED && record.result)
+        return record.result as InitiationResult;
+      if (
+        record.status === PaymentInitiationStatus.FAILED ||
+        record.leaseExpiresAt.getTime() <= Date.now()
+      ) {
+        const reclaimed = await prisma.paymentInitiation.updateMany({
+          where: {
+            id: record.id,
+            OR: [
+              { status: PaymentInitiationStatus.FAILED },
+              { status: PaymentInitiationStatus.PROCESSING, leaseExpiresAt: { lte: new Date() } },
+            ],
+          },
+          data: {
+            status: PaymentInitiationStatus.PROCESSING,
+            claimToken,
+            leaseExpiresAt,
+            result: Prisma.JsonNull,
+            errorCode: null,
+          },
+        });
+        owned = reclaimed.count === 1;
+        if (owned)
+          void this.resilience?.attention({
+            dedupeKey: `payment-initiation-reclaimed:${order.id}`,
+            category: "PAYMENT",
+            entityType: "Order",
+            entityId: order.id,
+            orderId: order.id,
+            severity: "WARNING",
+            summary: `Recovered an interrupted payment initiation for ${order.orderNumber}`,
+            failureCategory: "PAYMENT_INITIATION_INTERRUPTED",
+          });
+      }
+      if (!owned) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!owned)
+      throw new ApiException({
+        code: "PAYMENT_VERIFICATION_PENDING",
+        message: "Payment initiation is still processing; retry shortly",
+      });
+
+    try {
+      const result = await this.gateway().initiate({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        amountNpr: order.totalAmountNpr,
+        returnUrl,
+      });
+      const saved = await prisma.paymentInitiation.updateMany({
+        where: { orderId: order.id, claimToken, status: PaymentInitiationStatus.PROCESSING },
+        data: {
+          status: PaymentInitiationStatus.COMPLETED,
+          result: result as Prisma.InputJsonValue,
+          leaseExpiresAt: new Date(),
+        },
+      });
+      if (saved.count !== 1)
+        throw new Error("Payment initiation ownership was lost before persistence");
+      return result;
+    } catch (error) {
+      await prisma.paymentInitiation.updateMany({
+        where: { orderId: order.id, claimToken, status: PaymentInitiationStatus.PROCESSING },
+        data: {
+          status: PaymentInitiationStatus.FAILED,
+          errorCode: "PROVIDER_INITIATION_FAILED",
+          leaseExpiresAt: new Date(),
+        },
+      });
+      throw error;
+    }
   }
 
   /**

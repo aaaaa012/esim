@@ -174,6 +174,64 @@ describe("PaymentsService inventory admission", () => {
     expect(initiate).toHaveBeenCalledOnce();
     expect(beginPayment).toHaveBeenCalledOnce();
   });
+
+  it("allows only one provider initiation across concurrent API requests", async () => {
+    const order = orderFor({
+      status: OrderStatus.DRAFT,
+      purchaseType: "TOPUP",
+      payment: undefined,
+    });
+    let record: AnyRecord | null = null;
+    const initiate = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return {
+        reference: "shared-pidx",
+        redirectUrl: "https://khalti.example/shared",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      };
+    });
+    const prisma = {
+      enabled: true,
+      paymentInitiation: {
+        create: vi.fn(async ({ data }: AnyRecord) => {
+          if (record) throw { code: "P2002" };
+          record = { id: "init-1", status: "PROCESSING", result: null, ...data };
+          return record;
+        }),
+        findUnique: vi.fn(async () => record),
+        updateMany: vi.fn(async ({ where, data }: AnyRecord) => {
+          if (!record || (where.claimToken && where.claimToken !== record.claimToken))
+            return { count: 0 };
+          record = { ...record, ...data };
+          return { count: 1 };
+        }),
+      },
+    };
+    const beginPayment = vi.fn().mockResolvedValue(undefined);
+    const orders = {
+      refreshOne: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockReturnValue(order),
+      beginPayment,
+      assertInventoryAvailableForNewOrder: vi.fn(),
+    };
+    const service = new PaymentsService(
+      orders as never,
+      { initiate } as never,
+      { initiate } as never,
+      undefined,
+      undefined,
+      prisma as never,
+    );
+
+    const [first, second] = await Promise.all([
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+    ]);
+    expect(first.reference).toBe("shared-pidx");
+    expect(second.reference).toBe("shared-pidx");
+    expect(initiate).toHaveBeenCalledOnce();
+    expect(beginPayment).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("PaymentsService payment verification mapping", () => {

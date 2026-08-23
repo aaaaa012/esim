@@ -90,6 +90,12 @@ enum PaymentStatus {
   CHARGED_BACK
 }
 
+enum PaymentInitiationStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 enum PaymentDisputeType {
   CHARGEBACK
   DISPUTE
@@ -459,6 +465,7 @@ model Order {
   traveler                     Traveler?
   documents                    TravelerDocument[]
   payments                     Payment[]
+  paymentInitiation            PaymentInitiation?
   inventory                    EsimInventory?
   customerEsim                 CustomerEsim?
   reviews                      OrderReview[]
@@ -564,6 +571,23 @@ model Payment {
 
   @@unique([provider, providerTransactionId])
   @@index([orderId])
+}
+
+model PaymentInitiation {
+  id             String                  @id @default(uuid()) @db.Uuid
+  orderId        String                  @unique @db.Uuid
+  order          Order                   @relation(fields: [orderId], references: [id])
+  provider       PaymentProvider
+  amountNpr      Int
+  status         PaymentInitiationStatus @default(PROCESSING)
+  claimToken     String                  @db.Uuid
+  leaseExpiresAt DateTime
+  result         Json?
+  errorCode      String?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@index([status, leaseExpiresAt])
 }
 
 model InventoryBatch {

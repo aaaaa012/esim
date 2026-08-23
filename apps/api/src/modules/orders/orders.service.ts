@@ -828,6 +828,17 @@ export class OrdersService implements OnModuleInit {
   ) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
+    if (
+      order.payment?.status === PaymentStatus.PENDING &&
+      order.payment.reference === initiation.reference
+    )
+      return this.redact(order);
+    if (
+      order.payment?.status === PaymentStatus.PENDING &&
+      order.payment.expiresAt &&
+      new Date(order.payment.expiresAt).getTime() > Date.now()
+    )
+      throw new ConflictException("Another payment session is already active");
     if (order.purchaseType !== "TOPUP") {
       const required = order.documents.filter((d) =>
         [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type),
