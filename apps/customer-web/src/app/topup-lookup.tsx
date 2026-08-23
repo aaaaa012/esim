@@ -1,21 +1,19 @@
 "use client";
+
+import { CheckCircle2, LoaderCircle, RefreshCcw, Search, Smartphone, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { LoaderCircle, RefreshCcw, Search, Smartphone } from "lucide-react";
 import ErrorModal from "../components/error-modal";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
+type Plan = { id: string; name: string; dataAllowance: string; validityDays: number; sellingPriceNpr: number };
+type Country = { code: string; name: string };
 type LookupResult = {
   found: boolean;
   mobile: string;
   subscriber?: {
-    currentPlan?: {
-      name: string;
-      dataAllowance: string;
-      validityDays: number;
-      countryCode: string;
-      countryName: string;
-    };
+    currentPlan?: Plan & { countryCode: string; countryName: string };
     countryCode?: string;
     countryName?: string;
     expiresAt?: string;
@@ -26,11 +24,28 @@ type LookupResult = {
   lookupToken?: string;
 };
 
+const npr = (amount: number) => `NPR ${amount.toLocaleString("en-NP")}`;
+
 export default function TopupLookup() {
+  const router = useRouter();
   const [mobile, setMobile] = useState("");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<null | LookupResult>(null);
+  const [result, setResult] = useState<LookupResult | null>(null);
+  const [alternatives, setAlternatives] = useState<Plan[] | null>(null);
+  const [countries, setCountries] = useState<Country[]>([]);
+  const [destination, setDestination] = useState("");
+  const [showAlternatives, setShowAlternatives] = useState(false);
   const [error, setError] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const close = () => {
+    if (busy) return;
+    setOpen(false);
+    setResult(null);
+    setAlternatives(null);
+    setShowAlternatives(false);
+    setError("");
+  };
 
   const lookup = async () => {
     if (!mobile.trim()) {
@@ -39,41 +54,18 @@ export default function TopupLookup() {
     }
     setBusy(true);
     setError("");
+    setResult(null);
+    setAlternatives(null);
+    setShowAlternatives(false);
     try {
       const response = await fetch(`${API}/guest/orders/topup-lookup`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mobile: mobile.trim() }),
       });
-      const payload = (await response.json()) as {
-        data?: unknown;
-        error?: { message: string };
-      };
-      if (!response.ok)
-        throw new Error(payload.error?.message ?? "Lookup failed");
-      const value = payload.data as LookupResult;
-      setResult(value);
-      try {
-        if (value?.found && value.topUpAvailable) {
-          sessionStorage.setItem("vc_topup_mobile", mobile.trim());
-          if (value.lookupToken)
-            sessionStorage.setItem("vc_topup_token", value.lookupToken);
-          if (value.subscriber?.countryCode) {
-            sessionStorage.setItem(
-              "vc_topup_country",
-              value.subscriber.countryCode,
-            );
-          } else {
-            sessionStorage.removeItem("vc_topup_country");
-          }
-        } else {
-          sessionStorage.removeItem("vc_topup_mobile");
-          sessionStorage.removeItem("vc_topup_token");
-          sessionStorage.removeItem("vc_topup_country");
-        }
-      } catch {
-        /* storage unavailable */
-      }
+      const payload = (await response.json()) as { data?: LookupResult; error?: { message: string } };
+      if (!response.ok) throw new Error(payload.error?.message ?? "Lookup failed");
+      setResult(payload.data ?? null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Lookup failed");
     } finally {
@@ -81,79 +73,125 @@ export default function TopupLookup() {
     }
   };
 
+  const beginRecharge = async (planId: string, planCountry: string) => {
+    if (!result?.topUpAvailable || !planCountry) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${API}/guest/orders/topup-eligibility`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mobile: result.mobile || mobile.trim(), lookupToken: result.lookupToken, planId }),
+      });
+      const payload = (await response.json()) as { data?: { allowed?: boolean; errorMessage?: string }; error?: { message?: string } };
+      const eligibility = payload.data;
+      if (!response.ok || !eligibility?.allowed)
+        throw new Error(eligibility?.errorMessage ?? payload.error?.message ?? "This eSIM cannot subscribe to the selected plan.");
+    const params = new URLSearchParams({
+      plan: planId,
+      mobile: result.mobile || mobile.trim(),
+      lookup: result.lookupToken ?? "",
+      country: planCountry,
+    });
+    router.push(`/esim/checkout?${params.toString()}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "We could not confirm this recharge plan.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadPlans = async (country: string) => {
+    if (!country) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${API}/public/plans?country=${encodeURIComponent(country)}`);
+      const payload = (await response.json()) as { data?: Plan[]; error?: { message: string } };
+      if (!response.ok) throw new Error(payload.error?.message ?? "Plans could not be loaded");
+      setAlternatives(payload.data ?? []);
+      setShowAlternatives(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Plans could not be loaded");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadAlternatives = async () => {
+    const country = result?.subscriber?.countryCode;
+    if (!country) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${API}/public/countries`);
+      const payload = (await response.json()) as { data?: Country[] };
+      if (!response.ok) throw new Error("Destinations could not be loaded");
+      setCountries(payload.data ?? []);
+      setDestination(country);
+      setShowAlternatives(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Destinations could not be loaded");
+    } finally {
+      setBusy(false);
+    }
+    await loadPlans(country);
+  };
+
+  const plan = result?.subscriber?.currentPlan;
   return (
-    <div className="topup-box">
-      <div className="topup-head">
-        <Smartphone size={16} />
-        <b>Already have a Visa Compass eSIM?</b>
-        <small>
-          Enter your mobile number to see your current plan and recharge it.
-        </small>
-      </div>
-      <div className="topup-row">
-        <input
-          value={mobile}
-          onChange={(e) => setMobile(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && void lookup()}
-          placeholder="e.g. +977 9841 234 567"
-          inputMode="tel"
-        />
-        <button
-          className="button"
-          disabled={busy}
-          onClick={() => void lookup()}
-        >
-          {busy ? (
-            <LoaderCircle className="spin" size={16} />
-          ) : (
-            <Search size={16} />
-          )}{" "}
-          Check
+    <>
+      <div className="topup-box">
+        <div className="topup-head">
+          <Smartphone size={16} />
+          <b>Already have a Visa Compass eSIM?</b>
+          <small>Check your eSIM and recharge it in a few steps.</small>
+        </div>
+        <button className="button topup-open" onClick={() => setOpen(true)}>
+          <RefreshCcw size={16} /> Recharge an existing eSIM
         </button>
       </div>
-      {error && <ErrorModal error={error} onClose={() => setError("")} />}
-      {result && (
-        <div className="topup-result">
-          {result.found && result.subscriber ? (
-            <>
-              <div className="topup-subscriber">
-                <b>
-                  {result.subscriber.currentPlan?.name ?? "Active subscriber"}
-                </b>
-                <span>
-                  {result.subscriber.currentPlan
-                    ? `${result.subscriber.currentPlan.countryName} · ${result.subscriber.currentPlan.dataAllowance} · ${result.subscriber.currentPlan.validityDays} days`
-                    : (result.subscriber.countryName ?? "Existing eSIM")}
-                </span>
-                {result.subscriber.usage && (
-                  <small>
-                    Used {result.subscriber.usage.usedMb} /{" "}
-                    {result.subscriber.usage.totalMb} MB
-                    {result.subscriber.expiresAt
-                      ? ` · valid until ${new Date(result.subscriber.expiresAt).toLocaleDateString()}`
-                      : ""}
-                  </small>
-                )}
-              </div>
-              {result.topUpAvailable ? (
-                <p className="topup-note ok">
-                  <RefreshCcw size={14} /> Recharge detected — select this
-                  destination below to top up this number.
-                </p>
-              ) : (
-                <p className="topup-note warn">
-                  We could not find an active eSIM for this number.
-                </p>
-              )}
-            </>
-          ) : (
-            <p className="topup-note warn">
-              No prior plan was found for this number. Choose a destination
-              below to start a new eSIM.
-            </p>
-          )}
+
+      {open ? (
+        <div className="topup-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && close()}>
+          <section className="topup-modal" role="dialog" aria-modal="true" aria-labelledby="topup-dialog-title">
+            <button className="topup-modal-close" onClick={close} aria-label="Close recharge lookup"><X size={19} /></button>
+            <header className="topup-dialog-heading">
+              <span className="topup-dialog-icon"><Smartphone size={19} /></span>
+              <div><h2 id="topup-dialog-title">Top up your eSIM</h2><p>Enter the mobile number linked to your Visa Compass eSIM.</p></div>
+            </header>
+            <div className="topup-row">
+              <input autoFocus value={mobile} onChange={(event) => setMobile(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void lookup()} placeholder="e.g. +977 9841 234 567" inputMode="tel" />
+              <button className="button" disabled={busy} onClick={() => void lookup()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />} Check</button>
+            </div>
+
+            {result ? <div className="topup-result">
+              {result.found && result.subscriber && plan ? <>
+                <div className="topup-subscriber">
+                  <b>{plan.name}</b>
+                  <span>{plan.countryName} · {plan.dataAllowance} · {plan.validityDays} days</span>
+                  {result.subscriber.usage ? <small>Used {result.subscriber.usage.usedMb} / {result.subscriber.usage.totalMb} MB{result.subscriber.expiresAt ? ` · valid until ${new Date(result.subscriber.expiresAt).toLocaleDateString()}` : ""}</small> : null}
+                </div>
+                {result.topUpAvailable ? <>
+                  <p className="topup-note ok"><CheckCircle2 size={15} /> Your eSIM is eligible for recharge.</p>
+                  {!showAlternatives ? <div className="topup-actions">
+                    <button className="button" disabled={busy} onClick={() => void beginRecharge(plan.id, plan.countryCode)}><RefreshCcw size={16} /> Continue with this plan</button>
+                    <button className="button secondary" disabled={busy} onClick={() => void loadAlternatives()}>Choose another {plan.countryName} plan</button>
+                  </div> : <div className="topup-alternatives">
+                    <label className="topup-destination"><span>Destination</span><select value={destination} onChange={(event) => { const next = event.target.value; setDestination(next); void loadPlans(next); }}><option value="">Choose a destination</option>{countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></label>
+                    <p>Choose a plan. We will confirm with Transatel before you can pay.</p>
+                    {alternatives?.length ? alternatives.map((item) => <div className="topup-plan-option" key={item.id}>
+                      <span><b>{item.name}</b><small>{item.dataAllowance} · {item.validityDays} days · {npr(item.sellingPriceNpr)}</small></span>
+                      <button className="button" disabled={busy} onClick={() => void beginRecharge(item.id, destination)}>Select</button>
+                    </div>) : <p className="topup-note warn">There are no recharge plans available for this destination right now.</p>}
+                  </div>}
+                </> : <p className="topup-note warn">This eSIM is no longer eligible for recharge. Please choose a new eSIM plan instead.</p>}
+              </> : <p className="topup-note warn">No prior Visa Compass eSIM was found for this mobile number. Please choose a destination to buy a new eSIM.</p>}
+            </div> : null}
+          </section>
         </div>
-      )}
-    </div>
+      ) : null}
+      {error ? <ErrorModal error={error} onClose={() => setError("")} /> : null}
+    </>
   );
 }

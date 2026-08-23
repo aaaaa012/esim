@@ -23,4 +23,10 @@ jobs:
           NEXT_PUBLIC_PAYMENT_MODE: ${{ vars.NEXT_PUBLIC_PAYMENT_MODE }}
           NEXT_PUBLIC_CUSTOMER_WEB_URL: ${{ vars.NEXT_PUBLIC_CUSTOMER_WEB_URL }}
       - name: Reject committed secrets
-        run: '! git grep -nE "(CLERK_SECRET_KEY|KHALTI_SECRET_KEY|DATABASE_URL)=.+" -- ":(exclude).env.example"'
+        run: |
+          matches="$(git grep -nE "(CLERK_SECRET_KEY|KHALTI_SECRET_KEY|DATABASE_URL)=.+" -- ":(exclude).github/workflows/ci.yml" || true)"
+          unexpected="$(printf '%s\n' "$matches" | grep -vE 'CLERK_SECRET_KEY=sk_test_\.\.\.|(DIRECT_)?DATABASE_URL=postgresql://user:password@localhost|(DIRECT_)?DATABASE_URL=postgresql://(app_user|migration_user):password@(host|pooler-host|database-host)|DIRECT_DATABASE_URL=.postgresql://\.\.\.' || true)"
+          if [ -n "$unexpected" ]; then
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi

@@ -78,6 +78,9 @@ const ACTION_FILTER_OPTIONS = [
   { value: "khalti-initiate", label: "Khalti Payment Initiation" },
   { value: "khalti-callback", label: "Khalti Payment Callback Received" },
   { value: "transatel-callback", label: "Transatel Network Update Received" },
+  { value: "partner-api", label: "Partner API Request" },
+  { value: "customer-topup-lookup", label: "Customer eSIM Lookup" },
+  { value: "customer-topup-eligibility", label: "Customer Top-up Eligibility" },
 ];
 
 function dump(value: unknown): string {
@@ -219,6 +222,8 @@ export default function LogsClient() {
       if (actionFilter === "khalti-initiate") return act.includes("khalti payment initiation");
       if (actionFilter === "khalti-callback") return act.includes("khalti payment callback");
       if (actionFilter === "transatel-callback") return act.includes("transatel network update");
+      if (actionFilter === "customer-topup-lookup") return act.includes("customer esim lookup");
+      if (actionFilter === "customer-topup-eligibility") return act.includes("customer top-up eligibility");
       return true;
     });
   }, [items, actionFilter]);

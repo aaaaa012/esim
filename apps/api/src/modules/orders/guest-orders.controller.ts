@@ -23,6 +23,7 @@ import { GuestLookupRateLimitGuard } from "../../common/guest-lookup.rate-limit.
 import { PassportVerificationRateLimitGuard } from "../../common/passport-verification.rate-limit.guard.js";
 import { clientIp } from "../../common/client-ip.js";
 import { PaymentsService } from "../payments/payments.service.js";
+import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { OrdersService } from "./orders.service.js";
 
 const guestTokenTtlMs = 24 * 60 * 60_000;
@@ -80,6 +81,7 @@ export class GuestOrdersController {
   constructor(
     private readonly orders: OrdersService,
     private readonly payments: PaymentsService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Post() async create(
@@ -242,15 +244,120 @@ export class GuestOrdersController {
   @Post("topup-lookup")
   @UseGuards(GuestLookupRateLimitGuard)
   async topUpLookup(@Body() body: { mobile: string }) {
-    if (!body.mobile?.trim())
-      throw new BadRequestException("mobile is required");
-    const result = await this.orders.topUpLookup(body.mobile);
-    return {
-      ...result,
-      ...(result.found
-        ? { lookupToken: lookupTokenFor(body.mobile.trim()) }
-        : {}),
-    };
+    const startedAt = Date.now();
+    try {
+      if (!body.mobile?.trim())
+        throw new BadRequestException("mobile is required");
+      const result = await this.orders.topUpLookup(body.mobile);
+      await this.recordTopUpEvent("customer-topup-lookup", 200, startedAt, {
+        found: result.found,
+        topUpAvailable:
+          "topUpAvailable" in result && Boolean(result.topUpAvailable),
+      }, { mobile: "[REDACTED]" });
+      return {
+        ...result,
+        ...(result.found
+          ? { lookupToken: lookupTokenFor(body.mobile.trim()) }
+          : {}),
+      };
+    } catch (error) {
+      await this.recordTopUpEvent(
+        "customer-topup-lookup",
+        this.statusFor(error),
+        startedAt,
+        { found: false },
+        { mobile: "[REDACTED]" },
+        error,
+      );
+      throw error;
+    }
+  }
+
+  @Post("topup-eligibility")
+  @UseGuards(GuestLookupRateLimitGuard)
+  async topUpEligibility(
+    @Body() body: { mobile?: string; lookupToken?: string; planId?: string },
+  ) {
+    const startedAt = Date.now();
+    try {
+      if (!body.planId?.trim())
+        throw new BadRequestException("planId is required");
+      const mobile = mobileFromLookupToken(body.lookupToken ?? "");
+      if (body.mobile && body.mobile !== mobile)
+        throw new ForbiddenException(
+          "Top-up lookup does not match this mobile number",
+        );
+      const result = await this.orders.checkTopUpEligibility(mobile, body.planId);
+      await this.recordTopUpEvent("customer-topup-eligibility", 200, startedAt, {
+        planId: body.planId,
+        allowed: result.allowed,
+        ...(result.errorKey ? { errorKey: result.errorKey } : {}),
+        ...(result.errorMessage
+          ? { reason: result.errorMessage.slice(0, 300) }
+          : {}),
+      }, {
+        mobile: "[REDACTED]",
+        lookupToken: "[REDACTED]",
+        planId: body.planId,
+      });
+      return result;
+    } catch (error) {
+      await this.recordTopUpEvent(
+        "customer-topup-eligibility",
+        this.statusFor(error),
+        startedAt,
+        body.planId
+          ? { planId: body.planId, allowed: false }
+          : { allowed: false },
+        {
+          mobile: "[REDACTED]",
+          lookupToken: "[REDACTED]",
+          ...(body.planId ? { planId: body.planId } : {}),
+        },
+        error,
+      );
+      throw error;
+    }
+  }
+
+  private statusFor(error: unknown) {
+    return typeof error === "object" && error && "getStatus" in error &&
+      typeof (error as { getStatus?: unknown }).getStatus === "function"
+      ? (error as { getStatus(): number }).getStatus()
+      : 500;
+  }
+
+  /** Persist safe customer top-up milestones without phone numbers or tokens. */
+  private async recordTopUpEvent(
+    operation: "customer-topup-lookup" | "customer-topup-eligibility",
+    status: number,
+    startedAt: number,
+    responseBody: Record<string, unknown>,
+    requestBody: Record<string, unknown>,
+    error?: unknown,
+  ) {
+    if (!this.prisma.enabled) return;
+    const message =
+      error instanceof Error ? error.message.slice(0, 500) : undefined;
+    try {
+      await this.prisma.integrationLog.create({
+        data: {
+          operation,
+          method: "POST",
+          endpoint:
+            operation === "customer-topup-lookup"
+              ? "/guest/orders/topup-lookup"
+              : "/guest/orders/topup-eligibility",
+          status,
+          durationMs: Date.now() - startedAt,
+          requestBody: { source: "customer-web", ...requestBody },
+          responseBody: responseBody as never,
+          ...(message ? { errorMessage: message } : {}),
+        },
+      });
+    } catch {
+      // Diagnostics must never interrupt a customer recharge journey.
+    }
   }
 
   private assert(id: string, token: string) {

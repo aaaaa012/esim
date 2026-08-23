@@ -41,4 +41,14 @@ describe("activityLabel", () => {
       }),
     ).toBe("Transatel Service Request");
   });
+
+  it.each([
+    ["partner-api", "Partner API Request"],
+    ["customer-topup-lookup", "Customer eSIM Lookup"],
+    ["customer-topup-eligibility", "Customer Top-up Eligibility"],
+  ])("labels %s operations", (identifier, label) => {
+    expect(
+      activityLabel({ group: "provider", identifier, title: "POST /request" }),
+    ).toBe(label);
+  });
 });

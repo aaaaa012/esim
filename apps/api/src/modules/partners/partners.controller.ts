@@ -12,6 +12,7 @@ import {
   Query,
   Req,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
@@ -34,6 +35,7 @@ import {
   PartnerScopes,
 } from "./partner-auth.guard.js";
 import { PartnerService } from "./partner.service.js";
+import { PartnerApiLoggingInterceptor } from "./partner-api-logging.interceptor.js";
 
 const legacyCreateSchema = z.object({
   quoteId: z.string().uuid(),
@@ -77,6 +79,7 @@ export const completeCreateSchema = z.object({
   externalOrderId: z.string().trim().min(1).max(120),
   externalCustomerId: z.string().trim().min(1).max(120),
   planId: z.string().uuid(),
+  purchaseType: z.enum(["INITIAL_PURCHASE", "TOPUP"]).optional(),
   settlement: z
     .discriminatedUnion("method", [
       z.object({ method: z.literal("PARTNER_ACCOUNT") }),
@@ -87,7 +90,14 @@ export const completeCreateSchema = z.object({
       }),
     ])
     .optional(),
-  documentVerificationId: z.string().uuid(),
+  documentVerificationId: z.string().uuid().optional(),
+  topUpMobile: z
+    .string()
+    .trim()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Mobile number of the existing eSIM to top up"),
   consent: z.object({
     compatibilityAccepted: z.literal(true),
     termsAccepted: z.literal(true),
@@ -95,6 +105,24 @@ export const completeCreateSchema = z.object({
     acceptedAt: z.iso.datetime(),
   }),
   metadata: z.record(z.string(), z.string().max(500)).optional(),
+}).superRefine((value, context) => {
+  const purchaseType = value.purchaseType ?? (value.topUpMobile ? "TOPUP" : "INITIAL_PURCHASE");
+  if (purchaseType === "TOPUP" && !value.topUpMobile)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["topUpMobile"], message: "topUpMobile is required for a top-up" });
+  if (purchaseType === "INITIAL_PURCHASE" && !value.documentVerificationId)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["documentVerificationId"],
+      message: "Document verification is required for an initial purchase",
+    });
+  if (purchaseType === "TOPUP" && value.documentVerificationId)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["documentVerificationId"],
+      message: "Document verification must not be supplied for a top-up",
+    });
+  if (purchaseType === "INITIAL_PURCHASE" && value.topUpMobile)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["topUpMobile"], message: "topUpMobile must not be supplied for an initial purchase" });
 });
 const createSchema = z.union([completeCreateSchema, legacyCreateSchema]);
 export const hostedCheckoutSessionSchema = z.object({
@@ -108,6 +136,12 @@ export const hostedCheckoutSessionSchema = z.object({
     .max(20)
     .optional()
     .describe("Mobile number of an existing subscriber to attach a top-up to"),
+  allowInitialPurchaseFallback: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Explicit customer-approved fallback when the supplied mobile cannot be used for a top-up",
+    ),
 });
 const listSchema = z.object({
   cursor: z.string().uuid().optional(),
@@ -150,6 +184,7 @@ const LegacyPartnerRoute = () =>
 
 @Controller("partners")
 @UseGuards(PartnerAuthGuard)
+@UseInterceptors(PartnerApiLoggingInterceptor)
 @ApiBearerAuth("partner-key")
 export class PartnersController {
   constructor(private readonly partners: PartnerService) {}

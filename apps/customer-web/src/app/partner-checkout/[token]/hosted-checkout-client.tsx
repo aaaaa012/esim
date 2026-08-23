@@ -145,7 +145,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [busy, setBusy] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyingDoc, setVerifyingDoc] = useState<
-    "in-progress" | "done" | "failed" | null
+    "in-progress" | "waiting" | "done" | "failed" | null
   >(null);
   const [error, setError] = useState("");
   const [done, setDone] = useState<{ orderNumber: string } | null>(null);
@@ -153,8 +153,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   useEffect(() => {
     if (!verifyingDoc || verifyingDoc === "in-progress") return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (verifyingDoc === "failed") setStep(3);
+    if (event.key !== "Escape") return;
+    if (verifyingDoc === "failed") setStep(3);
       setVerifyingDoc(null);
     };
     window.addEventListener("keydown", onKey);
@@ -316,7 +316,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     );
     setVerification(result);
     const ok = result.status === "VERIFIED" || result.status === "SKIPPED";
-    setVerifyingDoc(ok ? "done" : "failed");
+    const waiting = ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
+      result.status,
+    );
+    setVerifyingDoc(ok ? "done" : waiting ? "waiting" : "failed");
     setSession((s) =>
       s
         ? {
@@ -450,7 +453,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         status: string;
       }>(`/partner-checkout/${token}/complete`, {
         method: "POST",
-        body: JSON.stringify({ consentAccepted: true }),
+        body: JSON.stringify({
+          consentAccepted: true,
+          compatibilityAccepted: true,
+        }),
       });
       setDone({ orderNumber: result.orderNumber });
     });
@@ -931,7 +937,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           }}
         >
           <div
-            className={`verify-modal ${verifyingDoc === "in-progress" ? "checking" : verifyingDoc === "done" ? "done" : "failed"}`}
+            className={`verify-modal ${verifyingDoc === "in-progress" || verifyingDoc === "waiting" ? "checking" : verifyingDoc === "done" ? "done" : "failed"}`}
           >
             {verifyingDoc === "in-progress" ? (
               <>
@@ -941,6 +947,17 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   We are uploading your documents securely and checking your
                   passport against the traveller details you entered. This
                   usually takes a few seconds…
+                </p>
+              </>
+            ) : verifyingDoc === "waiting" ? (
+              <>
+                <LoaderCircle className="spin verify-modal-icon" size={38} />
+                <b id="verify-modal-title">Your verification is still in progress</b>
+                <p>
+                  This can take a few minutes. Keep this page open and try
+                  again shortly. If it still has not completed, contact
+                  {" "}{session?.partner?.name ?? "your travel partner"} with
+                  your order number.
                 </p>
               </>
             ) : verifyingDoc === "done" ? (
@@ -972,7 +989,23 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             )}
             {verifyingDoc !== "in-progress" && (
               <div className="form-actions">
-                {verifyingDoc === "failed" ? (
+                {verifyingDoc === "waiting" ? (
+                  <>
+                    <button
+                      className="button secondary"
+                      autoFocus
+                      onClick={() => setVerifyingDoc(null)}
+                    >
+                      Keep waiting
+                    </button>
+                    <button
+                      className="button primary"
+                      onClick={() => void verifyPassport()}
+                    >
+                      Check again
+                    </button>
+                  </>
+                ) : verifyingDoc === "failed" ? (
                   <>
                     <button
                       className="button secondary"

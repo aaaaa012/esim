@@ -16,6 +16,10 @@ export function activityLabel(entry: LogActivity): string {
 
   const operation = entry.identifier?.toLowerCase() ?? "";
   const endpoint = entry.title.toLowerCase();
+  if (operation === "partner-api") return "Partner API Request";
+  if (operation === "customer-topup-lookup") return "Customer eSIM Lookup";
+  if (operation === "customer-topup-eligibility")
+    return "Customer Top-up Eligibility";
   const provider =
     operation.startsWith("khalti") || endpoint.includes("epayment")
       ? "Khalti"

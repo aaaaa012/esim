@@ -117,6 +117,7 @@ export class PartnerAdminController {
         externalOrderId: z.string().trim().min(1).max(120),
         externalCustomerId: z.string().trim().min(1).max(120),
         topUpMobile: z.string().trim().min(1).max(20).optional(),
+        allowInitialPurchaseFallback: z.literal(true).optional(),
       })
       .parse(body);
     return this.partnerService.createHostedCheckoutSession(id, input);

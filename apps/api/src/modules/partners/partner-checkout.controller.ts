@@ -60,7 +60,12 @@ export class PartnerCheckoutController {
     @Ip() ipAddress: string,
     @Headers("user-agent") userAgent?: string,
   ) {
-    z.object({ consentAccepted: z.literal(true) }).parse(body);
+    z
+      .object({
+        consentAccepted: z.literal(true),
+        compatibilityAccepted: z.literal(true),
+      })
+      .parse(body);
     return this.partners.completeHostedCheckout(token, {
       ipAddress,
       userAgent: userAgent ?? "unknown",

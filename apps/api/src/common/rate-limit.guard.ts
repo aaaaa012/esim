@@ -51,6 +51,10 @@ export class RateLimitGuard implements CanActivate {
     // UUIDs and numeric ids must not form attacker-controlled fresh buckets.
     const route = path
       .replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, ":id")
+      // Hosted-checkout tokens are high entropy, but must still share one
+      // per-IP bucket so a leaked link cannot be used to bypass throttling by
+      // varying token-shaped path segments.
+      .replace(/\/partner-checkout\/[A-Za-z0-9_-]{32,100}(?=\/|$)/g, "/partner-checkout/:token")
       .replace(/\/\d+(?=\/|$)/g, "/:id");
     const key = `${ip}:${request.method}:${route}`;
 

@@ -729,6 +729,7 @@ model PartnerDocumentVerification {
   partnerId         String                        @db.Uuid
   partner           Partner                       @relation(fields: [partnerId], references: [id])
   externalOrderId   String
+  activeExternalOrderKey String?                  @unique
   status            String                        @default("AWAITING_UPLOAD")
   travelerSnapshot  Json
   expiresAt         DateTime
