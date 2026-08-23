@@ -465,7 +465,11 @@ export class InventoryService implements OnModuleInit {
       });
       await tx.order.update({
         where: { id: orderId },
-        data: { providerStatus: null, providerSubscriptionId: null },
+        data: {
+          providerStatus: null,
+          providerSubscriptionId: null,
+          version: { increment: 1 },
+        },
       });
       return {
         previousIccid: rejected.iccid,

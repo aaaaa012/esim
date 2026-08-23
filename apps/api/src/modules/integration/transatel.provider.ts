@@ -925,7 +925,7 @@ export class TransatelProvider implements ConnectivityProvider {
       if (!failure.retryable && this.prisma.enabled)
         await this.prisma.order.update({
           where: { id: request.orderId },
-          data: { providerStatus: "REJECTED" },
+          data: { providerStatus: "REJECTED", version: { increment: 1 } },
         });
       throw new ApiException({
         code: ApiErrorCode.PROVISIONING_FAILED,
@@ -954,7 +954,11 @@ export class TransatelProvider implements ConnectivityProvider {
       await this.prisma.$transaction([
         this.prisma.order.update({
           where: { id: request.orderId },
-          data: { providerSubscriptionId, providerStatus: "PRELOADED" },
+          data: {
+            providerSubscriptionId,
+            providerStatus: "PRELOADED",
+            version: { increment: 1 },
+          },
         }),
         this.prisma.esimInventory.update({
           where: { id: profile.id },

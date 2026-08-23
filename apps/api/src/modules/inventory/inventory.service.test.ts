@@ -294,7 +294,10 @@ describe("InventoryService.replacePermanentlyRejectedProfile", () => {
     );
     expect(orderUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { providerStatus: null, providerSubscriptionId: null },
+        data: expect.objectContaining({
+          providerStatus: null,
+          providerSubscriptionId: null,
+        }),
       }),
     );
   });

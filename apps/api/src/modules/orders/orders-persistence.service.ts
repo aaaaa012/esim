@@ -28,10 +28,22 @@ export class OrdersPersistenceService {
     private readonly crypto: CryptoService,
   ) {}
 
-  async load(orderId?: string): Promise<DemoOrder[]> {
+  async load(orderId?: string, startup = false): Promise<DemoOrder[]> {
     if (!this.prisma.enabled) return [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const rows = await this.prisma.order.findMany({
-      where: orderId ? { id: orderId } : {},
+      where: orderId
+        ? { id: orderId }
+        : startup
+          ? {
+              OR: [
+                { status: { notIn: ["COMPLETED", "CANCELLED", "REFUNDED"] } },
+                { createdAt: { gte: today } },
+              ],
+            }
+          : {},
+      ...(startup ? { orderBy: { updatedAt: "desc" as const }, take: 2_000 } : {}),
       include: {
         customer: { include: { user: true } },
         partner: { select: { id: true, code: true, name: true } },
@@ -498,10 +510,29 @@ export class OrdersPersistenceService {
                 status: order.payment.status as DbPaymentStatus,
               },
             });
-          await tx.orderEvent.deleteMany({ where: { orderId: order.id } });
-          if (order.timeline.length)
+          const persistedEvents = await tx.orderEvent.findMany({
+            where: { orderId: order.id },
+            select: { fromStatus: true, toStatus: true, createdAt: true, reason: true },
+          });
+          const persistedEventKeys = new Set(
+            persistedEvents.map((event) =>
+              eventKey(
+                event.fromStatus,
+                event.toStatus,
+                event.createdAt.toISOString(),
+                event.reason,
+              ),
+            ),
+          );
+          const newEvents = order.timeline.filter(
+            (event) =>
+              !persistedEventKeys.has(
+                eventKey(event.from, event.to, event.at, event.reason ?? null),
+              ),
+          );
+          if (newEvents.length)
             await tx.orderEvent.createMany({
-              data: order.timeline.map((event) => ({
+              data: newEvents.map((event) => ({
                 orderId: order.id,
                 fromStatus: event.from as DbOrderStatus | null,
                 toStatus: event.to as DbOrderStatus,
@@ -845,4 +876,13 @@ export class OrdersPersistenceService {
     });
     return { userId: user.id, customerId: customer.id };
   }
+}
+
+function eventKey(
+  from: string | null,
+  to: string,
+  at: string,
+  reason: string | null,
+) {
+  return `${from ?? ""}|${to}|${new Date(at).toISOString()}|${reason ?? ""}`;
 }

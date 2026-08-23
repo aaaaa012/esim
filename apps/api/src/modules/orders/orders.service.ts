@@ -158,9 +158,11 @@ export class OrdersService implements OnModuleInit {
       if (order.id === orderId) this.orders.set(order.id, order);
   }
   async onModuleInit() {
-    for (const order of await this.persistence.load())
+    for (const order of await this.persistence.load(undefined, true))
       this.orders.set(order.id, order);
-    this.logger.log(`Hydrated ${this.orders.size} persisted order(s)`);
+    this.logger.log(
+      `Hydrated ${this.orders.size} active/recent persisted order(s) for recovery`,
+    );
     for (const order of this.orders.values()) {
       if (
         ![OrderStatus.APPROVED, OrderStatus.PROVISIONING].includes(order.status)
@@ -607,6 +609,13 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id, ownerId ?? undefined);
     const document = order.documents.find((item) => item.id === documentId);
     if (!document) throw new NotFoundException("Document not found");
+    if (document.uploadVerified)
+      return {
+        id: document.id,
+        type: document.type,
+        status: document.status,
+        uploadVerified: true,
+      };
     await this.storage.verifyDocument(document.privateAssetId);
     document.uploadVerified = true;
     const reviewResubmission = [

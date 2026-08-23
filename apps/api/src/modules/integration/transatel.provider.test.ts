@@ -304,10 +304,10 @@ describe("TransatelProvider", () => {
     expect(prisma.order.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "order-1" },
-        data: {
+        data: expect.objectContaining({
           providerSubscriptionId: "sub-123",
           providerStatus: "PRELOADED",
-        },
+        }),
       }),
     );
     expect(prisma.esimInventory.update).toHaveBeenCalledWith(

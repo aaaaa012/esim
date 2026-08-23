@@ -311,6 +311,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         data: {
           documentReviewStatus: "MANUAL_REVIEW",
           documentReviewStartedAt: new Date(),
+          version: { increment: 1 },
         },
       });
       if (!updated.count) continue;

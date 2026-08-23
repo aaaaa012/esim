@@ -119,7 +119,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       }),
       this.prisma.order.update({
         where: { id: order.id },
-        data: { documentReviewStatus: reviewStatus },
+        data: { documentReviewStatus: reviewStatus, version: { increment: 1 } },
       }),
       this.prisma.orderEvent.create({
         data: {
@@ -304,6 +304,7 @@ export class PassportOcrProcessor implements OnModuleInit {
                 : partial
                   ? "MANUAL_REVIEW"
                   : "REUPLOAD_REQUIRED",
+              version: { increment: 1 },
             },
           }),
           this.prisma.travelerDocument.updateMany({
@@ -371,7 +372,10 @@ export class PassportOcrProcessor implements OnModuleInit {
       if (exhausted && verification.consumedOrderId)
         await this.prisma.order.update({
           where: { id: verification.consumedOrderId },
-          data: { documentReviewStatus: "MANUAL_REVIEW" },
+          data: {
+            documentReviewStatus: "MANUAL_REVIEW",
+            version: { increment: 1 },
+          },
         });
       if (exhausted && verification.consumedOrderId)
         await this.resilience.attention({

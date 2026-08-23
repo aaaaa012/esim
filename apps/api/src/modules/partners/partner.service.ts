@@ -1848,9 +1848,6 @@ export class PartnerService {
       create: { id: "platform" },
     });
     const now = new Date();
-    const releaseAt =
-      order.documentCheckoutReleaseAt ??
-      new Date(now.getTime() + config.ocrCheckoutWaitMs);
     if (config.documentReviewPolicy === "MANUAL_REVIEW") {
       await this.prisma.order.update({
         where: { id: order.id },
@@ -1858,7 +1855,8 @@ export class PartnerService {
           documentReviewPolicy: config.documentReviewPolicy,
           documentReviewStatus: "MANUAL_REVIEW",
           documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-          documentCheckoutReleaseAt: releaseAt,
+          documentCheckoutReleaseAt: null,
+          version: { increment: 1 },
         },
       });
       return {
@@ -1874,7 +1872,8 @@ export class PartnerService {
           documentReviewPolicy: config.documentReviewPolicy,
           documentReviewStatus: "SKIPPED",
           documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-          documentCheckoutReleaseAt: releaseAt,
+          documentCheckoutReleaseAt: null,
+          version: { increment: 1 },
         },
       });
       return {
@@ -1883,24 +1882,14 @@ export class PartnerService {
         method: "policy",
       };
     }
-    if (releaseAt <= now) {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: { documentReviewStatus: "OCR_BACKGROUND" },
-      });
-      return {
-        status: "OCR_BACKGROUND",
-        checkedAt: now.toISOString(),
-        method: "asynchronous",
-      };
-    }
     await this.prisma.order.update({
       where: { id: order.id },
       data: {
         documentReviewPolicy: config.documentReviewPolicy,
         documentReviewStatus: "OCR_PENDING",
         documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-        documentCheckoutReleaseAt: releaseAt,
+        documentCheckoutReleaseAt: null,
+        version: { increment: 1 },
       },
     });
     try {
@@ -1919,7 +1908,10 @@ export class PartnerService {
     } catch {
       await this.prisma.order.update({
         where: { id: order.id },
-        data: { documentReviewStatus: "MANUAL_REVIEW" },
+        data: {
+          documentReviewStatus: "MANUAL_REVIEW",
+          version: { increment: 1 },
+        },
       });
       return {
         status: "MANUAL_REVIEW",
