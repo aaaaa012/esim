@@ -21,7 +21,8 @@
     "db:transfer": "pnpm prisma:generate:source && node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/transfer-cockroach-to-postgres.ts",
     "db:validate-transfer": "pnpm prisma:generate:source && node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/validate-postgres-transfer.ts",
     "db:transfer:typecheck": "pnpm prisma:generate:source && tsc -p tsconfig.transfer.json",
-    "db:smoke": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/postgres-smoke.ts"
+    "db:smoke": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/postgres-smoke.ts",
+    "db:reconcile-hosted-customers": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/reconcile-hosted-customers.ts"
   },
   "dependencies": {
     "@clerk/backend": "^2.14.0",

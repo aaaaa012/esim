@@ -376,6 +376,12 @@ export class OperationsController {
       const traveler = customer.orders.find(
         (order) => order.traveler,
       )?.traveler;
+      const displayEmail =
+        customer.source === "PARTNER" &&
+        customer.email.endsWith("@partner.visacompass.invalid") &&
+        traveler?.email
+          ? traveler.email
+          : customer.email;
       const subscriptions = customer.orders.flatMap(
         (order) => order.customerEsim?.subscriptions ?? [],
       );
@@ -397,7 +403,7 @@ export class OperationsController {
         name: traveler
           ? `${traveler.firstName} ${traveler.surname}`
           : "Customer profile pending",
-        email: customer.email,
+        email: displayEmail,
         phone: customer.phone ?? traveler?.mobile ?? null,
         orders: customer.orders.length,
         completedEsims: customer.orders.filter(

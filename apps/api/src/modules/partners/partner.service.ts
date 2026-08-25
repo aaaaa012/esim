@@ -228,91 +228,93 @@ export class PartnerService {
       update: {},
       create: { id: "platform" },
     });
-    const checkoutReleaseAt = new Date(now.getTime() + config.ocrCheckoutWaitMs);
+    const checkoutReleaseAt = new Date(
+      now.getTime() + config.ocrCheckoutWaitMs,
+    );
     const verificationId = randomUUID();
-    const create = async () => this.prisma.$transaction(async (tx) => {
-      const existing = await tx.partnerDocumentVerification.findUnique({
-        where: { activeExternalOrderKey },
-        include: { documents: true },
-      });
-      if (existing) {
-        const resumable =
-          !existing.consumedAt &&
-          existing.expiresAt > now &&
-          !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
-        if (resumable)
-          return this.uploadSessionResponse(existing, true);
-        await tx.partnerDocumentVerification.update({
-          where: { id: existing.id },
-          data: {
-            activeExternalOrderKey: null,
-            ...(existing.expiresAt <= now ? { status: "EXPIRED" } : {}),
-          },
+    const create = async () =>
+      this.prisma.$transaction(async (tx) => {
+        const existing = await tx.partnerDocumentVerification.findUnique({
+          where: { activeExternalOrderKey },
+          include: { documents: true },
         });
-      }
-      await tx.partnerDocumentVerification.create({
-        data: {
-          id: verificationId,
-          partnerId,
-          externalOrderId: input.externalOrderId,
-          activeExternalOrderKey,
-          travelerSnapshot: this.travelerData(
-            input.traveler,
-          ) as unknown as Prisma.InputJsonValue,
-          expiresAt,
-          reviewPolicy: config.documentReviewPolicy,
-          checkoutReleaseAt,
-          ...(config.documentReviewPolicy === "MANUAL_REVIEW"
-            ? { status: "MANUAL_REVIEW" }
-            : config.documentReviewPolicy === "NO_REVIEW"
-              ? { status: "SKIPPED" }
-              : {}),
-        },
-      });
-      const items = [];
-      for (const document of input.documents) {
-        const id = randomUUID();
-        const signed = this.storage.createPartnerDocumentUpload(
-          id,
-          document.type as unknown as SharedDocumentType,
-        );
-        const intent = await tx.partnerDocumentUploadIntent.create({
+        if (existing) {
+          const resumable =
+            !existing.consumedAt &&
+            existing.expiresAt > now &&
+            !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
+          if (resumable) return this.uploadSessionResponse(existing, true);
+          await tx.partnerDocumentVerification.update({
+            where: { id: existing.id },
+            data: {
+              activeExternalOrderKey: null,
+              ...(existing.expiresAt <= now ? { status: "EXPIRED" } : {}),
+            },
+          });
+        }
+        await tx.partnerDocumentVerification.create({
           data: {
-            id,
+            id: verificationId,
             partnerId,
-            verificationId,
             externalOrderId: input.externalOrderId,
-            type: document.type,
-            fileName: document.fileName,
-            contentType: document.contentType,
-            declaredSizeBytes: document.sizeBytes,
-            privateAssetId: signed.assetId,
+            activeExternalOrderKey,
+            travelerSnapshot: this.travelerData(
+              input.traveler,
+            ) as unknown as Prisma.InputJsonValue,
             expiresAt,
+            reviewPolicy: config.documentReviewPolicy,
+            checkoutReleaseAt,
+            ...(config.documentReviewPolicy === "MANUAL_REVIEW"
+              ? { status: "MANUAL_REVIEW" }
+              : config.documentReviewPolicy === "NO_REVIEW"
+                ? { status: "SKIPPED" }
+                : {}),
           },
         });
-        items.push({
-          id: intent.id,
-          type: intent.type,
-          fileName: intent.fileName,
-          expiresAt: intent.expiresAt,
-          upload: signed.upload,
-        });
-      }
-      return {
-        verificationId,
-        externalOrderId: input.externalOrderId,
-        status:
-          config.documentReviewPolicy === "MANUAL_REVIEW"
-            ? "MANUAL_REVIEW"
-            : config.documentReviewPolicy === "NO_REVIEW"
-              ? "SKIPPED"
-              : "AWAITING_UPLOAD",
-        expiresAt,
-        checkoutReleaseAt,
-        documents: items,
-        resumed: false,
-      };
-    });
+        const items = [];
+        for (const document of input.documents) {
+          const id = randomUUID();
+          const signed = this.storage.createPartnerDocumentUpload(
+            id,
+            document.type as unknown as SharedDocumentType,
+          );
+          const intent = await tx.partnerDocumentUploadIntent.create({
+            data: {
+              id,
+              partnerId,
+              verificationId,
+              externalOrderId: input.externalOrderId,
+              type: document.type,
+              fileName: document.fileName,
+              contentType: document.contentType,
+              declaredSizeBytes: document.sizeBytes,
+              privateAssetId: signed.assetId,
+              expiresAt,
+            },
+          });
+          items.push({
+            id: intent.id,
+            type: intent.type,
+            fileName: intent.fileName,
+            expiresAt: intent.expiresAt,
+            upload: signed.upload,
+          });
+        }
+        return {
+          verificationId,
+          externalOrderId: input.externalOrderId,
+          status:
+            config.documentReviewPolicy === "MANUAL_REVIEW"
+              ? "MANUAL_REVIEW"
+              : config.documentReviewPolicy === "NO_REVIEW"
+                ? "SKIPPED"
+                : "AWAITING_UPLOAD",
+          expiresAt,
+          checkoutReleaseAt,
+          documents: items,
+          resumed: false,
+        };
+      });
     try {
       return await create();
     } catch (error) {
@@ -321,10 +323,12 @@ export class PartnerService {
         error.code !== "P2002"
       )
         throw error;
-      const existing = await this.prisma.partnerDocumentVerification.findUnique({
-        where: { activeExternalOrderKey },
-        include: { documents: true },
-      });
+      const existing = await this.prisma.partnerDocumentVerification.findUnique(
+        {
+          where: { activeExternalOrderKey },
+          include: { documents: true },
+        },
+      );
       if (!existing) throw error;
       return this.uploadSessionResponse(existing, true);
     }
@@ -818,13 +822,36 @@ export class PartnerService {
     plan: Prisma.PlanGetPayload<{ include: { country: true } }>,
     requestContext: { ipAddress: string; userAgent: string },
   ) {
-    const target = await this.applicationOrders.resolveSubscriber(input.topUpMobile);
+    const target = await this.applicationOrders.resolveSubscriber(
+      input.topUpMobile,
+    );
     const inventory = target?.inventory;
     if (!inventory || !target)
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
         message:
           "This number cannot be used for a top-up with the selected plan. Create a documented initial purchase only after customer consent.",
+        status: 422,
+      });
+    const existingPartnerCustomer =
+      await this.prisma.partnerCustomer.findUnique({
+        where: {
+          partnerId_externalCustomerId: {
+            partnerId: partner.id,
+            externalCustomerId: input.externalCustomerId,
+          },
+        },
+        select: { customerId: true },
+      });
+    if (
+      !existingPartnerCustomer ||
+      !target.customerId ||
+      existingPartnerCustomer.customerId !== target.customerId
+    )
+      throw new ApiException({
+        code: "TOPUP_CUSTOMER_MISMATCH",
+        message:
+          "This eSIM is not attached to the supplied partner customer. Use the same externalCustomerId as the original purchase.",
         status: 422,
       });
     const eligibility = await this.applicationOrders.checkTopUpEligibility(
@@ -845,7 +872,10 @@ export class PartnerService {
     const acceptedAt = new Date(input.consent.acceptedAt);
     await this.prisma.$transaction(async (tx) => {
       const duplicate = await tx.order.findFirst({
-        where: { partnerId: partner.id, externalOrderId: input.externalOrderId },
+        where: {
+          partnerId: partner.id,
+          externalOrderId: input.externalOrderId,
+        },
       });
       if (duplicate)
         throw new ApiException({
@@ -893,7 +923,9 @@ export class PartnerService {
               : {}),
           },
           compatibilityAcceptedAt: acceptedAt,
-          events: { create: { fromStatus: null, toStatus: OrderStatus.APPROVED } },
+          events: {
+            create: { fromStatus: null, toStatus: OrderStatus.APPROVED },
+          },
         },
       });
       await tx.customerConsent.createMany({
@@ -913,14 +945,21 @@ export class PartnerService {
         amountPaisa,
         input.externalOrderId,
       );
-      await this.createEvent(tx, partner.id, orderId, "order.accepted", orderId, {
+      await this.createEvent(
+        tx,
+        partner.id,
         orderId,
-        externalOrderId: input.externalOrderId,
-        status: OrderStatus.APPROVED,
-        fulfillmentStatus: "PENDING",
-        amountPaisa,
-        currency: "NPR",
-      });
+        "order.accepted",
+        orderId,
+        {
+          orderId,
+          externalOrderId: input.externalOrderId,
+          status: OrderStatus.APPROVED,
+          fulfillmentStatus: "PENDING",
+          amountPaisa,
+          currency: "NPR",
+        },
+      );
       await tx.outboxMessage.create({
         data: {
           dedupeKey: `partner-fulfillment-${orderId}`,
@@ -1427,27 +1466,27 @@ export class PartnerService {
       return tx.travelerDocument.upsert({
         where: { orderId_type: { orderId, type: input.type } },
         update: {
-        fileName: input.fileName,
-        privateAssetId: signed.assetId,
-        status: DocumentStatus.PENDING,
-        uploadVerified: false,
-        reviewedAt: null,
-        reviewedById: null,
-        ...(input.type === DocumentType.PASSPORT
-          ? {
-              passportVerificationStatus: null,
-              passportVerificationMethod: null,
-              passportMatchedFields: Prisma.DbNull,
-              passportConfidence: null,
-              passportVerifiedAt: null,
-            }
-          : {}),
+          fileName: input.fileName,
+          privateAssetId: signed.assetId,
+          status: DocumentStatus.PENDING,
+          uploadVerified: false,
+          reviewedAt: null,
+          reviewedById: null,
+          ...(input.type === DocumentType.PASSPORT
+            ? {
+                passportVerificationStatus: null,
+                passportVerificationMethod: null,
+                passportMatchedFields: Prisma.DbNull,
+                passportConfidence: null,
+                passportVerifiedAt: null,
+              }
+            : {}),
         },
         create: {
-        orderId,
-        type: input.type,
-        fileName: input.fileName,
-        privateAssetId: signed.assetId,
+          orderId,
+          type: input.type,
+          fileName: input.fileName,
+          privateAssetId: signed.assetId,
         },
       });
     });
@@ -1541,6 +1580,17 @@ export class PartnerService {
     const topUp = input.topUpMobile
       ? await this.applicationOrders.resolveSubscriber(input.topUpMobile)
       : null;
+    const existingPartnerCustomer = input.topUpMobile
+      ? await this.prisma.partnerCustomer.findUnique({
+          where: {
+            partnerId_externalCustomerId: {
+              partnerId,
+              externalCustomerId: input.externalCustomerId,
+            },
+          },
+          select: { customerId: true },
+        })
+      : null;
     // A top-up is only valid when we can bind to a real eSIM. A fallback to a
     // new purchase is deliberately opt-in: callers must obtain consent before
     // changing the requested product from a top-up to a new eSIM.
@@ -1552,6 +1602,18 @@ export class PartnerService {
           )
         : null;
     const isTopUp = Boolean(topUp?.inventory && eligibility?.allowed);
+    if (
+      isTopUp &&
+      (!existingPartnerCustomer ||
+        !topUp?.customerId ||
+        existingPartnerCustomer.customerId !== topUp.customerId)
+    )
+      throw new ApiException({
+        code: "TOPUP_CUSTOMER_MISMATCH",
+        message:
+          "This eSIM is not attached to the supplied partner customer. Use the same externalCustomerId as the original purchase.",
+        status: 422,
+      });
     if (input.topUpMobile && !isTopUp && !input.allowInitialPurchaseFallback)
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
@@ -1694,7 +1756,8 @@ export class PartnerService {
       requiredDocuments.every((type) =>
         currentDocuments.some(
           (document) =>
-            document.type === type && document.status === DocumentStatus.APPROVED,
+            document.type === type &&
+            document.status === DocumentStatus.APPROVED,
         ),
       );
     if (
@@ -1798,6 +1861,38 @@ export class PartnerService {
         update: this.travelerData(traveler),
         create: { orderId: order.id, ...this.travelerData(traveler) },
       });
+      const normalizedEmail = traveler.email.trim().toLowerCase();
+      const emailOwner = await tx.customer.findUnique({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      });
+      // The Order already owns customerId from ensurePartnerCustomer. Enrich
+      // that same Customer from the hosted form, but never steal an email that
+      // belongs to another customer account.
+      await tx.customer.update({
+        where: { id: order.customerId },
+        data: {
+          phone: traveler.mobile.trim(),
+          ...(!emailOwner || emailOwner.id === order.customerId
+            ? { email: normalizedEmail }
+            : {}),
+        },
+      });
+      if (order.partnerCustomerId) {
+        const attached = await tx.partnerCustomer.findFirst({
+          where: {
+            id: order.partnerCustomerId,
+            customerId: order.customerId,
+          },
+          select: { id: true },
+        });
+        if (!attached)
+          throw new ApiException({
+            code: "PARTNER_CUSTOMER_MISMATCH",
+            message: "Hosted order is not attached to its partner customer",
+            status: 409,
+          });
+      }
     });
     return this.hostedCheckout(token);
   }
@@ -1819,27 +1914,27 @@ export class PartnerService {
       return tx.travelerDocument.upsert({
         where: { orderId_type: { orderId: order.id, type: input.type } },
         update: {
-        fileName: input.fileName,
-        privateAssetId: signed.assetId,
-        status: DocumentStatus.PENDING,
-        uploadVerified: false,
-        reviewedAt: null,
-        reviewedById: null,
-        ...(input.type === DocumentType.PASSPORT
-          ? {
-              passportVerificationStatus: null,
-              passportVerificationMethod: null,
-              passportMatchedFields: Prisma.DbNull,
-              passportConfidence: null,
-              passportVerifiedAt: null,
-            }
-          : {}),
+          fileName: input.fileName,
+          privateAssetId: signed.assetId,
+          status: DocumentStatus.PENDING,
+          uploadVerified: false,
+          reviewedAt: null,
+          reviewedById: null,
+          ...(input.type === DocumentType.PASSPORT
+            ? {
+                passportVerificationStatus: null,
+                passportVerificationMethod: null,
+                passportMatchedFields: Prisma.DbNull,
+                passportConfidence: null,
+                passportVerifiedAt: null,
+              }
+            : {}),
         },
         create: {
-        orderId: order.id,
-        type: input.type,
-        fileName: input.fileName,
-        privateAssetId: signed.assetId,
+          orderId: order.id,
+          type: input.type,
+          fileName: input.fileName,
+          privateAssetId: signed.assetId,
         },
       });
     });
@@ -1925,11 +2020,9 @@ export class PartnerService {
         message: "Traveller details are required before verification",
       });
     if (
-      [
-        "MANUAL_REVIEW",
-        "OCR_BACKGROUND",
-        "REUPLOAD_REQUIRED",
-      ].includes(order.documentReviewStatus)
+      ["MANUAL_REVIEW", "OCR_BACKGROUND", "REUPLOAD_REQUIRED"].includes(
+        order.documentReviewStatus,
+      )
     )
       return {
         status: order.documentReviewStatus,
@@ -2342,7 +2435,9 @@ export class PartnerService {
           ? order.traveler.email
           : order.traveler.mobile,
       orderNumber: order.orderNumber,
-      ...(order.traveler.firstName ? { customerName: order.traveler.firstName } : {}),
+      ...(order.traveler.firstName
+        ? { customerName: order.traveler.firstName }
+        : {}),
     });
   }
 

@@ -131,9 +131,7 @@ export class OrdersService implements OnModuleInit {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
   })();
   private readonly maxProvisioningProfileSwaps = (() => {
-    const configured = Number(
-      process.env.MAX_PROVISIONING_PROFILE_SWAPS ?? 2,
-    );
+    const configured = Number(process.env.MAX_PROVISIONING_PROFILE_SWAPS ?? 2);
     return Number.isFinite(configured) ? Math.max(0, configured) : 2;
   })();
   constructor(
@@ -242,11 +240,18 @@ export class OrdersService implements OnModuleInit {
       },
       orderBy: { createdAt: "desc" },
     });
+    const latestTraveler = orders.find((order) => order.traveler)?.traveler;
+    const displayEmail =
+      customer.source === "PARTNER" &&
+      customer.email.endsWith("@partner.visacompass.invalid") &&
+      latestTraveler?.email
+        ? latestTraveler.email
+        : customer.email;
     return {
       ownerId: customer.user?.clerkId ?? customer.id,
       customerCode: customer.customerCode,
-      email: customer.email,
-      name: orders.find((order) => order.traveler)?.traveler?.firstName,
+      email: displayEmail,
+      name: latestTraveler?.firstName,
       orders: orders.map((order) => ({
         id: order.id,
         orderNumber: order.orderNumber,
@@ -782,8 +787,7 @@ export class OrdersService implements OnModuleInit {
         matchedFields: [],
         checkedAt: now.toISOString(),
         method: "ocr-error",
-        detail:
-          "Documents require manual approval before payment can continue",
+        detail: "Documents require manual approval before payment can continue",
       };
       await this.persistence.save(order);
       return this.redact(order);
@@ -800,7 +804,8 @@ export class OrdersService implements OnModuleInit {
     if (
       !["OCR_PENDING", "OCR_BACKGROUND"].includes(
         order.documentReviewStatus ?? "",
-      ) || requeueBackgroundVerification
+      ) ||
+      requeueBackgroundVerification
     ) {
       order.documentReviewStatus = "OCR_PENDING";
       if (requeueBackgroundVerification) {
@@ -1329,6 +1334,7 @@ export class OrdersService implements OnModuleInit {
       );
       if (!prior?.traveler) return null;
       return {
+        customerId: undefined,
         planCountryCode: prior.plan.countryCode,
         traveler: {
           firstName: prior.traveler.firstName,
@@ -1359,6 +1365,7 @@ export class OrdersService implements OnModuleInit {
     )
       return null;
     return {
+      customerId: prior.customerId,
       planCountryCode: prior.plan.country.isoCode,
       traveler: {
         firstName: prior.traveler.firstName,
@@ -1370,10 +1377,10 @@ export class OrdersService implements OnModuleInit {
       },
       inventory: prior.customerEsim?.inventory
         ? {
-          id: prior.customerEsim.inventory.id,
-          eid: prior.customerEsim.inventory.eid,
-          iccid: prior.customerEsim.inventory.iccid,
-          msisdn: prior.customerEsim.inventory.msisdn,
+            id: prior.customerEsim.inventory.id,
+            eid: prior.customerEsim.inventory.eid,
+            iccid: prior.customerEsim.inventory.iccid,
+            msisdn: prior.customerEsim.inventory.msisdn,
           }
         : null,
     };
@@ -1390,6 +1397,7 @@ export class OrdersService implements OnModuleInit {
       );
       if (!prior?.traveler) return null;
       return {
+        customerId: undefined,
         planCountryCode: prior.plan.countryCode,
         traveler: {
           firstName: prior.traveler.firstName,
@@ -1465,8 +1473,7 @@ export class OrdersService implements OnModuleInit {
             item.type === type && item.status === DocumentStatus.APPROVED,
         ),
       );
-      if (allRequiredApproved)
-        order.documentReviewStatus = "MANUALLY_APPROVED";
+      if (allRequiredApproved) order.documentReviewStatus = "MANUALLY_APPROVED";
       if (!alreadyApproved)
         order.timeline.push({
           from: order.status,

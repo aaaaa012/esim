@@ -202,6 +202,7 @@ export default function AdminWorkspace() {
   const [hostedLinkPlansBusy, setHostedLinkPlansBusy] = useState(false);
   const hostedLinkPlanCache = useRef<Record<string, HostedLinkPlan[]>>({});
   const hostedLinkPlanRequestId = useRef(0);
+  const [hostedLinkCustomerId, setHostedLinkCustomerId] = useState("");
   const [hostedLinkMobile, setHostedLinkMobile] = useState("");
   const [hostedLinkResult, setHostedLinkResult] = useState<{
     partnerName: string;
@@ -657,8 +658,8 @@ export default function AdminWorkspace() {
     }
   };
   const generateCheckoutLink = async (allowInitialPurchaseFallback = false) => {
-    if (!hostedLinkFor || !hostedLinkPlanId) {
-      toast.error("Choose a plan first");
+    if (!hostedLinkFor || !hostedLinkPlanId || !hostedLinkCustomerId.trim()) {
+      toast.error("Choose a plan and enter the partner customer ID");
       return;
     }
     setHostedLinkBusy(true);
@@ -672,7 +673,10 @@ export default function AdminWorkspace() {
         body: JSON.stringify({
           planId: hostedLinkPlanId,
           externalOrderId: `vc-portal-${Date.now()}`,
-          externalCustomerId: `portal-customer-${Date.now()}`,
+          // This must be stable across initial purchases and top-ups. A
+          // per-checkout timestamp creates duplicate Customer records and
+          // breaks ownership of the existing eSIM.
+          externalCustomerId: hostedLinkCustomerId.trim(),
           ...(hostedLinkMobile.trim()
             ? { topUpMobile: hostedLinkMobile.trim() }
             : {}),
@@ -1732,6 +1736,7 @@ export default function AdminWorkspace() {
                                   setHostedLinkPlanId("");
                                   setHostedLinkCountry("");
                                   setHostedLinkPlans([]);
+                                  setHostedLinkCustomerId("");
                                   setHostedLinkMobile("");
                                   setHostedLinkResult(null);
                                   setLookupState(null);
@@ -1808,6 +1813,23 @@ export default function AdminWorkspace() {
                   </DialogHeader>
                   {!hostedLinkResult ? (
                     <div className="space-y-4 pt-1">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">
+                          Partner customer ID
+                        </Label>
+                        <Input
+                          value={hostedLinkCustomerId}
+                          onChange={(event) =>
+                            setHostedLinkCustomerId(event.target.value)
+                          }
+                          placeholder="Stable ID from the partner, e.g. customer-91"
+                          maxLength={120}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Reuse this exact ID for every order and top-up from
+                          the same customer.
+                        </p>
+                      </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">
                           Country
@@ -1932,7 +1954,11 @@ export default function AdminWorkspace() {
                           Cancel
                         </Button>
                         <Button
-                          disabled={!hostedLinkPlanId || hostedLinkBusy}
+                          disabled={
+                            !hostedLinkPlanId ||
+                            !hostedLinkCustomerId.trim() ||
+                            hostedLinkBusy
+                          }
                           onClick={() => void generateCheckoutLink()}
                         >
                           {hostedLinkBusy ? (
@@ -2019,10 +2045,9 @@ export default function AdminWorkspace() {
                   <DialogHeader>
                     <DialogTitle>Top-up could not be confirmed</DialogTitle>
                     <DialogDescription>
-                      {topUpFallback?.mobile} does not have an eligible eSIM
-                      for the selected plan. Do not create a new eSIM unless
-                      the customer has explicitly agreed to an initial
-                      purchase.
+                      {topUpFallback?.mobile} does not have an eligible eSIM for
+                      the selected plan. Do not create a new eSIM unless the
+                      customer has explicitly agreed to an initial purchase.
                     </DialogDescription>
                   </DialogHeader>
                   <DialogFooter>
@@ -2140,13 +2165,22 @@ export default function AdminWorkspace() {
           </TabsContent>
         )}
       </Tabs>
-      <Dialog open={Boolean(issuedPartnerKey)} onOpenChange={(open) => !open && setIssuedPartnerKey(null)}>
+      <Dialog
+        open={Boolean(issuedPartnerKey)}
+        onOpenChange={(open) => !open && setIssuedPartnerKey(null)}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>API key for {issuedPartnerKey?.partnerName}</DialogTitle>
-            <DialogDescription>This value is shown once. Store it securely before closing.</DialogDescription>
+            <DialogTitle>
+              API key for {issuedPartnerKey?.partnerName}
+            </DialogTitle>
+            <DialogDescription>
+              This value is shown once. Store it securely before closing.
+            </DialogDescription>
           </DialogHeader>
-          <code className="break-all rounded-lg bg-muted p-3 text-xs">{issuedPartnerKey?.apiKey}</code>
+          <code className="break-all rounded-lg bg-muted p-3 text-xs">
+            {issuedPartnerKey?.apiKey}
+          </code>
           <DialogFooter>
             <Button
               variant="outline"
@@ -2163,7 +2197,9 @@ export default function AdminWorkspace() {
               <Copy />
               Copy
             </Button>
-            <Button onClick={() => setIssuedPartnerKey(null)}>I have stored it</Button>
+            <Button onClick={() => setIssuedPartnerKey(null)}>
+              I have stored it
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

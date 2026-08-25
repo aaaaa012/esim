@@ -309,23 +309,86 @@ describe("partner hosted checkout", () => {
     );
   });
 
+  it("enriches the same partner customer and keeps the hosted order attached", async () => {
+    const customerUpdate = vi.fn().mockResolvedValue({ id: "customer-1" });
+    const travelerUpsert = vi.fn().mockResolvedValue({ id: "traveler-1" });
+    const instance = service({
+      partnerHostedCheckoutSession: {
+        findUnique: vi.fn().mockResolvedValue(session),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...order([]),
+          partnerCustomerId: "partner-customer-1",
+          orderType: "INITIAL_PURCHASE",
+          partner: { name: "Test partner", slug: "test", brand: {} },
+        }),
+      },
+      $transaction: vi.fn((callback) =>
+        callback({
+          order: {
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
+          traveler: { upsert: travelerUpsert },
+          customer: {
+            findUnique: vi.fn().mockResolvedValue(null),
+            update: customerUpdate,
+          },
+          partnerCustomer: {
+            findFirst: vi.fn().mockResolvedValue({ id: "partner-customer-1" }),
+          },
+        }),
+      ),
+    });
+    (instance as unknown as { crypto: Record<string, unknown> }).crypto = {
+      encrypt: vi.fn((value: string) => `encrypted:${value}`),
+      blindIndex: vi.fn((value: string) => `hash:${value}`),
+    };
+    vi.spyOn(instance, "hostedCheckout").mockResolvedValue({
+      ok: true,
+    } as never);
+
+    await instance.setHostedTraveler("abcdefghijklmnopqrstuvwxyz012345", {
+      title: "MR",
+      firstName: "Samir",
+      surname: "Majhi",
+      dateOfBirth: "1995-01-01",
+      nationality: "NP",
+      city: "Kathmandu",
+      countryOfResidence: "NP",
+      email: "Customer@Example.com",
+      mobile: "+9779800000000",
+      passportNumber: "PA1234567",
+      passportExpiryDate: "2030-01-01",
+    });
+
+    expect(travelerUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { orderId: "order-1" } }),
+    );
+    expect(customerUpdate).toHaveBeenCalledWith({
+      where: { id: "customer-1" },
+      data: {
+        email: "customer@example.com",
+        phone: "+9779800000000",
+      },
+    });
+  });
+
   it("rejects completion when a required document is missing", async () => {
     const instance = service({
       partnerHostedCheckoutSession: {
         findUnique: vi.fn().mockResolvedValue(session),
       },
       order: {
-        findUnique: vi
-          .fn()
-          .mockResolvedValue(
-            order([
-              {
-                type: "PASSPORT",
-                privateAssetId: "passport-1",
-                passportVerificationStatus: "VERIFIED",
-              },
-            ]),
-          ),
+        findUnique: vi.fn().mockResolvedValue(
+          order([
+            {
+              type: "PASSPORT",
+              privateAssetId: "passport-1",
+              passportVerificationStatus: "VERIFIED",
+            },
+          ]),
+        ),
       },
     });
     await expect(
