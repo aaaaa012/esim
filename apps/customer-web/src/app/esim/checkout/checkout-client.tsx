@@ -60,7 +60,11 @@ type Order = {
     | "SKIPPED";
   provisioningFailure?: { code: string; message: string };
 };
-type Payment = { reference: string; redirectUrl: string; expiresAt: string };
+type Payment = {
+  reference: string; redirectUrl: string; expiresAt: string;
+  qrDataUrl?: string; qrPayload?: string; websocketUrl?: string;
+  banks?: { bankName: string; bankCode: string; bankIcon?: string; intentScheme: string }[];
+};
 type DocumentAuthorization = {
   id: string;
   upload: {
@@ -898,6 +902,15 @@ export default function CheckoutClient({
       }
       void verifyPayment(order);
     });
+  useEffect(() => {
+    if (!payment?.websocketUrl || !order) return;
+    let socket: WebSocket | undefined;
+    try {
+      socket = new WebSocket(payment.websocketUrl);
+      socket.onmessage = () => complete(); // Socket is only a prompt; API verification remains authoritative.
+    } catch { /* Manual status verification remains available. */ }
+    return () => socket?.close();
+  }, [payment?.websocketUrl, order?.id]);
 
   if ((!planId && !orderId) || planLoadFailed)
     return (
@@ -1387,9 +1400,13 @@ export default function CheckoutClient({
                       NPR amount.
                     </p>
                     <div className="gateway-grid">
-                      <button className="selected">
+                      <button className={provider === PaymentProvider.KHALTI ? "selected" : ""} onClick={() => setProvider(PaymentProvider.KHALTI)}>
                         <b>Khalti</b>
                         <small>Digital wallet</small>
+                      </button>
+                      <button className={provider === PaymentProvider.FONEPAY ? "selected" : ""} onClick={() => setProvider(PaymentProvider.FONEPAY)}>
+                        <b>Fonepay</b>
+                        <small>Mobile banking & QR</small>
                       </button>
                     </div>
                     {payment ? (
@@ -1409,16 +1426,15 @@ export default function CheckoutClient({
                             Simulate verified payment
                           </Action>
                         </div>
+                      ) : payment.qrDataUrl ? (
+                        <div className="simulator-box">
+                          <span>Scan with Fonepay mobile banking</span>
+                          <img src={payment.qrDataUrl} alt="Fonepay payment QR code" style={{ width: 220, height: 220, alignSelf: "center" }} />
+                          {payment.banks?.length ? <div className="gateway-grid">{payment.banks.map((bank) => <button key={bank.bankCode} onClick={() => { if (payment.qrPayload) window.location.assign(`${bank.intentScheme}${bank.intentScheme.includes("?") ? "&" : "?"}qrPayload=${encodeURIComponent(payment.qrPayload)}`); }}><b>{bank.bankName}</b><small>Open banking app</small></button>)}</div> : null}
+                          <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>I&apos;ve paid — check status</Action>
+                        </div>
                       ) : (
-                        <Action
-                          busy={busy}
-                          disabled={
-                            verifyingPassport || !passportGatePassed(order)
-                          }
-                          onClick={complete}
-                        >
-                          Check payment status
-                        </Action>
+                        <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>Check payment status</Action>
                       )
                     ) : isTopUp && !order ? (
                       <Action busy={busy} onClick={begin}>
@@ -1432,7 +1448,7 @@ export default function CheckoutClient({
                         }
                         onClick={() => void initiate()}
                       >
-                        Continue to Khalti
+                        Continue to {provider === PaymentProvider.FONEPAY ? "Fonepay" : "Khalti"}
                       </Action>
                     )}
                   </>

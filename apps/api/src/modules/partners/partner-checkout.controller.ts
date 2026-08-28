@@ -1,13 +1,5 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Headers,
-  Ip,
-  Param,
-  Post,
-} from "@nestjs/common";
-import { DocumentType } from "@prisma/client";
+import { Body, Controller, Get, Headers, Ip, Param, Post } from "@nestjs/common";
+import { DocumentType, PaymentProvider } from "@prisma/client";
 import { travelerSchema } from "@visa-compass/shared";
 import { z } from "zod";
 import { PartnerService } from "./partner.service.js";
@@ -15,6 +7,17 @@ import { PartnerService } from "./partner.service.js";
 const hostedDocumentSchema = z.object({
   type: z.enum(DocumentType),
   fileName: z.string().trim().min(1).max(180),
+});
+
+const hostedPaymentSchema = z.object({
+  provider: z.union([
+    z.literal(PaymentProvider.KHALTI),
+    z.literal(PaymentProvider.FONEPAY),
+  ]),
+});
+
+const hostedVerifySchema = z.object({
+  reference: z.string().trim().min(1).max(120).optional(),
 });
 
 @Controller("partner-checkout")
@@ -75,5 +78,41 @@ export class PartnerCheckoutController {
   @Post(":token/verify-passport")
   verifyPassport(@Param("token") token: string) {
     return this.partners.verifyHostedPassport(token);
+  }
+
+  @Post(":token/payment")
+  payment(@Param("token") token: string, @Body() body: unknown) {
+    const { provider } = hostedPaymentSchema.parse(body);
+    return this.partners.hostedCheckoutInitiate(token, provider);
+  }
+
+  @Post(":token/payment/simulate-complete")
+  simulatePayment(@Param("token") token: string, @Body() body: unknown) {
+    const input = z
+      .object({
+        reference: hostedVerifySchema.shape.reference,
+        scenario: z
+          .enum([
+            "SUCCESS",
+            "CANCELLED",
+            "PENDING",
+            "WRONG_AMOUNT",
+            "REFUNDED",
+            "TIMEOUT",
+          ])
+          .default("SUCCESS"),
+      })
+      .parse(body);
+    return this.partners.hostedCheckoutSimulate(
+      token,
+      input.reference,
+      input.scenario,
+    );
+  }
+
+  @Post(":token/verify")
+  verify(@Param("token") token: string, @Body() body: unknown) {
+    const { reference } = hostedVerifySchema.parse(body);
+    return this.partners.hostedCheckoutVerify(token, reference);
   }
 }

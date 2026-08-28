@@ -25,6 +25,7 @@ export enum OrderStatus {
 
 export enum PaymentProvider {
   KHALTI = "KHALTI",
+  FONEPAY = "FONEPAY",
 }
 export enum PaymentStatus {
   INITIATED = "INITIATED",

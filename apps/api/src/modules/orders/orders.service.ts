@@ -1759,6 +1759,7 @@ export class OrdersService implements OnModuleInit {
         "Provider accepted the provisioning request",
       );
       await this.safeNotify(order, "QR_READY");
+      await this.enqueueHostedSettlement(order.id, "CAPTURE");
       return this.redact(order);
     } catch (error) {
       const errorCode =
@@ -1904,6 +1905,7 @@ export class OrdersService implements OnModuleInit {
         await this.inventory.release(order.id);
         await this.persistence.save(order);
         await this.alertProvisioningFailure(order);
+        await this.enqueueHostedSettlement(order.id, "RELEASE");
         await this.resilience?.attention({
           dedupeKey: `provisioning-failure:${order.id}`,
           category: "PROVISIONING_ATTENTION",
@@ -1997,6 +1999,7 @@ export class OrdersService implements OnModuleInit {
       "Provider QR was recovered successfully",
     );
     await this.safeNotify(order, "QR_READY");
+    await this.enqueueHostedSettlement(order.id, "CAPTURE");
     return this.redact(order);
   }
   async markProvisioningManualReview(id: string, reason: string) {
@@ -2014,6 +2017,7 @@ export class OrdersService implements OnModuleInit {
     order.operationalDisposition = "RECONCILE_PROVIDER";
     await this.persistence.save(order);
     await this.alertProvisioningFailure(order);
+    await this.enqueueHostedSettlement(order.id, "RELEASE");
   }
   async applyProviderEvent(event: ProviderWebhookEvent) {
     if (!event.orderId)
@@ -2690,6 +2694,7 @@ export class OrdersService implements OnModuleInit {
       "Provider activation was confirmed",
     );
     if (!wasReady) await this.safeNotify(order, "QR_READY");
+    await this.enqueueHostedSettlement(order.id, "CAPTURE");
   }
   private async activateOrder(
     order: DemoOrder,
@@ -2791,6 +2796,31 @@ export class OrdersService implements OnModuleInit {
       }
     }
     throw failure;
+  }
+  /**
+   * Prompts the hosted-settlement worker to convert a hosted checkout deposit
+   * into a capture (delivery success) or a release (delivery failure). The
+   * reconciliation partner-hosted-deposits sweep is the authoritative safety
+   * net, so a dropped enqueue must never fail an order transition.
+   */
+  private async enqueueHostedSettlement(
+    orderId: string,
+    outcome: "CAPTURE" | "RELEASE",
+  ) {
+    try {
+      await this.queues.add(
+        QUEUES.partnerHosted,
+        "settle-reservation",
+        { orderId, outcome },
+        `hosted-settlement-${orderId}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Hosted settlement enqueue failed for ${orderId}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
   }
   private transition(order: DemoOrder, to: OrderStatus, reason?: string) {
     assertTransition(order.status, to);

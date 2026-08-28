@@ -18,6 +18,7 @@ import { PaymentsController } from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
 import { KhaltiGateway } from "./modules/payments/gateways/khalti.gateway.js";
 import { PaymentSimulatorGateway } from "./modules/payments/gateways/simulator.gateway.js";
+import { FonepayGateway } from "./modules/payments/gateways/fonepay.gateway.js";
 import { CryptoService } from "./infrastructure/crypto.service.js";
 import {
   OperationsIntegrationEventsController,
@@ -36,6 +37,7 @@ import { InventoryService } from "./modules/inventory/inventory.service.js";
 import { AdminController } from "./modules/admin/admin.controller.js";
 import { AdminService } from "./modules/admin/admin.service.js";
 import { ProvisioningProcessor } from "./jobs/provisioning.processor.js";
+import { HostedSettlementProcessor } from "./jobs/hosted-settlement.processor.js";
 import { PartnersController } from "./modules/partners/partners.controller.js";
 import { PartnerAuthGuard } from "./modules/partners/partner-auth.guard.js";
 import { PartnerApiLoggingInterceptor } from "./modules/partners/partner-api-logging.interceptor.js";
@@ -125,6 +127,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     PaymentsService,
     KhaltiGateway,
     PaymentSimulatorGateway,
+    FonepayGateway,
     AurigaMockProvider,
     TransatelProvider,
     ConnectivityService,
@@ -136,6 +139,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     CloudinaryStorageService,
     QueueService,
     ProvisioningProcessor,
+    HostedSettlementProcessor,
     IntegrationProcessor,
     ReconciliationService,
     MetricsService,

@@ -4,6 +4,10 @@ export type PaymentInitiation = {
   redirectUrl: string;
   expiresAt: string;
   correlationId?: string;
+  qrDataUrl?: string;
+  qrPayload?: string;
+  websocketUrl?: string;
+  banks?: { bankName: string; bankCode: string; bankIcon?: string; packageName?: string; intentScheme: string }[];
 };
 export type PaymentVerification = {
   reference: string;

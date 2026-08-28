@@ -17,6 +17,7 @@ import { InventoryService } from "../modules/inventory/inventory.service.js";
 import { TransatelOperationsService } from "../modules/integration/transatel-operations.service.js";
 import { ProductionResilienceService } from "./production-resilience.service.js";
 import { ManualRefundsService } from "../modules/payments/manual-refunds.service.js";
+import { PartnerService } from "../modules/partners/partner.service.js";
 import { ApiException } from "../common/api-error.js";
 import { ApiErrorCode } from "@visa-compass/shared";
 import {
@@ -38,6 +39,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   private pendingPaymentTimer?: ReturnType<typeof setInterval>;
   private ocrRecoveryTimer?: ReturnType<typeof setInterval>;
+  private hostedDepositsTimer?: ReturnType<typeof setInterval>;
   private repairedReusableInventory = false;
 
   constructor(
@@ -52,6 +54,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly resilience: ProductionResilienceService,
     private readonly refunds: ManualRefundsService,
     private readonly storage: CloudinaryStorageService,
+    private readonly partners: PartnerService,
     private readonly metrics?: MetricsService,
   ) {}
 
@@ -142,12 +145,34 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     void this.ocrRecoveryAsLeader().catch((error) =>
       this.recordRunFailure(error, "ocr-recovery"),
     );
+    // Faster sweep for hosted-checkout deposits: settles (captures/releases)
+    // reservations that reached a terminal order state, and releases deposits
+    // for expired, unpaid links. Mirrors the pending-payments backstop — the
+    // queue + full reconciliation cycle remain the other recovery paths.
+    const hostedSeconds = Number(
+      process.env.HOSTED_DEPOSIT_RECONCILE_SECONDS ?? 60,
+    );
+    const hostedMs =
+      Number.isFinite(hostedSeconds) && hostedSeconds > 0
+        ? hostedSeconds * 1000
+        : 60_000;
+    this.hostedDepositsTimer = setInterval(
+      () =>
+        void this.hostedDepositsAsLeader().catch((error) =>
+          this.recordRunFailure(error, "partner-hosted-deposits"),
+        ),
+      hostedMs,
+    );
+    void this.hostedDepositsAsLeader().catch((error) =>
+      this.recordRunFailure(error, "partner-hosted-deposits"),
+    );
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
     if (this.pendingPaymentTimer) clearInterval(this.pendingPaymentTimer);
     if (this.ocrRecoveryTimer) clearInterval(this.ocrRecoveryTimer);
+    if (this.hostedDepositsTimer) clearInterval(this.hostedDepositsTimer);
   }
 
   private async runAsLeader() {
@@ -159,6 +184,32 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     if (!result.acquired)
       this.logger.debug(
         "Skipped reconciliation; another replica holds the lease",
+      );
+    return result.value;
+  }
+
+  private async hostedDepositsAsLeader() {
+    if (!this.prisma.enabled) return;
+    const result = await this.queues.withDistributedLock(
+      "partner-hosted-deposits",
+      5 * 60_000,
+      async () => {
+        const deposits = await this.partners.reconcileHostedDeposits();
+        const expired = await this.partners.releaseExpiredHostedReservations();
+        if (
+          deposits.captured > 0 ||
+          deposits.released > 0 ||
+          expired.released > 0
+        )
+          this.logger.log(
+            `Hosted deposits settled: captured=${deposits.captured} released=${deposits.released} expired=${expired.released}`,
+          );
+        return { deposits, expired };
+      },
+    );
+    if (!result.acquired)
+      this.logger.debug(
+        "Skipped hosted deposit sweep; another replica holds the lease",
       );
     return result.value;
   }
@@ -327,6 +378,20 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       ["approved-orders", () => this.orders.recoverApprovedOrders()],
       ["payments", () => this.payments.reconcilePendingPayments()],
       ["reservations", () => this.inventory.reconcileStaleReservations()],
+      [
+        "partner-hosted-deposits",
+        async () => {
+          if (!this.prisma.enabled) return { captured: 0, released: 0, skipped: 0 };
+          return this.partners.reconcileHostedDeposits();
+        },
+      ],
+      [
+        "partner-hosted-expiry",
+        async () => {
+          if (!this.prisma.enabled) return { released: 0, cancelled: 0 };
+          return this.partners.releaseExpiredHostedReservations();
+        },
+      ],
       ["refunds", () => this.refunds.reconcilePending()],
       ["expired-records", () => this.cleanupExpiredRecords()],
     ];

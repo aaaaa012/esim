@@ -38,6 +38,7 @@ import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
 import { ocrJobOptions } from "../../jobs/ocr-recovery.config.js";
 import { OrdersService } from "../orders/orders.service.js";
+import { PaymentsService } from "../payments/payments.service.js";
 
 /** Opaque, deterministic composite cursor for (createdAt, id) keyset pagination. */
 function encodeCursor(
@@ -131,6 +132,19 @@ type PartnerOrderRow = Prisma.OrderGetPayload<{
 export class PartnerService {
   private readonly logger = new Logger(PartnerService.name);
 
+  /** Delivery-success terminals that convert a hosted deposit into a capture. */
+  private readonly hostedDepositSuccess = new Set<OrderStatus>([
+    OrderStatus.QR_READY,
+    OrderStatus.COMPLETED,
+    OrderStatus.ACTIVATION_ATTENTION,
+  ]);
+
+  /** Delivery-failure/cancellation terminals that release a hosted deposit. */
+  private readonly hostedDepositRelease = new Set<OrderStatus>([
+    OrderStatus.PROVISIONING_FAILED,
+    OrderStatus.CANCELLED,
+  ]);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
@@ -140,6 +154,7 @@ export class PartnerService {
     private readonly partnerWebhooks: PartnerWebhookProcessor,
     private readonly queues: QueueService,
     private readonly applicationOrders: OrdersService,
+    private readonly payments?: PaymentsService,
   ) {}
 
   private async verifyUploadedDocument(assetId: string) {
@@ -1687,6 +1702,12 @@ export class PartnerService {
           events: { create: { fromStatus: null, toStatus: OrderStatus.DRAFT } },
         },
       });
+      await this.reserveAccount(
+        tx,
+        partnerId,
+        amountPaisa,
+        input.externalOrderId,
+      );
       await tx.partnerHostedCheckoutSession.create({
         data: {
           id: sessionId,
@@ -2159,17 +2180,10 @@ export class PartnerService {
     }
     const amountPaisa = Math.round(Number(order.totalAmount) * 100);
     await this.prisma.$transaction(async (tx) => {
-      await this.debitAccount(
-        tx,
-        order.partnerId!,
-        order.id,
-        amountPaisa,
-        order.externalOrderId!,
-      );
       const updated = await tx.order.updateMany({
         where: { id: order.id, version: order.version },
         data: {
-          status: OrderStatus.APPROVED,
+          status: OrderStatus.PAYMENT_PENDING,
           compatibilityAcceptedAt: new Date(),
           version: { increment: 1 },
         },
@@ -2184,25 +2198,10 @@ export class PartnerService {
         data: {
           orderId: order.id,
           fromStatus: OrderStatus.DRAFT,
-          toStatus: OrderStatus.APPROVED,
-          reason: "Hosted checkout completed",
+          toStatus: OrderStatus.PAYMENT_PENDING,
+          reason: "Hosted checkout review completed; awaiting customer payment",
         },
       });
-      await this.createEvent(
-        tx,
-        order.partnerId!,
-        order.id,
-        "order.accepted",
-        order.id,
-        {
-          orderId: order.id,
-          externalOrderId: order.externalOrderId,
-          status: OrderStatus.APPROVED,
-          fulfillmentStatus: "PENDING",
-          amountPaisa,
-          currency: "NPR",
-        },
-      );
       await tx.customerConsent.createMany({
         data: ["COMPATIBILITY", "TERMS", "PRIVACY"].map((type) => ({
           customerId: order.customerId,
@@ -2213,14 +2212,9 @@ export class PartnerService {
           acceptedAt: new Date(),
         })),
       });
-      await tx.partnerHostedCheckoutSession.update({
-        where: { id: session.id },
-        data: { consumedAt: new Date() },
-      });
     });
     const handoff = await Promise.allSettled([
       this.applicationOrders.refreshFromPersistence(order.id),
-      this.partnerWebhooks.enqueuePending(),
     ]);
     for (const result of handoff)
       if (result.status === "rejected")
@@ -2229,27 +2223,282 @@ export class PartnerService {
             ? result.reason.message
             : "Hosted checkout post-commit handoff failed",
         );
-    try {
-      await this.applicationOrders.approveToProvisioning(
-        order.id,
-        "Hosted checkout completed",
-      );
-    } catch (error) {
-      this.logger.error(
-        `Hosted checkout provision handoff failed for ${order.id}: ${
-          error instanceof Error ? error.message : "unknown"
-        }`,
-      );
-    }
-    const provisioned = await this.prisma.order.findUnique({
-      where: { id: order.id },
-      select: { status: true },
-    });
     return {
       orderId: order.id,
       orderNumber: order.orderNumber,
-      status: provisioned?.status ?? OrderStatus.APPROVED,
+      status: OrderStatus.PAYMENT_PENDING,
+      amountPaisa,
+      currency: order.currency,
     };
+  }
+
+  async hostedCheckoutInitiate(token: string, provider: PaymentProvider) {
+    const session = await this.hostedCheckoutSession(token);
+    if (!this.payments) return this.hostedPaymentDeprecated();
+    return this.payments.initiate(
+      session.orderId,
+      null,
+      provider as unknown as Parameters<PaymentsService["initiate"]>[2],
+      `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/partner-checkout/${token}`,
+    );
+  }
+
+  async hostedCheckoutVerify(token: string, reference?: string) {
+    const session = await this.hostedCheckoutSession(token);
+    if (!this.payments) return this.hostedPaymentDeprecated();
+    const resolved =
+      reference ?? (await this.activePaymentReference(session.orderId));
+    if (!resolved)
+      throw new ApiException({
+        code: "PAYMENT_NOT_INITIATED",
+        message: "Start a payment before checking its status",
+        status: 400,
+      });
+    return this.payments.verify(session.orderId, null, resolved);
+  }
+
+  async hostedCheckoutSimulate(
+    token: string,
+    reference?: string,
+    scenario:
+      | "SUCCESS"
+      | "CANCELLED"
+      | "PENDING"
+      | "WRONG_AMOUNT"
+      | "REFUNDED"
+      | "TIMEOUT" = "SUCCESS",
+  ) {
+    const session = await this.hostedCheckoutSession(token);
+    if (!this.payments) return this.hostedPaymentDeprecated();
+    const resolved =
+      reference ?? (await this.activePaymentReference(session.orderId));
+    if (!resolved)
+      throw new ApiException({
+        code: "PAYMENT_NOT_INITIATED",
+        message: "Start a payment before simulating its completion",
+        status: 400,
+      });
+    return this.payments.simulate(session.orderId, null, resolved, scenario);
+  }
+
+  private async activePaymentReference(orderId: string) {
+    const payment = await this.prisma.payment.findFirst({
+      where: { orderId },
+      orderBy: { createdAt: "desc" },
+      select: { paymentReference: true },
+    });
+    return payment?.paymentReference ?? null;
+  }
+
+  /**
+   * Settles the deposit reserved when the hosted checkout session was created:
+   * delivery success (QR_READY/COMPLETED/ACTIVATION_ATTENTION) converts the
+   * reservation into a CAPTURE debit; delivery failure (PROVISIONING_FAILED) or
+   * cancellation releases the reservation. Idempotent — ledger references
+   * (`capture:<orderId>` / `release:<orderId>`) make repeated runs no-ops.
+   * Outcome is re-derived from the current DB status so races with the
+   * order machine resolve to the safer action.
+   */
+  async settleHostedReservation(
+    orderId: string,
+    outcome?: "CAPTURE" | "RELEASE",
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        channel: true,
+        partnerId: true,
+        externalOrderId: true,
+        partnerSettlementMethod: true,
+        totalAmount: true,
+        status: true,
+      },
+    });
+    if (!order)
+      return { orderId, action: "SKIPPED" as const, reason: "NOT_FOUND" };
+    if (order.channel !== OrderChannel.PARTNER_HOSTED)
+      return {
+        orderId,
+        action: "SKIPPED" as const,
+        reason: "NOT_HOSTED_CHECKOUT",
+      };
+    if (
+      order.partnerSettlementMethod !==
+      PartnerSettlementMethod.PARTNER_ACCOUNT
+    )
+      return {
+        orderId,
+        action: "SKIPPED" as const,
+        reason: "NOT_PARTNER_ACCOUNT",
+      };
+    const partnerId = order.partnerId;
+    if (!partnerId)
+      return { orderId, action: "SKIPPED" as const, reason: "NO_PARTNER" };
+    const amountPaisa = Math.round(Number(order.totalAmount) * 100);
+    if (this.hostedDepositSuccess.has(order.status)) {
+      const applied = await this.prisma.$transaction(async (tx) =>
+        this.captureAccount(tx, partnerId, orderId, amountPaisa),
+      );
+      return {
+        orderId,
+        action: "CAPTURED" as const,
+        amountPaisa,
+        ...applied,
+      };
+    }
+    if (this.hostedDepositRelease.has(order.status)) {
+      const applied = await this.prisma.$transaction(async (tx) =>
+        this.releaseReservation(tx, partnerId, orderId, amountPaisa),
+      );
+      return {
+        orderId,
+        action: "RELEASED" as const,
+        amountPaisa,
+        ...applied,
+      };
+    }
+    this.logger.debug(
+      `Hosted settlement skipped for ${orderId} in status ${order.status} (hint ${outcome ?? "none"})`,
+    );
+    return {
+      orderId,
+      action: "SKIPPED" as const,
+      reason: `STATUS_${order.status}`,
+    };
+  }
+
+  /** Safety net for capturing/releasing deposits that missed the fast path. */
+  async reconcileHostedDeposits(): Promise<{
+    captured: number;
+    released: number;
+    skipped: number;
+  }> {
+    const orders = await this.prisma.order.findMany({
+      where: {
+        channel: OrderChannel.PARTNER_HOSTED,
+        partnerSettlementMethod: PartnerSettlementMethod.PARTNER_ACCOUNT,
+        status: {
+          in: [
+            OrderStatus.QR_READY,
+            OrderStatus.COMPLETED,
+            OrderStatus.ACTIVATION_ATTENTION,
+            OrderStatus.PROVISIONING_FAILED,
+            OrderStatus.CANCELLED,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+    let captured = 0;
+    let released = 0;
+    let skipped = 0;
+    for (const { id } of orders) {
+      try {
+        const result = await this.settleHostedReservation(id);
+        if (result.action === "CAPTURED") captured += 1;
+        else if (result.action === "RELEASED") released += 1;
+        else skipped += 1;
+      } catch (error) {
+        this.logger.warn(
+          `Hosted deposit reconciliation failed for order ${id}: ${
+            error instanceof Error ? error.message : "unknown"
+          }`,
+        );
+        skipped += 1;
+      }
+    }
+    return { captured, released, skipped };
+  }
+
+  /**
+   * Releases deposits for hosted checkout sessions that expired before the
+   * customer paid, cancelling their still-unpaid orders. Safe by construction:
+   * only sessions with orders in DRAFT/PAYMENT_PENDING are touched — once a
+   * payment is confirmed the order leaves those statuses.
+   */
+  async releaseExpiredHostedReservations(now = new Date()): Promise<{
+    released: number;
+    cancelled: number;
+  }> {
+    const sessions = await this.prisma.partnerHostedCheckoutSession.findMany({
+      where: { expiresAt: { lt: now }, consumedAt: null },
+      select: {
+        id: true,
+        partnerId: true,
+        order: {
+          select: {
+            id: true,
+            channel: true,
+            externalOrderId: true,
+            partnerSettlementMethod: true,
+            totalAmount: true,
+            status: true,
+            version: true,
+          },
+        },
+      },
+    });
+    let released = 0;
+    let cancelled = 0;
+    for (const session of sessions) {
+      const order = session.order;
+      if (
+        !order ||
+        order.channel !== OrderChannel.PARTNER_HOSTED ||
+        (order.status !== OrderStatus.DRAFT &&
+          order.status !== OrderStatus.PAYMENT_PENDING)
+      )
+        continue;
+      try {
+        const amountPaisa = Math.round(Number(order.totalAmount) * 100);
+        await this.prisma.$transaction(async (tx) => {
+          await tx.partnerHostedCheckoutSession.updateMany({
+            where: { id: session.id, consumedAt: null },
+            data: { consumedAt: now },
+          });
+          const updated = await tx.order.updateMany({
+            where: {
+              id: order.id,
+              version: order.version,
+              status: {
+                in: [OrderStatus.DRAFT, OrderStatus.PAYMENT_PENDING],
+              },
+            },
+            data: { status: OrderStatus.CANCELLED, version: { increment: 1 } },
+          });
+          if (updated.count !== 1)
+            throw new ApiException({
+              code: "ORDER_CONFLICT",
+              message: "Order was changed by another request; retry",
+              status: 409,
+            });
+          await tx.orderEvent.create({
+            data: {
+              orderId: order.id,
+              fromStatus: order.status,
+              toStatus: OrderStatus.CANCELLED,
+              reason: "Hosted checkout link expired before payment",
+            },
+          });
+          await this.releaseReservation(
+            tx,
+            session.partnerId,
+            order.id,
+            amountPaisa,
+          );
+        });
+        cancelled += 1;
+        released += 1;
+      } catch (error) {
+        this.logger.warn(
+          `Expired hosted reservation release failed for ${order.id}: ${
+            error instanceof Error ? error.message : "unknown"
+          }`,
+        );
+      }
+    }
+    return { released, cancelled };
   }
 
   async cancel(partnerId: string, orderId: string, reason: string) {
@@ -2282,7 +2531,14 @@ export class PartnerService {
         order.partnerSettlementMethod ===
         PartnerSettlementMethod.PARTNER_ACCOUNT
       ) {
-        if (order.partnerQuote)
+        if (order.channel === OrderChannel.PARTNER_HOSTED) {
+          await this.releaseReservation(
+            tx,
+            partnerId,
+            orderId,
+            Math.round(Number(order.totalAmount) * 100),
+          );
+        } else if (order.partnerQuote)
           await this.releaseReservation(
             tx,
             partnerId,
@@ -2720,6 +2976,62 @@ export class PartnerService {
     });
   }
 
+  private async captureAccount(
+    tx: Prisma.TransactionClient,
+    partnerId: string,
+    orderId: string,
+    amountPaisa: number,
+  ) {
+    const reference = `capture:${orderId}`;
+    const existing = await tx.partnerLedgerEntry.findUnique({
+      where: { reference },
+    });
+    if (existing) return { applied: false, reason: "ALREADY_CAPTURED" };
+    const account = await tx.partnerAccount.findUnique({
+      where: { partnerId },
+    });
+    if (!account)
+      return { applied: false, reason: "NO_ACCOUNT", account: false };
+    if (account.reservedPaisa < amountPaisa)
+      throw new ApiException({
+        code: "PARTNER_BALANCE_CONFLICT",
+        message:
+          "The deposit reserved for this order does not cover the captured amount",
+        status: 409,
+      });
+    const balanceAfterPaisa = account.balancePaisa - amountPaisa;
+    const updated = await tx.partnerAccount.updateMany({
+      where: {
+        id: account.id,
+        version: account.version,
+        reservedPaisa: { gte: amountPaisa },
+      },
+      data: {
+        reservedPaisa: { decrement: amountPaisa },
+        balancePaisa: balanceAfterPaisa,
+        version: { increment: 1 },
+      },
+    });
+    if (updated.count !== 1)
+      throw new ApiException({
+        code: "PARTNER_BALANCE_CONFLICT",
+        message: "Partner balance changed; retry",
+        status: 409,
+      });
+    await tx.partnerLedgerEntry.create({
+      data: {
+        partnerId,
+        orderId,
+        type: PartnerLedgerEntryType.CAPTURE,
+        amountPaisa,
+        balanceAfterPaisa,
+        reference,
+        metadata: { settlement: "PARTNER_ACCOUNT", channel: "PARTNER_HOSTED" },
+      },
+    });
+    return { applied: true };
+  }
+
   private travelerData(traveler: TravelerInput) {
     return {
       title: traveler.title,
@@ -2830,10 +3142,17 @@ export class PartnerService {
     orderId: string,
     amountPaisa: number,
   ) {
+    const reference = `release:${orderId}`;
+    const existing = await tx.partnerLedgerEntry.findUnique({
+      where: { reference },
+    });
+    if (existing) return { applied: false, reason: "ALREADY_RELEASED" };
     const account = await tx.partnerAccount.findUnique({
       where: { partnerId },
     });
-    if (!account) return;
+    if (!account) return { applied: false, reason: "NO_ACCOUNT" };
+    if (account.reservedPaisa <= 0)
+      return { applied: false, reason: "NO_RESERVATION" };
     const updated = await tx.partnerAccount.updateMany({
       where: { id: account.id, version: account.version },
       data: {
@@ -2856,9 +3175,11 @@ export class PartnerService {
         type: PartnerLedgerEntryType.RELEASE,
         amountPaisa,
         balanceAfterPaisa: account.balancePaisa,
-        reference: `release:${orderId}`,
+        reference,
+        metadata: { settlement: "PARTNER_ACCOUNT", channel: "PARTNER_HOSTED" },
       },
     });
+    return { applied: true };
   }
 
   private async refundDirectDebit(

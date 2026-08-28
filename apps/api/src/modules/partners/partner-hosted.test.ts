@@ -437,3 +437,179 @@ describe("partner hosted checkout", () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 });
+
+describe("hosted deposit settlement", () => {
+  function ledgerTx(overrides: Record<string, unknown> = {}) {
+    return {
+      partnerLedgerEntry: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: "ledger-1" }),
+      },
+      partnerAccount: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "account-1",
+          partnerId: "partner-1",
+          balancePaisa: 1_000_000,
+          creditLimitPaisa: 0,
+          reservedPaisa: 249_900,
+          version: 1,
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      ...overrides,
+    };
+  }
+
+  function hostedOrder(status: string) {
+    return {
+      id: "order-1",
+      channel: "PARTNER_HOSTED",
+      partnerId: "partner-1",
+      externalOrderId: "ext-1",
+      partnerSettlementMethod: "PARTNER_ACCOUNT",
+      totalAmount: "2499",
+      status,
+    };
+  }
+
+  it("captures the reserved deposit when the order reaches QR_READY", async () => {
+    const tx = ledgerTx();
+    const instance = service({
+      order: {
+        findUnique: vi.fn().mockResolvedValue(hostedOrder("QR_READY")),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    });
+
+    const result = await instance.settleHostedReservation("order-1", "CAPTURE");
+    expect(result.action).toBe("CAPTURED");
+    const update = tx.partnerAccount.updateMany.mock.calls[0]![0];
+    expect(update.where).toMatchObject({ reservedPaisa: { gte: 249_900 } });
+    expect(update.data).toMatchObject({
+      reservedPaisa: { decrement: 249_900 },
+      balancePaisa: 750_100,
+      version: { increment: 1 },
+    });
+    const ledger = tx.partnerLedgerEntry.create.mock.calls[0]![0].data;
+    expect(ledger.type).toBe("CAPTURE");
+    expect(ledger.reference).toBe("capture:order-1");
+  });
+
+  it("captures when the order is already completed", async () => {
+    const tx = ledgerTx();
+    const instance = service({
+      order: {
+        findUnique: vi.fn().mockResolvedValue(hostedOrder("COMPLETED")),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    });
+
+    const result = await instance.settleHostedReservation("order-1");
+    expect(result.action).toBe("CAPTURED");
+  });
+
+  it("releases the reserved deposit on PROVISIONING_FAILED", async () => {
+    const tx = ledgerTx();
+    const instance = service({
+      order: {
+        findUnique: vi.fn().mockResolvedValue(
+          hostedOrder("PROVISIONING_FAILED"),
+        ),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    });
+
+    const result = await instance.settleHostedReservation("order-1", "RELEASE");
+    expect(result.action).toBe("RELEASED");
+    const update = tx.partnerAccount.updateMany.mock.calls[0]![0];
+    expect(update.data).toMatchObject({
+      reservedPaisa: { decrement: 249_900 },
+    });
+    const ledger = tx.partnerLedgerEntry.create.mock.calls[0]![0].data;
+    expect(ledger.type).toBe("RELEASE");
+    expect(ledger.reference).toBe("release:order-1");
+  });
+
+  it("release is idempotent across retries", async () => {
+    const existing = { id: "release-1" };
+    const tx = ledgerTx({
+      partnerLedgerEntry: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        create: vi.fn(),
+      },
+      partnerAccount: {
+        findUnique: vi.fn(),
+        updateMany: vi.fn(),
+      },
+    });
+    const instance = service({
+      order: {
+        findUnique: vi.fn().mockResolvedValue(
+          hostedOrder("PROVISIONING_FAILED"),
+        ),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    });
+
+    const result = await instance.settleHostedReservation("order-1", "RELEASE");
+    expect(result).toMatchObject({
+      action: "RELEASED",
+      applied: false,
+      reason: "ALREADY_RELEASED",
+    });
+    expect(tx.partnerAccount.updateMany).not.toHaveBeenCalled();
+    expect(tx.partnerLedgerEntry.create).not.toHaveBeenCalled();
+  });
+
+  it("skips non-hosted orders", async () => {
+    const instance = service({
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...hostedOrder("COMPLETED"),
+          channel: "CUSTOMER_WEB",
+        }),
+      },
+    });
+    const result = await instance.settleHostedReservation("order-1", "CAPTURE");
+    expect(result).toMatchObject({ action: "SKIPPED" });
+  });
+
+  it("skips orders still in transit", async () => {
+    const instance = service({
+      order: {
+        findUnique: vi.fn().mockResolvedValue(hostedOrder("PROVISIONING")),
+      },
+    });
+    const result = await instance.settleHostedReservation("order-1", "RELEASE");
+    expect(result).toMatchObject({ action: "SKIPPED" });
+  });
+
+  it("throws a balance conflict when the reservation no longer covers the amount", async () => {
+    const tx = ledgerTx({
+      partnerAccount: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "account-1",
+          partnerId: "partner-1",
+          balancePaisa: 10_000,
+          creditLimitPaisa: 0,
+          reservedPaisa: 1_000,
+          version: 1,
+        }),
+        updateMany: vi.fn(),
+      },
+    });
+    const instance = service({
+      order: {
+        findUnique: vi.fn().mockResolvedValue(hostedOrder("QR_READY")),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    });
+
+    await expect(
+      instance.settleHostedReservation("order-1", "CAPTURE"),
+    ).rejects.toMatchObject({
+      response: { code: "PARTNER_BALANCE_CONFLICT" },
+    });
+    expect(tx.partnerAccount.updateMany).not.toHaveBeenCalled();
+  });
+});

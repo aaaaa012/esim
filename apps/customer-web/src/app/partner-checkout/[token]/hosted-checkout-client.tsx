@@ -15,12 +15,17 @@ import {
   UserRound,
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
-import { apiErrorMessage, DocumentType } from "@visa-compass/shared";
+import {
+  apiErrorMessage,
+  DocumentType,
+  PaymentProvider,
+} from "@visa-compass/shared";
 import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
 import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+const SIMULATOR = process.env.NEXT_PUBLIC_PAYMENT_MODE === "simulator";
 type Envelope<T> = { data: T; error?: { code?: string; message: string } };
 
 type Brand = { logoUrl?: string; colors?: { primary?: string } } | null;
@@ -62,6 +67,20 @@ type Verification = {
   checkedAt?: string;
   method?: string;
   detail?: string;
+};
+
+type Payment = {
+  reference: string;
+  redirectUrl: string;
+  expiresAt: string;
+  qrDataUrl?: string;
+  qrPayload?: string;
+  banks?: {
+    bankName: string;
+    bankCode: string;
+    bankIcon?: string;
+    intentScheme: string;
+  }[];
 };
 
 type Traveler = {
@@ -149,7 +168,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     "in-progress" | "waiting" | "done" | "failed" | null
   >(null);
   const [error, setError] = useState("");
-  const [done, setDone] = useState<{ orderNumber: string } | null>(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [orderNumber, setOrderNumber] = useState("");
+  const [outcome, setOutcome] = useState<{
+    status: string;
+    orderNumber: string;
+  } | null>(null);
+  const [payment, setPayment] = useState<Payment | null>(null);
+  const [provider, setProvider] = useState<PaymentProvider>(
+    PaymentProvider.KHALTI,
+  );
 
   useEffect(() => {
     if (!verifyingDoc || verifyingDoc === "in-progress") return;
@@ -168,6 +196,18 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       .then((value) => {
         if (cancelled) return;
         setSession(value);
+        if (value.order.status !== "DRAFT") {
+          setOrderNumber(value.order.orderNumber);
+          if (value.order.status === "PAYMENT_PENDING") {
+            setSubmitted(true);
+            return;
+          }
+          setOutcome({
+            status: value.order.status,
+            orderNumber: value.order.orderNumber,
+          });
+          return;
+        }
         if (value.order.orderType === "TOPUP") {
           setStep(4);
           return;
@@ -465,6 +505,69 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     verification?.status === "MANUALLY_APPROVED" ||
     verification?.status === "SKIPPED";
 
+  const PAID_STATUSES = new Set([
+    "PAYMENT_CONFIRMED",
+    "REVIEW_PENDING",
+    "APPROVED",
+    "PROVISIONING",
+    "QR_READY",
+    "ACTIVATION_ATTENTION",
+    "COMPLETED",
+  ]);
+  const FAILED_STATUSES = new Set([
+    "PAYMENT_FAILED",
+    "CANCELLED",
+    "PROVISIONING_FAILED",
+  ]);
+  const external = (url: string) => {
+    try {
+      return new URL(url).origin !== window.location.origin;
+    } catch {
+      return true;
+    }
+  };
+  const initiatePayment = () =>
+    run(async () => {
+      const value = await api<Payment>(`/partner-checkout/${token}/payment`, {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      });
+      setPayment(value);
+      if (value.redirectUrl && external(value.redirectUrl))
+        window.location.assign(value.redirectUrl);
+    });
+  const checkPayment = () =>
+    run(async () => {
+      const result = await api<{ status: string }>(
+        `/partner-checkout/${token}/verify`,
+        { method: "POST", body: "{}" },
+      );
+      if (PAID_STATUSES.has(result.status)) {
+        setOutcome({ status: result.status, orderNumber });
+        return;
+      }
+      if (FAILED_STATUSES.has(result.status)) {
+        setPayment(null);
+        return;
+      }
+      throw new Error(
+        "Your payment is still being confirmed by the gateway. Wait a moment, then check again.",
+      );
+    });
+  const simulatePayment = () =>
+    run(async () => {
+      const result = await api<{ status: string }>(
+        `/partner-checkout/${token}/payment/simulate-complete`,
+        { method: "POST", body: "{}" },
+      );
+      if (PAID_STATUSES.has(result.status)) {
+        setOutcome({ status: result.status, orderNumber });
+        return;
+      }
+      throw new Error(
+        `Simulated payment did not complete (${result.status})`,
+      );
+    });
   const complete = () =>
     run(async () => {
       if (!consent)
@@ -480,10 +583,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           compatibilityAccepted: true,
         }),
       });
-      setDone({ orderNumber: result.orderNumber });
+      setOrderNumber(result.orderNumber);
+      setSubmitted(true);
+      await initiatePayment();
     });
 
-  if (loadFailed || (session && session.order.status !== "DRAFT" && !done))
+  if (
+    loadFailed ||
+    (session && session.order.status !== "DRAFT" && !submitted && !outcome)
+  )
     return (
       <main className="checkout-page">
         <div className="checkout-recovery">
@@ -539,17 +647,171 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         </div>
         <div className="checkout-layout">
           <section className="checkout-card">
-            {done ? (
+            {outcome ? (
               <div className="form-section">
-                <div className="success-panel">
-                  <CheckCircle2 size={42} />
-                  <b>Order completed</b>
-                  <span>{done.orderNumber}</span>
-                  <p>
-                    Your eSIM is being activated automatically. The partner will
-                    send your activation QR to you shortly.
-                  </p>
+                <div
+                  className={
+                    outcome.status === "PAYMENT_PENDING" ||
+                    PAID_STATUSES.has(outcome.status)
+                      ? "success-panel"
+                      : "error-panel"
+                  }
+                >
+                  {PAID_STATUSES.has(outcome.status) ? (
+                    <>
+                      <CheckCircle2 size={42} />
+                      <b>Payment confirmed</b>
+                      <span>{outcome.orderNumber}</span>
+                      <p>
+                        Thanks! Your order is paid and the partner is activating
+                        your eSIM. The activation QR will be shared with you
+                        shortly.
+                      </p>
+                    </>
+                  ) : outcome.status === "PAYMENT_PENDING" ? (
+                    <>
+                      <LoaderCircle className="spin" size={42} />
+                      <b>Payment pending</b>
+                      <span>{outcome.orderNumber}</span>
+                      <p>
+                        We couldn&apos;t get a final confirmation from the
+                        payment provider. If you were asked to complete a
+                        payment, check again in a moment.
+                      </p>
+                      <button
+                        className="button primary"
+                        onClick={checkPayment}
+                        disabled={busy}
+                      >
+                        {busy ? (
+                          <LoaderCircle className="spin" size={18} />
+                        ) : (
+                          "Check again"
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle size={42} />
+                      <b>Your order could not be activated</b>
+                      <span>{outcome.orderNumber}</span>
+                      <p>
+                        Your payment was received but activation did not
+                        complete. The partner team is reviewing it and will
+                        contact you about next steps.
+                      </p>
+                    </>
+                  )}
                 </div>
+              </div>
+            ) : submitted ? (
+              <div className="form-section">
+                <span className="form-icon">
+                  <LockKeyhole />
+                </span>
+                <h2>
+                  Pay {session!.order.currency}{" "}
+                  {session!.order.amountNpr.toLocaleString()}
+                </h2>
+                <p>
+                  {orderNumber} · The server checks the exact order, reference
+                  and immutable NPR amount.
+                </p>
+                <div className="gateway-grid">
+                  <button
+                    className={
+                      provider === PaymentProvider.KHALTI ? "selected" : ""
+                    }
+                    onClick={() => setProvider(PaymentProvider.KHALTI)}
+                  >
+                    <b>Khalti</b>
+                    <small>Digital wallet</small>
+                  </button>
+                  <button
+                    className={
+                      provider === PaymentProvider.FONEPAY ? "selected" : ""
+                    }
+                    onClick={() => setProvider(PaymentProvider.FONEPAY)}
+                  >
+                    <b>Fonepay</b>
+                    <small>Mobile banking &amp; QR</small>
+                  </button>
+                </div>
+                {payment ? (
+                  SIMULATOR ? (
+                    <div className="simulator-box">
+                      <span>Local signed simulator</span>
+                      <small>
+                        Reference: {payment.reference.slice(0, 14)}...
+                      </small>
+                      <Action busy={busy} onClick={simulatePayment}>
+                        Simulate verified payment
+                      </Action>
+                    </div>
+                  ) : payment.qrDataUrl ? (
+                    <div className="simulator-box">
+                      <span>Scan with Fonepay mobile banking</span>
+                      <img
+                        src={payment.qrDataUrl}
+                        alt="Fonepay payment QR code"
+                        style={{
+                          width: 220,
+                          height: 220,
+                          alignSelf: "center",
+                        }}
+                      />
+                      {payment.banks?.length ? (
+                        <div className="gateway-grid">
+                          {payment.banks.map((bank) => (
+                            <button
+                              key={bank.bankCode}
+                              onClick={() => {
+                                if (payment.qrPayload)
+                                  window.location.assign(
+                                    `${bank.intentScheme}${
+                                      bank.intentScheme.includes("?")
+                                        ? "&"
+                                        : "?"
+                                    }qrPayload=${encodeURIComponent(
+                                      payment.qrPayload,
+                                    )}`,
+                                  );
+                              }}
+                            >
+                              <b>{bank.bankName}</b>
+                              <small>Open banking app</small>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                      <Action busy={busy} onClick={checkPayment}>
+                        I&apos;ve paid — check status
+                      </Action>
+                    </div>
+                  ) : (
+                    <Action busy={busy} onClick={checkPayment}>
+                      I&apos;ve paid — check status
+                    </Action>
+                  )
+                ) : (
+                  <>
+                    <Action busy={busy} onClick={initiatePayment}>
+                      Continue to{" "}
+                      {provider === PaymentProvider.FONEPAY ? "Fonepay" : "Khalti"}
+                    </Action>
+                    {submitted && (
+                      <div className="form-actions">
+                        <button
+                          className="button secondary"
+                          onClick={checkPayment}
+                          disabled={busy}
+                        >
+                          I&apos;ve already paid — check status
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             ) : (
               <>

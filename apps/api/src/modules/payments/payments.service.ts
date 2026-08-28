@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, Optional } from "@nestjs/common";
 import {
   ApiErrorCode,
   OrderStatus,
@@ -9,6 +9,7 @@ import { ApiException } from "../../common/api-error.js";
 import { OrdersService, type DemoOrder } from "../orders/orders.service.js";
 import { KhaltiGateway } from "./gateways/khalti.gateway.js";
 import { PaymentSimulatorGateway } from "./gateways/simulator.gateway.js";
+import { FonepayGateway } from "./gateways/fonepay.gateway.js";
 import { MetricsService } from "../../observability/metrics.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
@@ -52,12 +53,14 @@ export class PaymentsService {
     private readonly metrics?: MetricsService,
     private readonly resilience?: ProductionResilienceService,
     private readonly prisma?: PrismaService,
+    @Optional() private readonly fonepay?: FonepayGateway,
   ) {}
 
   async initiate(
     orderId: string,
     ownerId: string | null,
     provider: PaymentProvider,
+    returnUrlOverride?: string,
   ) {
     await this.orders.refreshOne?.(orderId, true);
     const order = this.orders.get(orderId, ownerId ?? undefined);
@@ -80,10 +83,12 @@ export class PaymentsService {
           : {}),
       };
     }
-    const returnUrl = `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/esim/checkout?order=${orderId}`;
+    const returnUrl =
+      returnUrlOverride ??
+      `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/esim/checkout?order=${orderId}`;
     const result = this.prisma?.enabled
       ? await this.initiatePersisted(order, provider, returnUrl)
-      : await this.gateway().initiate({
+      : await this.gateway(provider).initiate({
           orderId,
           orderNumber: order.orderNumber,
           amountNpr: order.totalAmountNpr,
@@ -170,7 +175,7 @@ export class PaymentsService {
       });
 
     try {
-      const result = await this.gateway().initiate({
+      const result = await this.gateway(provider).initiate({
         orderId: order.id,
         orderNumber: order.orderNumber,
         amountNpr: order.totalAmountNpr,
@@ -597,6 +602,10 @@ export class PaymentsService {
   }
   private gateway(provider?: PaymentProvider) {
     if (process.env.PAYMENT_MODE === "simulator") return this.simulator;
+    if (provider === PaymentProvider.FONEPAY) {
+      if (!this.fonepay) throw new BadRequestException("Fonepay is unavailable");
+      return this.fonepay;
+    }
     if (
       process.env.NODE_ENV === "production" ||
       ["khalti", "sandbox"].includes(process.env.PAYMENT_MODE ?? "")

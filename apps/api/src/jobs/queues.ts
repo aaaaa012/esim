@@ -7,6 +7,7 @@ export const QUEUES = {
   partnerWebhooks: "partner-webhooks",
   documents: "documents",
   identityCallbacks: "identity-callbacks",
+  partnerHosted: "partner-hosted",
 } as const;
 
 export const DEFAULT_JOB_OPTIONS = {

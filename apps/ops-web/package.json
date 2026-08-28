@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env node_modules/next/dist/bin/next dev -p 3001",
-    "build": "node --env-file-if-exists=../../.env node_modules/next/dist/bin/next build",
+    "build": "node ../../scripts/next-build.mjs",
     "start": "node --env-file-if-exists=../../.env node_modules/next/dist/bin/next start -p 3001",
     "lint": "tsc --noEmit",
     "test": "vitest run",
