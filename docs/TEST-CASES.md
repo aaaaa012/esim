@@ -19,7 +19,8 @@ plus the manual E2E scripts in §4 that must be executed against a deployed envi
 | Inventory lifecycle + quarantine + failover reserve | inventory.service.test.ts | reserve/release/quarantine/batch approval | PASS |
 | Transatel provider + operations | transatel.provider.test.ts, transatel-operations.service.test.ts, provider-failure.test.ts | preload commit point, delayed accept, outage handling | PASS |
 | Notifications (service + templates) | notification.*.test.ts | queue-fail-closed, retry, branded HTML/text, QR credential secrecy, HTML escaping, personalization | PASS |
-| Email channels (Gmail MIME + Resend contract) | email.channels.test.ts | 10 — multipart/alternative, attachment ordering, header-injection stripping, OAuth failure, reply_to lists, simulated mode | PASS |
+| Email channel (Amazon SES v2) | ses-email.channel.test.ts | 4 — simulation, UTF-8 text/HTML, attachment, reply-to, missing configuration, sanitized provider failure | PASS |
+| Private storage (Amazon S3) | s3-storage.service.test.ts | 4 — simulation, content-type-bound presign, magic-byte verification, spoof rejection | PASS |
 | Crypto (PII/QR encryption) | crypto.service.test.ts | roundtrip, per-call IV, GCM tamper detection, blind index normalization, prod fail-closed | PASS |
 | Env validation (production gate) | env-validation.test.ts | 8 — missing secrets named, sandbox Khalti refused, localhost refused, multi-replica refused, provider-specific email creds | PASS |
 | Partner channel (auth/hosted/prepaid/admin) | partner-*.test.ts | contract + idempotency + hosted checkout | PASS |
@@ -28,7 +29,8 @@ plus the manual E2E scripts in §4 that must be executed against a deployed envi
 | Customer-web UI components | error-modal.test.tsx | a11y dialog, Escape/backdrop close, inner-click ignore | PASS |
 | Ops-web UI | partner-workspace, lifecycle-actions tests | action gating | PASS |
 
-Totals: **243 API + 4 customer-web + 2 ops-web + 5 shared = 254 automated cases, all green.**
+Migration verification on 2026-08-28: **294 API + 7 customer-web automated
+cases, all green**. Run the root suite to refresh the cross-workspace aggregate.
 
 ## 2. Critical edge cases covered by automation (auditor highlights)
 
@@ -46,7 +48,8 @@ Totals: **243 API + 4 customer-web + 2 ops-web + 5 shared = 254 automated cases,
 - `main.ts` bootstrap retry loop (exercised only in real boots)
 - `qr-pdf.service.ts` PDF bytes (manually verified in E2E; password = MSISDN)
 - WhatsApp channel live call (simulated-mode logic tested via notification service)
-- Cloudinary storage adapter (vendor SDK passthrough)
+- Live S3/SES calls against the production AWS account (covered by the go-live
+  smoke tests; SDK behavior is mocked in unit tests)
 
 ## 4. Manual E2E scripts (run against the AWS deployment before opening traffic)
 

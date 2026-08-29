@@ -29,13 +29,8 @@ type DocumentAuthorization = {
   upload: {
     mode: string;
     endpoint?: string;
-    apiKey?: string;
-    publicId?: string;
-    deliveryType?: string;
-    allowedFormats?: string;
-    timestamp: number;
-    signature: string;
-    folder: string;
+    method?: "PUT";
+    headers?: Record<string, string>;
   };
 };
 type Order = {
@@ -119,23 +114,16 @@ export default function EsimDetails({ id }: { id: string }) {
         );
       const authorization = authorizationValue.data as DocumentAuthorization;
       if (
-        authorization.upload.mode !== "cloudinary-signed" ||
+        authorization.upload.mode !== "s3-presigned" ||
         !authorization.upload.endpoint
       )
         throw new Error("Private document storage is unavailable");
-      const form = new FormData();
-      form.append("file", file);
-      form.append("api_key", authorization.upload.apiKey!);
-      form.append("timestamp", String(authorization.upload.timestamp));
-      form.append("signature", authorization.upload.signature);
-      form.append("folder", authorization.upload.folder);
-      form.append("public_id", authorization.upload.publicId!);
-      form.append("type", authorization.upload.deliveryType!);
-      if (authorization.upload.allowedFormats)
-        form.append("allowed_formats", authorization.upload.allowedFormats);
-      const uploaded = await authFetch(authorization.upload.endpoint, {
-        method: "POST",
-        body: form,
+      const uploaded = await fetch(authorization.upload.endpoint, {
+        method: authorization.upload.method ?? "PUT",
+        ...(authorization.upload.headers
+          ? { headers: authorization.upload.headers }
+          : {}),
+        body: file,
       });
       if (!uploaded.ok) throw new Error("Replacement upload failed");
       const confirmation = await authFetch(

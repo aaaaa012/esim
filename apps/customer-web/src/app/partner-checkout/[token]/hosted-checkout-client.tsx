@@ -22,6 +22,7 @@ import {
 } from "@visa-compass/shared";
 import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
+import { fonepayBankIntentUrl } from "../../esim/checkout/payment-intent";
 import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -75,6 +76,7 @@ type Payment = {
   expiresAt: string;
   qrDataUrl?: string;
   qrPayload?: string;
+  websocketUrl?: string;
   banks?: {
     bankName: string;
     bankCode: string;
@@ -178,6 +180,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [provider, setProvider] = useState<PaymentProvider>(
     PaymentProvider.KHALTI,
   );
+  const [availableProviders, setAvailableProviders] = useState<PaymentProvider[]>([
+    PaymentProvider.KHALTI,
+  ]);
+  const paymentVerificationInFlight = useRef(false);
+
+  useEffect(() => {
+    void api<{ providers: PaymentProvider[] }>("/payments/providers")
+      .then((value) => {
+        if (!value.providers.length) return;
+        setAvailableProviders(value.providers);
+        if (!value.providers.includes(provider)) setProvider(value.providers[0]!);
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!verifyingDoc || verifyingDoc === "in-progress") return;
@@ -432,18 +448,17 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             upload: Record<string, unknown>;
           }>(`/partner-checkout/${token}/documents`, {
             method: "POST",
-            body: JSON.stringify({ type, fileName: file.name }),
+            body: JSON.stringify({
+              type,
+              fileName: file.name,
+              contentType: file.type || "application/pdf",
+            }),
           });
           const upload = authorization.upload as {
             mode: string;
             endpoint?: string;
-            apiKey?: string;
-            publicId?: string;
-            deliveryType?: string;
-            timestamp?: number;
-            signature?: string;
-            folder?: string;
-            allowedFormats?: string;
+            method?: "PUT";
+            headers?: Record<string, string>;
           };
           if (upload.mode === "local-simulator") {
             await api(
@@ -453,25 +468,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             continue;
           }
           if (
-            upload.mode !== "cloudinary-signed" ||
-            !upload.endpoint ||
-            !upload.timestamp ||
-            !upload.signature
+            upload.mode !== "s3-presigned" ||
+            !upload.endpoint
           )
             throw new Error("Private document storage is unavailable");
-          const form = new FormData();
-          form.append("file", file);
-          form.append("api_key", upload.apiKey!);
-          form.append("timestamp", String(upload.timestamp));
-          form.append("signature", upload.signature);
-          form.append("folder", upload.folder!);
-          form.append("public_id", upload.publicId!);
-          form.append("type", upload.deliveryType!);
-          if (upload.allowedFormats)
-            form.append("allowed_formats", upload.allowedFormats);
           const uploaded = await fetch(upload.endpoint, {
-            method: "POST",
-            body: form,
+            method: upload.method ?? "PUT",
+            ...(upload.headers ? { headers: upload.headers } : {}),
+            body: file,
           });
           if (!uploaded.ok) {
             let bodyText = "";
@@ -554,6 +558,45 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         "Your payment is still being confirmed by the gateway. Wait a moment, then check again.",
       );
     });
+  useEffect(() => {
+    if (!payment || outcome) return;
+    let stopped = false;
+    let socket: WebSocket | undefined;
+    const verifySilently = async () => {
+      if (stopped || paymentVerificationInFlight.current) return;
+      paymentVerificationInFlight.current = true;
+      try {
+        const result = await api<{ status: string }>(
+          `/partner-checkout/${token}/verify`,
+          { method: "POST", body: "{}" },
+        );
+        if (PAID_STATUSES.has(result.status))
+          setOutcome({ status: result.status, orderNumber });
+        else if (FAILED_STATUSES.has(result.status)) setPayment(null);
+      } catch {
+        // Polling and the manual action remain available for transient errors.
+      } finally {
+        paymentVerificationInFlight.current = false;
+      }
+    };
+    if (payment.websocketUrl) {
+      try {
+        socket = new WebSocket(payment.websocketUrl);
+        socket.onmessage = () => void verifySilently();
+      } catch {
+        // The provider status endpoint remains authoritative.
+      }
+    }
+    const interval = window.setInterval(() => {
+      if (new Date(payment.expiresAt).getTime() > Date.now())
+        void verifySilently();
+    }, 5_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+      socket?.close();
+    };
+  }, [payment, outcome, orderNumber, token]);
   const simulatePayment = () =>
     run(async () => {
       const result = await api<{ status: string }>(
@@ -727,7 +770,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     <b>Khalti</b>
                     <small>Digital wallet</small>
                   </button>
-                  <button
+                  {availableProviders.includes(PaymentProvider.FONEPAY) ? <button
                     className={
                       provider === PaymentProvider.FONEPAY ? "selected" : ""
                     }
@@ -735,7 +778,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   >
                     <b>Fonepay</b>
                     <small>Mobile banking &amp; QR</small>
-                  </button>
+                  </button> : null}
                 </div>
                 {payment ? (
                   SIMULATOR ? (
@@ -766,16 +809,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                             <button
                               key={bank.bankCode}
                               onClick={() => {
-                                if (payment.qrPayload)
-                                  window.location.assign(
-                                    `${bank.intentScheme}${
-                                      bank.intentScheme.includes("?")
-                                        ? "&"
-                                        : "?"
-                                    }qrPayload=${encodeURIComponent(
-                                      payment.qrPayload,
-                                    )}`,
-                                  );
+                                if (!payment.qrPayload) return;
+                                const target = fonepayBankIntentUrl(
+                                  bank.intentScheme,
+                                  payment.qrPayload,
+                                );
+                                if (target) window.location.assign(target);
                               }}
                             >
                               <b>{bank.bankName}</b>

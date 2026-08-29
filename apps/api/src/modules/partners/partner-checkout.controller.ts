@@ -7,6 +7,7 @@ import { PartnerService } from "./partner.service.js";
 const hostedDocumentSchema = z.object({
   type: z.enum(DocumentType),
   fileName: z.string().trim().min(1).max(180),
+  contentType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
 });
 
 const hostedPaymentSchema = z.object({
@@ -45,6 +46,7 @@ export class PartnerCheckoutController {
     return this.partners.addHostedDocument(token, {
       type: input.type as DocumentType,
       fileName: input.fileName,
+      contentType: input.contentType,
     });
   }
 

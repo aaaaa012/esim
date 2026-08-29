@@ -3,7 +3,7 @@ import { ConflictException } from "@nestjs/common";
 import { OrderStatus, PaymentStatus } from "@visa-compass/shared";
 import { OrdersService, type DemoOrder } from "./orders.service.js";
 import type { ConnectivityService } from "../integration/connectivity.service.js";
-import type { CloudinaryStorageService } from "../../infrastructure/cloudinary-storage.service.js";
+import type { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import type { OrdersPersistenceService } from "./orders-persistence.service.js";
 import type { InventoryService } from "../inventory/inventory.service.js";
 import type { QueueService } from "../../jobs/queue.service.js";
@@ -65,7 +65,7 @@ function ordersService(
   } as unknown as OrdersPersistenceService;
   return new OrdersService(
     connectivity as unknown as ConnectivityService,
-    {} as unknown as CloudinaryStorageService,
+    {} as unknown as S3StorageService,
     persistence,
     inventory as unknown as InventoryService,
     {} as unknown as QueueService,

@@ -8,6 +8,7 @@ function service(
     verifyDocument: vi.fn().mockResolvedValue({ simulated: true }),
   },
   applicationOrders: Record<string, unknown> = {},
+  payments?: Record<string, unknown>,
 ) {
   return new PartnerService(
     prisma as never,
@@ -18,6 +19,7 @@ function service(
     {} as never,
     {} as never,
     applicationOrders as never,
+    payments as never,
   );
 }
 
@@ -435,6 +437,35 @@ describe("partner hosted checkout", () => {
     ).rejects.toThrow("No eSIM inventory is currently available");
     expect(assertInventory).toHaveBeenCalledOnce();
     expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("blocks payment initiation until hosted review and consent are complete", async () => {
+    const initiate = vi.fn();
+    const instance = service(
+      {
+        partnerHostedCheckoutSession: {
+          findUnique: vi.fn().mockResolvedValue(session),
+        },
+        order: {
+          findUnique: vi.fn().mockResolvedValue({
+            status: "DRAFT",
+            channel: "PARTNER_HOSTED",
+            partnerSettlementMethod: "HOSTED_PAYMENT",
+          }),
+        },
+      },
+      undefined,
+      {},
+      { initiate },
+    );
+
+    await expect(
+      instance.hostedCheckoutInitiate(
+        "abcdefghijklmnopqrstuvwxyz012345",
+        "FONEPAY" as never,
+      ),
+    ).rejects.toMatchObject({ code: "HOSTED_CHECKOUT_NOT_COMPLETED" });
+    expect(initiate).not.toHaveBeenCalled();
   });
 });
 

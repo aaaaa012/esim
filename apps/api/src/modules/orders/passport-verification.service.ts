@@ -6,7 +6,7 @@ import {
 } from "@nestjs/common";
 import { createWorker, type Worker } from "tesseract.js";
 import { DocumentType, type TravelerInput } from "@visa-compass/shared";
-import { CloudinaryStorageService } from "../../infrastructure/cloudinary-storage.service.js";
+import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import { confusableNormalize, editDistance, parseMrz } from "./mrz-parser.js";
 import type { DemoOrder } from "./orders.service.js";
 
@@ -197,7 +197,7 @@ export const imageDimensions = (
  * Documents are auto-approved after payment today, so a mismatch between the
  * traveller form and the uploaded passport would otherwise never be caught.
  * This service downloads the uploaded passport (rasterizing PDFs to their
- * first page via Cloudinary), runs Tesseract OCR, and compares the extracted
+ * first page from S3), runs Tesseract OCR, and compares the extracted
  * text against the traveller details. The passport number is the primary
  * signal; the order only reaches "VERIFIED" when at least one more field
  * (name, date of birth or expiry) also matches.
@@ -222,7 +222,7 @@ export class PassportVerificationService implements OnModuleDestroy {
   private static readonly MRZ_ALPHABET =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
 
-  constructor(private readonly storage: CloudinaryStorageService) {}
+  constructor(private readonly storage: S3StorageService) {}
 
   async verify(order: DemoOrder): Promise<PassportVerificationResult> {
     if (order.purchaseType === "TOPUP") {

@@ -63,7 +63,7 @@ The operator flow is **create partner → top up balance → issue credential �
   with `amountPaisa`, `balanceAfterPaisa`, unique `reference` (dedupe).
 - `PartnerCustomer` — maps a partner's `externalCustomerId` to our internal `Customer`.
 - `PartnerDocumentUploadIntent` — a signed upload promise that links `partnerId`+`externalOrderId`
-  to a Cloudinary `privateAssetId`, with `expiresAt` and a `consumedAt` (one-time use).
+  to a Amazon S3 `privateAssetId`, with `expiresAt` and a `consumedAt` (one-time use).
 - `PartnerEvent` / `PartnerWebhookDelivery` / `PartnerWebhookEndpoint` — the durable webhook outbox.
 - `PartnerIdempotencyRecord` — dedupe for mutations (`partnerId+method+route+key` unique).
 - `PartnerRateBucket` — per-minute per-partner request counting for rate limits.
@@ -114,14 +114,14 @@ order creation so later catalogue edits can't alter an existing order or its led
 `POST /partners/document-upload-sessions` (scope `documents:write`, requires `Idempotency-Key`).
 Body lists `documents[{type,fileName,contentType,sizeBytes}]` for a given `externalOrderId`.
 `createUploadSessions` validates that document types are non-duplicate and safe, then creates
-`PartnerDocumentUploadIntent` rows and returns one **presigned Cloudinary upload** per document
-(`endpoint`, `publicId`, `apiKey`, `signature`, `timestamp`). The intent records the declared size
-and format for later verification.
+`PartnerDocumentUploadIntent` rows and returns one **presigned Amazon S3 upload** per document
+(`mode`, `endpoint`, `method: PUT`, required `headers`, and expiry). The intent records the declared
+size and format for later verification.
 
 ### Step 2 — Partner uploads bytes
 
-The partner POSTs the raw bytes directly to Cloudinary using the presigned signature. The bytes are
-not proxied through us, but the intent "remembers" the expected size/content-type.
+The partner PUTs the raw bytes directly to Amazon S3 at `endpoint` using the exact returned headers.
+The bytes are not proxied through us, but the intent remembers the expected size/content type.
 
 ### Step 3 — Resolve the order (`createCompleteOrder`)
 

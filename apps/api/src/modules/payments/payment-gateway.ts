@@ -26,6 +26,7 @@ export type PaymentContext = {
 export interface PaymentGateway {
   readonly provider: string;
   initiate(input: {
+    attemptId: string;
     orderId: string;
     orderNumber: string;
     amountNpr: number;

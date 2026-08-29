@@ -63,9 +63,9 @@ Key services:
 - `PaymentsService` — payment orchestration
 - `AdminService` — plan/CSV, integrations, users, invitations
 - `ConnectivityService` / `TransatelProvider` — eSIM provisioning
-- `NotificationService` + provider-neutral `EmailChannel` (`ResendEmailChannel`) + `WhatsappChannel` + `QrPdfService`
+- `NotificationService` + provider-neutral `EmailChannel` (`SesEmailChannel`) + `WhatsappChannel` + `QrPdfService`
 - `ClerkSyncService` — identity synchronization
-- `CloudinaryStorageService` — private document storage
+- `Amazon S3StorageService` — private document storage
 - `QueueService` + processors + `ReconciliationService` — background jobs
 - `PrismaService`, `CryptoService` — infrastructure
 
@@ -93,13 +93,13 @@ reconciliation `reconciliation.service.ts:70`).
 With default `.env.example` values, the system runs with:
 
 - Payment simulator gateway (no Khalti credentials)
-- Local document-storage simulator (no Cloudinary)
-- Simulated notifications (no Resend/WhatsApp)
+- Local document-storage simulator (no Amazon S3)
+- Simulated notifications (no Amazon SES/WhatsApp)
 - In-process queue (no Redis)
 
 Source: `README.md` "Integration modes"; each adapter falls back to a
 simulated branch when credentials are absent (`khalti.gateway.ts:9`,
-`cloudinary-storage.service.ts:17-19`, `resend-email.channel.ts`, `whatsapp.channel.ts:6`).
+`s3-storage.service.ts:17-19`, `ses-email.channel.ts`, `whatsapp.channel.ts:6`).
 
 ### Transatel connectivity is the single production connectivity provider
 

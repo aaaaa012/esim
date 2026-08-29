@@ -81,7 +81,7 @@ Anyone can buy without an account. This is a full, real purchase.
      passport expiry, nationality, country of residence, city, email, mobile/WhatsApp, and an
      optional employer/business field.
    - **Documents** — **Passport** and **Travel ticket** are required; **Visa** is optional.
-     PDF/JPG/PNG, max 10 MB, uploaded to the private document store (Cloudinary) using a
+     PDF/JPG/PNG, max 10 MB, uploaded to the private document store (Amazon S3) using a
      short-lived signed upload, or to a local simulator when storage isn't configured. The
      server verifies the upload landed.
    - **Payment** — Khalti.
@@ -234,7 +234,7 @@ Sidebar (Super Admin only): the **Administration** item appears.
   upload a CSV/XLSX to import plans (they land as `DRAFT`), **Approve** a draft (becomes
   `ACTIVE` and visible to customers), **Reject** (archived), edit the selling price, toggle
   popular, and change status.
-- **Integrations** — live health of email, Khalti, Transatel, Cloudinary, WhatsApp; "Test"
+- **Integrations** — live health of email, Khalti, Transatel, Amazon S3, WhatsApp; "Test"
   buttons; Transatel actions (**Sync catalog**, **Register webhook**, **Eligibility check** for
   a subscriber number); integration call log. Credentials are never shown — the UI explains how
   to set them in the environment.
@@ -351,7 +351,7 @@ These are **current behaviours** you should consciously accept or change:
 7. **Guest purchases leave no account.** If a guest buys without signing up, their completed
    order is found later only via mobile number (for top-ups) or by the token in that browser.
 
-8. **Notifications need real providers in production** (Resend for email, optional
+8. **Notifications need real providers in production** (Amazon SES for email, optional
    WhatsApp). Without them, email delivery is simulated and the customer will **not** receive
    the QR attachment.
 

@@ -3,7 +3,7 @@ import { DocumentType, type Prisma } from "@prisma/client";
 import type { Job } from "bullmq";
 import { randomUUID } from "node:crypto";
 import { CryptoService } from "../infrastructure/crypto.service.js";
-import { CloudinaryStorageService } from "../infrastructure/cloudinary-storage.service.js";
+import { S3StorageService } from "../infrastructure/s3-storage.service.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 import { PassportVerificationService } from "../modules/orders/passport-verification.service.js";
 import { QueueService } from "./queue.service.js";
@@ -32,7 +32,7 @@ export class PassportOcrProcessor implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
     private readonly passportVerifier: PassportVerificationService,
-    private readonly storage: CloudinaryStorageService,
+    private readonly storage: S3StorageService,
     private readonly resilience: ProductionResilienceService,
   ) {}
 

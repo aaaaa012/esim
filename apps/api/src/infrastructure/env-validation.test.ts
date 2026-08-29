@@ -32,13 +32,11 @@ const validProductionEnv = {
   TRANSATEL_WEBHOOK_TARGET_URL: 'https://api.visacompass.example/api/v1/webhooks/transatel',
   TRANSATEL_WEBHOOK_SECRET: 'transatel-webhook-secret-16+',
   NOTIFICATION_MODE: 'live',
-  EMAIL_PROVIDER: 'resend',
-  RESEND_API_KEY: 're_live_key',
+  EMAIL_PROVIDER: 'ses',
   EMAIL_FROM_ADDRESS: 'noreply@visacompass.example',
   EMAIL_FROM_NAME: 'Visa Compass',
-  CLOUDINARY_CLOUD_NAME: 'cloud',
-  CLOUDINARY_API_KEY: 'key',
-  CLOUDINARY_API_SECRET: 'secret',
+  AWS_REGION: 'ap-south-1',
+  AWS_S3_BUCKET: 'visa-compass-private-documents',
   TRUST_PROXY: '1',
   ORDER_WORKFLOW_MODE: 'database-first',
 };
@@ -77,16 +75,36 @@ describe('validateEnv production gate', () => {
     expect(() => validateEnv(memory)).toThrow();
   });
 
-  it('enforces provider-specific email credentials', () => {
-    const noResendKey = { ...validProductionEnv } as Record<string, unknown>;
-    delete noResendKey.RESEND_API_KEY;
-    expect(() => validateEnv(noResendKey)).toThrow(/RESEND_API_KEY/);
+  it('enforces the SES provider and AWS region', () => {
+    const noRegion = { ...validProductionEnv } as Record<string, unknown>;
+    delete noRegion.AWS_REGION;
+    expect(() => validateEnv(noRegion)).toThrow(/AWS_REGION/);
     const gmail = { ...validProductionEnv, EMAIL_PROVIDER: 'gmail' } as Record<string, unknown>;
-    expect(() => validateEnv(gmail)).toThrow(/resend/);
+    expect(() => validateEnv(gmail)).toThrow(/ses/);
   });
 
   it('keeps non-production boot ergonomic while still validating declared values', () => {
     expect(() => validateEnv({ NODE_ENV: 'development' })).not.toThrow();
     expect(() => validateEnv({ NODE_ENV: 'development', PERSISTENCE_MODE: 'prisma' })).toThrow(/DATABASE_URL/);
+  });
+
+  it('requires every Fonepay credential when Dynamic QR is enabled', () => {
+    expect(() =>
+      validateEnv({ NODE_ENV: 'development', FONEPAY_ENABLED: 'true' }),
+    ).toThrow(/FONEPAY_BASE_URL.*FONEPAY_USERNAME.*FONEPAY_PASSWORD/);
+  });
+
+  it('accepts a complete enabled Fonepay configuration', () => {
+    expect(() =>
+      validateEnv({
+        NODE_ENV: 'development',
+        FONEPAY_ENABLED: 'true',
+        FONEPAY_BASE_URL: 'https://fonepay.example',
+        FONEPAY_USERNAME: 'merchant',
+        FONEPAY_PASSWORD: 'secret',
+        FONEPAY_TERMINAL_ID: 'VC-TERMINAL',
+        FONEPAY_PRIVATE_KEY_BASE64: 'private-key',
+      }),
+    ).not.toThrow();
   });
 });

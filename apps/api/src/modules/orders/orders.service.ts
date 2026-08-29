@@ -25,7 +25,7 @@ import {
 import { assertTransition } from "./order-machine.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import type { ProviderWebhookEvent } from "../integration/connectivity-provider.js";
-import { CloudinaryStorageService } from "../../infrastructure/cloudinary-storage.service.js";
+import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import { ApiException } from "../../common/api-error.js";
 import { OrdersPersistenceService } from "./orders-persistence.service.js";
 import { InventoryService } from "../inventory/inventory.service.js";
@@ -136,7 +136,7 @@ export class OrdersService implements OnModuleInit {
   })();
   constructor(
     private readonly connectivity: ConnectivityService,
-    private readonly storage: CloudinaryStorageService,
+    private readonly storage: S3StorageService,
     private readonly persistence: OrdersPersistenceService,
     private readonly inventory: InventoryService,
     private readonly queues: QueueService,
@@ -591,7 +591,11 @@ export class OrdersService implements OnModuleInit {
       !replacement
     )
       throw new BadRequestException("Documents cannot be changed now");
-    const signed = this.storage.createDocumentUpload(id, input.type);
+    const signed = await this.storage.createDocumentUpload(
+      id,
+      input.type,
+      input.contentType ?? "application/pdf",
+    );
     const document = {
       id: randomUUID(),
       type: input.type,
@@ -694,7 +698,7 @@ export class OrdersService implements OnModuleInit {
     const document = order.documents.find((item) => item.id === documentId);
     if (!document) throw new NotFoundException("Document not found");
     return {
-      url: this.storage.signedReadUrl(document.privateAssetId),
+      url: await this.storage.signedReadUrl(document.privateAssetId),
       fileName: document.fileName,
       contentType: document.fileName.toLowerCase().endsWith(".pdf")
         ? "application/pdf"
@@ -1759,7 +1763,6 @@ export class OrdersService implements OnModuleInit {
         "Provider accepted the provisioning request",
       );
       await this.safeNotify(order, "QR_READY");
-      await this.enqueueHostedSettlement(order.id, "CAPTURE");
       return this.redact(order);
     } catch (error) {
       const errorCode =
@@ -1905,7 +1908,6 @@ export class OrdersService implements OnModuleInit {
         await this.inventory.release(order.id);
         await this.persistence.save(order);
         await this.alertProvisioningFailure(order);
-        await this.enqueueHostedSettlement(order.id, "RELEASE");
         await this.resilience?.attention({
           dedupeKey: `provisioning-failure:${order.id}`,
           category: "PROVISIONING_ATTENTION",
@@ -1999,7 +2001,6 @@ export class OrdersService implements OnModuleInit {
       "Provider QR was recovered successfully",
     );
     await this.safeNotify(order, "QR_READY");
-    await this.enqueueHostedSettlement(order.id, "CAPTURE");
     return this.redact(order);
   }
   async markProvisioningManualReview(id: string, reason: string) {
@@ -2017,7 +2018,6 @@ export class OrdersService implements OnModuleInit {
     order.operationalDisposition = "RECONCILE_PROVIDER";
     await this.persistence.save(order);
     await this.alertProvisioningFailure(order);
-    await this.enqueueHostedSettlement(order.id, "RELEASE");
   }
   async applyProviderEvent(event: ProviderWebhookEvent) {
     if (!event.orderId)
@@ -2694,7 +2694,6 @@ export class OrdersService implements OnModuleInit {
       "Provider activation was confirmed",
     );
     if (!wasReady) await this.safeNotify(order, "QR_READY");
-    await this.enqueueHostedSettlement(order.id, "CAPTURE");
   }
   private async activateOrder(
     order: DemoOrder,
@@ -2796,31 +2795,6 @@ export class OrdersService implements OnModuleInit {
       }
     }
     throw failure;
-  }
-  /**
-   * Prompts the hosted-settlement worker to convert a hosted checkout deposit
-   * into a capture (delivery success) or a release (delivery failure). The
-   * reconciliation partner-hosted-deposits sweep is the authoritative safety
-   * net, so a dropped enqueue must never fail an order transition.
-   */
-  private async enqueueHostedSettlement(
-    orderId: string,
-    outcome: "CAPTURE" | "RELEASE",
-  ) {
-    try {
-      await this.queues.add(
-        QUEUES.partnerHosted,
-        "settle-reservation",
-        { orderId, outcome },
-        `hosted-settlement-${orderId}`,
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Hosted settlement enqueue failed for ${orderId}: ${
-          error instanceof Error ? error.message : "unknown"
-        }`,
-      );
-    }
   }
   private transition(order: DemoOrder, to: OrderStatus, reason?: string) {
     assertTransition(order.status, to);

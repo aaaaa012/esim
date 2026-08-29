@@ -93,14 +93,17 @@ local guest-order continuity.
 
 ## Private document storage
 
-| Variable                | Used by                                                            |
-| ----------------------- | ------------------------------------------------------------------ |
-| `CLOUDINARY_CLOUD_NAME` | Signed upload + read (`cloudinary-storage.service.ts:17,26-27,49`) |
-| `CLOUDINARY_API_KEY`    | Signed upload (`cloudinary-storage.service.ts:17,26-27`)           |
-| `CLOUDINARY_API_SECRET` | Signed upload signature (`cloudinary-storage.service.ts:17,26-27`) |
+| Variable                  | Used by                                                        |
+| ------------------------- | -------------------------------------------------------------- |
+| `AWS_REGION`              | S3 client and default SES region                               |
+| `AWS_S3_BUCKET`           | Private object bucket for signed upload/read/delete operations |
+| `AWS_S3_ENDPOINT`         | Optional local S3-compatible endpoint                          |
+| `AWS_S3_FORCE_PATH_STYLE` | Optional local endpoint compatibility                          |
 
-When any of these three is missing, document upload returns
-`mode: 'local-simulator'` (`cloudinary-storage.service.ts:17-19`).
+Outside production, missing `AWS_REGION` or `AWS_S3_BUCKET` makes document
+upload return `mode: 'local-simulator'`. Production fails validation. AWS
+credentials come from the SDK default credential chain; prefer a workload IAM
+role over long-lived environment keys.
 
 ### Passport OCR verification (Tesseract)
 
@@ -114,16 +117,17 @@ first use and cached unless `TESSERACT_LANG_PATH` points at pre-bundled data.
 | `TESSERACT_LANG_PATH`  | Folder containing pre-downloaded `.traineddata` (`passport-verification.service.ts:135`) |
 | `TESSERACT_CACHE_PATH` | Cache dir for downloaded language data (`passport-verification.service.ts:135`)          |
 
-When Cloudinary is not configured the check is skipped (`SKIPPED`) rather than
+When Amazon S3 is not configured the check is skipped (`SKIPPED`) rather than
 blocking payment, matching the local-simulator flow.
 
 ## Notifications
 
 | Variable                                                                | Used by                                                                                                                     |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `NOTIFICATION_MODE`                                                     | `live` enables real delivery; `simulator` never calls Resend or WhatsApp                                                    |
-| `EMAIL_PROVIDER`                                                        | Must be `resend`; the provider-neutral channel is ready for a future SES adapter                                            |
-| `RESEND_API_KEY`                                                        | Sending-only Resend API key                                                                                                 |
+| `NOTIFICATION_MODE`                                                     | `live` enables real delivery; `simulator` never calls Amazon SES or WhatsApp                                                    |
+| `EMAIL_PROVIDER`                                                        | Must be `ses` for live email delivery                                                                                         |
+| `AWS_SES_REGION`                                                        | SES region; falls back to `AWS_REGION`                                                                                        |
+| `AWS_SES_CONFIGURATION_SET`                                             | Optional SES configuration set for event publishing                                                                          |
 | `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`               | Verified-domain sender, display name, and optional reply-to address                                                         |
 | `OPS_ALERT_EMAIL`, `ADMIN_ALERT_EMAIL`                                  | Monitored distribution addresses for direct infrastructure and operational alerts                                           |
 | `WHATSAPP_API_URL`                                                      | WhatsApp Graph URL, default `https://graph.facebook.com/v21.0` (`whatsapp.channel.ts:7`)                                    |

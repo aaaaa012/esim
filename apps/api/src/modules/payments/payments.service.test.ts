@@ -232,6 +232,47 @@ describe("PaymentsService inventory admission", () => {
     expect(initiate).toHaveBeenCalledOnce();
     expect(beginPayment).toHaveBeenCalledTimes(2);
   });
+
+  it("blocks provider switching while a persisted session is active", async () => {
+    const order = orderFor({ purchaseType: "TOPUP", payment: undefined });
+    const record = {
+      id: "init-1",
+      orderId: order.id,
+      provider: PaymentProvider.FONEPAY,
+      amountNpr: order.totalAmountNpr,
+      claimToken: "claim-1",
+      leaseExpiresAt: new Date(),
+      status: "COMPLETED",
+      result: {
+        reference: "VCREF",
+        redirectUrl: "",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        qrPayload: "payload",
+      },
+    };
+    const service = new PaymentsService(
+      {
+        refreshOne: vi.fn(),
+        get: vi.fn().mockReturnValue(order),
+        assertInventoryAvailableForNewOrder: vi.fn(),
+      } as never,
+      {} as never,
+      {} as never,
+      undefined,
+      undefined,
+      {
+        enabled: true,
+        paymentInitiation: {
+          create: vi.fn().mockRejectedValue({ code: "P2002" }),
+          findUnique: vi.fn().mockResolvedValue(record),
+        },
+      } as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+    ).rejects.toMatchObject({ code: "PAYMENT_SESSION_ACTIVE" });
+  });
 });
 
 describe("PaymentsService payment verification mapping", () => {

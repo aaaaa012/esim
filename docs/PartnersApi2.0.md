@@ -61,7 +61,7 @@ The primary 2.0 integration flow allows partners to create, verify, and provisio
 ```
 [Partner App] --- (1) GET /plans ---> [Visa Compass API] (Get planId & required docs)
 [Partner App] --- (2) POST /document-upload-sessions ---> [Visa Compass API] (Get signed upload URLs)
-[Partner App] --- (3) Upload bytes ---> [Cloudinary Storage]
+[Partner App] --- (3) Upload bytes ---> [Amazon S3 Storage]
 [Partner App] --- (4) POST /orders ---> [Visa Compass API] (Auto-verifies, debits balance, provisions eSIM)
 ```
 
@@ -130,7 +130,7 @@ Retrieves active eSIM destination plans.
 
 #### `POST /api/v1/partners/document-upload-sessions`
 
-Requests presigned Cloudinary upload signatures for traveler documents.
+Requests presigned Amazon S3 upload signatures for traveler documents.
 
 - **Scope:** `documents:write`
 - **Headers:** `Idempotency-Key: <unique-key>`
@@ -164,11 +164,11 @@ Requests presigned Cloudinary upload signatures for traveler documents.
           "uploadId": "4c45d42e-a43d-4c96-93ef-6ae961182987",
           "type": "PASSPORT",
           "upload": {
-            "endpoint": "https://api.cloudinary.com/v1_1/cfci5l6h/auto/upload",
-            "publicId": "passport-doc_13b0e978-e961-4fdd-b3bd-fee6c402a3b5",
-            "apiKey": "249735284615998",
-            "signature": "08939875da5b8d7786f58129958b47742e712599",
-            "timestamp": 1786226794
+            "mode": "s3-presigned",
+            "endpoint": "https://private-documents.s3.ap-south-1.amazonaws.com/visa-compass/private/partner-uploads/...?X-Amz-...",
+            "method": "PUT",
+            "headers": { "content-type": "application/pdf" },
+            "expiresInSeconds": 900
           }
         }
       ]
@@ -406,7 +406,7 @@ with the partner's name/logo:
 | ------ | ---------------------------------------- | ---------------------------------------------------- |
 | `GET`  | `/:token`                                | Loads plan, amount, required docs + partner branding |
 | `POST` | `/:token/traveler`                       | Saves traveller details (`travelerSchema`)           |
-| `POST` | `/:token/documents`                      | Requests a private Cloudinary upload for a document  |
+| `POST` | `/:token/documents`                      | Requests a private Amazon S3 upload for a document  |
 | `POST` | `/:token/documents/:documentId/confirm`  | Confirms the document was uploaded/verified          |
 | `POST` | `/:token/verify-passport`                | Runs the server-side passport OCR check              |
 | `POST` | `/:token/complete`                       | Completes the order (requires verified passport)     |

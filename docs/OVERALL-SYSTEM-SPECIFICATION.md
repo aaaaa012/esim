@@ -24,8 +24,8 @@ flowchart LR
   API --> K[Khalti payment]
   API --> T[Transatel eSIM]
   API --> CL[Clerk identity]
-  API --> N[Resend / WhatsApp]
-  API --> S[Cloudinary private documents]
+  API --> N[Amazon SES / WhatsApp]
+  API --> S[Amazon S3 private documents]
 ```
 
 The API is the central decision point. It validates requests, applies business rules, controls access, records changes and connects the web applications to the external providers. PostgreSQL is the durable business record when `PERSISTENCE_MODE=prisma`. Redis/BullMQ runs work that should not keep a customer waiting, such as provisioning, notifications and callback processing.
@@ -42,8 +42,8 @@ The API is the central decision point. It validates requests, applies business r
 | Khalti                 | Customer payment gateway.                            | Starts and verifies direct customer payments.                                                         | Customer checkout.                                                   |
 | Transatel              | Connectivity/eSIM provider.                          | Supplies catalogue, provisioning, lifecycle and usage information.                                    | eSIM fulfilment.                                                     |
 | Clerk                  | Identity provider.                                   | Handles customer/staff sign-in and identity synchronisation. Database roles still decide permissions. | Sign-in and staff access.                                            |
-| Cloudinary             | Private document storage.                            | Supports signed uploads and controlled document reads.                                                | Checkout and document review.                                        |
-| Resend / WhatsApp      | Notification channels.                               | Delivers order updates. QR-ready email attaches a PNG QR image.                                       | Customers and support.                                               |
+| Amazon S3             | Private document storage.                            | Supports signed uploads and controlled document reads.                                                | Checkout and document review.                                        |
+| Amazon SES / WhatsApp      | Notification channels.                               | Delivers order updates. QR-ready email attaches a PNG QR image.                                       | Customers and support.                                               |
 | Redis / BullMQ         | Background-job and shared rate-limit infrastructure. | Makes delayed work reliable across instances.                                                         | Provisioning, callbacks, notifications, reconciliation and webhooks. |
 
 ## 3. Users and roles
@@ -194,7 +194,7 @@ BullMQ queues are `provisioning`, `provider-callbacks`, `payments`, `notificatio
 
 - Helmet, configured CORS, body-size limits and `no-store, private` headers protect HTTP traffic and sensitive responses.
 - AES-256-GCM encrypts sensitive traveller and QR data. A separate HMAC key supports blind indexes. Production startup requires the encryption configuration.
-- Cloudinary document uploads/reads are private and signed. The server verifies file type and size.
+- Amazon S3 document uploads/reads are private and signed. The server verifies file type and size.
 - Rate limits apply per IP/route. With Redis, the limit is shared. Webhooks are exempt because they are signature verified.
 - `TRUST_PROXY` must match the real proxy arrangement. A wrong setting can make client-IP rate limits unreliable.
 - API responses hide internal provider detail. Logs retain safe diagnostic detail with a correlation ID.
@@ -207,7 +207,7 @@ BullMQ queues are `provisioning`, `provider-callbacks`, `payments`, `notificatio
 
 ## 13. Environments and configuration
 
-Local development can use simulator modes. Production needs `NODE_ENV=production`, PostgreSQL, Redis, encryption/hashing keys, Clerk production keys/webhook secret, Khalti keys/webhook secret, Transatel OAuth/callback secret, Cloudinary and live notification credentials. Main URLs are `API_PUBLIC_URL`, `CUSTOMER_WEB_URL`, `OPS_WEB_URL` and `NEXT_PUBLIC_API_URL`.
+Local development can use simulator modes. Production needs `NODE_ENV=production`, PostgreSQL, Redis, encryption/hashing keys, Clerk production keys/webhook secret, Khalti keys/webhook secret, Transatel OAuth/callback secret, Amazon S3 and live notification credentials. Main URLs are `API_PUBLIC_URL`, `CUSTOMER_WEB_URL`, `OPS_WEB_URL` and `NEXT_PUBLIC_API_URL`.
 
 Production requires `ORDER_WORKFLOW_MODE=database-first`. Lifecycle mutations refresh canonical PostgreSQL state and use optimistic versions; Redis is limited to transport, coordination, and bounded leases. Run the API with `PROCESS_ROLE=api`, the platform-neutral workflow worker with `pnpm --filter @visa-compass/api start:workflow-worker`, and the one-concurrency OCR worker with `pnpm --filter @visa-compass/api start:ocr-worker`. UAT/production domain names, provider certification status, and deployment platform remain environment-specific.
 

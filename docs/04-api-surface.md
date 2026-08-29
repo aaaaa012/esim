@@ -143,7 +143,7 @@ From `apps/api/src/modules/admin/admin.controller.ts:22-99`.
 | GET    | `/admin/plans`                                 | Plans with country, prices, status                                    |
 | POST   | `/admin/plans/import-csv`                      | Body `{ csv }` bulk upsert (≤2000 rows)                               |
 | PATCH  | `/admin/plans/:id`                             | Body `{ sellingPriceNpr?, popular?, status? }`                        |
-| GET    | `/admin/integrations`                          | Integration statuses (email, khalti, transatel, cloudinary, whatsapp) |
+| GET    | `/admin/integrations`                          | Integration statuses (email, khalti, transatel, S3, whatsapp)        |
 | POST   | `/admin/integrations/:id/test`                 | Test integration configuration                                        |
 | POST   | `/admin/integrations/transatel/sync-catalog`   | Sync Transatel catalog                                                |
 | POST   | `/admin/integrations/transatel/ensure-webhook` | Register/update Transatel webhook                                     |
@@ -153,7 +153,7 @@ From `apps/api/src/modules/admin/admin.controller.ts:22-99`.
 | PATCH  | `/admin/users/:id/status`                      | Body `{ status }`                                                     |
 | GET    | `/admin/staff-invitations`                     | Invitation list                                                       |
 | POST   | `/admin/staff-invitations`                     | Body `{ email, accountType }`                                         |
-| POST   | `/admin/staff-invitations/:id/resend`          | Resend invitation                                                     |
+| POST   | `/admin/staff-invitations/:id/resend`          | Amazon SES invitation                                                     |
 | DELETE | `/admin/staff-invitations/:id`                 | Revoke invitation                                                     |
 
 ## Partners (partner API key)

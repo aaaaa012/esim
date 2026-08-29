@@ -24,7 +24,7 @@ FROM CODE` rather than guessed.
 | [11-notifications.md](./11-notifications.md)                                                 | Notification templates, channels, QR delivery                                       |
 | [12-background-jobs.md](./12-background-jobs.md)                                             | BullMQ queues, workers, processors, reconciliation                                  |
 | [13-data-persistence.md](./13-data-persistence.md)                                           | Prisma schema, persistence modes, orders persistence, crypto                        |
-| [14-document-storage.md](./14-document-storage.md)                                           | Private document storage: Cloudinary signed uploads and the local simulator         |
+| [14-document-storage.md](./14-document-storage.md)                                           | Private document storage: Amazon S3 signed uploads and the local simulator         |
 | [15-webhooks-integration-events.md](./15-webhooks-integration-events.md)                     | Inbound webhooks, signature verification, events and integration logs               |
 | [16-shared-contracts.md](./16-shared-contracts.md)                                           | The `@visa-compass/shared` package: contracts, schemas, error codes                 |
 | [17-customer-web.md](./17-customer-web.md)                                                   | Customer portal pages and their API calls                                           |
@@ -32,6 +32,7 @@ FROM CODE` rather than guessed.
 | [19-observability-hardening.md](./19-observability-hardening.md)                             | Health, rate limiting, logging, correlation, exception handling, audit              |
 | [20-documentation-gaps.md](./20-documentation-gaps.md)                                       | Things that could not be determined from the code                                   |
 | [PRODUCTION-SCENARIO-ACCEPTANCE.md](./PRODUCTION-SCENARIO-ACCEPTANCE.md)                     | Production failure scenarios, implemented controls, and launch evidence             |
+| [AWS-S3-SES-MIGRATION.md](./AWS-S3-SES-MIGRATION.md)                                       | AWS bucket, IAM, SES, object-copy, smoke, and rollback cutover runbook               |
 
 ## Pre-existing documentation
 

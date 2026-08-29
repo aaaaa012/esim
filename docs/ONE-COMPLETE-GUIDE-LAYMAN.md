@@ -7,8 +7,8 @@ point at the exact source so you can verify any claim.
 
 > Two portals (customer + operations) talk to one backend (the API) which talks to
 > five outside services: **Clerk** (who you are), **Khalti** (payments), **Transatel**
-> (the actual mobile-network eSIMs), **Cloudinary** (secure document storage) and
-> **Resend / WhatsApp** (messages). The product sells international travel eSIM data
+> (the actual mobile-network eSIMs), **Amazon S3** (secure document storage) and
+> **Amazon SES / WhatsApp** (messages). The product sells international travel eSIM data
 > plans in Nepali Rupees (NPR).
 
 ---
@@ -25,8 +25,8 @@ point at the exact source so you can verify any claim.
 | **Clerk**                | External                   | Login/registration. Issues the "I am this person" tokens (JWTs).                                                        |
 | **Khalti**               | External                   | Takes customer money.                                                                                                   |
 | **Transatel**            | External                   | Actually provisions the eSIM on the mobile network and reports usage.                                                   |
-| **Cloudinary**           | External                   | Holds uploaded passport/ticket scans privately.                                                                         |
-| **Resend / WhatsApp**    | External                   | Deliver eSIM QR images and status messages.                                                                             |
+| **Amazon S3**           | External                   | Holds uploaded passport/ticket scans privately.                                                                         |
+| **Amazon SES / WhatsApp**    | External                   | Deliver eSIM QR images and status messages.                                                                             |
 
 ---
 
@@ -92,13 +92,13 @@ does the calling; the server checks who you are on every request.
    7–20 digits, passport 5–30 chars. Anything weird → clear validation error, nothing
    is stored.
 
-5. **Upload documents.** `POST .../documents` returns a **signed Cloudinary upload URL**
-   (with a signature and expiry) so the browser can upload the file _straight to
-   Cloudinary_ — the passport/ticket never passes through our server. Then
+5. **Upload documents.** `POST .../documents` returns a **presigned Amazon S3 upload URL**
+   (with a required method, headers, and expiry) so the browser can upload the file _straight to
+   Amazon S3_ — the passport/ticket never passes through our server. Then
    `POST .../documents/:docId/confirm` makes the server check the file really exists
    and is a PDF/JPG/PNG under 10 MB. Passport and Ticket are required; Visa is
    optional.
-   → `apps/api/src/infrastructure/cloudinary-storage.service.ts`
+   → `apps/api/src/infrastructure/s3-storage.service.ts`
 
 6. **Pay.** `POST .../payment` with provider `KHALTI`. The server double-checks the
    traveler is filled in and both documents are uploaded **and verified**; only then
@@ -130,9 +130,9 @@ does the calling; the server checks who you are on every request.
     → `OrdersService.processProvisioning`, `TransatelProvider.provision`
 
 11. **The QR arrives by email.** A background job renders the QR as an unencrypted
-    PNG image and emails it through Resend. The QR is _the credential that installs
+    PNG image and emails it through Amazon SES. The QR is _the credential that installs
     the eSIM_, so the email template warns the customer not to share it.
-    → `apps/api/src/jobs/integration.processor.ts`, `resend-email.channel.ts`
+    → `apps/api/src/jobs/integration.processor.ts`, `ses-email.channel.ts`
 
 12. **Watch usage.** `GET .../usage` shows used MB / total MB. This comes fresh from
     Transatel's balance API, cached per subscription and refreshed by a background job.
@@ -146,7 +146,7 @@ does the calling; the server checks who you are on every request.
 - **You close the tab after paying** → the browser checks for a return reference and
   verifies automatically on reload.
 - **Passport/ticket missing when paying** → hard error, you cannot pay until they exist.
-- **Document is the wrong type or too big** → Cloudinary verify rejects it.
+- **Document is the wrong type or too big** → Amazon S3 verify rejects it.
 - **QR not ready when Transatel answers** (provisioning status `DELAYED`) → the server
   waits for Transatel's **webhook** to deliver activation, then completes the order.
   → `OrdersService.applyProviderEvent`
@@ -466,7 +466,7 @@ config).
 - **Dashboard** — counts of pending reviews, awaiting customers, failed provisioning,
   completed today, plus integration health (Transatel/Khalti configured?).
 - **Work queue / review** — orders in `REVIEW_PENDING`. Ops opens a customer's documents
-  (private preview via signed Cloudinary URL) and either **approves** or **requests
+  (private preview via signed Amazon S3 URL) and either **approves** or **requests
   re-upload** (with a reason). Approving both passport+ticket moves the order to
   APPROVED → PROVISIONING → and reserves inventory. Re-upload moves it to
   `AWAITING_CUSTOMER`; the customer gets a "DOCUMENT_REUPLOAD" email and re-uploads;
@@ -504,7 +504,7 @@ Beyond all ops abilities, super admin gets `admin/*` endpoints (all MFA-gated):
   (columns: countryISO2, name, providerPlanId, dataAllowance, validityDays, costprice,
   sellingprice; validated row-by-row, capped at 2,000 rows).
   → `apps/api/src/modules/admin/admin.service.ts`
-- **Integrations** — view configuration health for Resend/Khalti/Transatel/Cloudinary/
+- **Integrations** — view configuration health for Amazon SES/Khalti/Transatel/Amazon S3/
   WhatsApp; trigger Transatel **catalog sync** (pull products → create/update plans) and
   **webhook registration**; eligibility checks.
 - **Users** — list all users; change account type (CUSTOMER → OPERATIONS/SUPER_ADMIN, with
@@ -630,8 +630,8 @@ integration calls are recorded.
 | Payments        | `PAYMENT_MODE=simulator`, fake gateway, `simulate` endpoint                          | Khalti (`PAYMENT_MODE=sandbox` or production)               |
 | eSIM activation | Needs Transatel **test** credentials; without them orders end in PROVISIONING_FAILED | Transatel live                                              |
 | Inventory       | 20 mock eSIMs auto-seeded (non-prod only)                                            | Imported by ops via CSV/Excel                               |
-| Documents       | Local "simulator" signed upload                                                      | Cloudinary authenticated upload                             |
-| Email/WhatsApp  | `NOTIFICATION_MODE=simulator` (no real send)                                         | Resend / WhatsApp Cloud API                                 |
+| Documents       | Local "simulator" signed upload                                                      | Amazon S3 authenticated upload                             |
+| Email/WhatsApp  | `NOTIFICATION_MODE=simulator` (no real send)                                         | Amazon SES / WhatsApp Cloud API                                 |
 | Jobs            | In-process "fake" queue                                                              | BullMQ + Redis                                              |
 | Persistence     | In-memory order map (lost on restart)                                                | PostgreSQL/Postgres via Prisma (`PERSISTENCE_MODE=prisma`) |
 

@@ -3,6 +3,10 @@ import { existsSync, statSync } from "node:fs";
 
 const node = process.execPath;
 const environmentFile = "--env-file-if-exists=../../.env";
+// A developer may launch this command from a shell that previously exported
+// NODE_ENV=production. Node's --env-file-if-exists preserves existing values,
+// so force the development mode promised by this script for every child.
+const developmentEnvironment = { ...process.env, NODE_ENV: "development" };
 
 const processes = [];
 const workerOutput = "dist/src/ocr-worker.js";
@@ -43,7 +47,7 @@ watch(
       "start",
       "--watch",
     ],
-    { stdio: "inherit" },
+    { stdio: "inherit", env: developmentEnvironment },
   ),
 );
 
@@ -54,6 +58,7 @@ const waitForWorkerBuild = setInterval(() => {
   watch(
     spawn(node, [environmentFile, "--watch", workerOutput], {
       stdio: "inherit",
+      env: developmentEnvironment,
     }),
   );
 }, 100);

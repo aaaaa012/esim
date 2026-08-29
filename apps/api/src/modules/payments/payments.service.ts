@@ -21,6 +21,16 @@ type InitiationResult = {
   correlationId?: string;
   expiresAt?: string;
   redirectUrl?: string;
+  qrDataUrl?: string;
+  qrPayload?: string;
+  websocketUrl?: string;
+  banks?: Array<{
+    bankName: string;
+    bankCode: string;
+    bankIcon?: string;
+    packageName?: string;
+    intentScheme: string;
+  }>;
 };
 
 type VerifySource =
@@ -56,6 +66,21 @@ export class PaymentsService {
     @Optional() private readonly fonepay?: FonepayGateway,
   ) {}
 
+  availableProviders() {
+    const simulator = process.env.PAYMENT_MODE === "simulator";
+    const providers = [PaymentProvider.KHALTI];
+    if (
+      process.env.FONEPAY_ENABLED === "true" &&
+      process.env.FONEPAY_BASE_URL &&
+      process.env.FONEPAY_USERNAME &&
+      process.env.FONEPAY_PASSWORD &&
+      process.env.FONEPAY_TERMINAL_ID &&
+      process.env.FONEPAY_PRIVATE_KEY_BASE64
+    )
+      providers.push(PaymentProvider.FONEPAY);
+    return { providers, simulator };
+  }
+
   async initiate(
     orderId: string,
     ownerId: string | null,
@@ -72,7 +97,9 @@ export class PaymentsService {
       existing.status === PaymentStatus.PENDING &&
       existing.expiresAt &&
       new Date(existing.expiresAt).getTime() > Date.now() &&
-      existing.redirectUrl
+      existing.redirectUrl &&
+      existing.provider === provider &&
+      !this.prisma?.enabled
     ) {
       return {
         reference: existing.reference,
@@ -89,6 +116,7 @@ export class PaymentsService {
     const result = this.prisma?.enabled
       ? await this.initiatePersisted(order, provider, returnUrl)
       : await this.gateway(provider).initiate({
+          attemptId: randomUUID(),
           orderId,
           orderNumber: order.orderNumber,
           amountNpr: order.totalAmountNpr,
@@ -129,13 +157,26 @@ export class PaymentsService {
     while (!owned && Date.now() < deadline) {
       const record = await prisma.paymentInitiation.findUnique({ where: { orderId: order.id } });
       if (!record) continue;
-      if (record.provider !== provider || record.amountNpr !== order.totalAmountNpr)
-        throw new BadRequestException("Payment initiation conflicts with the current order amount or provider");
-      if (record.status === PaymentInitiationStatus.COMPLETED && record.result)
-        return record.result as InitiationResult;
+      if (record.amountNpr !== order.totalAmountNpr)
+        throw new BadRequestException("Payment initiation conflicts with the current order amount");
+      const stored = record.result as InitiationResult | null;
+      const storedActive =
+        record.status === PaymentInitiationStatus.COMPLETED &&
+        stored &&
+        (!stored.expiresAt || new Date(stored.expiresAt).getTime() > Date.now());
+      if (storedActive) {
+        if (record.provider !== provider)
+          throw new ApiException({
+            code: "PAYMENT_SESSION_ACTIVE",
+            message: "Another payment provider session is still active",
+            status: 409,
+          });
+        return stored;
+      }
       if (
         record.status === PaymentInitiationStatus.FAILED ||
-        record.leaseExpiresAt.getTime() <= Date.now()
+        record.leaseExpiresAt.getTime() <= Date.now() ||
+        (record.status === PaymentInitiationStatus.COMPLETED && !storedActive)
       ) {
         const reclaimed = await prisma.paymentInitiation.updateMany({
           where: {
@@ -143,9 +184,11 @@ export class PaymentsService {
             OR: [
               { status: PaymentInitiationStatus.FAILED },
               { status: PaymentInitiationStatus.PROCESSING, leaseExpiresAt: { lte: new Date() } },
+              { status: PaymentInitiationStatus.COMPLETED },
             ],
           },
           data: {
+            provider,
             status: PaymentInitiationStatus.PROCESSING,
             claimToken,
             leaseExpiresAt,
@@ -176,6 +219,7 @@ export class PaymentsService {
 
     try {
       const result = await this.gateway(provider).initiate({
+        attemptId: claimToken,
         orderId: order.id,
         orderNumber: order.orderNumber,
         amountNpr: order.totalAmountNpr,

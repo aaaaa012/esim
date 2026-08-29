@@ -8,7 +8,7 @@ PostgreSQL is the lifecycle source of truth. Redis transports durable outbox wor
 - Workflow worker: `PROCESS_ROLE=workflow-worker pnpm --filter @visa-compass/api start:workflow-worker`
 - OCR worker: `PROCESS_ROLE=ocr-worker pnpm --filter @visa-compass/api start:ocr-worker`
 
-All processes share `DATABASE_URL`, `REDIS_URL`, encryption keys, provider credentials, Cloudinary credentials, and notification credentials. The workflow worker consumes provisioning, callbacks, notifications, reconciliation, partner webhooks, and identity callbacks. OCR remains isolated at concurrency one.
+All processes share `DATABASE_URL`, `REDIS_URL`, encryption keys, provider credentials, Amazon S3 credentials, and notification credentials. The workflow worker consumes provisioning, callbacks, notifications, reconciliation, partner webhooks, and identity callbacks. OCR remains isolated at concurrency one.
 
 The API Dockerfile builds one immutable backend image for all three roles. Use
 its default command for the API, override the command with

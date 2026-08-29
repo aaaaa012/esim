@@ -62,8 +62,8 @@ or partner tops it up via credits (`PartnerLedgerEntryType.CREDIT`).
 
 ```
 [Partner app] ──(1) GET /plans───────────────────► Visa Compass API
-[Partner app] ──(2) POST /document-upload-sessions─► returns signed Cloudinary URLs
-[Partner app] ──(3) upload bytes────────────────────► Cloudinary
+[Partner app] ──(2) POST /document-upload-sessions─► returns signed Amazon S3 URLs
+[Partner app] ──(3) upload bytes────────────────────► Amazon S3
 [Partner app] ──(4) POST /orders (complete)────────► auto-verify, debit, provision
 [Partner app] ──(5) GET /orders/:id/esim ──────────► activation QR when READY
 ```
@@ -82,11 +82,11 @@ requires `Idempotency-Key`) declares the documents the customer will upload.
 The server:
 
 - validates types, sizes (≤ 10 MB), and that types are unique;
-- signs short-lived **private, authenticated** Cloudinary upload URLs
+- signs short-lived **private, authenticated** Amazon S3 upload URLs
   (`privateAssetId` per document, expires in 15 minutes);
 - records a `PartnerDocumentUploadIntent`.
 
-The partner's client uploads the bytes directly to Cloudinary. Nothing touches
+The partner's client uploads the bytes directly to Amazon S3. Nothing touches
 the Visa Compass API for the file bytes — this keeps documents private.
 
 ### 3.3 Submit the complete order
@@ -195,7 +195,7 @@ number also gets a blind index for lookups).
 
 ### 4.4 Documents
 
-`POST /partner-checkout/:token/documents` returns a **private** Cloudinary
+`POST /partner-checkout/:token/documents` returns a **private** Amazon S3
 upload URL; the browser uploads the file directly, then
 `POST /partner-checkout/:token/documents/:documentId/confirm` verifies it
 (≤ 10 MB, PDF/JPG/PNG).
@@ -273,7 +273,7 @@ The ledger and account endpoints give partners full reconciliation.
   refund; `/refund-requests` sends a formal request to the ops review queue.
 - **Notifications**: partners can trigger `EMAIL` / `WHATSAPP` templates
   (`ORDER_STATUS`, `QR_READY`, `DOCUMENT_REUPLOAD`).
-- **Simulator**: when Cloudinary and/or the connectivity provider are
+- **Simulator**: when Amazon S3 and/or the connectivity provider are
   unavailable (non-production), the API gracefully runs in `local-simulator`
   mode — uploads and provisioning are simulated, and passport verification
   returns `SKIPPED` — so the whole flow can be demoed without live services.

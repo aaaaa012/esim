@@ -1,85 +1,94 @@
 # 14 — Private Document Storage
 
-Primary source: `apps/api/src/infrastructure/cloudinary-storage.service.ts`.
+Primary source: `apps/api/src/infrastructure/s3-storage.service.ts`.
 
 ## Overview
 
-`CloudinaryStorageService` manages travel-document uploads. It issues short-lived
-signed upload authorizations, verifies uploaded documents, and provides signed
-read URLs and downloads. When Cloudinary credentials are absent it operates in
-a `local-simulator` mode so the whole flow still works offline.
+`S3StorageService` stores private travel documents in Amazon S3. It issues
+short-lived presigned upload authorizations, verifies uploaded object metadata
+and file signatures, provides five-minute presigned reads, and downloads bytes
+for operations and OCR. When AWS storage is absent outside production it uses
+the existing `local-simulator` flow.
 
-## Signed upload authorization
+## Configuration
 
-`createDocumentUpload(orderId, type)` (`cloudinary-storage.service.ts:13-28`):
+- `AWS_REGION` — region containing the private bucket.
+- `AWS_S3_BUCKET` — private bucket name.
+- `AWS_S3_ENDPOINT` and `AWS_S3_FORCE_PATH_STYLE=true` — optional settings for
+  a local S3-compatible service; do not use them for production AWS S3.
+- Credentials come from the AWS SDK default credential chain. In production,
+  attach an IAM role to the workload instead of exporting long-lived access
+  keys.
 
-- `assetId = doc_{uuid}`.
-- Folder: `visa-compass/private/orders/{orderId}`.
-- If any of `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` /
-  `CLOUDINARY_API_SECRET` is missing:
-  - Returns `{ assetId, upload: { mode: 'local-simulator', timestamp,
-signature: sha256(`${assetId}:${timestamp}`), folder,
-expiresInSeconds: 600 } }`.
-- Otherwise (Cloudinary configured):
-  - `publicId = {type.toLowerCase()}-{assetId}`.
-  - `signature = cloudinary.utils.api_sign_request({ timestamp, folder,
-public_id: publicId, type: 'authenticated' }, apiSecret)`.
-  - Returns `{ assetId: '{folder}/{publicId}', upload: { mode:
-'cloudinary-signed', endpoint: https://api.cloudinary.com/v1_1/{cloudName}/auto/upload,
-cloudName, apiKey, publicId, deliveryType: 'authenticated', timestamp,
-signature, folder, expiresInSeconds: 600 } }`.
+The workload role needs only `s3:PutObject`, `s3:GetObject`, and
+`s3:DeleteObject` for `arn:aws:s3:::<bucket>/visa-compass/private/*`.
 
-The client uploads directly to the Cloudinary endpoint with the signature
-(`checkout-client.tsx:325-346`).
+## Presigned upload authorization
+
+`createDocumentUpload(orderId, type, contentType)` and
+`createPartnerDocumentUpload(uploadId, type, contentType)` create a random key
+under one of these prefixes:
+
+- `visa-compass/private/orders/{orderId}/`
+- `visa-compass/private/partner-uploads/{uploadId}/`
+
+When configured, the response is:
+
+```json
+{
+  "assetId": "visa-compass/private/orders/.../passport-doc_<uuid>",
+  "upload": {
+    "mode": "s3-presigned",
+    "endpoint": "https://<bucket>.s3.<region>.amazonaws.com/...?X-Amz-...",
+    "method": "PUT",
+    "headers": { "content-type": "application/pdf" },
+    "expiresInSeconds": 600
+  }
+}
+```
+
+The browser sends the file bytes directly to `endpoint` using `PUT` and the
+returned headers. The signed `content-type` must match exactly. Partner
+pre-verification upload URLs last 900 seconds; customer/order URLs last 600.
+
+The bucket CORS policy must allow the customer and partner portal origins to
+send `PUT` and the `Content-Type` header. The bucket and objects remain private;
+no public-read ACL is used.
 
 ## Verification
 
-`verifyDocument(assetId)` (`cloudinary-storage.service.ts:30-44`):
+`verifyDocument(assetId)`:
 
-- Simulator mode: returns `{ bytes: 0, format: 'pdf', simulated: true }`.
-- Cloudinary mode: loads the resource (`type: 'authenticated'`,
-  `resource_type: 'image'`) and enforces:
-  - Format must be `pdf`, `jpg`, `jpeg`, or `png`.
-  - Size must be ≤ 10 MB.
-  - Otherwise `BadRequestException` "Document must be a PDF, JPG or PNG up to
-    10 MB"; any other failure → "Document upload could not be verified".
+- Uses `HeadObject` to require a non-empty object no larger than 10 MB.
+- Reads only the first 16 bytes and detects PDF, JPEG, or PNG by magic bytes.
+- Requires the detected format to match S3 `Content-Type`.
+- Rejects missing, oversized, spoofed, or unsupported objects with a sanitized
+  `BadRequestException`.
 
-## Reading documents
+## Reading and OCR
 
-- `signedReadUrl(assetId)` (`cloudinary-storage.service.ts:46-50`): throws
-  `ServiceUnavailableException` when unconfigured; otherwise returns a
-  Cloudinary signed URL valid for 300 seconds (`type: 'authenticated'`,
-  `resource_type: 'image'`, `sign_url: true`).
-- `downloadDocument(assetId)` (`cloudinary-storage.service.ts:52-57`): fetches
-  the signed URL and returns `{ bytes, contentType }`.
+- `signedReadUrl` creates a private `GetObject` URL valid for 300 seconds.
+- `downloadDocument` streams the object through the AWS SDK and enforces the
+  10 MB limit.
+- `downloadDocumentImage` returns JPEG/PNG bytes directly. For PDF passports,
+  it writes the bytes to a mode-0600 temporary directory and uses `pdftoppm` to
+  rasterize only page one as a grayscale JPEG capped at 2000 px. The temporary
+  directory is always removed. The production Docker image installs
+  `poppler-utils` for this path.
 
-## Ops document endpoints
+## Local simulator
 
-`orders.controller.ts:38` (`GET /operations/orders/:id/documents/:documentId/content`):
+Outside production, missing `AWS_REGION` or `AWS_S3_BUCKET` returns
+`upload.mode = 'local-simulator'`. The client skips the byte upload and calls
+the confirm endpoint, where verification returns a simulated result. Production
+fails closed when storage is absent.
 
-- Sets `content-type`, `content-disposition: inline; filename=...` (filename
-  sanitized of quotes/newlines), `cache-control: no-store, private`, then
-  sends the bytes.
+## Security and bucket lifecycle
 
-`orders.controller.ts:37` (`.../preview`): returns
-`{ url, fileName, contentType, expiresInSeconds: 300 }` from
-`documentPreview` (`orders.service.ts:107`).
-
-## Local simulator end-to-end
-
-With default `.env.example` (no Cloudinary), the checkout flow works as:
-
-1. `POST /customer/orders/:id/documents` returns
-   `upload.mode = 'local-simulator'`.
-2. The client sees `local-simulator` and immediately calls
-   `POST .../documents/:documentId/confirm` without uploading anywhere
-   (`checkout-client.tsx:318-324`).
-3. `confirmDocument` → `storage.verifyDocument` returns the simulated result
-   and marks `uploadVerified = true` (`orders.service.ts:106`).
-
-## Security properties
-
-- Uploads are `authenticated` delivery type — not public.
-- Signed read URLs expire in 300 s.
-- The QR payload remains encrypted at rest, but notification attachments and authenticated account downloads are intentionally unencrypted
-  (`qr-pdf.service.ts:10-24`, see `docs/11-notifications.md`).
+- Enable S3 Block Public Access and bucket-owner-enforced object ownership.
+- Keep default S3 server-side encryption enabled; use a customer-managed KMS
+  key if policy requires it.
+- Restrict the workload role to the private prefix above.
+- Configure a lifecycle rule appropriate to the legal retention period.
+- Log S3 data events for the private prefix when audit requirements call for
+  object-level access records.

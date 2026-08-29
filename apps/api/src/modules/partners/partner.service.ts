@@ -29,7 +29,7 @@ import {
 } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
-import { CloudinaryStorageService } from "../../infrastructure/cloudinary-storage.service.js";
+import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import { ApiException } from "../../common/api-error.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { NotificationService } from "../notification/notification.service.js";
@@ -132,14 +132,14 @@ type PartnerOrderRow = Prisma.OrderGetPayload<{
 export class PartnerService {
   private readonly logger = new Logger(PartnerService.name);
 
-  /** Delivery-success terminals that convert a hosted deposit into a capture. */
+  // Legacy reservation reconciliation remains readable for historical
+  // PARTNER_ACCOUNT orders. New partner-hosted sessions use HOSTED_PAYMENT and
+  // never enter this settlement path.
   private readonly hostedDepositSuccess = new Set<OrderStatus>([
     OrderStatus.QR_READY,
     OrderStatus.COMPLETED,
     OrderStatus.ACTIVATION_ATTENTION,
   ]);
-
-  /** Delivery-failure/cancellation terminals that release a hosted deposit. */
   private readonly hostedDepositRelease = new Set<OrderStatus>([
     OrderStatus.PROVISIONING_FAILED,
     OrderStatus.CANCELLED,
@@ -148,7 +148,7 @@ export class PartnerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
-    private readonly storage: CloudinaryStorageService,
+    private readonly storage: S3StorageService,
     private readonly connectivity: ConnectivityService,
     private readonly notifications: NotificationService,
     private readonly partnerWebhooks: PartnerWebhookProcessor,
@@ -258,7 +258,7 @@ export class PartnerService {
             !existing.consumedAt &&
             existing.expiresAt > now &&
             !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
-          if (resumable) return this.uploadSessionResponse(existing, true);
+          if (resumable) return await this.uploadSessionResponse(existing, true);
           await tx.partnerDocumentVerification.update({
             where: { id: existing.id },
             data: {
@@ -289,9 +289,10 @@ export class PartnerService {
         const items = [];
         for (const document of input.documents) {
           const id = randomUUID();
-          const signed = this.storage.createPartnerDocumentUpload(
+          const signed = await this.storage.createPartnerDocumentUpload(
             id,
             document.type as unknown as SharedDocumentType,
+            document.contentType,
           );
           const intent = await tx.partnerDocumentUploadIntent.create({
             data: {
@@ -349,7 +350,7 @@ export class PartnerService {
     }
   }
 
-  private uploadSessionResponse(
+  private async uploadSessionResponse(
     verification: {
       id: string;
       externalOrderId: string;
@@ -360,6 +361,7 @@ export class PartnerService {
         id: string;
         type: DocumentType;
         fileName: string;
+        contentType: string;
         expiresAt: Date;
       }>;
     },
@@ -372,16 +374,21 @@ export class PartnerService {
       expiresAt: verification.expiresAt,
       checkoutReleaseAt: verification.checkoutReleaseAt,
       resumed,
-      documents: verification.documents.map((document) => ({
-        id: document.id,
-        type: document.type,
-        fileName: document.fileName,
-        expiresAt: document.expiresAt,
-        upload: this.storage.createPartnerDocumentUpload(
-          document.id,
-          document.type as unknown as SharedDocumentType,
-        ).upload,
-      })),
+      documents: await Promise.all(
+        verification.documents.map(async (document) => ({
+          id: document.id,
+          type: document.type,
+          fileName: document.fileName,
+          expiresAt: document.expiresAt,
+          upload: (
+            await this.storage.createPartnerDocumentUpload(
+              document.id,
+              document.type as unknown as SharedDocumentType,
+              document.contentType,
+            )
+          ).upload,
+        })),
+      ),
     };
   }
 
@@ -1466,15 +1473,16 @@ export class PartnerService {
   async addDocument(
     partnerId: string,
     orderId: string,
-    input: { type: DocumentType; fileName: string },
+    input: { type: DocumentType; fileName: string; contentType: string },
   ) {
     const order = await this.mutableOrder(partnerId, orderId, [
       OrderStatus.DRAFT,
       OrderStatus.AWAITING_CUSTOMER,
     ]);
-    const signed = this.storage.createDocumentUpload(
+    const signed = await this.storage.createDocumentUpload(
       orderId,
       input.type as unknown as SharedDocumentType,
+      input.contentType,
     );
     const document = await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
@@ -1550,8 +1558,8 @@ export class PartnerService {
   }
 
   /**
-   * Portal / no-code path: creates a DRAFT order (prepaid PARTNER_ACCOUNT
-   * settlement) plus a single-use, expiring hosted checkout session for a
+   * Portal / no-code path: creates a customer-funded DRAFT order plus a
+   * single-use, expiring hosted checkout session for a
    * low-capacity partner that cannot integrate the REST API. The partner
    * shares `checkoutUrl`; the traveller completes traveller details,
    * documents and passport verification on the Visa Compass-hosted,
@@ -1595,17 +1603,6 @@ export class PartnerService {
     const topUp = input.topUpMobile
       ? await this.applicationOrders.resolveSubscriber(input.topUpMobile)
       : null;
-    const existingPartnerCustomer = input.topUpMobile
-      ? await this.prisma.partnerCustomer.findUnique({
-          where: {
-            partnerId_externalCustomerId: {
-              partnerId,
-              externalCustomerId: input.externalCustomerId,
-            },
-          },
-          select: { customerId: true },
-        })
-      : null;
     // A top-up is only valid when we can bind to a real eSIM. A fallback to a
     // new purchase is deliberately opt-in: callers must obtain consent before
     // changing the requested product from a top-up to a new eSIM.
@@ -1617,18 +1614,6 @@ export class PartnerService {
           )
         : null;
     const isTopUp = Boolean(topUp?.inventory && eligibility?.allowed);
-    if (
-      isTopUp &&
-      (!existingPartnerCustomer ||
-        !topUp?.customerId ||
-        existingPartnerCustomer.customerId !== topUp.customerId)
-    )
-      throw new ApiException({
-        code: "TOPUP_CUSTOMER_MISMATCH",
-        message:
-          "This eSIM is not attached to the supplied partner customer. Use the same externalCustomerId as the original purchase.",
-        status: 422,
-      });
     if (input.topUpMobile && !isTopUp && !input.allowInitialPurchaseFallback)
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
@@ -1671,7 +1656,7 @@ export class PartnerService {
           partnerId,
           partnerCustomerId: partnerCustomer.id,
           externalOrderId: input.externalOrderId,
-          partnerSettlementMethod: PartnerSettlementMethod.PARTNER_ACCOUNT,
+          partnerSettlementMethod: PartnerSettlementMethod.HOSTED_PAYMENT,
           partnerMetadata: Prisma.JsonNull,
           planId: plan.id,
           status: OrderStatus.DRAFT,
@@ -1702,12 +1687,6 @@ export class PartnerService {
           events: { create: { fromStatus: null, toStatus: OrderStatus.DRAFT } },
         },
       });
-      await this.reserveAccount(
-        tx,
-        partnerId,
-        amountPaisa,
-        input.externalOrderId,
-      );
       await tx.partnerHostedCheckoutSession.create({
         data: {
           id: sessionId,
@@ -1743,7 +1722,7 @@ export class PartnerService {
   }
 
   async hostedCheckout(token: string) {
-    const session = await this.hostedCheckoutSession(token);
+    const session = await this.hostedCheckoutSession(token, true);
     let order = await this.prisma.order.findUnique({
       where: { id: session.orderId },
       include: {
@@ -1920,15 +1899,16 @@ export class PartnerService {
 
   async addHostedDocument(
     token: string,
-    input: { type: DocumentType; fileName: string },
+    input: { type: DocumentType; fileName: string; contentType: string },
   ) {
     const order = await this.sessionOrder(token, [
       OrderStatus.DRAFT,
       OrderStatus.AWAITING_CUSTOMER,
     ]);
-    const signed = this.storage.createDocumentUpload(
+    const signed = await this.storage.createDocumentUpload(
       order.id,
       input.type as unknown as SharedDocumentType,
+      input.contentType,
     );
     const document = await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
@@ -2234,6 +2214,29 @@ export class PartnerService {
 
   async hostedCheckoutInitiate(token: string, provider: PaymentProvider) {
     const session = await this.hostedCheckoutSession(token);
+    const order = await this.prisma.order.findUnique({
+      where: { id: session.orderId },
+      select: { status: true, channel: true, partnerSettlementMethod: true },
+    });
+    if (
+      !order ||
+      order.channel !== OrderChannel.PARTNER_HOSTED ||
+      order.partnerSettlementMethod !== PartnerSettlementMethod.HOSTED_PAYMENT
+    )
+      throw new ApiException({
+        code: "HOSTED_PAYMENT_NOT_ALLOWED",
+        message: "This checkout is not customer-funded",
+        status: 403,
+      });
+    if (
+      order.status !== OrderStatus.PAYMENT_PENDING &&
+      order.status !== OrderStatus.PAYMENT_FAILED
+    )
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_COMPLETED",
+        message: "Complete the checkout review and consent before payment",
+        status: 409,
+      });
     if (!this.payments) return this.hostedPaymentDeprecated();
     return this.payments.initiate(
       session.orderId,
@@ -2254,7 +2257,9 @@ export class PartnerService {
         message: "Start a payment before checking its status",
         status: 400,
       });
-    return this.payments.verify(session.orderId, null, resolved);
+    const result = await this.payments.verify(session.orderId, null, resolved);
+    await this.finalizeHostedPayment(session, result as { status?: string });
+    return result;
   }
 
   async hostedCheckoutSimulate(
@@ -2278,7 +2283,35 @@ export class PartnerService {
         message: "Start a payment before simulating its completion",
         status: 400,
       });
-    return this.payments.simulate(session.orderId, null, resolved, scenario);
+    const result = await this.payments.simulate(
+      session.orderId,
+      null,
+      resolved,
+      scenario,
+    );
+    await this.finalizeHostedPayment(session, result as { status?: string });
+    return result;
+  }
+
+  private async finalizeHostedPayment(
+    session: { id: string; orderId: string; partnerId: string },
+    result: { status?: string },
+  ) {
+    const paidStatuses = new Set<string>([
+      OrderStatus.PAYMENT_CONFIRMED,
+      OrderStatus.REVIEW_PENDING,
+      OrderStatus.APPROVED,
+      OrderStatus.PROVISIONING,
+      OrderStatus.QR_READY,
+      OrderStatus.ACTIVATION_ATTENTION,
+      OrderStatus.COMPLETED,
+    ]);
+    if (!result.status || !paidStatuses.has(result.status)) return;
+    const consumed = await this.prisma.partnerHostedCheckoutSession.updateMany({
+      where: { id: session.id, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+    if (consumed.count === 1) await this.partnerWebhooks.enqueuePending();
   }
 
   private async activePaymentReference(orderId: string) {
@@ -2531,14 +2564,7 @@ export class PartnerService {
         order.partnerSettlementMethod ===
         PartnerSettlementMethod.PARTNER_ACCOUNT
       ) {
-        if (order.channel === OrderChannel.PARTNER_HOSTED) {
-          await this.releaseReservation(
-            tx,
-            partnerId,
-            orderId,
-            Math.round(Number(order.totalAmount) * 100),
-          );
-        } else if (order.partnerQuote)
+        if (order.partnerQuote)
           await this.releaseReservation(
             tx,
             partnerId,
@@ -2758,7 +2784,7 @@ export class PartnerService {
     return partner;
   }
 
-  private async hostedCheckoutSession(token: string) {
+  private async hostedCheckoutSession(token: string, allowConsumed = false) {
     if (!/^[A-Za-z0-9_-]{32,100}$/.test(token))
       throw new ApiException({
         code: "HOSTED_CHECKOUT_NOT_FOUND",
@@ -2768,7 +2794,11 @@ export class PartnerService {
     const session = await this.prisma.partnerHostedCheckoutSession.findUnique({
       where: { tokenHash: createHash("sha256").update(token).digest("hex") },
     });
-    if (!session || session.consumedAt || session.expiresAt <= new Date())
+    if (
+      !session ||
+      (!allowConsumed && session.consumedAt) ||
+      (!session.consumedAt && session.expiresAt <= new Date())
+    )
       throw new ApiException({
         code: "HOSTED_CHECKOUT_NOT_FOUND",
         message: "Hosted checkout not found",

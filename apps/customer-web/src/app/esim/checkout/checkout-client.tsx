@@ -4,6 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import ErrorModal from "../../../components/error-modal";
+import { fonepayBankIntentUrl } from "./payment-intent";
 import Link from "next/link";
 import {
   Check,
@@ -70,13 +71,8 @@ type DocumentAuthorization = {
   upload: {
     mode: string;
     endpoint?: string;
-    apiKey?: string;
-    publicId?: string;
-    deliveryType?: string;
-    allowedFormats?: string;
-    timestamp: number;
-    signature: string;
-    folder: string;
+    method?: "PUT";
+    headers?: Record<string, string>;
   };
 };
 type Traveler = {
@@ -367,6 +363,18 @@ export default function CheckoutClient({
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
   const [verifyingPassport, setVerifyingPassport] = useState(false);
+  const [availableProviders, setAvailableProviders] = useState<PaymentProvider[]>([
+    PaymentProvider.KHALTI,
+  ]);
+  useEffect(() => {
+    void api<{ providers: PaymentProvider[] }>("/payments/providers")
+      .then((value) => {
+        if (!value.providers.length) return;
+        setAvailableProviders(value.providers);
+        if (!value.providers.includes(provider)) setProvider(value.providers[0]!);
+      })
+      .catch(() => undefined);
+  }, []);
   useEffect(() => {
     if (!isTopUpIntent) return;
     setCompatible(true);
@@ -814,23 +822,16 @@ export default function CheckoutClient({
             return;
           }
           if (
-            authorization.upload.mode !== "cloudinary-signed" ||
+            authorization.upload.mode !== "s3-presigned" ||
             !authorization.upload.endpoint
           )
             throw new Error("Private document storage is unavailable");
-          const form = new FormData();
-          form.append("file", file);
-          form.append("api_key", authorization.upload.apiKey!);
-          form.append("timestamp", String(authorization.upload.timestamp));
-          form.append("signature", authorization.upload.signature);
-          form.append("folder", authorization.upload.folder);
-          form.append("public_id", authorization.upload.publicId!);
-          form.append("type", authorization.upload.deliveryType!);
-          if (authorization.upload.allowedFormats)
-            form.append("allowed_formats", authorization.upload.allowedFormats);
-          const uploaded = await authFetch(authorization.upload.endpoint, {
-            method: "POST",
-            body: form,
+          const uploaded = await fetch(authorization.upload.endpoint, {
+            method: authorization.upload.method ?? "PUT",
+            ...(authorization.upload.headers
+              ? { headers: authorization.upload.headers }
+              : {}),
+            body: file,
           });
           if (!uploaded.ok) throw new Error(`Upload failed for ${file.name}`);
           await api(
@@ -911,6 +912,13 @@ export default function CheckoutClient({
     } catch { /* Manual status verification remains available. */ }
     return () => socket?.close();
   }, [payment?.websocketUrl, order?.id]);
+  useEffect(() => {
+    if (!payment || !order || SIMULATOR) return;
+    const interval = window.setInterval(() => {
+      if (new Date(payment.expiresAt).getTime() > Date.now()) void complete();
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [payment?.reference, payment?.expiresAt, order?.id]);
 
   if ((!planId && !orderId) || planLoadFailed)
     return (
@@ -1404,10 +1412,10 @@ export default function CheckoutClient({
                         <b>Khalti</b>
                         <small>Digital wallet</small>
                       </button>
-                      <button className={provider === PaymentProvider.FONEPAY ? "selected" : ""} onClick={() => setProvider(PaymentProvider.FONEPAY)}>
+                      {availableProviders.includes(PaymentProvider.FONEPAY) ? <button className={provider === PaymentProvider.FONEPAY ? "selected" : ""} onClick={() => setProvider(PaymentProvider.FONEPAY)}>
                         <b>Fonepay</b>
                         <small>Mobile banking & QR</small>
-                      </button>
+                      </button> : null}
                     </div>
                     {payment ? (
                       SIMULATOR ? (
@@ -1430,7 +1438,7 @@ export default function CheckoutClient({
                         <div className="simulator-box">
                           <span>Scan with Fonepay mobile banking</span>
                           <img src={payment.qrDataUrl} alt="Fonepay payment QR code" style={{ width: 220, height: 220, alignSelf: "center" }} />
-                          {payment.banks?.length ? <div className="gateway-grid">{payment.banks.map((bank) => <button key={bank.bankCode} onClick={() => { if (payment.qrPayload) window.location.assign(`${bank.intentScheme}${bank.intentScheme.includes("?") ? "&" : "?"}qrPayload=${encodeURIComponent(payment.qrPayload)}`); }}><b>{bank.bankName}</b><small>Open banking app</small></button>)}</div> : null}
+                          {payment.banks?.length ? <div className="gateway-grid">{payment.banks.map((bank) => <button key={bank.bankCode} onClick={() => { if (!payment.qrPayload) return; const target = fonepayBankIntentUrl(bank.intentScheme, payment.qrPayload); if (target) window.location.assign(target); }}><b>{bank.bankName}</b><small>Open banking app</small></button>)}</div> : null}
                           <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>I&apos;ve paid — check status</Action>
                         </div>
                       ) : (

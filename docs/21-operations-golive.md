@@ -132,7 +132,7 @@ Reconciliation failures increment
 `OPS_ALERT_EMAIL` to a monitored mailbox to receive the provisioning alerts.
 Set `ADMIN_ALERT_EMAIL` to a separately monitored administration distribution
 list. A Redis rate-limit outage opens one deduplicated Ops attention incident
-and sends direct Resend alerts to both addresses without using BullMQ. API
+and sends direct Amazon SES alerts to both addresses without using BullMQ. API
 requests temporarily use a stricter local limiter and a recovery email is sent
 when shared limiting is restored.
 
@@ -192,7 +192,7 @@ point-in-time recovery complement these dumps; they do not replace restore tests
 - [ ] Apply migrations to a real PostgreSQL: `pnpm --filter api prisma:migrate`.
 - [ ] Set `NODE_ENV=production`, `TRUST_PROXY`, `REDIS_URL`, `OPS_ALERT_EMAIL`, and `ADMIN_ALERT_EMAIL`.
 - [ ] Configure real secrets: `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`,
-      `BOOTSTRAP_SUPER_ADMIN_TOKEN`, Khalti, Transatel, Cloudinary, Resend.
+      `BOOTSTRAP_SUPER_ADMIN_TOKEN`, Khalti, Transatel, Amazon S3, Amazon SES.
 - [ ] Set `STAFF_EMAIL_DOMAIN` (default `visacompassnepal.com`) — staff accounts are
       pre-provisioned by a Super Admin at this domain; there is no public staff sign-up.
 - [ ] Point `/metrics` at a Prometheus scrape and add the failure alert rules.

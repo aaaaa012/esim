@@ -2,7 +2,7 @@
 
 Primary sources: `apps/api/src/modules/notification/notification.service.ts`,
 `notification.controller.ts`, `notification.templates.ts`, `email.channel.ts`,
-`resend-email.channel.ts`,
+`ses-email.channel.ts`,
 `whatsapp.channel.ts`, `qr-pdf.service.ts`, and the delivery worker in
 `apps/api/src/jobs/integration.processor.ts`.
 
@@ -32,20 +32,21 @@ type NotificationTemplate =
 
 ## Delivery channels
 
-### Email (Resend)
+### Email (Amazon SES)
 
 `email.channel.ts` defines the provider-neutral contract and
-`resend-email.channel.ts` implements it:
+`ses-email.channel.ts` implements it:
 
 - `NOTIFICATION_MODE !== 'live'` → simulated `{ providerMessageId:
-resend-sim-{ts}, simulated: true }` without contacting Resend.
-- Live delivery requires `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, and a
-  verified-domain `EMAIL_FROM_ADDRESS`; `EMAIL_FROM_NAME` and `EMAIL_REPLY_TO`
-  control presentation and replies.
-- The official Resend SDK sends plain text and optional base64 QR PNG
-  attachments. Notification IDs are Resend idempotency keys for safe retries.
+ses-sim-{ts}, simulated: true }` without contacting Amazon SES.
+- Live delivery requires `EMAIL_PROVIDER=ses`, `AWS_SES_REGION` (or
+  `AWS_REGION`), and a verified `EMAIL_FROM_ADDRESS`; `EMAIL_FROM_NAME` and
+  `EMAIL_REPLY_TO` control presentation and replies.
+- The AWS SDK for SES v2 sends UTF-8 text/HTML and optional QR PNG attachments.
+  SES does not expose a per-message idempotency key; durable notification rows
+  and fixed BullMQ job IDs prevent duplicate scheduling in the normal path.
 - Provider errors are sanitized; BullMQ retry exhaustion continues to create
-  an Operations attention case. AWS SES can later implement the same contract.
+  an Operations attention case.
 
 ### WhatsApp
 
@@ -128,8 +129,8 @@ Where notifications are triggered:
 
 `AdminService.integrations` reports:
 
-- Email Resend: HEALTHY only when `NOTIFICATION_MODE === 'live'`,
-  `EMAIL_PROVIDER=resend`, and the API key and sender are present.
+- Email Amazon SES: HEALTHY only when `NOTIFICATION_MODE === 'live'`,
+  `EMAIL_PROVIDER=ses`, an AWS region, and the sender are present.
 - WhatsApp: HEALTHY only when `NOTIFICATION_MODE === 'live'` and
   `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`
   all present (`admin.service.ts:257-269`).

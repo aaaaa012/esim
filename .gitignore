@@ -25,3 +25,6 @@ apps/ops-web/.next-dev/
 _*.cjs
 apps/api/prisma/e2e-proof.cjs
 apps/api/prisma/reset-for-fresh.cjs
+
+# Local security assessment; do not publish vulnerability details.
+docs/security/VAPT-2026-08-25.md

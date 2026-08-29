@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Post, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from "@nestjs/common";
 import { initiatePaymentSchema } from "@visa-compass/shared";
 import { UserRoleName } from "@prisma/client";
 import {
@@ -50,5 +50,14 @@ export class PaymentsController {
     @Req() req: AuthenticatedRequest,
   ) {
     return this.payments.verify(orderId, req.user!.id, body.reference);
+  }
+}
+
+@Controller("payments")
+export class PaymentProvidersController {
+  constructor(private readonly payments: PaymentsService) {}
+
+  @Get("providers") providers() {
+    return this.payments.availableProviders();
   }
 }

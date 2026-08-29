@@ -51,7 +51,7 @@ documentation set had to make an assumption.
 7. **Simulator inventory seeding is dev-only.** `inventory.service.ts:14`
    returns early when Prisma is disabled or in production, so seeded
    inventory only exists locally.
-8. **Email/WhatsApp simulation in non-prod.** `resend-email.channel.ts` and
+8. **Email/WhatsApp simulation in non-prod.** `ses-email.channel.ts` and
    `whatsapp.channel.ts` return `simulated: true` payloads when notification
    mode is not live — expected for development, but live provider smoke tests
    remain part of deployment verification.

@@ -37,8 +37,7 @@ const baseSchema = z.object({
   OPS_ALERT_EMAIL: z.string().email().optional(),
   ADMIN_ALERT_EMAIL: z.string().email().optional(),
   NOTIFICATION_MODE: z.enum(["live", "simulator"]).optional(),
-  EMAIL_PROVIDER: z.literal("resend").optional(),
-  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_PROVIDER: z.literal("ses").optional(),
   EMAIL_FROM_ADDRESS: z.string().email().optional(),
   EMAIL_FROM_NAME: z.string().min(1).optional(),
   EMAIL_REPLY_TO: z.string().email().optional(),
@@ -48,9 +47,15 @@ const baseSchema = z.object({
   TRANSATEL_CLIENT_SECRET: z.string().min(1).optional(),
   TRANSATEL_MVNO_REF: z.string().min(1).optional(),
   TRANSATEL_WEBHOOK_TARGET_URL: z.string().url().optional(),
-  CLOUDINARY_CLOUD_NAME: z.string().optional(),
-  CLOUDINARY_API_KEY: z.string().optional(),
-  CLOUDINARY_API_SECRET: z.string().optional(),
+  AWS_REGION: z.string().min(1).optional(),
+  AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  AWS_SESSION_TOKEN: z.string().min(1).optional(),
+  AWS_S3_BUCKET: z.string().min(3).optional(),
+  AWS_S3_ENDPOINT: z.string().url().optional(),
+  AWS_S3_FORCE_PATH_STYLE: z.enum(["true", "false"]).optional(),
+  AWS_SES_REGION: z.string().min(1).optional(),
+  AWS_SES_CONFIGURATION_SET: z.string().min(1).optional(),
   CLERK_PUBLISHABLE_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),
   CLERK_WEBHOOK_SECRET: z.string().optional(),
@@ -118,13 +123,11 @@ const productionSchema = baseSchema.extend({
   TRANSATEL_WEBHOOK_TARGET_URL: z.string().url(),
   TRANSATEL_WEBHOOK_SECRET: z.string().min(16),
   NOTIFICATION_MODE: z.literal("live"),
-  EMAIL_PROVIDER: z.literal("resend"),
-  RESEND_API_KEY: z.string().min(1),
+  EMAIL_PROVIDER: z.literal("ses"),
   EMAIL_FROM_ADDRESS: z.string().email(),
   EMAIL_FROM_NAME: z.string().min(1),
-  CLOUDINARY_CLOUD_NAME: z.string().min(1),
-  CLOUDINARY_API_KEY: z.string().min(1),
-  CLOUDINARY_API_SECRET: z.string().min(1),
+  AWS_REGION: z.string().min(1),
+  AWS_S3_BUCKET: z.string().min(3),
   TRUST_PROXY: z.string().min(1),
   // Production lifecycle commands use PostgreSQL compare-and-set transitions;
   // the in-process lock is only a development fallback.
@@ -135,12 +138,14 @@ export function validateEnv(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   if (config.NODE_ENV === "production") {
-    return productionSchema.safeParse(config).success
-      ? config
-      : failWith(productionSchema.safeParse(config));
+    const productionResult = productionSchema.safeParse(config);
+    if (!productionResult.success) return failWith(productionResult);
+    assertFonepayConfiguration(config);
+    return config;
   }
   const result = baseSchema.safeParse(config);
   if (!result.success) return failWith(result);
+  assertFonepayConfiguration(config);
 
   // Even outside production, if an encryption key or persistence is configured
   // it must be valid; never silently degrade to development-only fallbacks.
@@ -155,6 +160,21 @@ export function validateEnv(
     );
   }
   return config;
+}
+
+function assertFonepayConfiguration(config: Record<string, unknown>) {
+  if (config.FONEPAY_ENABLED !== "true") return;
+  const required = [
+    "FONEPAY_BASE_URL",
+    "FONEPAY_USERNAME",
+    "FONEPAY_PASSWORD",
+    "FONEPAY_TERMINAL_ID",
+    "FONEPAY_PRIVATE_KEY_BASE64",
+  ].filter((key) => !config[key]);
+  if (required.length)
+    throw new Error(
+      `FONEPAY_ENABLED=true requires ${required.join(", ")}. Refusing to boot.`,
+    );
 }
 
 function failWith(result: {

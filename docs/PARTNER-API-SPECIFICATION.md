@@ -963,19 +963,15 @@ All objects are contained in `data` unless stated otherwise.
 | `documents[].type`                                   | `DocumentType`       | Requested type.                                          |
 | `documents[].fileName`                               | string               | Declared original name.                                  |
 | `documents[].expiresAt`                              | ISO date-time        | Upload intent expiration (15 minutes).                   |
-| `documents[].upload.mode`                            | string               | `cloudinary-signed` or non-production `local-simulator`. |
-| `documents[].upload.endpoint`                        | URL string, optional | Storage upload endpoint.                                 |
-| `documents[].upload.cloudName`, `apiKey`, `publicId` | string, optional     | Cloudinary upload inputs.                                |
-| `documents[].upload.deliveryType`                    | string, optional     | `authenticated` when Cloudinary signed.                  |
-| `documents[].upload.timestamp`                       | integer              | Unix seconds for signature.                              |
-| `documents[].upload.signature`                       | string               | Provider upload signature.                               |
-| `documents[].upload.folder`                          | string               | Private storage folder.                                  |
+| `documents[].upload.mode`                            | string               | `s3-presigned` or non-production `local-simulator`.       |
+| `documents[].upload.endpoint`                        | URL string, optional | Presigned S3 object URL.                                  |
+| `documents[].upload.method`                          | string, optional     | `PUT` in S3 mode.                                         |
+| `documents[].upload.headers`                         | object, optional     | Headers that must be sent exactly, including content type.|
 | `documents[].upload.expiresInSeconds`                | integer              | Instruction TTL, currently 900.                          |
 
-Upload to the returned endpoint with the returned fields unchanged. In signed
-Cloudinary mode include `type=authenticated`; do not alter public ID, folder,
-or transformation. The API verifies private asset byte count and format before
-accepting an API order.
+Upload the raw file bytes to the returned endpoint with the returned method and
+headers unchanged. The API verifies private asset byte count, content type, and
+magic-byte format before accepting an API order.
 
 ### `PartnerOrder`
 

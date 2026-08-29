@@ -537,17 +537,19 @@ export class AdminService {
     return [
       {
         id: "email",
-        name: "Email (Resend)",
+        name: "Email (AWS SES)",
         category: "NOTIFICATION",
-        provider: "RESEND",
+        provider: "AWS_SES",
         enabled:
           process.env.NOTIFICATION_MODE === "live" &&
-          process.env.EMAIL_PROVIDER === "resend" &&
-          configured(["RESEND_API_KEY", "EMAIL_FROM_ADDRESS"]),
+          process.env.EMAIL_PROVIDER === "ses" &&
+          Boolean(process.env.AWS_SES_REGION || process.env.AWS_REGION) &&
+          configured(["EMAIL_FROM_ADDRESS"]),
         status:
           process.env.NOTIFICATION_MODE === "live" &&
-          process.env.EMAIL_PROVIDER === "resend" &&
-          configured(["RESEND_API_KEY", "EMAIL_FROM_ADDRESS"])
+          process.env.EMAIL_PROVIDER === "ses" &&
+          Boolean(process.env.AWS_SES_REGION || process.env.AWS_REGION) &&
+          configured(["EMAIL_FROM_ADDRESS"])
             ? "HEALTHY"
             : "SIMULATED",
       },
@@ -582,20 +584,12 @@ export class AdminService {
           : "CONFIG_REQUIRED",
       },
       {
-        id: "cloudinary",
+        id: "s3",
         name: "Private Document Storage",
         category: "STORAGE",
-        provider: "CLOUDINARY",
-        enabled: configured([
-          "CLOUDINARY_CLOUD_NAME",
-          "CLOUDINARY_API_KEY",
-          "CLOUDINARY_API_SECRET",
-        ]),
-        status: configured([
-          "CLOUDINARY_CLOUD_NAME",
-          "CLOUDINARY_API_KEY",
-          "CLOUDINARY_API_SECRET",
-        ])
+        provider: "AWS_S3",
+        enabled: configured(["AWS_REGION", "AWS_S3_BUCKET"]),
+        status: configured(["AWS_REGION", "AWS_S3_BUCKET"])
           ? "HEALTHY"
           : "CONFIG_REQUIRED",
       },

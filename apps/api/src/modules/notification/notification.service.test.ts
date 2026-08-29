@@ -41,8 +41,8 @@ describe("NotificationService queue-disabled delivery guard", () => {
 
   it("reports delivery configuration without exposing credentials", () => {
     vi.stubEnv("NOTIFICATION_MODE", "live");
-    vi.stubEnv("EMAIL_PROVIDER", "resend");
-    vi.stubEnv("RESEND_API_KEY", "resend-key");
+    vi.stubEnv("EMAIL_PROVIDER", "ses");
+    vi.stubEnv("AWS_REGION", "ap-south-1");
     vi.stubEnv("EMAIL_FROM_ADDRESS", "sender@example.com");
     const service = new NotificationService(memoryPrisma(), queueStub(true));
 
@@ -50,7 +50,7 @@ describe("NotificationService queue-disabled delivery guard", () => {
       expect.objectContaining({
         queue: "READY",
         mode: "LIVE",
-        provider: "RESEND",
+        provider: "AWS_SES",
         operational: true,
         channels: expect.objectContaining({ email: "CONFIGURED" }),
       }),

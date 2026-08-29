@@ -82,7 +82,7 @@ Two documents are **required** — a **passport** and a **travel ticket**
 **What happens:**
 
 - The website securely uploads the files directly to a private document
-  service (Cloudinary).
+  service (Amazon S3).
 - The upload is "signed" — it is allowed only for a short window and only for
   this order — so customers cannot upload to the wrong place.
 - Only PDF, JPG or PNG files up to 10 MB are accepted. Bigger or wrong-type
@@ -188,8 +188,8 @@ surfaced to customers later.
 | **Database (PostgreSQL)**        | The single source of truth: customers, orders, documents, payments, inventory, subscriptions, audit logs.                                                                                 |
 | **Telecom provider (Transatel)**  | The company that actually turns on the eSIM in the destination network.                                                                                                                   |
 | **Wallets (Khalti)**              | Collect the money in NPR.                                                                                                                                                                 |
-| **Document storage (Cloudinary)** | Holds passport/ticket files privately, with short-lived access links.                                                                                                                     |
-| **Email (Resend) + WhatsApp**     | Send order updates. The activation QR is delivered by email as an **unencrypted PNG image** and must be kept private.                                                                    |
+| **Document storage (Amazon S3)** | Holds passport/ticket files privately, with short-lived access links.                                                                                                                     |
+| **Email (Amazon SES) + WhatsApp**     | Send order updates. The activation QR is delivered by email as an **unencrypted PNG image** and must be kept private.                                                                    |
 | **Background jobs (Redis)**       | A "to-do list" of tasks (activate this eSIM, verify this payment, send this email, refresh this usage). If a task fails it retries automatically.                                         |
 | **The audit trail**               | An unchangeable diary of every important action (who invited whom, who approved what, who changed a price).                                                                               |
 
@@ -246,8 +246,8 @@ agencies, etc.) sell Visa Compass eSIMs inside their own systems:
 | Auth                        | Clerk (JWT, authorized parties, MFA flag from session `fva`)                                           |
 | Payments                    | Khalti adapter + local simulator                                                                       |
 | Connectivity                | Transatel adapter (OCS preload, inventory, catalog, SIM management, webhooks)                          |
-| Document storage            | Cloudinary signed authenticated uploads                                                                |
-| Notifications               | Resend API + WhatsApp Business Cloud API                                                               |
+| Document storage            | Amazon S3 signed authenticated uploads                                                                |
+| Notifications               | Amazon SES API + WhatsApp Business Cloud API                                                               |
 | Security                    | helmet, CORS allow-list, rate limiting, AES-256-GCM at rest, HMAC webhook signatures, idempotency keys |
 
 ---

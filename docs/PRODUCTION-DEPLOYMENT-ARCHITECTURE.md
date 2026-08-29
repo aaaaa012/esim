@@ -13,7 +13,7 @@ Target audience: an MSP / platform vendor who will deploy, host, operate, or whi
 
 Visa Compass is a **modular-monolith eSIM commerce platform** for Nepal-originated travel. A customer buys a
 data eSIM, pays with **Khalti**, the platform provisions the eSIM at **Transatel**, emits a **QR / password-
-protected PDF**, and delivers it (and the lifetime document) to the customer by **email (Resend)** and
+protected PDF**, and delivers it (and the lifetime document) to the customer by **email (Amazon SES)** and
 optionally **WhatsApp**. Orders complete when the customer activates at the operator, reported back via a
 Transatel event. There is also a partner-hosted/API channel for white-label resellers.
 
@@ -35,8 +35,8 @@ Transatel event. There is also a partner-hosted/API channel for white-label rese
 └───────┬─────────────────────┬───────────────────┬──────────────────┬──────────────────┘
         │                     │                   │                  │
         ▼                     ▼                   ▼                  ▼
-   CockroachDB           Redis (Upstash)     Cloudinary          outbound: Khalti ·
-   (system of record,    (BullMQ queues,     (document/           Transatel · Resend ·
+   CockroachDB           Redis (Upstash)     Amazon S3          outbound: Khalti ·
+   (system of record,    (BullMQ queues,     (document/           Transatel · Amazon SES ·
     Postgres wire)        leases)              attachment store)   WhatsApp
                                                                        ▲
    inbound webhooks: Khalti · Transatel(constant-time HMAC) · Clerk(svix) │
@@ -48,7 +48,7 @@ Transatel event. There is also a partner-hosted/API channel for white-label rese
   (provisioning/notification/reconciliation processors register on `OnModuleInit`).
 - **Data:** CockroachDB (Postgres protocol) — the system of record. Redis (Upstash) — job queue,
   idempotency keys, cross-instance leader leases.
-- **Media:** Cloudinary — passport/ticket/visa document storage.
+- **Media:** Amazon S3 — passport/ticket/visa document storage.
 - **Auth:** Clerk (customer + ops identities); a token-gated HMAC "guest" checkout for logged-out buyers.
 
 ### Hard scaling constraint (important for the vendor)
@@ -89,7 +89,7 @@ Secrets group (treat as credentials; rotate before go-live):
 - `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `CLERK_PUBLISHABLE_KEY`
 - `GUEST_ORDER_SECRET` (guest checkout HMAC)
 - `BOOTSTRAP_SUPER_ADMIN_EMAIL`, `BOOTSTRAP_SUPER_ADMIN_TOKEN`
-- `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
+- `AWS_REGION`, `AWS_S3_BUCKET` (credentials supplied by the workload IAM role)
 
 Payments (Khalti):
 - `PAYMENT_MODE=khalti` (must be literal), `KHALTI_SECRET_KEY`, `PAYMENT_WEBHOOK_SECRET`
@@ -102,9 +102,9 @@ Connectivity (Transatel):
 
 Notifications:
 - `NOTIFICATION_MODE=live` (must be literal)
-- `EMAIL_PROVIDER=resend` **or** `gmail`
-  - Resend: `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS` (a sender on a domain **verified in Resend**), optional `EMAIL_REPLY_TO`
-  - Gmail: `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_FROM_ADDRESS`
+- `EMAIL_PROVIDER=ses`, `AWS_SES_REGION` (or `AWS_REGION`),
+  `EMAIL_FROM_ADDRESS` (a verified SES identity), optional `EMAIL_REPLY_TO` and
+  `AWS_SES_CONFIGURATION_SET`
 
 Runtime/linkage:
 - `NODE_ENV=production`, `PERSISTENCE_MODE=prisma`, `ORDER_WORKFLOW_MODE=single-instance`
@@ -129,15 +129,16 @@ Runtime/linkage:
 
 ## 6. Go-live runbook (checked)
 
-1. Set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS` from a **domain verified in Resend**;
-   set `EMAIL_REPLY_TO`.
+1. Verify the sender identity in SES, move the SES account out of sandbox, then
+   set `EMAIL_PROVIDER=ses`, `AWS_SES_REGION`, `EMAIL_FROM_ADDRESS`, and
+   optional `EMAIL_REPLY_TO`.
 2. Point `KHALTI_BASE_URL` at production Khalti (not `dev.khalti.com`); set a real `TRANSATEL_COS`.
 3. Rotate every secret under §4 **before** opening real traffic.
 4. Apply schema: `prisma migrate deploy` against the production Cockroach instance.
 5. Set `NODE_ENV=production`; export `ORDER_WORKFLOW_MODE=single-instance`; boot exactly **one** API instance.
 6. Verify `GET /api/v1/health/ready` returns `api/database/redis = up`.
 7. Bootstrap the first Super Admin (token-gated `POST /auth/bootstrap`, rate-limited).
-8. Smoke a real checkout → Khalti → Transatel → Resend QR → activation.
+8. Smoke a real checkout → Khalti → Transatel → Amazon SES QR → activation.
 
 Detailed steps: see `21-operations-golive.md` and `PRODUCTION-CREDENTIALS-CHECKLIST.md`.
 

@@ -17,7 +17,7 @@ Routes: `OrdersController` (`orders.controller.ts:10-23`), `PaymentsController`
 2. **Traveler**: `PATCH /customer/orders/:id/traveler` — only while `DRAFT`
    (`orders.service.ts:104`).
 3. **Documents**: `POST /customer/orders/:id/documents` returns a signed upload
-   authorization; client uploads to Cloudinary (or simulator) then
+   authorization; client uploads to Amazon S3 (or simulator) then
    `POST .../documents/:documentId/confirm` verifies it
    (`orders.service.ts:105-106`; see `docs/14-document-storage.md`).
 4. **Payment**: `POST /customer/orders/:id/payment` → `PaymentsService.initiate`

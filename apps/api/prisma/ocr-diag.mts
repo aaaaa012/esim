@@ -8,7 +8,7 @@
  */
 import { PrismaService } from "../dist/src/infrastructure/prisma.service.js";
 import { CryptoService } from "../dist/src/infrastructure/crypto.service.js";
-import { CloudinaryStorageService } from "../dist/src/infrastructure/cloudinary-storage.service.js";
+import { S3StorageService } from "../dist/src/infrastructure/s3-storage.service.js";
 import { PassportVerificationService } from "../dist/src/modules/orders/passport-verification.service.js";
 
 const documentId = process.argv[2];
@@ -47,7 +47,7 @@ const order = {
     },
   ],
 };
-const verifier = new PassportVerificationService(new CloudinaryStorageService());
+const verifier = new PassportVerificationService(new S3StorageService());
 const result = await verifier.verify(order as never);
 console.log("TRAVELER:", JSON.stringify(order.traveler));
 console.log("RESULT:", JSON.stringify(result, null, 1));

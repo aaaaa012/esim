@@ -11,6 +11,7 @@ RUN pnpm install --frozen-lockfile \
  && pnpm --filter @visa-compass/api build
 
 FROM node:22-alpine AS runtime
+RUN apk add --no-cache poppler-utils
 RUN corepack enable
 ENV NODE_ENV=production
 WORKDIR /app

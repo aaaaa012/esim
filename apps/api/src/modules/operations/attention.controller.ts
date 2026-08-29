@@ -78,11 +78,9 @@ export class AttentionController {
       dependencies: {
         connectivity,
         notifications: this.notifications.health(),
-        cloudinary: [
-          "CLOUDINARY_CLOUD_NAME",
-          "CLOUDINARY_API_KEY",
-          "CLOUDINARY_API_SECRET",
-        ].every((key) => Boolean(process.env[key]))
+        s3: ["AWS_REGION", "AWS_S3_BUCKET"].every((key) =>
+          Boolean(process.env[key]),
+        )
           ? "CONFIGURED"
           : "CONFIG_REQUIRED",
         paymentGateway: process.env.KHALTI_SECRET_KEY

@@ -239,6 +239,7 @@ export default function InventoryClient() {
   const [profilesSearch, setProfilesSearch] = useState("");
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [restoring, setRestoring] = useState("");
+  const refreshedReconciliationRun = useRef<string | null>(null);
   const PAGE_SIZE = 50;
 
   const loadProfiles = () => {
@@ -259,10 +260,11 @@ export default function InventoryClient() {
       .catch((e) => toast.error(e.message))
       .finally(() => setProfilesLoading(false));
   };
+  const inventoryReady = data !== null;
   useEffect(() => {
-    if (data) loadProfiles();
+    if (inventoryReady) loadProfiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profilesPage, profilesStatus, profilesSearch, data]);
+  }, [profilesPage, profilesStatus, profilesSearch, inventoryReady]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setProfilesPage(1);
@@ -350,13 +352,23 @@ export default function InventoryClient() {
     if (!reconciliationRun || reconciliationRun.status === "COMPLETED") return;
     const timer = window.setInterval(() => {
       void loadReconciliationRun(reconciliationRun.id)
-        .then(() => load())
         .catch(() => undefined);
-    }, 2_000);
+    }, 5_000);
     return () => window.clearInterval(timer);
-    // `load` intentionally reads the current search without restarting polling.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadReconciliationRun, reconciliationRun?.id, reconciliationRun?.status]);
+  useEffect(() => {
+    if (
+      !reconciliationRun ||
+      reconciliationRun.status !== "COMPLETED" ||
+      refreshedReconciliationRun.current === reconciliationRun.id
+    )
+      return;
+    refreshedReconciliationRun.current = reconciliationRun.id;
+    load();
+    // Refresh overview and visible reconciliation rows exactly once when a run
+    // finishes. `load` intentionally reads the current live-search value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconciliationRun?.id, reconciliationRun?.status]);
   const startBulkReconciliation = async () => {
     setBulkReconciling(true);
     try {

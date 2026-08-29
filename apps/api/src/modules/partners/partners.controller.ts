@@ -457,6 +457,7 @@ export class PartnersController {
     return this.partners.addDocument(request.partner!.id, id, {
       type: input.type as DocumentType,
       fileName: input.fileName,
+      contentType: input.contentType,
     });
   }
 

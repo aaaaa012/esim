@@ -14,7 +14,10 @@ import {
 } from "./modules/orders/orders.controller.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
 import { GuestOrdersController } from "./modules/orders/guest-orders.controller.js";
-import { PaymentsController } from "./modules/payments/payments.controller.js";
+import {
+  PaymentProvidersController,
+  PaymentsController,
+} from "./modules/payments/payments.controller.js";
 import { PaymentsService } from "./modules/payments/payments.service.js";
 import { KhaltiGateway } from "./modules/payments/gateways/khalti.gateway.js";
 import { PaymentSimulatorGateway } from "./modules/payments/gateways/simulator.gateway.js";
@@ -28,7 +31,7 @@ import {
   WebhooksController,
 } from "./modules/webhooks/webhooks.controller.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
-import { CloudinaryStorageService } from "./infrastructure/cloudinary-storage.service.js";
+import { S3StorageService } from "./infrastructure/s3-storage.service.js";
 import { QueueService } from "./jobs/queue.service.js";
 import { ClerkSyncService } from "./modules/identity/clerk-sync.service.js";
 import { OrdersPersistenceService } from "./modules/orders/orders-persistence.service.js";
@@ -37,7 +40,6 @@ import { InventoryService } from "./modules/inventory/inventory.service.js";
 import { AdminController } from "./modules/admin/admin.controller.js";
 import { AdminService } from "./modules/admin/admin.service.js";
 import { ProvisioningProcessor } from "./jobs/provisioning.processor.js";
-import { HostedSettlementProcessor } from "./jobs/hosted-settlement.processor.js";
 import { PartnersController } from "./modules/partners/partners.controller.js";
 import { PartnerAuthGuard } from "./modules/partners/partner-auth.guard.js";
 import { PartnerApiLoggingInterceptor } from "./modules/partners/partner-api-logging.interceptor.js";
@@ -52,7 +54,7 @@ import { TransatelProvider } from "./modules/integration/transatel.provider.js";
 import { NotificationController } from "./modules/notification/notification.controller.js";
 import { NotificationService } from "./modules/notification/notification.service.js";
 import { EMAIL_CHANNEL } from "./modules/notification/email.channel.js";
-import { ResendEmailChannel } from "./modules/notification/resend-email.channel.js";
+import { SesEmailChannel } from "./modules/notification/ses-email.channel.js";
 import { WhatsappChannel } from "./modules/notification/whatsapp.channel.js";
 import { QrPdfService } from "./modules/notification/qr-pdf.service.js";
 import { IntegrationProcessor } from "./jobs/integration.processor.js";
@@ -97,6 +99,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     InventoryController,
     AdminController,
     PaymentsController,
+    PaymentProvidersController,
     WebhooksController,
     OperationsIntegrationEventsController,
     OperationsIntegrationLogsController,
@@ -136,10 +139,9 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     PartnerWebhookProcessor,
     CryptoService,
     PrismaService,
-    CloudinaryStorageService,
+    S3StorageService,
     QueueService,
     ProvisioningProcessor,
-    HostedSettlementProcessor,
     IntegrationProcessor,
     ReconciliationService,
     MetricsService,
@@ -147,8 +149,8 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     PartnerAuthGuard,
     PartnerApiLoggingInterceptor,
     NotificationService,
-    ResendEmailChannel,
-    { provide: EMAIL_CHANNEL, useExisting: ResendEmailChannel },
+    SesEmailChannel,
+    { provide: EMAIL_CHANNEL, useExisting: SesEmailChannel },
     WhatsappChannel,
     QrPdfService,
     CustomerEsimsService,

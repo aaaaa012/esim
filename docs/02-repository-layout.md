@@ -60,7 +60,7 @@ Source files under `apps/api/src`:
     `logging.interceptor.ts`, `rate-limit.guard.ts`
   - `csv.util.ts` (+ `.test.ts`)
 - `infrastructure/` — `prisma.service.ts`, `crypto.service.ts`,
-  `cloudinary-storage.service.ts`
+  `s3-storage.service.ts`
 - `jobs/` — `queues.ts`, `queue.service.ts`, `provisioning.processor.ts`,
   `integration.processor.ts`, `reconciliation.service.ts`
 - `modules/`
@@ -77,7 +77,7 @@ Source files under `apps/api/src`:
   - `integration/` — `connectivity.service.ts`, `connectivity-provider.ts`,
     `transatel.provider.ts`
   - `notification/` — `notification.service.ts`, `notification.controller.ts`,
-    `notification.templates.ts`, `email.channel.ts`, `resend-email.channel.ts`, `whatsapp.channel.ts`,
+    `notification.templates.ts`, `email.channel.ts`, `ses-email.channel.ts`, `whatsapp.channel.ts`,
     `qr-pdf.service.ts`
   - `webhooks/` — `webhooks.controller.ts`
 - `observability/` — `health.controller.ts`

@@ -36,7 +36,7 @@ Clerk auth, no backend rendering).
    `.env.example`), then returns to `/guest/orders/{id}/status`.
 3. `POST .../traveler` with `TravelerInput`; 4. `POST .../documents` returns
    signed upload (`upload.mode: 'local-simulator'` → confirm immediately;
-   `'cloudinary-signed'` → direct Cloudinary upload,
+   `'s3-presigned'` → direct Amazon S3 upload,
    `checkout-client.tsx:318-346`); 5. `POST .../documents/{id}/confirm`;
 4. `POST .../submit`; 7. `GET /customer/orders/{id}` equivalent to view the
    final state.
