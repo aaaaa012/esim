@@ -691,7 +691,6 @@ export default function CheckoutClient({
         storeGuestToken(created.token, created.order.id);
         if (created.order.purchaseType === "TOPUP") {
           setStep(4);
-          await initiate(created.order);
         } else {
           setStep(2);
         }
@@ -723,7 +722,6 @@ export default function CheckoutClient({
       }
       if (finalOrder.purchaseType === "TOPUP") {
         setStep(4);
-        await initiate(finalOrder);
       } else {
         setStep(2);
       }
@@ -1374,8 +1372,9 @@ export default function CheckoutClient({
                     <b>Checking payment status</b>
                     <span>{order?.orderNumber}</span>
                     <p>
-                      We are checking with Khalti. Your order will only be
-                      marked as paid after the gateway confirms the transaction.
+                      We are checking with your payment provider. Your order
+                      will only be marked as paid after the gateway confirms
+                      the transaction.
                     </p>
                   </div>
                 ) : (
