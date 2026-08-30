@@ -62,6 +62,10 @@ Deployments are serialized, and GitHub passes the exact tested commit SHA to
 EC2. A delayed workflow cannot roll production back over a newer deployed
 commit.
 
+The deploy job also checks `github.repository == 'samirextra369/esim2.2'`.
+Mirroring this workflow to the upstream parent repository runs CI there but can
+never deploy the parent repository to production.
+
 Create a protected GitHub Environment named `production`, then configure:
 
 - Environment secret `EC2_HOST`: the EC2 Elastic IP or stable hostname.

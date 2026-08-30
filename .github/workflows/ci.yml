@@ -36,7 +36,7 @@ jobs:
 
   deploy-production:
     name: Deploy with-fonepay to EC2
-    if: github.event_name == 'push' && github.ref == 'refs/heads/with-fonepay'
+    if: github.repository == 'samirextra369/esim2.2' && ((github.event_name == 'push' && github.ref == 'refs/heads/with-fonepay') || github.event_name == 'workflow_dispatch')
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
