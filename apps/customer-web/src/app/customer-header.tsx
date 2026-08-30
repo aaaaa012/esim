@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Globe2, Menu, X } from "lucide-react";
+import { Bell, Menu, X } from "lucide-react";
 import { SignInButton, SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import ThemeToggle from "./theme-toggle";
 
@@ -41,10 +42,30 @@ export default function CustomerHeader() {
     <header className="site-header">
       <div className="shell header-inner">
         <Link className="brand" href="/">
-          <span className="mark">
-            <Globe2 size={21} />
-          </span>
-          Visa Compass
+          <Image
+            className="brand-mark-logo"
+            src="/brand/visa-compass-mark.png"
+            alt=""
+            width={370}
+            height={484}
+            priority
+          />
+          <Image
+            className="brand-wordmark brand-wordmark-color"
+            src="/brand/visa-compass-services-color.png"
+            alt="Visa Compass Services"
+            width={1267}
+            height={466}
+            priority
+          />
+          <Image
+            className="brand-wordmark brand-wordmark-white"
+            src="/brand/visa-compass-services-white.png"
+            alt="Visa Compass Services"
+            width={933}
+            height={373}
+            priority
+          />
         </Link>
         <nav className="navlinks">
           {navLink("/#plans", "Destinations")}

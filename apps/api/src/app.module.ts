@@ -32,6 +32,7 @@ import {
 } from "./modules/webhooks/webhooks.controller.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
 import { S3StorageService } from "./infrastructure/s3-storage.service.js";
+import { PublicAssetStorageService } from "./infrastructure/public-asset-storage.service.js";
 import { QueueService } from "./jobs/queue.service.js";
 import { ClerkSyncService } from "./modules/identity/clerk-sync.service.js";
 import { OrdersPersistenceService } from "./modules/orders/orders-persistence.service.js";
@@ -73,6 +74,11 @@ import {
   PartnerShowcasePublicController,
 } from "./modules/showcase/partner-showcase.controller.js";
 import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
+import {
+  HomepageCampaignAdminController,
+  HomepageCampaignPublicController,
+} from "./modules/showcase/homepage-campaign.controller.js";
+import { HomepageCampaignService } from "./modules/showcase/homepage-campaign.service.js";
 import { ManualRefundsController } from "./modules/payments/manual-refunds.controller.js";
 import { ManualRefundsService } from "./modules/payments/manual-refunds.service.js";
 import { PaymentDisputesController } from "./modules/payments/payment-disputes.controller.js";
@@ -113,6 +119,8 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     TransatelOperationsController,
     PartnerShowcaseAdminController,
     PartnerShowcasePublicController,
+    HomepageCampaignAdminController,
+    HomepageCampaignPublicController,
     ManualRefundsController,
     PaymentDisputesController,
     AttentionController,
@@ -140,6 +148,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     CryptoService,
     PrismaService,
     S3StorageService,
+    PublicAssetStorageService,
     QueueService,
     ProvisioningProcessor,
     IntegrationProcessor,
@@ -156,6 +165,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     CustomerEsimsService,
     TransatelOperationsService,
     PartnerShowcaseService,
+    HomepageCampaignService,
     ManualRefundsService,
     PaymentDisputesService,
     ProductionResilienceService,

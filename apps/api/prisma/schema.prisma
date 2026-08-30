@@ -758,22 +758,22 @@ model PartnerDocumentUploadIntent {
 }
 
 model PartnerDocumentVerification {
-  id                String                        @id @default(uuid()) @db.Uuid
-  partnerId         String                        @db.Uuid
-  partner           Partner                       @relation(fields: [partnerId], references: [id])
-  externalOrderId   String
-  activeExternalOrderKey String?                  @unique
-  status            String                        @default("AWAITING_UPLOAD")
-  travelerSnapshot  Json
-  expiresAt         DateTime
-  consumedAt        DateTime?
-  consumedOrderId   String?                       @unique @db.Uuid
-  failureCode       String?
-  reviewPolicy      DocumentReviewPolicy          @default(AUTO_OCR)
-  checkoutReleaseAt DateTime?
-  createdAt         DateTime                      @default(now())
-  updatedAt         DateTime                      @updatedAt
-  documents         PartnerDocumentUploadIntent[]
+  id                     String                        @id @default(uuid()) @db.Uuid
+  partnerId              String                        @db.Uuid
+  partner                Partner                       @relation(fields: [partnerId], references: [id])
+  externalOrderId        String
+  activeExternalOrderKey String?                       @unique
+  status                 String                        @default("AWAITING_UPLOAD")
+  travelerSnapshot       Json
+  expiresAt              DateTime
+  consumedAt             DateTime?
+  consumedOrderId        String?                       @unique @db.Uuid
+  failureCode            String?
+  reviewPolicy           DocumentReviewPolicy          @default(AUTO_OCR)
+  checkoutReleaseAt      DateTime?
+  createdAt              DateTime                      @default(now())
+  updatedAt              DateTime                      @updatedAt
+  documents              PartnerDocumentUploadIntent[]
 
   @@index([partnerId, externalOrderId])
   @@index([status, expiresAt])
@@ -1304,6 +1304,42 @@ model PartnerShowcase {
   updatedAt DateTime @updatedAt
 
   @@index([active, sortOrder])
+}
+
+enum HomepageCampaignPlacement {
+  FEATURED_BANNER
+  OFFER_GALLERY
+  HOW_GUIDE
+  WHY_ESIM_BANNER
+}
+
+enum HomepageCampaignFormat {
+  PORTRAIT
+  SQUARE
+  LANDSCAPE
+}
+
+model HomepageCampaign {
+  id          String                    @id @default(uuid()) @db.Uuid
+  title       String
+  altText     String
+  imageUrl    String
+  assetKey    String?
+  placement   HomepageCampaignPlacement
+  format      HomepageCampaignFormat
+  imageWidth  Int
+  imageHeight Int
+  countryCode String?
+  ctaLabel    String
+  sortOrder   Int                       @default(0)
+  active      Boolean                   @default(true)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  @@index([active, placement, sortOrder])
+  @@index([placement, startsAt, endsAt])
 }
 
 model AuditLog {

@@ -22,7 +22,9 @@ const baseSchema = z.object({
   PERSISTENCE_MODE: z.enum(["prisma", "memory"]).optional(),
   REDIS_URL: z.string().min(1).optional(),
   APP_ENCRYPTION_KEY_BASE64: z.string().min(16).optional(),
-  PAYMENT_MODE: z.enum(["khalti", "fonepay", "sandbox", "simulator"]).optional(),
+  PAYMENT_MODE: z
+    .enum(["khalti", "fonepay", "sandbox", "simulator"])
+    .optional(),
   FONEPAY_ENABLED: z.enum(["true", "false"]).optional(),
   FONEPAY_BASE_URL: z.string().url().optional(),
   FONEPAY_USERNAME: z.string().min(1).optional(),
@@ -52,6 +54,8 @@ const baseSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   AWS_SESSION_TOKEN: z.string().min(1).optional(),
   AWS_S3_BUCKET: z.string().min(3).optional(),
+  AWS_PUBLIC_ASSET_BUCKET: z.string().min(3).optional(),
+  PUBLIC_ASSET_BASE_URL: z.string().url().optional(),
   AWS_S3_ENDPOINT: z.string().url().optional(),
   AWS_S3_FORCE_PATH_STYLE: z.enum(["true", "false"]).optional(),
   AWS_SES_REGION: z.string().min(1).optional(),

@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -7,9 +8,9 @@ import {
   Bell,
   Boxes,
   ClipboardCheck,
-  Compass,
   Gauge,
   Handshake,
+  Images,
   History,
   PackageSearch,
   RadioTower,
@@ -43,6 +44,11 @@ const overviewItems: NavItem[] = [
   },
 ];
 const systemItems: NavItem[] = [
+  {
+    href: "/admin/homepage-campaigns",
+    label: "Homepage campaigns",
+    icon: Images,
+  },
   { href: "/manual-refunds", label: "Refunds", icon: Undo2 },
   { href: "/notifications", label: "Messages", icon: Bell },
   { href: "/logs", label: "Logs", icon: History },
@@ -113,11 +119,23 @@ export default function OpsSidebar({
         aria-label="Operations navigation"
       >
         <div className="ops-sidebar-brand">
-          <span className="mark">
-            <Compass className="size-4" />
-          </span>
+          <Image
+            className="ops-brand-mark"
+            src="/brand/visa-compass-mark.png"
+            alt=""
+            width={370}
+            height={484}
+            priority
+          />
           <div className="word">
-            <b>Visa Compass</b>
+            <Image
+              className="ops-brand-wordmark"
+              src="/brand/visa-compass-services-white.png"
+              alt="Visa Compass Services"
+              width={933}
+              height={373}
+              priority
+            />
             <span>Operations</span>
           </div>
           <button

@@ -1,10 +1,8 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import Image from "next/image";
 import "./globals.css";
 import CustomerHeader from "./customer-header";
 import { ClerkProvider } from "@clerk/nextjs";
-
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Visa Compass eSIM",
@@ -24,7 +22,7 @@ export default function RootLayout({
 }) {
   return (
     <ClerkProvider>
-      <html lang="en" className={inter.variable} suppressHydrationWarning>
+      <html lang="en" suppressHydrationWarning>
         <head>
           <script
             dangerouslySetInnerHTML={{
@@ -37,11 +35,24 @@ export default function RootLayout({
           {children}
           <footer className="footer">
             <div className="shell">
-              <span>© {new Date().getFullYear()} Visa Compass Nepal. All rights reserved.</span>
-              <span>
-                Coverage depends on local partner networks · Device
-                compatibility required
-              </span>
+              <Image
+                className="footer-logo"
+                src="/brand/visa-compass-services-white.png"
+                alt="Visa Compass Services"
+                width={933}
+                height={373}
+              />
+              <div className="footer-copy">
+                <span>
+                  © {new Date().getFullYear()} Visa Compass Nepal. All rights
+                  reserved.
+                </span>
+                <span>
+                  Coverage depends on local partner networks · Device
+                  compatibility required
+                </span>
+                <b>Travel eSIM connectivity powered by Ubigi.</b>
+              </div>
             </div>
           </footer>
         </body>

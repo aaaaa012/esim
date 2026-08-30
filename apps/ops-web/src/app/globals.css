@@ -290,27 +290,20 @@
   padding: 1.25rem 1.1rem;
   border-bottom: 1px solid rgb(255 255 255 / 0.07);
 }
-.ops-sidebar-brand .mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.15rem;
-  height: 2.15rem;
-  border-radius: 0.6rem;
+.ops-sidebar-brand .ops-brand-mark {
+  width: 1.85rem;
+  height: 2.42rem;
+  object-fit: contain;
   flex-shrink: 0;
-  color: #fff;
-  background: linear-gradient(135deg, #087e8b, #075985);
-  box-shadow: 0 6px 18px -6px rgb(8 126 139 / 0.6);
 }
 .ops-sidebar-brand .word {
   line-height: 1.25rem;
 }
-.ops-sidebar-brand .word b {
+.ops-sidebar-brand .ops-brand-wordmark {
   display: block;
-  font-weight: 700;
-  font-size: 0.95rem;
-  color: #fff;
-  letter-spacing: -0.01em;
+  width: 7.6rem;
+  height: auto;
+  object-fit: contain;
 }
 .ops-sidebar-brand .word span {
   font-size: 0.65rem;

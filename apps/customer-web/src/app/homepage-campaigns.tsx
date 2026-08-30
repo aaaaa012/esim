@@ -1,0 +1,437 @@
+"use client";
+
+import Image from "next/image";
+import Link from "next/link";
+import { ArrowLeft, ArrowRight, ExternalLink, Wifi, X } from "lucide-react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+
+type Placement =
+  "FEATURED_BANNER" | "OFFER_GALLERY" | "HOW_GUIDE" | "WHY_ESIM_BANNER";
+
+export type HomepageCampaign = {
+  id: string;
+  title: string;
+  altText: string;
+  imageUrl: string;
+  placement: Placement;
+  format: "PORTRAIT" | "SQUARE" | "LANDSCAPE";
+  imageWidth: number;
+  imageHeight: number;
+  countryCode: string | null;
+  ctaLabel: string;
+  ctaHref: string;
+  sortOrder: number;
+};
+
+type CampaignGroups = Record<Placement, HomepageCampaign[]>;
+
+const entries: Array<
+  Omit<HomepageCampaign, "id" | "placement" | "sortOrder"> & {
+    id: string;
+    placement: Placement;
+    sortOrder: number;
+  }
+> = [
+  {
+    id: "featured-nepali-partnership",
+    title: "Visa Compass and Ubigi international eSIM",
+    altText:
+      "Nepali campaign introducing Visa Compass and Ubigi travel eSIM for more than 200 destinations.",
+    imageUrl: "/campaigns/nepali-partnership.webp",
+    placement: "FEATURED_BANNER",
+    format: "LANDSCAPE",
+    imageWidth: 1600,
+    imageHeight: 477,
+    countryCode: null,
+    ctaLabel: "Browse travel plans",
+    ctaHref: "/#plans",
+    sortOrder: 0,
+  },
+  ...[
+    ["Australia", "AU", "australia.webp"],
+    ["Japan", "JP", "japan.webp"],
+    ["Malaysia", "MY", "malaysia.webp"],
+    ["Singapore", "SG", "singapore.webp"],
+    ["Thailand", "TH", "thailand.webp"],
+    ["United Arab Emirates", "AE", "uae.webp"],
+    ["United Kingdom", "GB", "uk.webp"],
+    ["Vietnam", "VN", "vietnam.webp"],
+  ].map(([country, code, file], index) => ({
+    id: `destination-${code!.toLowerCase()}`,
+    title: `${country} travel eSIM offer`,
+    altText: `${country} travel eSIM package offer from Visa Compass and Ubigi, with pricing in Nepali rupees.`,
+    imageUrl: `/campaigns/${file}`,
+    placement: "OFFER_GALLERY" as const,
+    format: "PORTRAIT" as const,
+    imageWidth: 768,
+    imageHeight: 1376,
+    countryCode: code!,
+    ctaLabel: "View plans",
+    ctaHref: `/?country=${code}#plans`,
+    sortOrder: index,
+  })),
+  {
+    id: "general-mobile-internet",
+    title: "Global internet without roaming fees",
+    altText:
+      "Traveller using a phone with a summary of Visa Compass and Ubigi global eSIM benefits.",
+    imageUrl: "/campaigns/mobile-internet-benefits.webp",
+    placement: "OFFER_GALLERY",
+    format: "PORTRAIT",
+    imageWidth: 1165,
+    imageHeight: 1600,
+    countryCode: null,
+    ctaLabel: "Browse destinations",
+    ctaHref: "/#plans",
+    sortOrder: 20,
+  },
+  ...[
+    ["Purchase and top up in Nepali rupees", "npr-purchase.webp", 1240, 1247],
+    ["One eSIM for a lifetime of travel", "one-esim-for-life.webp", 1250, 1250],
+  ].map(([title, file, width, height], index) => ({
+    id: `general-square-${index}`,
+    title: String(title),
+    altText: `${title} through the Visa Compass and Ubigi travel eSIM partnership.`,
+    imageUrl: `/campaigns/${file}`,
+    placement: "OFFER_GALLERY" as const,
+    format: "SQUARE" as const,
+    imageWidth: Number(width),
+    imageHeight: Number(height),
+    countryCode: null,
+    ctaLabel: "Browse travel plans",
+    ctaHref: "/#plans",
+    sortOrder: 30 + index,
+  })),
+  {
+    id: "setup-guide",
+    title: "Getting started with your eSIM",
+    altText:
+      "Three-step setup guide showing compatibility check, plan purchase, and QR code activation.",
+    imageUrl: "/campaigns/getting-started-guide.webp",
+    placement: "HOW_GUIDE",
+    format: "PORTRAIT",
+    imageWidth: 1165,
+    imageHeight: 1600,
+    countryCode: null,
+    ctaLabel: "Check compatibility",
+    ctaHref: "/compatibility",
+    sortOrder: 0,
+  },
+  {
+    id: "partnership-benefits",
+    title: "Why travel with Visa Compass and Ubigi",
+    altText:
+      "Visa Compass and Ubigi partnership banner summarizing international eSIM purchase, top-up, installation, and hotspot benefits.",
+    imageUrl: "/campaigns/partnership-benefits.webp",
+    placement: "WHY_ESIM_BANNER",
+    format: "LANDSCAPE",
+    imageWidth: 1600,
+    imageHeight: 477,
+    countryCode: null,
+    ctaLabel: "Browse travel plans",
+    ctaHref: "/#plans",
+    sortOrder: 0,
+  },
+];
+
+function fallbackGroups(): CampaignGroups {
+  return {
+    FEATURED_BANNER: entries.filter(
+      (item) => item.placement === "FEATURED_BANNER",
+    ),
+    OFFER_GALLERY: entries.filter((item) => item.placement === "OFFER_GALLERY"),
+    HOW_GUIDE: entries.filter((item) => item.placement === "HOW_GUIDE"),
+    WHY_ESIM_BANNER: entries.filter(
+      (item) => item.placement === "WHY_ESIM_BANNER",
+    ),
+  };
+}
+
+type CampaignContextValue = {
+  groups: CampaignGroups;
+  openCampaign: (campaign: HomepageCampaign) => void;
+};
+
+const CampaignContext = createContext<CampaignContextValue | null>(null);
+
+function useCampaigns() {
+  const value = useContext(CampaignContext);
+  if (!value) throw new Error("Campaign components require CampaignProvider");
+  return value;
+}
+
+export function CampaignProvider({ children }: { children: ReactNode }) {
+  const [groups, setGroups] = useState<CampaignGroups>(fallbackGroups);
+  const [selected, setSelected] = useState<HomepageCampaign | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`${API}/public/homepage-campaigns`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Campaign service unavailable");
+        return (await response.json()) as { data: CampaignGroups };
+      })
+      .then((response) => setGroups(response.data))
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setGroups(fallbackGroups());
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (selected && !dialogRef.current?.open) dialogRef.current?.showModal();
+  }, [selected]);
+
+  const close = useCallback(() => dialogRef.current?.close(), []);
+
+  return (
+    <CampaignContext.Provider value={{ groups, openCampaign: setSelected }}>
+      {children}
+      <dialog
+        className="campaign-dialog"
+        ref={dialogRef}
+        onClose={() => setSelected(null)}
+        aria-labelledby="campaign-dialog-title"
+      >
+        {selected ? (
+          <div className="campaign-dialog-inner">
+            <div className="campaign-dialog-head">
+              <h2 id="campaign-dialog-title">{selected.title}</h2>
+              <button
+                type="button"
+                onClick={close}
+                aria-label="Close poster viewer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div
+              className={`campaign-dialog-art is-${selected.format.toLowerCase()}`}
+            >
+              <Image
+                src={selected.imageUrl}
+                alt={selected.altText}
+                width={selected.imageWidth}
+                height={selected.imageHeight}
+                sizes="(max-width: 760px) 94vw, 84vw"
+                priority
+              />
+            </div>
+            <div className="campaign-dialog-actions">
+              <button
+                type="button"
+                className="button secondary"
+                onClick={close}
+              >
+                Close
+              </button>
+              <Link className="button" href={selected.ctaHref} onClick={close}>
+                {selected.ctaLabel} <ExternalLink size={16} />
+              </Link>
+            </div>
+          </div>
+        ) : null}
+      </dialog>
+    </CampaignContext.Provider>
+  );
+}
+
+export function PoweredByBar() {
+  return (
+    <div className="powered-by-bar" aria-label="Connectivity partner">
+      <span>Travel eSIM connectivity</span>
+      <b>powered by Ubigi</b>
+    </div>
+  );
+}
+
+export function FeaturedCampaign() {
+  const { groups, openCampaign } = useCampaigns();
+  const campaign = groups.FEATURED_BANNER[0];
+  if (!campaign) return null;
+  return (
+    <section
+      className="campaign-featured"
+      aria-labelledby="featured-campaign-heading"
+    >
+      <div className="shell">
+        <div className="campaign-section-heading">
+          <div>
+            <span className="eyebrow">Featured partnership</span>
+            <h2 id="featured-campaign-heading">
+              Travel connected, wherever you land.
+            </h2>
+          </div>
+          <span className="campaign-section-note">Visa Compass × Ubigi</span>
+        </div>
+        <button
+          className="campaign-landscape-art"
+          type="button"
+          onClick={() => openCampaign(campaign)}
+          aria-label={`View full poster: ${campaign.title}`}
+        >
+          <Image
+            src={campaign.imageUrl}
+            alt={campaign.altText}
+            width={campaign.imageWidth}
+            height={campaign.imageHeight}
+            sizes="(max-width: 1180px) 100vw, 1132px"
+            priority
+          />
+        </button>
+        <div className="campaign-under-art">
+          <span>Select the artwork to read it at full size.</span>
+          <Link className="button" href={campaign.ctaHref}>
+            {campaign.ctaLabel} <ArrowRight size={17} />
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function OfferGallery() {
+  const { groups, openCampaign } = useCampaigns();
+  const railRef = useRef<HTMLDivElement>(null);
+  const campaigns = groups.OFFER_GALLERY;
+  if (!campaigns.length) return null;
+  const move = (direction: -1 | 1) => {
+    railRef.current?.scrollBy({
+      left: direction * Math.max(280, railRef.current.clientWidth * 0.78),
+      behavior: "smooth",
+    });
+  };
+  return (
+    <section
+      className="campaign-gallery-section"
+      aria-labelledby="campaign-gallery-heading"
+    >
+      <div className="shell">
+        <div className="campaign-gallery-head">
+          <div>
+            <span className="eyebrow">Current offers</span>
+            <h2 id="campaign-gallery-heading">
+              Choose where the journey takes you.
+            </h2>
+            <p>
+              Open any poster for offer details and a direct route to matching
+              plans.
+            </p>
+          </div>
+          <div
+            className="campaign-gallery-controls"
+            aria-label="Offer gallery controls"
+          >
+            <button
+              type="button"
+              onClick={() => move(-1)}
+              aria-label="Previous offers"
+            >
+              <ArrowLeft size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={() => move(1)}
+              aria-label="Next offers"
+            >
+              <ArrowRight size={18} />
+            </button>
+          </div>
+        </div>
+        <div className="campaign-rail" ref={railRef} tabIndex={0}>
+          {campaigns.map((campaign) => (
+            <article
+              className={`campaign-card is-${campaign.format.toLowerCase()}`}
+              key={campaign.id}
+            >
+              <button
+                className="campaign-card-art"
+                type="button"
+                onClick={() => openCampaign(campaign)}
+                aria-label={`View full poster: ${campaign.title}`}
+              >
+                <Image
+                  src={campaign.imageUrl}
+                  alt={campaign.altText}
+                  width={campaign.imageWidth}
+                  height={campaign.imageHeight}
+                  sizes="(max-width: 560px) 80vw, (max-width: 900px) 44vw, 30vw"
+                />
+              </button>
+              <div className="campaign-card-copy">
+                <h3>{campaign.title}</h3>
+                <Link href={campaign.ctaHref}>
+                  {campaign.ctaLabel} <ArrowRight size={15} />
+                </Link>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function GuideCampaign() {
+  const { groups, openCampaign } = useCampaigns();
+  const campaign = groups.HOW_GUIDE[0];
+  if (!campaign) return null;
+  return (
+    <div className="journey-visual campaign-guide">
+      <Image
+        src={campaign.imageUrl}
+        alt={campaign.altText}
+        width={campaign.imageWidth}
+        height={campaign.imageHeight}
+        sizes="(max-width: 860px) 100vw, 46vw"
+      />
+      <div className="journey-caption">
+        <span>
+          <Wifi size={17} />
+        </span>
+        <div>
+          <b>Ready before takeoff</b>
+          <small>Install at home. Connect when you land.</small>
+        </div>
+        <button type="button" onClick={() => openCampaign(campaign)}>
+          View full setup guide
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function WhyCampaign() {
+  const { groups, openCampaign } = useCampaigns();
+  const campaign = groups.WHY_ESIM_BANNER[0];
+  if (!campaign) return null;
+  return (
+    <div className="why-campaign">
+      <button type="button" onClick={() => openCampaign(campaign)}>
+        <Image
+          src={campaign.imageUrl}
+          alt={campaign.altText}
+          width={campaign.imageWidth}
+          height={campaign.imageHeight}
+          sizes="(max-width: 1180px) 100vw, 1132px"
+        />
+      </button>
+      <Link href={campaign.ctaHref}>
+        {campaign.ctaLabel} <ArrowRight size={15} />
+      </Link>
+    </div>
+  );
+}
