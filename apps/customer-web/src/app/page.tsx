@@ -159,35 +159,43 @@ export default function Home() {
             </div>
             <div className="how-layout">
               <GuideCampaign />
-              <div className="steps">
-                <div className="step">
+              <div className="steps-panel">
+                <div className="steps-intro">
+                  <span>From compatible phone to active eSIM</span>
+                  <p>Complete these steps before departure, then connect as soon as you land.</p>
+                </div>
+                <ol className="steps">
+                <li className="step">
                   <span className="step-number">1</span>
                   <div>
-                    <h3>Choose your destination</h3>
+                    <h3>Check your phone</h3>
                     <p>
-                      Compare plans with transparent data, validity, and
-                      coverage.
+                      Dial <strong>*#06#</strong> and confirm that your device shows an EID before buying.
                     </p>
                   </div>
-                </div>
-                <div className="step">
+                </li>
+                <li className="step">
                   <span className="step-number">2</span>
                   <div>
-                    <h3>Verify and pay securely</h3>
+                    <h3>Choose and purchase your plan</h3>
                     <p>
-                      Confirm compatibility, add your details, and pay via
-                      Khalti.
+                      Select your destination and data allowance, then pay securely in NPR.
                     </p>
                   </div>
-                </div>
-                <div className="step">
+                </li>
+                <li className="step">
                   <span className="step-number">3</span>
                   <div>
-                    <h3>Scan your QR code</h3>
+                    <h3>Install and activate</h3>
                     <p>
-                      Access your private eSIM QR and activate before departure.
+                      Scan the private QR code from your email and install the eSIM before departure.
                     </p>
                   </div>
+                </li>
+                </ol>
+                <div className="activation-tip">
+                  <CheckCircle2 size={18} aria-hidden="true" />
+                  <p><strong>Before landing:</strong> turn on your Ubigi line. Your selected plan starts automatically when you arrive.</p>
                 </div>
               </div>
             </div>

@@ -291,10 +291,20 @@
   border-bottom: 1px solid rgb(255 255 255 / 0.07);
 }
 .ops-sidebar-brand .ops-brand-mark {
+  display: none;
   width: 1.85rem;
   height: 2.42rem;
   object-fit: contain;
   flex-shrink: 0;
+}
+
+@media (max-width: 1023px) {
+  .ops-sidebar-brand .ops-brand-mark {
+    display: block;
+  }
+  .ops-sidebar-brand .word {
+    display: none;
+  }
 }
 .ops-sidebar-brand .word {
   line-height: 1.25rem;

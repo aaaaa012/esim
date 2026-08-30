@@ -76,6 +76,7 @@ import {
 import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
 import {
   HomepageCampaignAdminController,
+  HomepageMarketingAssetController,
   HomepageCampaignPublicController,
 } from "./modules/showcase/homepage-campaign.controller.js";
 import { HomepageCampaignService } from "./modules/showcase/homepage-campaign.service.js";
@@ -121,6 +122,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     PartnerShowcasePublicController,
     HomepageCampaignAdminController,
     HomepageCampaignPublicController,
+    HomepageMarketingAssetController,
     ManualRefundsController,
     PaymentDisputesController,
     AttentionController,

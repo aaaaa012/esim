@@ -11,6 +11,7 @@ import {
   FeaturedCampaign,
   GuideCampaign,
   OfferGallery,
+  resolveCampaignImageUrl,
   WhyCampaign,
 } from "./homepage-campaigns";
 
@@ -46,6 +47,16 @@ beforeAll(() => {
 });
 
 describe("homepage campaigns", () => {
+  it("resolves API-hosted artwork without confusing it with customer assets", () => {
+    expect(
+      resolveCampaignImageUrl(
+        "/api/v1/public/marketing-assets/campaign_example.jpg",
+      ),
+    ).toBe(
+      "http://localhost:4000/api/v1/public/marketing-assets/campaign_example.jpg",
+    );
+  });
+
   it("keeps all seeded placements available when the API is unavailable", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementationOnce(
       () => new Promise(() => undefined),

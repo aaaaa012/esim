@@ -42,13 +42,14 @@ export class HomepageCampaignService {
 
   async listAll() {
     if (!this.prisma.enabled) return [];
-    return this.prisma.homepageCampaign.findMany({
+    const items = await this.prisma.homepageCampaign.findMany({
       orderBy: [
         { placement: "asc" },
         { sortOrder: "asc" },
         { createdAt: "asc" },
       ],
     });
+    return items.map((item) => this.present(item));
   }
 
   async listActive() {
@@ -68,6 +69,7 @@ export class HomepageCampaignService {
         title: true,
         altText: true,
         imageUrl: true,
+        assetKey: true,
         placement: true,
         format: true,
         imageWidth: true,
@@ -80,11 +82,18 @@ export class HomepageCampaignService {
     });
     for (const item of items) {
       grouped[item.placement].push({
-        ...item,
+        ...this.present(item),
         ctaHref: this.ctaHref(item.countryCode, item.placement),
       });
     }
     return grouped;
+  }
+
+  private present<T extends { imageUrl: string; assetKey?: string | null }>(item: T) {
+    return {
+      ...item,
+      imageUrl: item.assetKey ? this.assets.publicUrl(item.assetKey) : item.imageUrl,
+    };
   }
 
   async create(input: CampaignInput & { assetKey: string }, actorId: string) {

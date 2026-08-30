@@ -123,7 +123,8 @@
 .campaign-card-art {
   display: block;
   width: 100%;
-  height: 430px;
+  aspect-ratio: 768 / 1376;
+  height: auto;
   padding: 0;
   overflow: hidden;
   border: 0;
@@ -132,13 +133,25 @@
   cursor: zoom-in;
 }
 .campaign-card.is-square .campaign-card-art {
-  height: 360px;
+  aspect-ratio: 1 / 1;
+  height: auto;
 }
 .campaign-card-art img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  object-position: top;
+  object-fit: contain;
+}
+.campaign-image-unavailable {
+  display: grid;
+  width: 100%;
+  min-height: 14rem;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--surface-2) 88%, var(--primary-soft));
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 650;
+  text-align: center;
 }
 .campaign-card-copy {
   display: grid;
@@ -234,19 +247,13 @@
 .campaign-guide {
   background: var(--surface);
 }
-.campaign-guide > img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: top;
-}
 .campaign-guide .journey-caption button {
   margin-left: auto;
   padding: 9px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.28);
+  border: 1px solid var(--border-strong);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: var(--surface-2);
+  color: var(--text);
   font-size: 12px;
   font-weight: 750;
   cursor: pointer;
@@ -898,6 +905,7 @@
 
 .section {
   padding: 96px 0;
+  scroll-margin-top: 116px;
 }
 
 .section-title {
@@ -1526,42 +1534,40 @@
 
 .how-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
-  align-items: stretch;
-  gap: 28px;
+  grid-template-columns: minmax(320px, 0.78fr) minmax(0, 1.22fr);
+  align-items: start;
+  gap: clamp(28px, 4vw, 52px);
 }
-.journey-visual {
-  position: relative;
-  min-height: 470px;
+.campaign-guide {
+  margin: 0;
   overflow: hidden;
   border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  background: var(--surface);
   box-shadow: var(--shadow-lg);
 }
-.journey-visual::after {
-  content: "";
-  position: absolute;
-  inset: 45% 0 0;
-  background: linear-gradient(transparent, rgba(3, 18, 28, 0.72));
-  pointer-events: none;
+.campaign-guide-art {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--surface) 88%, var(--primary-soft));
+  cursor: zoom-in;
 }
-.journey-visual img {
-  object-fit: cover;
+.campaign-guide-art img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
 }
 .journey-caption {
-  position: absolute;
-  z-index: 2;
-  left: 24px;
-  right: 24px;
-  bottom: 22px;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 16px;
-  background: rgba(5, 27, 39, 0.74);
-  color: #fff;
-  backdrop-filter: blur(12px);
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
 }
 .journey-caption > span {
   display: grid;
@@ -1569,20 +1575,45 @@
   width: 38px;
   height: 38px;
   border-radius: 11px;
-  background: rgba(45, 212, 191, 0.18);
-  color: #5eead4;
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 .journey-caption div {
   display: grid;
   gap: 2px;
 }
 .journey-caption small {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-3);
   font-size: 12px;
+}
+.steps-panel {
+  display: grid;
+  gap: 22px;
+  padding: clamp(22px, 3vw, 34px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--surface) 94%, var(--primary-soft));
+  box-shadow: var(--shadow-md);
+}
+.steps-intro span {
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.steps-intro p {
+  max-width: 54ch;
+  margin: 8px 0 0;
+  color: var(--text-2);
+  line-height: 1.6;
 }
 .steps {
   display: grid;
-  gap: 14px;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .step {
@@ -1590,11 +1621,11 @@
   grid-template-columns: auto 1fr;
   align-items: start;
   gap: 18px;
-  padding: 25px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  padding: 20px 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
   transition:
     box-shadow 0.2s ease,
     transform 0.2s ease,
@@ -1602,9 +1633,8 @@
 }
 
 .step:hover {
-  transform: translateY(-3px);
-  border-color: color-mix(in srgb, var(--primary) 26%, var(--border));
-  box-shadow: var(--shadow-md);
+  transform: none;
+  box-shadow: none;
 }
 
 .step-number {
@@ -1633,6 +1663,19 @@
   font-size: 14px;
   margin: 0;
 }
+.step p strong { color: var(--text); }
+.activation-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background: var(--primary-soft);
+  color: var(--text-2);
+}
+.activation-tip svg { flex: none; color: var(--primary); margin-top: 2px; }
+.activation-tip p { margin: 0; font-size: 14px; line-height: 1.55; }
+.activation-tip strong { color: var(--text); }
 
 /* ---------- Why us ---------- */
 
@@ -2091,7 +2134,7 @@
     flex-basis: calc(((100% - 18px) / 2) * 1.25);
   }
   .campaign-card-art {
-    height: 410px;
+    height: auto;
   }
   .campaign-guide .journey-caption {
     align-items: flex-start;
@@ -2109,6 +2152,7 @@
   .how-layout {
     grid-template-columns: 1fr;
   }
+  .steps-panel { order: -1; }
   .journey-visual {
     min-height: 390px;
   }
@@ -2224,7 +2268,7 @@
   }
   .campaign-card-art,
   .campaign-card.is-square .campaign-card-art {
-    height: 400px;
+    height: auto;
   }
   .campaign-under-art {
     align-items: flex-start;

@@ -15,6 +15,15 @@ import {
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
+export function resolveCampaignImageUrl(imageUrl: string) {
+  if (!imageUrl.startsWith("/api/v1/")) return imageUrl;
+  try {
+    return `${new URL(API).origin}${imageUrl}`;
+  } catch {
+    return imageUrl;
+  }
+}
+
 type Placement =
   "FEATURED_BANNER" | "OFFER_GALLERY" | "HOW_GUIDE" | "WHY_ESIM_BANNER";
 
@@ -170,6 +179,36 @@ function useCampaigns() {
   return value;
 }
 
+function CampaignImage({
+  campaign,
+  sizes,
+  priority = false,
+}: {
+  campaign: HomepageCampaign;
+  sizes: string;
+  priority?: boolean;
+}) {
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [campaign.imageUrl]);
+  if (broken)
+    return (
+      <span className="campaign-image-unavailable" role="img" aria-label={campaign.altText}>
+        Artwork temporarily unavailable
+      </span>
+    );
+  return (
+    <Image
+      src={resolveCampaignImageUrl(campaign.imageUrl)}
+      alt={campaign.altText}
+      width={campaign.imageWidth}
+      height={campaign.imageHeight}
+      sizes={sizes}
+      priority={priority}
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
 export function CampaignProvider({ children }: { children: ReactNode }) {
   const [groups, setGroups] = useState<CampaignGroups>(fallbackGroups);
   const [selected, setSelected] = useState<HomepageCampaign | null>(null);
@@ -221,11 +260,8 @@ export function CampaignProvider({ children }: { children: ReactNode }) {
             <div
               className={`campaign-dialog-art is-${selected.format.toLowerCase()}`}
             >
-              <Image
-                src={selected.imageUrl}
-                alt={selected.altText}
-                width={selected.imageWidth}
-                height={selected.imageHeight}
+              <CampaignImage
+                campaign={selected}
                 sizes="(max-width: 760px) 94vw, 84vw"
                 priority
               />
@@ -283,11 +319,8 @@ export function FeaturedCampaign() {
           onClick={() => openCampaign(campaign)}
           aria-label={`View full poster: ${campaign.title}`}
         >
-          <Image
-            src={campaign.imageUrl}
-            alt={campaign.altText}
-            width={campaign.imageWidth}
-            height={campaign.imageHeight}
+          <CampaignImage
+            campaign={campaign}
             sizes="(max-width: 1180px) 100vw, 1132px"
             priority
           />
@@ -363,11 +396,8 @@ export function OfferGallery() {
                 onClick={() => openCampaign(campaign)}
                 aria-label={`View full poster: ${campaign.title}`}
               >
-                <Image
-                  src={campaign.imageUrl}
-                  alt={campaign.altText}
-                  width={campaign.imageWidth}
-                  height={campaign.imageHeight}
+                <CampaignImage
+                  campaign={campaign}
                   sizes="(max-width: 560px) 80vw, (max-width: 900px) 44vw, 30vw"
                 />
               </button>
@@ -390,27 +420,31 @@ export function GuideCampaign() {
   const campaign = groups.HOW_GUIDE[0];
   if (!campaign) return null;
   return (
-    <div className="journey-visual campaign-guide">
-      <Image
-        src={campaign.imageUrl}
-        alt={campaign.altText}
-        width={campaign.imageWidth}
-        height={campaign.imageHeight}
-        sizes="(max-width: 860px) 100vw, 46vw"
-      />
-      <div className="journey-caption">
+    <figure className="campaign-guide">
+      <button
+        className="campaign-guide-art"
+        type="button"
+        onClick={() => openCampaign(campaign)}
+        aria-label={`Enlarge setup poster: ${campaign.title}`}
+      >
+        <CampaignImage
+          campaign={campaign}
+          sizes="(max-width: 860px) 100vw, 42vw"
+        />
+      </button>
+      <figcaption className="journey-caption">
         <span>
-          <Wifi size={17} />
+          <Wifi size={17} aria-hidden="true" />
         </span>
         <div>
           <b>Ready before takeoff</b>
-          <small>Install at home. Connect when you land.</small>
+          <small>Keep the full guide handy while you install.</small>
         </div>
         <button type="button" onClick={() => openCampaign(campaign)}>
           View full setup guide
         </button>
-      </div>
-    </div>
+      </figcaption>
+    </figure>
   );
 }
 
@@ -421,11 +455,8 @@ export function WhyCampaign() {
   return (
     <div className="why-campaign">
       <button type="button" onClick={() => openCampaign(campaign)}>
-        <Image
-          src={campaign.imageUrl}
-          alt={campaign.altText}
-          width={campaign.imageWidth}
-          height={campaign.imageHeight}
+        <CampaignImage
+          campaign={campaign}
           sizes="(max-width: 1180px) 100vw, 1132px"
         />
       </button>

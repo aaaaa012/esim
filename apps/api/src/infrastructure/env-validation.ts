@@ -54,7 +54,7 @@ const baseSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   AWS_SESSION_TOKEN: z.string().min(1).optional(),
   AWS_S3_BUCKET: z.string().min(3).optional(),
-  AWS_PUBLIC_ASSET_BUCKET: z.string().min(3).optional(),
+  AWS_MARKETING_ASSET_BUCKET: z.string().min(3).optional(),
   PUBLIC_ASSET_BASE_URL: z.string().url().optional(),
   AWS_S3_ENDPOINT: z.string().url().optional(),
   AWS_S3_FORCE_PATH_STYLE: z.enum(["true", "false"]).optional(),

@@ -118,7 +118,7 @@ export default function OpsSidebar({
         className={cn("ops-sidebar", open && "open")}
         aria-label="Operations navigation"
       >
-        <div className="ops-sidebar-brand">
+        <div className="ops-sidebar-brand" aria-label="Visa Compass Services Operations">
           <Image
             className="ops-brand-mark"
             src="/brand/visa-compass-mark.png"
@@ -131,7 +131,7 @@ export default function OpsSidebar({
             <Image
               className="ops-brand-wordmark"
               src="/brand/visa-compass-services-white.png"
-              alt="Visa Compass Services"
+              alt=""
               width={933}
               height={373}
               priority

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   kathmanduInputToUtc,
+  resolveCampaignArtwork,
   utcToKathmanduInput,
 } from "./homepage-campaigns-client";
 
@@ -16,5 +17,15 @@ describe("homepage campaign Nepal scheduling", () => {
       "2026-09-01T09:30",
     );
     expect(utcToKathmanduInput(null)).toBe("");
+  });
+
+  it("resolves private marketing media through the API origin", () => {
+    expect(
+      resolveCampaignArtwork(
+        "/api/v1/public/marketing-assets/campaign_example.jpg",
+      ),
+    ).toBe(
+      "http://localhost:4000/api/v1/public/marketing-assets/campaign_example.jpg",
+    );
   });
 });

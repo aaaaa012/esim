@@ -1,15 +1,22 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
   Req,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { HomepageCampaignPlacement, UserRoleName } from "@prisma/client";
+import type { Response } from "express";
 import { z } from "zod";
 import {
   AccountGuard,
@@ -56,10 +63,6 @@ const updateSchema = z.object({
   assetKey: z.string().min(1).max(500).optional(),
 });
 
-const uploadSchema = z.object({
-  contentType: z.enum(["image/jpeg", "image/png"]),
-});
-
 function dates<
   T extends {
     startsAt?: string | null | undefined;
@@ -97,9 +100,16 @@ export class HomepageCampaignAdminController {
   }
 
   @Post("uploads")
-  upload(@Body() body: unknown) {
-    const input = uploadSchema.parse(body);
-    return this.assets.createCampaignUpload(input.contentType);
+  @UseInterceptors(
+    FileInterceptor("artwork", { limits: { fileSize: 3 * 1024 * 1024 } }),
+  )
+  upload(
+    @UploadedFile()
+    file: { buffer: Buffer; mimetype: string; size: number } | undefined,
+  ) {
+    if (!file)
+      throw new BadRequestException("Campaign artwork file is required");
+    return this.assets.uploadCampaignAsset(file);
   }
 
   @Post()
@@ -133,5 +143,27 @@ export class HomepageCampaignPublicController {
   @Get()
   list() {
     return this.campaigns.listActive();
+  }
+}
+
+@Controller("public/marketing-assets")
+export class HomepageMarketingAssetController {
+  constructor(private readonly assets: PublicAssetStorageService) {}
+
+  @Get(":fileName")
+  async read(
+    @Param("fileName") fileName: string,
+    @Headers("if-none-match") ifNoneMatch: string | undefined,
+    @Res() response: Response,
+  ) {
+    const asset = await this.assets.readCampaignAsset(fileName);
+    if (ifNoneMatch && ifNoneMatch === asset.etag)
+      return response.status(304).end();
+    response.setHeader("Content-Type", asset.contentType);
+    response.setHeader("Content-Length", String(asset.bytes.length));
+    response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    response.setHeader("ETag", asset.etag);
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    return response.status(200).send(asset.bytes);
   }
 }

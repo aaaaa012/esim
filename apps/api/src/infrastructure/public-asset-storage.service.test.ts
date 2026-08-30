@@ -34,7 +34,7 @@ describe("PublicAssetStorageService artwork validation", () => {
   it("isolates public marketing objects to the campaign prefix", () => {
     expect(() =>
       subject.requireCampaignKey(
-        "visa-compass/public/homepage-promotions/campaign_ok.jpg",
+        "visa-compass/marketing/campaigns/campaign_0123456789ab_123e4567-e89b-12d3-a456-426614174000.jpg",
       ),
     ).not.toThrow();
     expect(() =>
@@ -42,7 +42,7 @@ describe("PublicAssetStorageService artwork validation", () => {
     ).toThrow(BadRequestException);
     expect(() =>
       subject.requireCampaignKey(
-        "visa-compass/public/homepage-promotions/../secret.jpg",
+        "visa-compass/marketing/campaigns/../secret.jpg",
       ),
     ).toThrow(BadRequestException);
   });

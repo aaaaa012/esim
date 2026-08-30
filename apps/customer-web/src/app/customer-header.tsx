@@ -41,7 +41,7 @@ export default function CustomerHeader() {
   return (
     <header className="site-header">
       <div className="shell header-inner">
-        <Link className="brand" href="/">
+        <Link className="brand" href="/" aria-label="Visa Compass Services home">
           <Image
             className="brand-mark-logo"
             src="/brand/visa-compass-mark.png"
@@ -53,7 +53,7 @@ export default function CustomerHeader() {
           <Image
             className="brand-wordmark brand-wordmark-color"
             src="/brand/visa-compass-services-color.png"
-            alt="Visa Compass Services"
+            alt=""
             width={1267}
             height={466}
             priority
@@ -61,7 +61,7 @@ export default function CustomerHeader() {
           <Image
             className="brand-wordmark brand-wordmark-white"
             src="/brand/visa-compass-services-white.png"
-            alt="Visa Compass Services"
+            alt=""
             width={933}
             height={373}
             priority

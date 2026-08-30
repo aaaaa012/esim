@@ -92,3 +92,25 @@ fails closed when storage is absent.
 - Configure a lifecycle rule appropriate to the legal retention period.
 - Log S3 data events for the private prefix when audit requirements call for
   object-level access records.
+
+## Homepage marketing media
+
+Homepage campaign artwork stays in the same private storage boundary but uses
+the isolated `visa-compass/marketing/campaigns/` prefix. Ops sends a multipart
+upload to the authenticated API; browsers never receive S3 credentials or a
+presigned marketing upload URL. The API verifies JPEG/PNG signatures,
+dimensions, ratio, and the 3 MB limit before writing an immutable object.
+
+Public reads go through
+`GET /api/v1/public/marketing-assets/:fileName`. The route accepts only the
+generated campaign filename grammar and always prepends the marketing prefix,
+so it cannot address private order documents. Responses include a content
+type, ETag, `nosniff`, and a one-year immutable cache policy.
+
+Set `AWS_MARKETING_ASSET_BUCKET` when marketing media uses a separate private
+bucket; otherwise it falls back to `AWS_S3_BUCKET`. Set
+`PUBLIC_ASSET_BASE_URL` to the absolute public API media route in production.
+The workload identity needs `s3:GetObject`, `s3:PutObject`, and
+`s3:DeleteObject` only for
+`arn:aws:s3:::<bucket>/visa-compass/marketing/*`. It does not require
+`s3:ListBucket` or public bucket access.

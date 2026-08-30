@@ -34,8 +34,7 @@ import {
 } from "@/components/ui/dialog";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-const CUSTOMER_WEB =
-  process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL ?? "http://localhost:3000";
+const CUSTOMER_WEB = process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL;
 const NEPAL_OFFSET_MS = (5 * 60 + 45) * 60 * 1000;
 
 type Placement =
@@ -61,13 +60,12 @@ type Campaign = {
   updatedAt: string;
 };
 type Country = { code: string; name: string };
-type UploadAuthorization = {
+type UploadedArtwork = {
   assetKey: string;
-  upload: {
-    endpoint: string;
-    method: "PUT";
-    headers: Record<string, string>;
-  };
+  imageUrl: string;
+  width: number;
+  height: number;
+  format: Format;
 };
 type FormState = {
   title: string;
@@ -140,41 +138,60 @@ function campaignStatus(campaign: Campaign): {
   return { label: "Live", tone: "success" };
 }
 
-function putFile(
-  authorization: UploadAuthorization["upload"],
-  file: File,
-  onProgress: (value: number) => void,
-) {
-  return new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open(authorization.method, authorization.endpoint);
-    Object.entries(authorization.headers).forEach(([key, value]) =>
-      xhr.setRequestHeader(key, value),
-    );
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable)
-        onProgress(Math.round((event.loaded / event.total) * 100));
-    };
-    xhr.onerror = () => reject(new Error("Artwork upload failed"));
-    xhr.onload = () =>
-      xhr.status >= 200 && xhr.status < 300
-        ? resolve()
-        : reject(new Error("Artwork upload failed"));
-    xhr.send(file);
-  });
+function customerOrigin() {
+  if (CUSTOMER_WEB) return CUSTOMER_WEB.replace(/\/$/, "");
+  if (typeof window !== "undefined" && window.location.hostname.startsWith("ops."))
+    return `${window.location.protocol}//${window.location.hostname.replace(/^ops\./, "esim.")}`;
+  return "http://localhost:3000";
+}
+
+export function resolveCampaignArtwork(imageUrl: string) {
+  if (imageUrl.startsWith("/api/v1/")) {
+    try {
+      return `${new URL(API).origin}${imageUrl}`;
+    } catch {
+      return imageUrl;
+    }
+  }
+  return imageUrl.startsWith("/") ? `${customerOrigin()}${imageUrl}` : imageUrl;
+}
+
+function apiError(value: unknown, fallback: string) {
+  if (!value || typeof value !== "object") return fallback;
+  const payload = value as {
+    message?: string;
+    correlationId?: string;
+    error?: string | { message?: string; correlationId?: string };
+  };
+  const message =
+    payload.message ??
+    (typeof payload.error === "string" ? payload.error : payload.error?.message) ??
+    fallback;
+  const correlationId =
+    payload.correlationId ??
+    (typeof payload.error === "object" ? payload.error?.correlationId : undefined) ??
+    (value as { meta?: { correlationId?: string } }).meta?.correlationId;
+  return correlationId ? `${message} (reference ${correlationId})` : message;
 }
 
 function Artwork({ campaign }: { campaign: Campaign }) {
-  const source = campaign.imageUrl.startsWith("/")
-    ? `${CUSTOMER_WEB}${campaign.imageUrl}`
-    : campaign.imageUrl;
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [campaign.imageUrl]);
+  if (broken)
+    return (
+      <span className="flex size-full flex-col items-center justify-center gap-2 bg-muted p-5 text-center text-xs text-muted-foreground">
+        <ImageIcon className="size-6" aria-hidden="true" />
+        Artwork unavailable
+      </span>
+    );
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={source}
+      src={resolveCampaignArtwork(campaign.imageUrl)}
       alt={campaign.altText}
-      className="size-full object-cover object-top"
+      className="max-h-[34rem] size-full object-contain"
       loading="lazy"
+      onError={() => setBroken(true)}
     />
   );
 }
@@ -190,6 +207,7 @@ export default function HomepageCampaignsClient() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadPhase, setUploadPhase] = useState("");
   const filePreview = useMemo(
     () => (file ? URL.createObjectURL(file) : ""),
     [file],
@@ -206,11 +224,13 @@ export default function HomepageCampaignsClient() {
     async <T,>(path: string, init?: RequestInit) => {
       const response = await authFetch(`${API}${path}`, {
         ...init,
-        headers: { "content-type": "application/json", ...init?.headers },
+        headers: {
+          ...(init?.body instanceof FormData ? {} : { "content-type": "application/json" }),
+          ...init?.headers,
+        },
       });
       const value = await response.json();
-      if (!response.ok)
-        throw new Error(value.error?.message ?? "Request failed");
+      if (!response.ok) throw new Error(apiError(value, "Request failed"));
       return value.data as T;
     },
     [authFetch],
@@ -250,6 +270,7 @@ export default function HomepageCampaignsClient() {
     setFile(null);
     setForm(initialForm);
     setUploadProgress(0);
+    setUploadPhase("");
   };
 
   const edit = (campaign: Campaign) => {
@@ -292,21 +313,21 @@ export default function HomepageCampaignsClient() {
     }
     setBusy(true);
     setUploadProgress(file ? 2 : 100);
+    setUploadPhase(file ? "Validating artwork" : "Saving campaign");
     try {
       let assetKey: string | undefined;
       if (file) {
-        const authorization = await request<UploadAuthorization>(
+        const body = new FormData();
+        body.append("artwork", file);
+        setUploadProgress(20);
+        setUploadPhase("Uploading securely");
+        const uploaded = await request<UploadedArtwork>(
           "/admin/homepage-campaigns/uploads",
-          {
-            method: "POST",
-            body: JSON.stringify({ contentType: file.type }),
-          },
+          { method: "POST", body },
         );
-        setUploadProgress(8);
-        await putFile(authorization.upload, file, (progress) =>
-          setUploadProgress(8 + Math.round(progress * 0.82)),
-        );
-        assetKey = authorization.assetKey;
+        setUploadProgress(82);
+        setUploadPhase("Artwork verified");
+        assetKey = uploaded.assetKey;
       }
       const payload = {
         title: form.title.trim(),
@@ -321,6 +342,7 @@ export default function HomepageCampaignsClient() {
         ...(assetKey ? { assetKey } : {}),
       };
       setUploadProgress(94);
+      setUploadPhase("Saving campaign");
       await request(
         editing
           ? `/admin/homepage-campaigns/${editing.id}`
@@ -328,10 +350,12 @@ export default function HomepageCampaignsClient() {
         { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) },
       );
       setUploadProgress(100);
+      setUploadPhase("Complete");
       toast.success(editing ? "Campaign updated" : "Campaign created");
       reset();
       await load();
     } catch (error) {
+      setUploadPhase("Upload failed");
       toast.error(
         error instanceof Error ? error.message : "Campaign could not be saved",
       );
@@ -387,7 +411,7 @@ export default function HomepageCampaignsClient() {
               {(filePreview || editing) && (
                 <button
                   type="button"
-                  className="relative block aspect-[16/8] w-full overflow-hidden rounded-lg border bg-muted"
+                  className="relative block min-h-64 w-full overflow-hidden rounded-lg border bg-muted p-2"
                   onClick={() =>
                     editing && !filePreview && setPreviewing(editing)
                   }
@@ -396,9 +420,7 @@ export default function HomepageCampaignsClient() {
                   <img
                     src={
                       filePreview ||
-                      (editing!.imageUrl.startsWith("/")
-                        ? `${CUSTOMER_WEB}${editing!.imageUrl}`
-                        : editing!.imageUrl)
+                      resolveCampaignArtwork(editing!.imageUrl)
                     }
                     alt="Campaign artwork preview"
                     className="size-full object-contain"
@@ -409,7 +431,7 @@ export default function HomepageCampaignsClient() {
                 <div className="space-y-1">
                   <Progress value={uploadProgress} />
                   <p className="text-xs text-muted-foreground">
-                    Uploading and verifying artwork · {uploadProgress}%
+                    {uploadPhase} · {uploadProgress}%
                   </p>
                 </div>
               )}
@@ -604,7 +626,7 @@ export default function HomepageCampaignsClient() {
                   >
                     <button
                       type="button"
-                      className="block aspect-[16/9] w-full overflow-hidden border-b bg-muted"
+                      className="block min-h-72 w-full overflow-hidden border-b bg-muted p-2"
                       onClick={() => setPreviewing(campaign)}
                       aria-label={`Preview ${campaign.title}`}
                     >
