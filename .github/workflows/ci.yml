@@ -21,7 +21,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
         env:
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
           NEXT_PUBLIC_PAYMENT_MODE: ${{ vars.NEXT_PUBLIC_PAYMENT_MODE }}
           NEXT_PUBLIC_CUSTOMER_WEB_URL: ${{ vars.NEXT_PUBLIC_CUSTOMER_WEB_URL }}

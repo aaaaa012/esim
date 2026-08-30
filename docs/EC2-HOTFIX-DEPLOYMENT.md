@@ -70,6 +70,14 @@ Create a protected GitHub Environment named `production`, then configure:
 - Environment secret `EC2_KNOWN_HOSTS`: the trusted EC2 SSH host-key line.
 - Optional environment variable `EC2_USER`: defaults to `ec2-user`.
 
+The CI build also requires these repository-level Actions variables (they are
+not production environment secrets):
+
+- `CLERK_PUBLISHABLE_KEY`: the public `pk_live_...` Clerk frontend key.
+- `NEXT_PUBLIC_API_URL`: the public API origin.
+- `NEXT_PUBLIC_CUSTOMER_WEB_URL`: the public customer-web origin.
+- `NEXT_PUBLIC_PAYMENT_MODE`: the frontend payment mode.
+
 Do not create `EC2_KNOWN_HOSTS` blindly in the workflow with `ssh-keyscan`.
 Obtain the host key through the already-trusted SSH connection and compare its
 fingerprint before saving it as a GitHub secret.
