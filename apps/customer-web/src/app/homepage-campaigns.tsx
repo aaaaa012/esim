@@ -192,7 +192,11 @@ function CampaignImage({
   useEffect(() => setBroken(false), [campaign.imageUrl]);
   if (broken)
     return (
-      <span className="campaign-image-unavailable" role="img" aria-label={campaign.altText}>
+      <span
+        className="campaign-image-unavailable"
+        role="img"
+        aria-label={campaign.altText}
+      >
         Artwork temporarily unavailable
       </span>
     );
@@ -339,14 +343,80 @@ export function FeaturedCampaign() {
 export function OfferGallery() {
   const { groups, openCampaign } = useCampaigns();
   const railRef = useRef<HTMLDivElement>(null);
+  const scrollEndRef = useRef<number | null>(null);
+  const pausedRef = useRef(false);
   const campaigns = groups.OFFER_GALLERY;
-  if (!campaigns.length) return null;
-  const move = (direction: -1 | 1) => {
-    railRef.current?.scrollBy({
-      left: direction * Math.max(280, railRef.current.clientWidth * 0.78),
+  const move = useCallback((direction: -1 | 1) => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const card = rail.querySelector<HTMLElement>('[data-loop-set="1"]');
+    const gap = Number.parseFloat(getComputedStyle(rail).columnGap || "18");
+    rail.scrollBy({
+      left:
+        direction *
+        Math.max(
+          280,
+          (card?.getBoundingClientRect().width ?? rail.clientWidth * 0.78) +
+            gap,
+        ),
       behavior: "smooth",
     });
-  };
+  }, []);
+
+  const loopMetrics = useCallback(() => {
+    const starts = railRef.current?.querySelectorAll<HTMLElement>(
+      '[data-loop-start="true"]',
+    );
+    if (!starts || starts.length < 3) return null;
+    return {
+      start: starts[1]!.offsetLeft,
+      cycle: starts[2]!.offsetLeft - starts[1]!.offsetLeft,
+    };
+  }, []);
+
+  const normalizeLoop = useCallback(() => {
+    if (scrollEndRef.current) window.clearTimeout(scrollEndRef.current);
+    scrollEndRef.current = window.setTimeout(() => {
+      const rail = railRef.current;
+      const metrics = loopMetrics();
+      if (!rail || !metrics || !metrics.cycle) return;
+      if (rail.scrollLeft < metrics.start - 2) rail.scrollLeft += metrics.cycle;
+      else if (rail.scrollLeft >= metrics.start + metrics.cycle - 2)
+        rail.scrollLeft -= metrics.cycle;
+    }, 120);
+  }, [loopMetrics]);
+
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail || !campaigns.length) return;
+    const position = window.requestAnimationFrame(() => {
+      const metrics = loopMetrics();
+      if (metrics) rail.scrollLeft = metrics.start;
+    });
+    const reducedMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const timer = reducedMotion
+      ? null
+      : window.setInterval(() => {
+          if (!pausedRef.current && document.visibilityState === "visible")
+            move(1);
+        }, 4200);
+    return () => {
+      window.cancelAnimationFrame(position);
+      if (timer) window.clearInterval(timer);
+      if (scrollEndRef.current) window.clearTimeout(scrollEndRef.current);
+    };
+  }, [campaigns.length, loopMetrics, move]);
+
+  if (!campaigns.length) return null;
+  const loopedCampaigns = [0, 1, 2].flatMap((setIndex) =>
+    campaigns.map((campaign, campaignIndex) => ({
+      campaign,
+      campaignIndex,
+      setIndex,
+    })),
+  );
   return (
     <section
       className="campaign-gallery-section"
@@ -363,6 +433,9 @@ export function OfferGallery() {
               Open any poster for offer details and a direct route to matching
               plans.
             </p>
+            <span className="campaign-gallery-motion-note">
+              Offers rotate automatically. Hover or focus the gallery to pause.
+            </span>
           </div>
           <div
             className="campaign-gallery-controls"
@@ -384,17 +457,36 @@ export function OfferGallery() {
             </button>
           </div>
         </div>
-        <div className="campaign-rail" ref={railRef} tabIndex={0}>
-          {campaigns.map((campaign) => (
+        <div
+          className="campaign-rail"
+          ref={railRef}
+          tabIndex={0}
+          onScroll={normalizeLoop}
+          onMouseEnter={() => (pausedRef.current = true)}
+          onMouseLeave={() => (pausedRef.current = false)}
+          onFocusCapture={() => (pausedRef.current = true)}
+          onBlurCapture={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget))
+              pausedRef.current = false;
+          }}
+          onPointerDown={() => (pausedRef.current = true)}
+          onPointerUp={() => (pausedRef.current = false)}
+          aria-label="Current travel offers"
+        >
+          {loopedCampaigns.map(({ campaign, campaignIndex, setIndex }) => (
             <article
               className={`campaign-card is-${campaign.format.toLowerCase()}`}
-              key={campaign.id}
+              key={`${setIndex}-${campaign.id}`}
+              data-loop-set={setIndex}
+              data-loop-start={campaignIndex === 0 ? "true" : undefined}
+              aria-hidden={setIndex === 1 ? undefined : true}
             >
               <button
                 className="campaign-card-art"
                 type="button"
                 onClick={() => openCampaign(campaign)}
                 aria-label={`View full poster: ${campaign.title}`}
+                tabIndex={setIndex === 1 ? undefined : -1}
               >
                 <CampaignImage
                   campaign={campaign}
@@ -402,8 +494,15 @@ export function OfferGallery() {
                 />
               </button>
               <div className="campaign-card-copy">
+                <div className="campaign-card-meta" aria-hidden="true">
+                  <span>{campaign.countryCode ?? "Global offer"}</span>
+                  <small>{String(campaignIndex + 1).padStart(2, "0")}</small>
+                </div>
                 <h3>{campaign.title}</h3>
-                <Link href={campaign.ctaHref}>
+                <Link
+                  href={campaign.ctaHref}
+                  tabIndex={setIndex === 1 ? undefined : -1}
+                >
                   {campaign.ctaLabel} <ArrowRight size={15} />
                 </Link>
               </div>

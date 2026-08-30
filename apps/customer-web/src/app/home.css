@@ -23,6 +23,21 @@
 .campaign-gallery-section {
   padding: 76px 0 0;
 }
+.campaign-gallery-section {
+  position: relative;
+  padding-bottom: 78px;
+  background:
+    radial-gradient(
+      circle at 92% 18%,
+      color-mix(in srgb, var(--primary-soft) 58%, transparent) 0,
+      transparent 32%
+    ),
+    linear-gradient(
+      180deg,
+      transparent,
+      color-mix(in srgb, var(--surface-2) 52%, transparent)
+    );
+}
 .campaign-section-heading,
 .campaign-gallery-head {
   display: flex;
@@ -42,6 +57,12 @@
   max-width: 660px;
   margin: 10px 0 0;
   color: var(--text-2);
+}
+.campaign-gallery-motion-note {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--text-3);
+  font-size: 12px;
 }
 .campaign-section-note {
   flex: none;
@@ -93,10 +114,21 @@
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--primary) 10%, transparent);
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    background 180ms ease;
 }
 .campaign-gallery-controls button:hover {
   border-color: var(--primary);
+  background: var(--primary-soft);
   color: var(--primary);
+  transform: translateY(-2px);
+}
+.campaign-gallery-controls button:active {
+  transform: translateY(0) scale(0.96);
 }
 .campaign-rail {
   display: flex;
@@ -106,6 +138,7 @@
   scroll-padding-inline: 4px;
   scroll-snap-type: x mandatory;
   scrollbar-color: var(--border-strong) transparent;
+  overscroll-behavior-inline: contain;
 }
 .campaign-card {
   flex: 0 0 calc((100% - 36px) / 3);
@@ -116,6 +149,21 @@
   border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+  transition:
+    transform 240ms ease,
+    border-color 240ms ease,
+    box-shadow 240ms ease;
+}
+.campaign-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  box-shadow: 0 22px 52px color-mix(in srgb, var(--primary) 15%, transparent);
+  transform: translateY(-5px);
+}
+.campaign-card:focus-within {
+  border-color: var(--primary);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent),
+    var(--shadow-md);
 }
 .campaign-card.is-square {
   flex-basis: calc(((100% - 36px) / 3) * 1.35);
@@ -156,7 +204,23 @@
 .campaign-card-copy {
   display: grid;
   gap: 10px;
+  min-height: 126px;
   padding: 17px 18px 18px;
+}
+.campaign-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+.campaign-card-meta small {
+  color: var(--text-3);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
 }
 .campaign-card-copy h3 {
   margin: 0;
@@ -172,6 +236,21 @@
   color: var(--primary);
   font-size: 13px;
   font-weight: 800;
+}
+.campaign-card-copy a {
+  margin-top: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--primary-soft);
+  transition:
+    gap 180ms ease,
+    background 180ms ease,
+    color 180ms ease;
+}
+.campaign-card-copy a:hover {
+  gap: 10px;
+  background: var(--primary);
+  color: white;
 }
 .campaign-dialog {
   max-width: min(1100px, 94vw);
@@ -1663,7 +1742,9 @@
   font-size: 14px;
   margin: 0;
 }
-.step p strong { color: var(--text); }
+.step p strong {
+  color: var(--text);
+}
 .activation-tip {
   display: flex;
   align-items: flex-start;
@@ -1673,9 +1754,19 @@
   background: var(--primary-soft);
   color: var(--text-2);
 }
-.activation-tip svg { flex: none; color: var(--primary); margin-top: 2px; }
-.activation-tip p { margin: 0; font-size: 14px; line-height: 1.55; }
-.activation-tip strong { color: var(--text); }
+.activation-tip svg {
+  flex: none;
+  color: var(--primary);
+  margin-top: 2px;
+}
+.activation-tip p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.activation-tip strong {
+  color: var(--text);
+}
 
 /* ---------- Why us ---------- */
 
@@ -2152,7 +2243,9 @@
   .how-layout {
     grid-template-columns: 1fr;
   }
-  .steps-panel { order: -1; }
+  .steps-panel {
+    order: -1;
+  }
   .journey-visual {
     min-height: 390px;
   }
@@ -2243,6 +2336,9 @@
   .campaign-gallery-section {
     padding-top: 54px;
   }
+  .campaign-gallery-section {
+    padding-bottom: 58px;
+  }
   .campaign-section-heading,
   .campaign-gallery-head {
     align-items: flex-start;
@@ -2269,6 +2365,9 @@
   .campaign-card-art,
   .campaign-card.is-square .campaign-card-art {
     height: auto;
+  }
+  .campaign-gallery-motion-note {
+    display: none;
   }
   .campaign-under-art {
     align-items: flex-start;

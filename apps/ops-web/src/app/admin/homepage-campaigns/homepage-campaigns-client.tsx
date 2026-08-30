@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CalendarDays,
   Eye,
   ImageIcon,
   LayoutTemplate,
@@ -67,7 +68,7 @@ type UploadedArtwork = {
   height: number;
   format: Format;
 };
-type FormState = {
+export type FormState = {
   title: string;
   altText: string;
   placement: Placement;
@@ -78,6 +79,8 @@ type FormState = {
   startsAt: string;
   endsAt: string;
 };
+type FormField = "title" | "altText" | "ctaLabel" | "startsAt" | "endsAt";
+type FormErrors = Partial<Record<FormField, string>>;
 
 const placements: Array<{ value: Placement; label: string; hint: string }> = [
   {
@@ -125,6 +128,24 @@ export function utcToKathmanduInput(value: string | null) {
     .slice(0, 16);
 }
 
+export function validateCampaignForm(form: FormState): FormErrors {
+  const errors: FormErrors = {};
+  if (form.title.trim().length < 2)
+    errors.title = "Enter a campaign title with at least 2 characters.";
+  if (form.altText.trim().length < 12)
+    errors.altText =
+      "Describe the artwork and offer in at least 12 characters.";
+  if (form.ctaLabel.trim().length < 2)
+    errors.ctaLabel = "Enter a CTA label with at least 2 characters.";
+  if (
+    form.startsAt &&
+    form.endsAt &&
+    new Date(`${form.startsAt}:00+05:45`) >= new Date(`${form.endsAt}:00+05:45`)
+  )
+    errors.endsAt = "End time must be later than start time.";
+  return errors;
+}
+
 function campaignStatus(campaign: Campaign): {
   label: string;
   tone: StatusTone;
@@ -140,7 +161,10 @@ function campaignStatus(campaign: Campaign): {
 
 function customerOrigin() {
   if (CUSTOMER_WEB) return CUSTOMER_WEB.replace(/\/$/, "");
-  if (typeof window !== "undefined" && window.location.hostname.startsWith("ops."))
+  if (
+    typeof window !== "undefined" &&
+    window.location.hostname.startsWith("ops.")
+  )
     return `${window.location.protocol}//${window.location.hostname.replace(/^ops\./, "esim.")}`;
   return "http://localhost:3000";
 }
@@ -165,11 +189,15 @@ function apiError(value: unknown, fallback: string) {
   };
   const message =
     payload.message ??
-    (typeof payload.error === "string" ? payload.error : payload.error?.message) ??
+    (typeof payload.error === "string"
+      ? payload.error
+      : payload.error?.message) ??
     fallback;
   const correlationId =
     payload.correlationId ??
-    (typeof payload.error === "object" ? payload.error?.correlationId : undefined) ??
+    (typeof payload.error === "object"
+      ? payload.error?.correlationId
+      : undefined) ??
     (value as { meta?: { correlationId?: string } }).meta?.correlationId;
   return correlationId ? `${message} (reference ${correlationId})` : message;
 }
@@ -208,6 +236,10 @@ export default function HomepageCampaignsClient() {
   const [loading, setLoading] = useState(true);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadPhase, setUploadPhase] = useState("");
+  const [formErrors, setFormErrors] = useState<FormErrors>({});
+  const titleRef = useRef<HTMLInputElement>(null);
+  const altTextRef = useRef<HTMLTextAreaElement>(null);
+  const ctaLabelRef = useRef<HTMLInputElement>(null);
   const filePreview = useMemo(
     () => (file ? URL.createObjectURL(file) : ""),
     [file],
@@ -225,7 +257,9 @@ export default function HomepageCampaignsClient() {
       const response = await authFetch(`${API}${path}`, {
         ...init,
         headers: {
-          ...(init?.body instanceof FormData ? {} : { "content-type": "application/json" }),
+          ...(init?.body instanceof FormData
+            ? {}
+            : { "content-type": "application/json" }),
           ...init?.headers,
         },
       });
@@ -263,7 +297,11 @@ export default function HomepageCampaignsClient() {
   const updateForm = <Key extends keyof FormState>(
     key: Key,
     value: FormState[Key],
-  ) => setForm((current) => ({ ...current, [key]: value }));
+  ) => {
+    setForm((current) => ({ ...current, [key]: value }));
+    if (key in formErrors)
+      setFormErrors((current) => ({ ...current, [key]: undefined }));
+  };
 
   const reset = () => {
     setEditing(null);
@@ -271,6 +309,7 @@ export default function HomepageCampaignsClient() {
     setForm(initialForm);
     setUploadProgress(0);
     setUploadPhase("");
+    setFormErrors({});
   };
 
   const edit = (campaign: Campaign) => {
@@ -291,12 +330,19 @@ export default function HomepageCampaignsClient() {
   };
 
   const save = async () => {
-    if (
-      !form.title.trim() ||
-      form.altText.trim().length < 12 ||
-      !form.ctaLabel.trim()
-    ) {
-      toast.error("Add a title, descriptive alt text, and CTA label");
+    const errors = validateCampaignForm(form);
+    if (Object.keys(errors).length) {
+      setFormErrors(errors);
+      const first = Object.keys(errors)[0] as FormField;
+      const fieldId: Record<FormField, string> = {
+        title: "campaign-title",
+        altText: "campaign-alt-text",
+        ctaLabel: "campaign-cta-label",
+        startsAt: "campaign-starts-at",
+        endsAt: "campaign-ends-at",
+      };
+      document.getElementById(fieldId[first])?.focus();
+      toast.error(errors[first]);
       return;
     }
     if (!editing && !file) {
@@ -419,8 +465,7 @@ export default function HomepageCampaignsClient() {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={
-                      filePreview ||
-                      resolveCampaignArtwork(editing!.imageUrl)
+                      filePreview || resolveCampaignArtwork(editing!.imageUrl)
                     }
                     alt="Campaign artwork preview"
                     className="size-full object-contain"
@@ -435,24 +480,45 @@ export default function HomepageCampaignsClient() {
                   </p>
                 </div>
               )}
-              <Field label="Campaign title">
+              <Field
+                id="campaign-title"
+                label="Campaign title"
+                error={formErrors.title}
+                required
+              >
                 <Input
+                  id="campaign-title"
+                  ref={titleRef}
                   value={form.title}
                   onChange={(event) => updateForm("title", event.target.value)}
                   placeholder="e.g. Japan travel eSIM offer"
+                  aria-invalid={Boolean(formErrors.title)}
+                  aria-describedby={
+                    formErrors.title ? "campaign-title-error" : undefined
+                  }
                 />
               </Field>
               <Field
+                id="campaign-alt-text"
                 label="Descriptive alt text"
-                hint="Required for customers who cannot see the artwork."
+                hint="Describe the artwork and useful offer context for customers who cannot see it (minimum 12 characters)."
+                error={formErrors.altText}
+                required
               >
                 <textarea
+                  id="campaign-alt-text"
+                  ref={altTextRef}
                   className="flex min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   value={form.altText}
                   onChange={(event) =>
                     updateForm("altText", event.target.value)
                   }
                   placeholder="Describe the visual and the useful offer context."
+                  minLength={12}
+                  aria-invalid={Boolean(formErrors.altText)}
+                  aria-describedby={
+                    formErrors.altText ? "campaign-alt-text-error" : undefined
+                  }
                 />
               </Field>
               <Field label="Homepage placement">
@@ -493,11 +559,24 @@ export default function HomepageCampaignsClient() {
                 </select>
               </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="CTA label">
+                <Field
+                  id="campaign-cta-label"
+                  label="CTA label"
+                  error={formErrors.ctaLabel}
+                  required
+                >
                   <Input
+                    id="campaign-cta-label"
+                    ref={ctaLabelRef}
                     value={form.ctaLabel}
                     onChange={(event) =>
                       updateForm("ctaLabel", event.target.value)
+                    }
+                    aria-invalid={Boolean(formErrors.ctaLabel)}
+                    aria-describedby={
+                      formErrors.ctaLabel
+                        ? "campaign-cta-label-error"
+                        : undefined
                     }
                   />
                 </Field>
@@ -514,22 +593,25 @@ export default function HomepageCampaignsClient() {
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Starts (Nepal time)">
-                  <Input
-                    type="datetime-local"
+                <Field id="campaign-starts-at" label="Starts (Nepal time)">
+                  <DateTimeInput
+                    id="campaign-starts-at"
+                    label="Open campaign start date and time picker"
                     value={form.startsAt}
-                    onChange={(event) =>
-                      updateForm("startsAt", event.target.value)
-                    }
+                    onChange={(value) => updateForm("startsAt", value)}
                   />
                 </Field>
-                <Field label="Ends (Nepal time)">
-                  <Input
-                    type="datetime-local"
+                <Field
+                  id="campaign-ends-at"
+                  label="Ends (Nepal time)"
+                  error={formErrors.endsAt}
+                >
+                  <DateTimeInput
+                    id="campaign-ends-at"
+                    label="Open campaign end date and time picker"
                     value={form.endsAt}
-                    onChange={(event) =>
-                      updateForm("endsAt", event.target.value)
-                    }
+                    onChange={(value) => updateForm("endsAt", value)}
+                    invalid={Boolean(formErrors.endsAt)}
                   />
                 </Field>
               </div>
@@ -714,19 +796,92 @@ export default function HomepageCampaignsClient() {
 }
 
 function Field({
+  id,
   label,
   hint,
+  error,
+  required = false,
   children,
 }: {
+  id?: string | undefined;
   label: string;
-  hint?: string;
+  hint?: string | undefined;
+  error?: string | undefined;
+  required?: boolean | undefined;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+        {required && (
+          <span className="ml-1 text-destructive" aria-hidden="true">
+            *
+          </span>
+        )}
+      </Label>
       {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      {error ? (
+        <p
+          id={`${id}-error`}
+          className="text-xs font-medium text-destructive"
+          role="alert"
+        >
+          {error}
+        </p>
+      ) : hint ? (
+        <p className="text-xs text-muted-foreground">{hint}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function DateTimeInput({
+  id,
+  label,
+  value,
+  onChange,
+  invalid = false,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  invalid?: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const openPicker = () => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    try {
+      input.showPicker?.();
+    } catch {
+      // Browsers that restrict showPicker still leave the native input focused.
+    }
+  };
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        ref={inputRef}
+        type="datetime-local"
+        step={60}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onClick={openPicker}
+        className="campaign-datetime pr-10 [color-scheme:light] dark:[color-scheme:dark]"
+        aria-invalid={invalid}
+        aria-describedby={invalid ? `${id}-error` : undefined}
+      />
+      <button
+        type="button"
+        onClick={openPicker}
+        className="absolute inset-y-0 right-0 grid w-10 place-items-center rounded-r-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        aria-label={label}
+      >
+        <CalendarDays className="size-4" aria-hidden="true" />
+      </button>
     </div>
   );
 }

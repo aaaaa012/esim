@@ -9,6 +9,11 @@
 
 @custom-variant dark (&:is([data-theme="dark"] *));
 
+.campaign-datetime::-webkit-calendar-picker-indicator {
+  pointer-events: none;
+  opacity: 0;
+}
+
 @theme inline {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 

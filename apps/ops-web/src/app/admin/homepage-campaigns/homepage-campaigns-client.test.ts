@@ -3,6 +3,7 @@ import {
   kathmanduInputToUtc,
   resolveCampaignArtwork,
   utcToKathmanduInput,
+  validateCampaignForm,
 } from "./homepage-campaigns-client";
 
 describe("homepage campaign Nepal scheduling", () => {
@@ -27,5 +28,39 @@ describe("homepage campaign Nepal scheduling", () => {
     ).toBe(
       "http://localhost:4000/api/v1/public/marketing-assets/campaign_example.jpg",
     );
+  });
+
+  it("reports only the actual invalid field instead of blaming valid inputs", () => {
+    expect(
+      validateCampaignForm({
+        title: "Weekend offer",
+        altText: "short",
+        placement: "OFFER_GALLERY",
+        countryCode: "",
+        ctaLabel: "Browse travel plans",
+        sortOrder: "3",
+        active: true,
+        startsAt: "",
+        endsAt: "",
+      }),
+    ).toEqual({
+      altText: "Describe the artwork and offer in at least 12 characters.",
+    });
+  });
+
+  it("rejects a Nepal-time end date that is not after the start date", () => {
+    expect(
+      validateCampaignForm({
+        title: "Weekend offer",
+        altText: "A descriptive campaign offer",
+        placement: "OFFER_GALLERY",
+        countryCode: "",
+        ctaLabel: "Browse travel plans",
+        sortOrder: "3",
+        active: true,
+        startsAt: "2026-09-02T09:00",
+        endsAt: "2026-09-02T08:00",
+      }).endsAt,
+    ).toBe("End time must be later than start time.");
   });
 });
