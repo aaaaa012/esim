@@ -44,6 +44,65 @@ function connectivityStub() {
   return {} as unknown as ConnectivityService;
 }
 
+describe("InventoryService.assign", () => {
+  it("upserts the same customer eSIM and provider subscription on recovery retries", async () => {
+    const customerEsimUpsert = vi
+      .fn()
+      .mockResolvedValue({ id: "customer-esim-1" });
+    const subscriptionUpsert = vi.fn().mockResolvedValue({ id: "sub-row-1" });
+    const tx = {
+      esimInventory: { update: vi.fn().mockResolvedValue(undefined) },
+      customerEsim: { upsert: customerEsimUpsert },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({ id: "inventory-1" }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    const providerInfo = {
+      provider: "TRANSATEL",
+      providerSubscriptionId: "provider-sub-1",
+    };
+
+    await inventory.assign(
+      "order-1",
+      "customer-1",
+      "LPA:1$recovered",
+      providerInfo,
+    );
+    await inventory.assign(
+      "order-1",
+      "customer-1",
+      "LPA:1$recovered",
+      providerInfo,
+    );
+
+    expect(customerEsimUpsert).toHaveBeenCalledTimes(2);
+    expect(customerEsimUpsert).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ where: { orderId: "order-1" } }),
+    );
+    expect(subscriptionUpsert).toHaveBeenCalledTimes(2);
+    expect(subscriptionUpsert).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { providerSubscriptionId: "provider-sub-1" },
+      }),
+    );
+  });
+});
+
 describe("InventoryService.importBatchCsv", () => {
   it("rejects an invalid MSISDN and does not import that row", async () => {
     const prisma = prismaStub();

@@ -22,6 +22,7 @@ import {
 import { flagEmoji } from "../../country-picker";
 import DatePicker from "./date-picker";
 import { submitCheckoutDocumentsSequentially } from "./document-submission";
+import { checkoutResumeDisposition } from "./checkout-resume";
 import {
   DocumentType,
   PaymentProvider,
@@ -390,18 +391,16 @@ export default function CheckoutClient({
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
       .then((value) => {
-        if (
-          ![
-            "DRAFT",
-            "PAYMENT_PENDING",
-            "PAYMENT_FAILED",
-            "PAYMENT_REVIEW_REQUIRED",
-          ].includes(value.status)
-        )
+        const disposition = checkoutResumeDisposition(value.status);
+        if (disposition === "UNSUPPORTED")
           throw new Error("This order can no longer be resumed from checkout");
         setOrder(value);
         setCompatible(true);
         if (value.traveler) setTraveler({ ...initial, ...value.traveler });
+        if (disposition === "POST_PAYMENT") {
+          setStep(4);
+          return;
+        }
         if (value.purchaseType === "TOPUP") {
           setStep(4);
           if (value.status === "PAYMENT_PENDING" && value.payment) {

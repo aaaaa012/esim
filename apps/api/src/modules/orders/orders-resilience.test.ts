@@ -50,6 +50,22 @@ function readyOrder(overrides: Partial<DemoOrder> = {}): DemoOrder {
   } as unknown as DemoOrder;
 }
 
+function customerTraveler(): NonNullable<DemoOrder["traveler"]> {
+  return {
+    title: "MS",
+    firstName: "Jane",
+    surname: "Doe",
+    dateOfBirth: "1990-01-01",
+    nationality: "NP",
+    email: "traveler@example.com",
+    mobile: "9779800000000",
+    city: "Kathmandu",
+    countryOfResidence: "NP",
+    passportNumber: "P1234567",
+    passportExpiryDate: "2030-01-01",
+  };
+}
+
 function ordersService(
   seed: DemoOrder[],
   connectivity: unknown,
@@ -57,11 +73,13 @@ function ordersService(
   prisma: unknown = { enabled: false },
   notifications: unknown = {},
   resilience?: unknown,
+  persistenceOverrides: Record<string, unknown> = {},
 ) {
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
     save: vi.fn().mockResolvedValue(undefined),
     provisioningAttempt: vi.fn().mockResolvedValue(undefined),
+    ...persistenceOverrides,
   } as unknown as OrdersPersistenceService;
   return new OrdersService(
     connectivity as unknown as ConnectivityService,
@@ -186,6 +204,176 @@ describe("OrdersService provisioning retry safety", () => {
 });
 
 describe("OrdersService asynchronous provisioning", () => {
+  it("recovers a persisted QR result on retry without another provider request", async () => {
+    const order = readyOrder({
+      id: "p-persisted",
+      status: OrderStatus.PROVISIONING,
+      qrPayload: "LPA:1$persisted",
+      providerSubscriptionId: "sub-persisted",
+      traveler: customerTraveler(),
+      assignment: {
+        inventoryId: "inv-1",
+        iccid: "8988247076000000319",
+        providerSubscriptionId: "sub-persisted",
+        verificationStatus: "PENDING",
+      },
+    });
+    const connectivity = {
+      provision: vi.fn(),
+      descriptor: vi.fn().mockReturnValue({ provider: "TRANSATEL" }),
+    };
+    const inventory = {
+      customerIdForOrder: vi.fn().mockResolvedValue("cust-1"),
+      assign: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+      }),
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const orders = ordersService(
+      [order],
+      connectivity,
+      inventory,
+      { enabled: false },
+      notifications,
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.processProvisioning(order.id, 2, false);
+    await orders.processProvisioning(order.id, 2, false);
+
+    expect(connectivity.provision).not.toHaveBeenCalled();
+    expect(inventory.assign).toHaveBeenCalledOnce();
+    expect(orders.get(order.id).status).toBe(OrderStatus.QR_READY);
+    expect(
+      orders
+        .get(order.id)
+        .timeline.filter((event) => event.to === OrderStatus.QR_READY),
+    ).toHaveLength(1);
+    expect(notifications.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("recovers immediately when the final QR-ready save loses a version race", async () => {
+    const persisted = readyOrder({
+      id: "p-conflict",
+      status: OrderStatus.PROVISIONING,
+      traveler: customerTraveler(),
+    });
+    delete persisted.qrPayload;
+    delete persisted.providerSubscriptionId;
+    delete persisted.providerStatus;
+    delete persisted.qrDeliveredAt;
+    const load = vi.fn(async () => [structuredClone(persisted)]);
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ConflictException(
+          "Order was changed by another request; reload and retry",
+        ),
+      )
+      .mockImplementation(async (value: DemoOrder) => {
+        Object.assign(persisted, structuredClone(value));
+      });
+    const connectivity = {
+      provision: vi.fn().mockResolvedValue({
+        providerSubscriptionId: "sub-conflict",
+        status: "READY",
+        qrPayload: "LPA:1$conflict",
+      }),
+      descriptor: vi.fn().mockReturnValue({ provider: "TRANSATEL" }),
+    };
+    const inventory = {
+      profileForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        eid: "eid-1",
+        iccid: "8988247076000000319",
+      }),
+      customerIdForOrder: vi.fn().mockResolvedValue("cust-1"),
+      assign: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+      }),
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const provisioningAttempt = vi.fn().mockResolvedValue(undefined);
+    const orders = ordersService(
+      [persisted],
+      connectivity,
+      inventory,
+      { enabled: false },
+      notifications,
+      undefined,
+      { load, save, provisioningAttempt },
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.processProvisioning(persisted.id, 1, false);
+
+    expect(connectivity.provision).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(provisioningAttempt).toHaveBeenCalledOnce();
+    expect(orders.get(persisted.id).status).toBe(OrderStatus.QR_READY);
+    expect(notifications.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("retries QR-ready recovery from fresh state after bounded version conflicts", async () => {
+    const persisted = readyOrder({
+      id: "p-recovery-race",
+      status: OrderStatus.PROVISIONING,
+      traveler: customerTraveler(),
+    });
+    delete persisted.qrPayload;
+    delete persisted.qrDeliveredAt;
+    const load = vi.fn(async () => [structuredClone(persisted)]);
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ConflictException(
+          "Order was changed by another request; reload and retry",
+        ),
+      )
+      .mockRejectedValueOnce(
+        new ConflictException(
+          "Order was changed by another request; reload and retry",
+        ),
+      )
+      .mockImplementation(async (value: DemoOrder) => {
+        Object.assign(persisted, structuredClone(value));
+      });
+    const inventory = {
+      customerIdForOrder: vi.fn().mockResolvedValue("cust-1"),
+      assign: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+      }),
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const orders = ordersService(
+      [persisted],
+      { descriptor: vi.fn().mockReturnValue({ provider: "TRANSATEL" }) },
+      inventory,
+      { enabled: false },
+      notifications,
+      undefined,
+      { load, save },
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.recoverProvisioningQrReady(persisted.id, {
+      qrPayload: "LPA:1$race",
+      providerSubscriptionId: "sub-race",
+      iccid: "8988247076000000319",
+    });
+
+    expect(save).toHaveBeenCalledTimes(3);
+    expect(inventory.assign).toHaveBeenCalledTimes(3);
+    expect(orders.get(persisted.id).status).toBe(OrderStatus.QR_READY);
+    expect(notifications.enqueue).toHaveBeenCalledOnce();
+  });
+
   it("keeps an accepted delayed preload in PROVISIONING without retrying or releasing inventory", async () => {
     const order = readyOrder({
       id: "p-1",

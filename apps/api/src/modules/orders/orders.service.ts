@@ -1642,6 +1642,21 @@ export class OrdersService implements OnModuleInit {
   ) {
     await this.refreshOne(id, true);
     const order = this.get(id);
+    if (
+      order.status === OrderStatus.PROVISIONING &&
+      order.qrPayload &&
+      order.providerSubscriptionId
+    ) {
+      this.logger.warn(
+        `Order ${id} already has provider activation details; recovering the local QR-ready state without another provisioning request`,
+      );
+      return this.recoverProvisioningQrReady(id, {
+        qrPayload: order.qrPayload,
+        providerSubscriptionId: order.providerSubscriptionId,
+        ...(order.assignment?.iccid ? { iccid: order.assignment.iccid } : {}),
+        reason: "Recovered persisted provider result during provisioning retry",
+      });
+    }
     if (order.status !== OrderStatus.PROVISIONING || order.qrPayload) {
       this.logger.debug(
         `Order ${id} is not eligible for provisioning; skipping`,
@@ -1757,7 +1772,20 @@ export class OrdersService implements OnModuleInit {
         OrderStatus.QR_READY,
         `Provisioned on attempt ${attempt}; activation QR delivered`,
       );
-      await this.persistence.save(order);
+      try {
+        await this.persistence.save(order);
+      } catch (error) {
+        if (!this.isOptimisticOrderConflict(error)) throw error;
+        this.logger.warn(
+          `Order ${order.id} changed after provider success; reloading and recovering its QR-ready state`,
+        );
+        return await this.recoverProvisioningQrReady(order.id, {
+          qrPayload: result.qrPayload,
+          providerSubscriptionId: result.providerSubscriptionId,
+          iccid: profile.iccid,
+          reason: "Recovered provider result after concurrent order update",
+        });
+      }
       await this.safeResolveAttention(
         `provisioning-failure:${order.id}`,
         "Provider accepted the provisioning request",
@@ -1778,6 +1806,16 @@ export class OrdersService implements OnModuleInit {
         await this.persistence.provisioningAttempt(order.id, attempt, request, {
           errorCode,
         });
+      if (
+        order.qrPayload &&
+        order.providerSubscriptionId &&
+        this.isOptimisticOrderConflict(error)
+      ) {
+        this.logger.warn(
+          `Order ${order.id} remains recoverable after a concurrent QR-ready update; retrying will finalize local state without resubmitting`,
+        );
+        throw error;
+      }
       const ambiguousOutcome =
         error instanceof ApiException &&
         String(error.internalDetail ?? "").includes(
@@ -1939,69 +1977,95 @@ export class OrdersService implements OnModuleInit {
       reason?: string;
     },
   ) {
-    await this.refreshOne(id, true);
-    const order = this.get(id);
-    if ([OrderStatus.QR_READY, OrderStatus.COMPLETED].includes(order.status))
-      return this.redact(order);
-    if (order.status !== OrderStatus.PROVISIONING)
-      throw new BadRequestException(
-        `Order in ${order.status} cannot be recovered to QR ready`,
-      );
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      await this.refreshOne(id, true);
+      const order = this.get(id);
+      if ([OrderStatus.QR_READY, OrderStatus.COMPLETED].includes(order.status))
+        return this.redact(order);
+      if (order.status !== OrderStatus.PROVISIONING)
+        throw new BadRequestException(
+          `Order in ${order.status} cannot be recovered to QR ready`,
+        );
 
-    const target = await this.provisioningTarget(order);
-    const customerId = await this.inventory.customerIdForOrder(order.id);
-    const expiresAt = new Date(
-      Date.now() + order.plan.validityDays * 86_400_000,
-    ).toISOString();
-    const providerInfo = {
-      provider: this.connectivity.descriptor().provider,
-      providerSubscriptionId: input.providerSubscriptionId,
-      expiresAt,
-    };
-    if (target) {
-      await this.inventory.assignTopup(
-        order.id,
-        customerId,
-        input.iccid ?? target.inventory.iccid,
-        input.qrPayload,
-        providerInfo,
-      );
-    } else {
-      await this.inventory.assign(
-        order.id,
-        customerId,
-        input.qrPayload,
-        providerInfo,
-      );
-    }
-
-    order.qrPayload = input.qrPayload;
-    order.qrDeliveredAt = new Date().toISOString();
-    order.providerSubscriptionId = input.providerSubscriptionId;
-    order.providerStatus = "PRELOADED";
-    delete order.provisioningFailure;
-    delete order.operationalDisposition;
-    const assigned = await this.inventory.inventoryForOrder(order.id);
-    if (assigned)
-      order.assignment = {
-        inventoryId: assigned.id,
-        iccid: assigned.iccid,
-        ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}),
+      const target = await this.provisioningTarget(order);
+      const customerId = await this.inventory.customerIdForOrder(order.id);
+      const expiresAt = new Date(
+        Date.now() + order.plan.validityDays * 86_400_000,
+      ).toISOString();
+      const providerInfo = {
+        provider: this.connectivity.descriptor().provider,
         providerSubscriptionId: input.providerSubscriptionId,
-        verificationStatus: "PENDING",
+        expiresAt,
       };
-    this.transition(
-      order,
-      OrderStatus.QR_READY,
-      input.reason ?? "Recovered provider QR after local persistence failure",
+      if (target) {
+        await this.inventory.assignTopup(
+          order.id,
+          customerId,
+          input.iccid ?? target.inventory.iccid,
+          input.qrPayload,
+          providerInfo,
+        );
+      } else {
+        await this.inventory.assign(
+          order.id,
+          customerId,
+          input.qrPayload,
+          providerInfo,
+        );
+      }
+
+      order.qrPayload = input.qrPayload;
+      order.qrDeliveredAt = new Date().toISOString();
+      order.providerSubscriptionId = input.providerSubscriptionId;
+      order.providerStatus = "PRELOADED";
+      delete order.provisioningFailure;
+      delete order.operationalDisposition;
+      const assigned = await this.inventory.inventoryForOrder(order.id);
+      if (assigned)
+        order.assignment = {
+          inventoryId: assigned.id,
+          iccid: assigned.iccid,
+          ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}),
+          providerSubscriptionId: input.providerSubscriptionId,
+          verificationStatus: "PENDING",
+        };
+      this.transition(
+        order,
+        OrderStatus.QR_READY,
+        input.reason ?? "Recovered provider QR after local persistence failure",
+      );
+      try {
+        await this.persistence.save(order);
+      } catch (error) {
+        if (
+          this.isOptimisticOrderConflict(error) &&
+          attempt < maxAttempts
+        ) {
+          this.logger.warn(
+            `QR-ready recovery for ${order.id} raced with another update; retrying from fresh state (${attempt}/${maxAttempts})`,
+          );
+          continue;
+        }
+        throw error;
+      }
+      await this.safeResolveAttention(
+        `provisioning-failure:${order.id}`,
+        "Provider QR was recovered successfully",
+      );
+      await this.safeNotify(order, "QR_READY");
+      return this.redact(order);
+    }
+    throw new ConflictException(
+      "Order recovery exhausted its concurrency retries",
     );
-    await this.persistence.save(order);
-    await this.safeResolveAttention(
-      `provisioning-failure:${order.id}`,
-      "Provider QR was recovered successfully",
+  }
+
+  private isOptimisticOrderConflict(error: unknown) {
+    return (
+      error instanceof ConflictException &&
+      error.message.includes("Order was changed by another request")
     );
-    await this.safeNotify(order, "QR_READY");
-    return this.redact(order);
   }
   async markProvisioningManualReview(id: string, reason: string) {
     const order = this.get(id);
