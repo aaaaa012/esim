@@ -11,6 +11,10 @@ Live-visa-compass-api.env
 graphify-out/
 *.log
 *.tsbuildinfo
+*.pem
+*.swp
+*.swo
+newclerkvisa.env
 apps/api/prisma/dev.db
 apps/api/generated/cockroach-client/
 .postgres-transfer-checkpoint.json
