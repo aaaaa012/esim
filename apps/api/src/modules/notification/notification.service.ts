@@ -38,6 +38,30 @@ export class NotificationService {
     private readonly queues: QueueService,
   ) {}
 
+  health() {
+    const mode =
+      process.env.NOTIFICATION_MODE === "live" ? "LIVE" : "SIMULATED";
+    const emailConfigured = Boolean(
+      process.env.EMAIL_PROVIDER === "ses" &&
+      (process.env.AWS_SES_REGION || process.env.AWS_REGION) &&
+      process.env.EMAIL_FROM_ADDRESS,
+    );
+    const whatsappConfigured = Boolean(
+      process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID,
+    );
+    return {
+      queue: this.queues.enabled ? "READY" : "UNAVAILABLE",
+      mode,
+      provider: "AWS_SES",
+      channels: {
+        email: emailConfigured ? "CONFIGURED" : "CONFIG_REQUIRED",
+        whatsapp: whatsappConfigured ? "CONFIGURED" : "CONFIG_REQUIRED",
+      },
+      operational:
+        this.queues.enabled && (mode === "SIMULATED" || emailConfigured),
+    };
+  }
+
   async enqueue(input: {
     orderId: string;
     channel: NotificationChannel;
@@ -54,6 +78,9 @@ export class NotificationService {
           orderId: input.orderId,
           channel: input.channel,
           template: input.template,
+          recipient: input.recipient,
+          orderNumber: input.orderNumber,
+          ...(input.reason ? { reason: input.reason } : {}),
           status: "QUEUED",
         },
       });
@@ -110,6 +137,32 @@ export class NotificationService {
       item.status = status;
       item.sentAt = status === "SENT" ? new Date() : null;
     }
+  }
+
+  async markFailure(id: string, error: unknown, terminal: boolean) {
+    if (!this.prisma.enabled) return this.mark(id, "FAILED");
+    const item = await this.prisma.notification.findUnique({
+      where: { id },
+      select: { attemptCount: true },
+    });
+    const attempt = (item?.attemptCount ?? 0) + 1;
+    await this.prisma.notification.update({
+      where: { id },
+      data: {
+        status: "FAILED",
+        attemptCount: { increment: 1 },
+        errorMessage:
+          error instanceof Error ? error.message.slice(0, 2000) : "unknown",
+        nextAttemptAt:
+          terminal && attempt >= 6
+            ? null
+            : new Date(
+                Date.now() +
+                  Math.min(15 * 60_000, 2_000 * 2 ** Math.min(attempt, 8)),
+              ),
+        sentAt: null,
+      },
+    });
   }
 
   async list(orderIds?: string[]) {

@@ -1,10 +1,11 @@
 # The Complete Journey, Step by Step
 
-*One document that walks the whole Visa Compass journey from the first visit to the
+_One document that walks the whole Visa Compass journey from the first visit to the
 last — exactly as the current codebase works today. No technical jargon. Read it
-from top to bottom like a story.*
+from top to bottom like a story._
 
-*Who is in this story:*
+_Who is in this story:_
+
 - **The customer** — a traveller buying an eSIM.
 - **The system** — Visa Compass software (the website, the engine behind it, and the
   automatic background chores it runs on its own).
@@ -23,6 +24,7 @@ No login is needed. The home page shows destinations and plan cards, e.g.
 "UAE Essential · 5 GB · 15 days · NPR 2,499". Popular plans appear first.
 
 **What the system does behind the scenes:**
+
 - It reads the plan list from the product database and shows **only plans marked
   Active** for **countries marked Active**.
 - If a country has no plans yet, it politely says coverage is coming — it never
@@ -39,6 +41,7 @@ No login is needed. The home page shows destinations and plan cards, e.g.
 Visa Compass eSIM?" box on the home page.
 
 **What the system does behind the scenes:**
+
 - It cleans up the number (ignores +977, a leading 0, spaces and dashes) and looks
   for a **completed** order that used that same number.
 - If found, it shows that customer's **current plan, how much data is used, and when
@@ -70,6 +73,7 @@ birth, nationality, city, country of residence, email, mobile number, passport
 number and passport expiry.
 
 **What the system does behind the scenes:**
+
 - Every field is checked before continuing (valid email, valid dates, two-letter
   country codes, etc.). Mistakes are blocked, not ignored.
 - **Sensitive fields are encrypted** before saving (date of birth, passport number,
@@ -83,6 +87,7 @@ PDF, JPG and PNG are allowed, up to 10 MB. On a phone there is also a
 "Take photo" button for the passport.
 
 **What the system does behind the scenes:**
+
 - The upload is "signed" — a short-lived, order-specific permission, so a file can
   only go into this order's private folder and nowhere else.
 - The file goes **directly and privately** to the document storage service, then the
@@ -94,6 +99,7 @@ payment page. After paying, the wallet sends them back to the checkout page, whi
 keeps checking until the payment is confirmed (usually seconds).
 
 **What the system does behind the scenes:**
+
 - An order is created as soon as the first step is saved. The **price is frozen** at
   that moment — it cannot change mid-checkout.
 - The payment reference and a **payment window** are recorded.
@@ -105,6 +111,7 @@ keeps checking until the payment is confirmed (usually seconds).
   system tracks from here to the end.
 
 **What if the customer doesn't pay?**
+
 - If they abandon the payment, the order is cleanly marked **Payment Failed** — it
   is never left stuck.
 - If they just close the browser and come back later, they can resume exactly where
@@ -113,6 +120,7 @@ keeps checking until the payment is confirmed (usually seconds).
   "My eSIMs".
 
 **Signed in or not?**
+
 - A signed-in customer checks out with their account.
 - A **guest** (no account) checks out the same way, login-free. Their order is
   guarded by a private token bound only to their own browser, so only they can
@@ -144,19 +152,20 @@ Behind the scenes, in order:
    the eSIM on the customer's phone.
 4. Mark the order **Completed**.
 5. **Email the customer: "Your Visa Compass eSIM is ready"**, with the QR attached
-   as a **password-protected PDF**.
+   as an **unencrypted PNG image**.
 
 **Step 10. The customer installs the eSIM.**
 They open the emailed PDF on their phone, enter the **mobile number they used at
 checkout**, and it unlocks to reveal the QR. They scan it — and they have data.
 
 **What the system does behind the scenes (the safety nets):**
+
 - The QR is **never shown on the website** — it only ever travels by email, locked
   with the customer's own mobile number.
 - If activation fails, the system **tries again automatically, up to 3 times**.
 - If it still fails, the order is flagged **for the operations team** and the
-  customer is told the friendly message *"our team is reviewing it and will contact
-  you"* — never scary technical text.
+  customer is told the friendly message _"our team is reviewing it and will contact
+  you"_ — never scary technical text.
 - In some cases the telecom company confirms activation a little later through a
   "callback" message. The system accepts that too: when the callback arrives it
   completes the order and emails the QR then.
@@ -173,8 +182,8 @@ left, and keeps that fresh so the customer and the team can see it.
 
 **Step 12. When the plan ends, the customer is told.**
 When the **data is fully used up** or the **time has elapsed**, the system marks that
-eSIM **Expired** and emails a friendly notice — *"your data plan was fully consumed"*
-or *"your data plan has expired"* — which points them back to the top-up box. The
+eSIM **Expired** and emails a friendly notice — _"your data plan was fully consumed"_
+or _"your data plan has expired"_ — which points them back to the top-up box. The
 whole cycle can then start again at **Step 2**.
 
 ---
@@ -186,7 +195,7 @@ Refunds happen when a paid order cannot be delivered (for example, activation ke
 failing) or when the team decides to reverse a payment.
 
 **How it works:** a staff member clicks **"Refund order"** and gives a reason. The
-order moves to *Refunding*, the system asks the wallet to return the money, and when
+order moves to _Refunding_, the system asks the wallet to return the money, and when
 the wallet confirms, the order is marked **Refunded**. Every step is tracked and
 audited. Only orders that were actually **paid** can be refunded, and every refund
 needs a reason.
@@ -198,20 +207,20 @@ needs a reason.
 Everything above runs automatically. The team's job is to watch and to handle
 **exceptions**:
 
-| Area | What the team does |
-| --- | --- |
-| **Dashboard** | Sees at a glance: orders awaiting review, orders waiting on a customer, activation failures, and how many were completed today. |
-| **Order list & detail** | Searches and opens any order; sees the full picture **including internal details staff need but customers never see**. Can see whether an order is a FIRST PURCHASE or a TOP-UP and the top-up number. |
-| **Documents** | Previews the customer's uploaded passport/ticket and either **Approves** them or asks for a **replacement**. |
-| **Replacement documents** | If a document is rejected, the order waits on the customer. The customer re-uploads it in "My eSIMs", and the order automatically returns to the review queue. |
-| **Retry activation** | One click to retry a failed activation (after the automatic 3 tries). |
-| **Refund / cancel** | Reverse a paid order or cancel a stuck draft — always with a reason, always audited. |
-| **Payment cleanup** | One button to clear orders whose payment windows ran out. |
-| **Inventory** | Sees how many eSIMs are available / reserved / assigned / activated, gets a low-stock warning, and uploads stock from a spreadsheet. |
-| **Plans & prices** | Edits prices, marks plans popular, enables/disables plans, and imports/updates the whole catalogue from a spreadsheet — changes go live to customers immediately. |
-| **Find a subscriber** | Types a mobile number to see its current plan and route future sales as TOP-UP. |
-| **Integrations** | One screen showing whether every partner is connected (wallet, telecom, email, WhatsApp, storage), testing each one, pulling the telecom catalogue, and checking whether a number is eligible for a plan. |
-| **Team & access** | Invites staff by email, assigns Operations or Admin roles, disables accounts, and reads the full audit log. |
+| Area                      | What the team does                                                                                                                                                                                        |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dashboard**             | Sees at a glance: orders awaiting review, orders waiting on a customer, activation failures, and how many were completed today.                                                                           |
+| **Order list & detail**   | Searches and opens any order; sees the full picture **including internal details staff need but customers never see**. Can see whether an order is a FIRST PURCHASE or a TOP-UP and the top-up number.    |
+| **Documents**             | Previews the customer's uploaded passport/ticket and either **Approves** them or asks for a **replacement**.                                                                                              |
+| **Replacement documents** | If a document is rejected, the order waits on the customer. The customer re-uploads it in "My eSIMs", and the order automatically returns to the review queue.                                            |
+| **Retry activation**      | One click to retry a failed activation (after the automatic 3 tries).                                                                                                                                     |
+| **Refund / cancel**       | Reverse a paid order or cancel a stuck draft — always with a reason, always audited.                                                                                                                      |
+| **Payment cleanup**       | One button to clear orders whose payment windows ran out.                                                                                                                                                 |
+| **Inventory**             | Sees how many eSIMs are available / reserved / assigned / activated, gets a low-stock warning, and uploads stock from a spreadsheet.                                                                      |
+| **Plans & prices**        | Edits prices, marks plans popular, enables/disables plans, and imports/updates the whole catalogue from a spreadsheet — changes go live to customers immediately.                                         |
+| **Find a subscriber**     | Types a mobile number to see its current plan and route future sales as TOP-UP.                                                                                                                           |
+| **Integrations**          | One screen showing whether every partner is connected (wallet, telecom, email, WhatsApp, storage), testing each one, pulling the telecom catalogue, and checking whether a number is eligible for a plan. |
+| **Team & access**         | Invites staff by email, assigns Operations or Admin roles, disables accounts, and reads the full audit log.                                                                                               |
 
 ---
 
@@ -241,18 +250,18 @@ send notifications.
 
 ## The order's life at a glance (statuses the system uses)
 
-| Status shown | What it means |
-| --- | --- |
-| **Draft** | Checkout started, not yet submitted (can be resumed or cancelled). |
-| **Payment Pending** | Waiting for the customer to pay (has a time window). |
-| **Payment Confirmed** | Money received and verified by the wallet. |
-| **Approved / Activating** | Payment verified; an eSIM is being switched on automatically. |
-| **Completed** | eSIM is ready; the QR was emailed. |
-| **Payment Failed** | Payment did not go through; the customer can retry or cancel. |
-| **Awaiting Customer** | Staff asked for a replacement document; waiting on the customer. |
-| **Activation Failed** | Automatic tries ran out; flagged for staff to retry or refund. |
-| **Refunding / Refunded** | Money is being (or has been) returned. |
-| **Cancelled** | The order was stopped before payment completed. |
+| Status shown              | What it means                                                      |
+| ------------------------- | ------------------------------------------------------------------ |
+| **Draft**                 | Checkout started, not yet submitted (can be resumed or cancelled). |
+| **Payment Pending**       | Waiting for the customer to pay (has a time window).               |
+| **Payment Confirmed**     | Money received and verified by the wallet.                         |
+| **Approved / Activating** | Payment verified; an eSIM is being switched on automatically.      |
+| **Completed**             | eSIM is ready; the QR was emailed.                                 |
+| **Payment Failed**        | Payment did not go through; the customer can retry or cancel.      |
+| **Awaiting Customer**     | Staff asked for a replacement document; waiting on the customer.   |
+| **Activation Failed**     | Automatic tries ran out; flagged for staff to retry or refund.     |
+| **Refunding / Refunded**  | Money is being (or has been) returned.                             |
+| **Cancelled**             | The order was stopped before payment completed.                    |
 
 ---
 
@@ -266,7 +275,7 @@ send notifications.
   real document storage, and real logins each need a **credential set** before a
   live customer can pay real money and receive a real QR. Until then, the features
   run in **simulator mode** and the integrations dashboard shows them as
-  *"configuration required"*. This is the expected, normal state for a
+  _"configuration required"_. This is the expected, normal state for a
   development-stage system — the code is all there; plugging in the real accounts is
   an operational step, not a development one.
 - The newest **database changes** are written but not yet applied to a live database.

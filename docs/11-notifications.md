@@ -1,7 +1,8 @@
 # 11 — Notifications
 
 Primary sources: `apps/api/src/modules/notification/notification.service.ts`,
-`notification.controller.ts`, `notification.templates.ts`, `gmail.channel.ts`,
+`notification.controller.ts`, `notification.templates.ts`, `email.channel.ts`,
+`ses-email.channel.ts`,
 `whatsapp.channel.ts`, `qr-pdf.service.ts`, and the delivery worker in
 `apps/api/src/jobs/integration.processor.ts`.
 
@@ -11,16 +12,19 @@ Primary sources: `apps/api/src/modules/notification/notification.service.ts`,
 
 ```ts
 type NotificationTemplate =
-  | 'ORDER_STATUS' | 'QR_READY' | 'DOCUMENT_REUPLOAD'
-  | 'PLAN_EXHAUSTED' | 'PLAN_EXPIRED';
+  | "ORDER_STATUS"
+  | "QR_READY"
+  | "DOCUMENT_REUPLOAD"
+  | "PLAN_EXHAUSTED"
+  | "PLAN_EXPIRED";
 ```
 
 `renderNotification(template, { orderNumber, reason? })` returns
 `{ subject, text }` (`notification.templates.ts:2-7`):
 
 - `QR_READY` — subject "Your Visa Compass eSIM is ready - {order}"; text tells
-  the customer to open the attached PDF and enter their mobile number to
-  reveal the QR.
+  the customer that the unencrypted QR image is attached and must be kept
+  private.
 - `DOCUMENT_REUPLOAD` — subject "Action required for {order}"; reason appended.
 - `PLAN_EXHAUSTED` — "Your data plan is used up - {order}".
 - `PLAN_EXPIRED` — "Your data plan has expired - {order}"; reason appended.
@@ -28,18 +32,21 @@ type NotificationTemplate =
 
 ## Delivery channels
 
-### Gmail
+### Email (Amazon SES)
 
-`gmail.channel.ts`:
+`email.channel.ts` defines the provider-neutral contract and
+`ses-email.channel.ts` implements it:
 
 - `NOTIFICATION_MODE !== 'live'` → simulated `{ providerMessageId:
-  gmail-sim-{ts}, simulated: true }`.
-- Otherwise requires GMAIL client id/secret/refresh token; OAuth refresh via
-  Google token endpoint, then `POST gmail/v1/users/me/messages/send` with a
-  base64url MIME message (`gmail.channel.ts:14-22`).
-- MIME builder supports plain text or multipart with a base64 attachment
-  (`gmail.channel.ts:25-48`).
-- `GMAIL_FROM_ADDRESS` default `me`.
+ses-sim-{ts}, simulated: true }` without contacting Amazon SES.
+- Live delivery requires `EMAIL_PROVIDER=ses`, `AWS_SES_REGION` (or
+  `AWS_REGION`), and a verified `EMAIL_FROM_ADDRESS`; `EMAIL_FROM_NAME` and
+  `EMAIL_REPLY_TO` control presentation and replies.
+- The AWS SDK for SES v2 sends UTF-8 text/HTML and optional QR PNG attachments.
+  SES does not expose a per-message idempotency key; durable notification rows
+  and fixed BullMQ job IDs prevent duplicate scheduling in the normal path.
+- Provider errors are sanitized; BullMQ retry exhaustion continues to create
+  an Operations attention case.
 
 ### WhatsApp
 
@@ -74,26 +81,25 @@ type NotificationTemplate =
 
 1. Marks notification `SENDING`.
 2. Renders the template.
-3. EMAIL → `qrAttachment(job)` builds a password-protected PDF when template is
-   `QR_READY` (requires `order.qrPayload` and `order.traveler.mobile`), then
-   `gmail.send({ to, subject, text, attachment? })`.
+3. EMAIL → `qrAttachment(job)` builds an unencrypted PNG when template is
+   `QR_READY` (requires `order.qrPayload`), then calls the injectable
+   `EmailChannel` with the notification ID as its idempotency key.
 4. WHATSAPP → `whatsapp.send({ to, text })`.
 5. Marks `SENT` or `SIMULATED` based on the channel result; on error marks
    `FAILED` and rethrows.
 
-## QR PDF
+## QR attachment and account download
 
 `qr-pdf.service.ts` (`build`):
 
 - Generates a QR PNG from `qrPayload` (`QRCode.toBuffer`, 512px).
 - Builds an A4 PDF via `pdfkit` with:
   - Title "Visa Compass eSIM", order number.
-  - A prompt to open the PDF on a phone and enter the mobile number.
+  - Instructions to scan the QR from another screen.
   - The QR image.
   - Warning: "This QR is sensitive — do not share it."
-- **Password-protected**: both user and owner password = the traveler's
-  mobile; permissions deny copying/modifying/annotating etc.
-  (`qr-pdf.service.ts:10-24`).
+- The authenticated account download is intentionally unencrypted and does not
+  require the MSISDN or any other password.
 
 ## Emitters
 
@@ -122,8 +128,9 @@ Where notifications are triggered:
 ## Admin integration status
 
 `AdminService.integrations` reports:
-- Email Gmail: HEALTHY only when `NOTIFICATION_MODE === 'live'` and Gmail creds
-  present (`admin.service.ts:183-203`).
+
+- Email Amazon SES: HEALTHY only when `NOTIFICATION_MODE === 'live'`,
+  `EMAIL_PROVIDER=ses`, an AWS region, and the sender are present.
 - WhatsApp: HEALTHY only when `NOTIFICATION_MODE === 'live'` and
   `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`
   all present (`admin.service.ts:257-269`).

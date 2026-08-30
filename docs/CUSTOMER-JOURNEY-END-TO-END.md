@@ -7,13 +7,13 @@ when a plan is exhausted or expires.
 
 ## 1. Entry points
 
-| Surface        | URL                                      | Requires login |
-| -------------- | ---------------------------------------- | -------------- |
-| Home + catalog | `customer-web` `/`                       | No             |
-| Top-up lookup  | `customer-web` `/` (top-up box)          | No             |
-| Checkout       | `/esim/checkout?plan=<id>[&mobile=<msisdn>]` | **No** (guest)  |
-| My eSIMs       | `/account/esims`                         | Yes            |
-| Ops console    | `ops-web` `/orders`, `/admin`            | Yes (staff)    |
+| Surface        | URL                                          | Requires login |
+| -------------- | -------------------------------------------- | -------------- |
+| Home + catalog | `customer-web` `/`                           | No             |
+| Top-up lookup  | `customer-web` `/` (top-up box)              | No             |
+| Checkout       | `/esim/checkout?plan=<id>[&mobile=<msisdn>]` | **No** (guest) |
+| My eSIMs       | `/account/esims`                             | Yes            |
+| Ops console    | `ops-web` `/orders`, `/admin`                | Yes (staff)    |
 
 A guest never has to sign up. Checkout works identically for signed-in customers and
 anonymous visitors; the only difference is the API surface used (see §2).
@@ -32,9 +32,9 @@ token = HMAC-SHA256(GUEST_ORDER_SECRET, orderId)
 - `POST /guest/orders` `{ planId, compatibilityAccepted, mobile? }` →
   `{ order, token }`. The token is kept in `sessionStorage` (`vc_guest_token`) so the
   same browser can resume an interrupted checkout.
-- Every subsequent mutation is sent to `/guest/orders/:id/…` and must include the token
-  (body for POST/PATCH, `?token=` query for GET). Wrong/missing tokens are rejected with
-  `403`.
+- Every subsequent request is sent to `/guest/orders/:id/…` with the token in
+  `x-guest-order-token`. Tokens are never accepted in URLs or JSON bodies;
+  wrong/missing tokens are rejected with `403`.
 - Signed-in customers use the existing `/customer/orders` routes; the checkout client
   auto-detects the session via Clerk and picks the matching API surface.
 
@@ -68,6 +68,7 @@ The order type is derived at order creation and persisted:
   exists for the supplied mobile.
 
 Implementation:
+
 - In-memory `DemoOrder.purchaseType` and `topUpMobile`.
 - Persisted to the DB `Order.orderType` enum (already present in the schema) and the
   `topUpMobile` hint is stored inside `pricingSnapshot`.
@@ -79,12 +80,12 @@ Implementation:
 Every payment carries an `expiresAt` window from the gateway. Four states are
 resolvable:
 
-| Situation                          | Endpoint (customer)                    | Endpoint (guest)                       | Endpoint (ops)                          |
-| ---------------------------------- | -------------------------------------- | -------------------------------------- | --------------------------------------- |
-| Payment window expired             | — (automatic)                          | — (automatic)                          | `POST /operations/payments/expire-stale`|
-| Customer abandons payment          | `POST /customer/orders/:id/payment/abandon` | `POST /guest/orders/:id/payment/abandon` | `POST /operations/orders/:id/payment/fail` |
-| Customer cancels a draft/retry     | `PATCH /customer/orders/:id/cancel`    | `POST /guest/orders/:id/cancel`        | `POST /operations/orders/:id/cancel`    |
-| Payment confirmed but order fails  | —                                      | —                                      | Refund flow (§6)                        |
+| Situation                         | Endpoint (customer)                         | Endpoint (guest)                         | Endpoint (ops)                             |
+| --------------------------------- | ------------------------------------------- | ---------------------------------------- | ------------------------------------------ |
+| Payment window expired            | — (automatic)                               | — (automatic)                            | `POST /operations/payments/expire-stale`   |
+| Customer abandons payment         | `POST /customer/orders/:id/payment/abandon` | `POST /guest/orders/:id/payment/abandon` | `POST /operations/orders/:id/payment/fail` |
+| Customer cancels a draft/retry    | `PATCH /customer/orders/:id/cancel`         | `POST /guest/orders/:id/cancel`          | `POST /operations/orders/:id/cancel`       |
+| Payment confirmed but order fails | —                                           | —                                        | Refund flow (§6)                           |
 
 - `OrdersService.expireStalePayments()` moves `PAYMENT_PENDING` orders whose
   `expiresAt` has passed to `PAYMENT_FAILED` (`PaymentStatus.FAILED`).
@@ -123,26 +124,26 @@ the top-up flow.
 
 ## 8. Backend API surface (new/changed)
 
-| Route | Auth | Purpose |
-| ----- | ---- | ------- |
-| `POST /guest/orders` | none | create order, returns `{ order, token }` |
-| `GET /guest/orders/:id` | token | resume order |
-| `PATCH /guest/orders/:id/traveler` | token | traveller details |
-| `POST /guest/orders/:id/documents` | token | upload authorization |
-| `POST /guest/orders/:id/documents/:documentId/confirm` | token | confirm upload |
-| `POST /guest/orders/:id/payment` | token | initiate payment |
-| `POST /guest/orders/:id/payment/verify` | token | confirm payment |
-| `POST /guest/orders/:id/payment/simulate` | token | dev-only simulation |
-| `POST /guest/orders/:id/payment/abandon` | token | resolve failure |
-| `POST /guest/orders/:id/cancel` | token | cancel draft |
-| `POST /guest/orders/topup-lookup` | none | MSISDN → current plan |
-| `GET /operations/topup/lookup?mobile=` | staff | ops MSISDN lookup |
-| `POST /operations/orders/:id/payment/refund` | staff | refund paid order |
-| `POST /operations/orders/:id/payment/fail` | staff | resolve failed payment |
-| `POST /operations/orders/:id/cancel` | staff | cancel order |
-| `POST /operations/payments/expire-stale` | staff | sweep expired windows |
-| `PATCH /customer/orders/:id/cancel` | customer | cancel own order |
-| `POST /customer/orders/:id/payment/abandon` | customer | resolve own failure |
+| Route                                                  | Auth     | Purpose                                  |
+| ------------------------------------------------------ | -------- | ---------------------------------------- |
+| `POST /guest/orders`                                   | none     | create order, returns `{ order, token }` |
+| `GET /guest/orders/:id`                                | token    | resume order                             |
+| `PATCH /guest/orders/:id/traveler`                     | token    | traveller details                        |
+| `POST /guest/orders/:id/documents`                     | token    | upload authorization                     |
+| `POST /guest/orders/:id/documents/:documentId/confirm` | token    | confirm upload                           |
+| `POST /guest/orders/:id/payment`                       | token    | initiate payment                         |
+| `POST /guest/orders/:id/payment/verify`                | token    | confirm payment                          |
+| `POST /guest/orders/:id/payment/simulate`              | token    | dev-only simulation                      |
+| `POST /guest/orders/:id/payment/abandon`               | token    | resolve failure                          |
+| `POST /guest/orders/:id/cancel`                        | token    | cancel draft                             |
+| `POST /guest/orders/topup-lookup`                      | none     | MSISDN → current plan                    |
+| `GET /operations/topup/lookup?mobile=`                 | staff    | ops MSISDN lookup                        |
+| `POST /operations/orders/:id/payment/refund`           | staff    | refund paid order                        |
+| `POST /operations/orders/:id/payment/fail`             | staff    | resolve failed payment                   |
+| `POST /operations/orders/:id/cancel`                   | staff    | cancel order                             |
+| `POST /operations/payments/expire-stale`               | staff    | sweep expired windows                    |
+| `PATCH /customer/orders/:id/cancel`                    | customer | cancel own order                         |
+| `POST /customer/orders/:id/payment/abandon`            | customer | resolve own failure                      |
 
 Changed: `GET /partners/orders/:id/usage` now resolves usage by the assigned **ICCID**
 (not the order id), so partner usage is accurate for provisioned eSIMs.
@@ -159,6 +160,7 @@ Changed: `GET /partners/orders/:id/usage` now resolves usage by the assigned **I
 - `pnpm --filter @visa-compass/ops-web typecheck`
 
 Manual smoke path (dev, `PAYMENT_MODE=simulator`):
+
 1. As a guest (not signed in): open `/`, pick a plan, go through compatibility →
    traveller → documents → payment → "Simulate verified payment" → success panel.
 2. Repeat as a guest but complete the order (QR "emailed"), then open `/`, enter the

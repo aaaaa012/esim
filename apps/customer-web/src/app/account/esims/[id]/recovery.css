@@ -68,6 +68,16 @@
   flex-shrink: 0;
 }
 
+.qr-recovery {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
 @media (max-width: 700px) {
   .customer-action-banner {
     align-items: flex-start;
@@ -82,5 +92,51 @@
   .replacement-control {
     align-items: stretch;
     flex-direction: column;
+  }
+}
+
+.qr-recovery b {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.qr-recovery small {
+  color: var(--text-2);
+  line-height: 1.45;
+  font-size: 12.5px;
+}
+
+.qr-recovery-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.qr-recovery-buttons .button {
+  gap: 7px;
+  font-size: 13px;
+  height: 42px;
+  padding: 0 14px;
+}
+
+.qr-notice {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.qr-notice.ok {
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+  color: var(--success);
+}
+
+@media (max-width: 700px) {
+  .qr-recovery-buttons .button {
+    width: 100%;
+    justify-content: center;
   }
 }

@@ -7,6 +7,28 @@ coverage
 .env.*
 !.env.example
 !.env.production.example
+Live-visa-compass-api.env
+graphify-out/
 *.log
 *.tsbuildinfo
+*.pem
+*.swp
+*.swo
+newclerkvisa.env
 apps/api/prisma/dev.db
+apps/api/generated/cockroach-client/
+.postgres-transfer-checkpoint.json
+apps/api/.postgres-transfer-checkpoint.json
+.clerk/
+.opencode/
+apps/api/eng.traineddata
+apps/customer-web/.next-dev/
+apps/ops-web/.next-dev/
+
+# local diagnostic scripts
+_*.cjs
+apps/api/prisma/e2e-proof.cjs
+apps/api/prisma/reset-for-fresh.cjs
+
+# Local security assessment; do not publish vulnerability details.
+docs/security/VAPT-2026-08-25.md

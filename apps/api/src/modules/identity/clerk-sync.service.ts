@@ -2,9 +2,11 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
@@ -14,7 +16,10 @@ import {
 } from "@prisma/client";
 import { createClerkClient } from "@clerk/backend";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
-import { GmailChannel } from "../notification/gmail.channel.js";
+import {
+  EMAIL_CHANNEL,
+  type EmailChannel,
+} from "../notification/email.channel.js";
 
 type ClerkUserEvent = {
   type: "user.created" | "user.updated" | "user.deleted";
@@ -38,7 +43,7 @@ export class ClerkSyncService {
   private readonly logger = new Logger(ClerkSyncService.name);
   constructor(
     private readonly prisma: PrismaService,
-    private readonly gmail?: GmailChannel,
+    @Optional() @Inject(EMAIL_CHANNEL) private readonly email?: EmailChannel,
   ) {}
   async sync(event: ClerkUserEvent) {
     if (!this.prisma.enabled) return { persisted: false };
@@ -59,18 +64,25 @@ export class ClerkSyncService {
       where: { clerkId: event.data.id },
     });
     if (existing) {
+      if (existing.status === UserStatus.DISABLED)
+        throw new ForbiddenException(
+          "Disabled accounts cannot be reactivated by a Clerk webhook",
+        );
       await this.prisma.user.update({
         where: { id: existing.id },
-        data: { email, status: UserStatus.ACTIVE },
+        data: { email },
       });
       return { persisted: true, accountType: existing.accountType };
     }
-    const disabledWithSameEmail = await this.prisma.user.findUnique({
+    const userWithSameEmail = await this.prisma.user.findUnique({
       where: { email },
     });
-    if (disabledWithSameEmail && disabledWithSameEmail.status === UserStatus.DISABLED) {
+    if (userWithSameEmail) {
+      // Clerk may recreate an identity after account recovery. Ownership is
+      // established by the verified email in the signed webhook; relink the
+      // existing database row rather than colliding with its unique email.
       await this.prisma.user.update({
-        where: { id: disabledWithSameEmail.id },
+        where: { id: userWithSameEmail.id },
         data: {
           clerkId: event.data.id,
           email,
@@ -79,7 +91,7 @@ export class ClerkSyncService {
       });
       return {
         persisted: true,
-        accountType: disabledWithSameEmail.accountType,
+        accountType: userWithSameEmail.accountType,
       };
     }
     const invitation = await this.prisma.staffInvitation.findFirst({
@@ -90,27 +102,9 @@ export class ClerkSyncService {
       },
       orderBy: { createdAt: "desc" },
     });
-    let accountType = invitation?.accountType ?? UserRoleName.CUSTOMER;
-    let bootstrap = false;
-    const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
-    const tokenConfigured = Boolean(process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim());
-    if (
-      accountType !== UserRoleName.SUPER_ADMIN &&
-      bootstrapEmail &&
-      email === bootstrapEmail &&
-      (process.env.NODE_ENV !== "production" || tokenConfigured)
-    ) {
-      const activeSuperAdmins = await this.prisma.user.count({
-        where: {
-          accountType: UserRoleName.SUPER_ADMIN,
-          status: UserStatus.ACTIVE,
-        },
-      });
-      if (activeSuperAdmins === 0) {
-        accountType = UserRoleName.SUPER_ADMIN;
-        bootstrap = true;
-      }
-    }
+    // Webhook delivery proves only that Clerk created an account. It must not
+    // be treated as proof of possession of the bootstrap secret.
+    const accountType = invitation?.accountType ?? UserRoleName.CUSTOMER;
     await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -132,17 +126,6 @@ export class ClerkSyncService {
             userId: user.id,
             email,
             customerCode: `VC-${user.id.slice(0, 8).toUpperCase()}`,
-          },
-        });
-      if (bootstrap)
-        await tx.auditLog.create({
-          data: {
-            module: "IDENTITY",
-            entity: "User",
-            entityId: user.id,
-            action: "BOOTSTRAP_SUPER_ADMIN",
-            performedById: user.id,
-            newValue: { source: "SIGNUP_AUTO_BOOTSTRAP", email },
           },
         });
       if (invitation) {
@@ -205,7 +188,12 @@ export class ClerkSyncService {
   }
 
   private async promoteByPortal(
-    existing: { id: string; accountType: UserRoleName; email: string; status: UserStatus },
+    existing: {
+      id: string;
+      accountType: UserRoleName;
+      email: string;
+      status: UserStatus;
+    },
     origin: string,
   ) {
     if (existing.accountType !== UserRoleName.CUSTOMER) return;
@@ -336,10 +324,12 @@ export class ClerkSyncService {
   async bootstrapSuperAdmin(clerkId: string, tokenInput: string) {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
-    const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+    const bootstrapEmail =
+      process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
     if (!bootstrapEmail)
       throw new BadRequestException("Bootstrap is not configured");
-    const configuredToken = process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim() ?? "";
+    const configuredToken =
+      process.env.BOOTSTRAP_SUPER_ADMIN_TOKEN?.trim() ?? "";
     const requiresToken = process.env.NODE_ENV === "production";
     if (requiresToken && !configuredToken)
       throw new BadRequestException("Bootstrap token is not configured");
@@ -430,12 +420,13 @@ export class ClerkSyncService {
 
   private async alertIdentityEmergency(message: string) {
     const recipient = process.env.OPS_ALERT_EMAIL;
-    if (recipient && this.gmail) {
+    if (recipient && this.email) {
       try {
-        await this.gmail.send({
+        await this.email.send({
           to: recipient,
           subject: "[Ops Alert] Super Admin identity emergency",
           text: message,
+          idempotencyKey: `identity-emergency-${createHash("sha256").update(message).digest("hex")}`,
         });
       } catch (error) {
         this.logger.error(

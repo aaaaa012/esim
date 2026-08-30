@@ -8,9 +8,14 @@ type DataTableProps = {
   className?: string;
 };
 
-export function DataTable({ columns, rows, rowKey, className }: DataTableProps) {
+export function DataTable({
+  columns,
+  rows,
+  rowKey,
+  className,
+}: DataTableProps) {
   return (
-    <div className={cn("overflow-x-auto", className)}>
+    <div className={cn("ops-data-table overflow-x-auto", className)}>
       <table className="w-full text-left text-sm">
         <thead>
           <tr className="border-b">
@@ -31,7 +36,7 @@ export function DataTable({ columns, rows, rowKey, className }: DataTableProps) 
           {rows.map((row) => (
             <tr
               key={rowKey(row)}
-              className="border-b transition-colors last:border-0 hover:bg-muted/40"
+              className="border-b transition-colors last:border-0 hover:bg-primary/[0.035]"
             >
               {row.map((cell, index) => (
                 <td

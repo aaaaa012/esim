@@ -6,6 +6,7 @@ type PanelProps = {
   title?: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
+  action?: ReactNode;
   className?: string;
   bodyClassName?: string;
   noPadding?: boolean;
@@ -16,15 +17,16 @@ export function Panel({
   title,
   description,
   actions,
+  action,
   className,
   bodyClassName,
   noPadding,
   children,
 }: PanelProps) {
   return (
-    <Card className={cn("gap-0 overflow-hidden", className)}>
-      {(title || actions) && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
+    <Card className={cn("ops-card gap-0 overflow-hidden border-0", className)}>
+      {(title || actions || action) && (
+        <div className="ops-panel-head flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
           <div className="space-y-0.5">
             {title && (
               <h2 className="text-base font-semibold tracking-tight">
@@ -35,7 +37,9 @@ export function Panel({
               <p className="text-xs text-muted-foreground">{description}</p>
             )}
           </div>
-          {actions && <div className="flex items-center gap-2">{actions}</div>}
+          {(actions || action) && (
+            <div className="flex items-center gap-2">{actions ?? action}</div>
+          )}
         </div>
       )}
       <CardContent

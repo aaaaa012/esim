@@ -1,7 +1,10 @@
 name: CI
 on:
   push:
+    branches:
+      - with-fonepay
   pull_request:
+  workflow_dispatch:
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -18,9 +21,67 @@ jobs:
       - run: pnpm test
       - run: pnpm build
         env:
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
           NEXT_PUBLIC_PAYMENT_MODE: ${{ vars.NEXT_PUBLIC_PAYMENT_MODE }}
           NEXT_PUBLIC_CUSTOMER_WEB_URL: ${{ vars.NEXT_PUBLIC_CUSTOMER_WEB_URL }}
       - name: Reject committed secrets
-        run: '! git grep -nE "(CLERK_SECRET_KEY|KHALTI_SECRET_KEY|DATABASE_URL)=.+" -- ":(exclude).env.example"'
+        run: |
+          matches="$(git grep -nE "(CLERK_SECRET_KEY|KHALTI_SECRET_KEY|DATABASE_URL)=.+" -- ":(exclude).github/workflows/ci.yml" || true)"
+          unexpected="$(printf '%s\n' "$matches" | grep -vE 'CLERK_SECRET_KEY=sk_test_\.\.\.|(DIRECT_)?DATABASE_URL=postgresql://user:password@localhost|(DIRECT_)?DATABASE_URL=postgresql://(app_user|migration_user):password@(host|pooler-host|database-host)|DIRECT_DATABASE_URL=.postgresql://\.\.\.' || true)"
+          if [ -n "$unexpected" ]; then
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+
+  deploy-production:
+    name: Deploy with-fonepay to EC2
+    if: github.repository == 'samirextra369/esim2.2' && ((github.event_name == 'push' && github.ref == 'refs/heads/with-fonepay') || github.event_name == 'workflow_dispatch')
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    concurrency:
+      group: visacompass-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_USER: ${{ vars.EC2_USER || 'ec2-user' }}
+      EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+      EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validate deployment secrets
+        shell: bash
+        run: |
+          test -n "$EC2_HOST" || { echo "Missing production secret: EC2_HOST" >&2; exit 1; }
+          test -n "$EC2_SSH_PRIVATE_KEY" || { echo "Missing production secret: EC2_SSH_PRIVATE_KEY" >&2; exit 1; }
+          test -n "$EC2_KNOWN_HOSTS" || { echo "Missing production secret: EC2_KNOWN_HOSTS" >&2; exit 1; }
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          install -m 700 -d "$RUNNER_TEMP/visacompass-ssh"
+          install -m 600 /dev/null "$RUNNER_TEMP/visacompass-ssh/deploy_key"
+          install -m 600 /dev/null "$RUNNER_TEMP/visacompass-ssh/known_hosts"
+          printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/visacompass-ssh/deploy_key"
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > "$RUNNER_TEMP/visacompass-ssh/known_hosts"
+
+      - name: Deploy tested commit
+        shell: bash
+        run: |
+          ssh \
+            -i "$RUNNER_TEMP/visacompass-ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=4 \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$RUNNER_TEMP/visacompass-ssh/known_hosts" \
+            "$EC2_USER@$EC2_HOST" \
+            "DEPLOY_SHA=$GITHUB_SHA RUN_TESTS=0 bash -s" < scripts/ec2-deploy.sh

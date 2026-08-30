@@ -31,7 +31,7 @@ IMPORTED → AVAILABLE → RESERVED → ASSIGNED → ACTIVATED
 ### Reservation (`reserve`, `inventory.service.ts:20-31`)
 
 - In-memory mode returns `{ id: memory-{orderId}, eid: mock-{orderId}, iccid:
-  mock-{orderId} }`.
+mock-{orderId} }`.
 - Prisma mode: finds the oldest AVAILABLE profile and atomically claims it with
   `updateMany` guarded by `status=AVAILABLE, assignedOrderId=null`,
   incrementing `version`. Retries up to 3 times; on conflict throws
@@ -85,7 +85,7 @@ IMPORTED → AVAILABLE → RESERVED → ASSIGNED → ACTIVATED
 
 - Requires Prisma. Looks up inventory by assigned order; calls
   `connectivity.getUsage(iccid)`; updates `Subscription.usedMb/totalMb/
-  usageLastCheckedAt`; returns `{ orderId, ...usage, lastCheckedAt }`.
+usageLastCheckedAt`; returns `{ orderId, ...usage, lastCheckedAt }`.
 
 `customerIdForOrder(orderId)` (`inventory.service.ts:182-187`): in-memory mode
 returns `memory-{orderId}`; Prisma mode reads the order's customerId.

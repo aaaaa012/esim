@@ -1,9 +1,11 @@
 "use client";
 import { useAuthenticatedFetch } from "../../../authenticated-api-provider";
+import ErrorModal from "../../../../components/error-modal";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   ChevronLeft,
   Clock3,
@@ -13,7 +15,12 @@ import {
   Upload,
 } from "lucide-react";
 import "./recovery.css";
-import { apiErrorMessage } from "@visa-compass/shared";
+import {
+  apiErrorMessage,
+  documentStatusLabel,
+  documentTypeLabel,
+  orderStatusLabel,
+} from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -22,12 +29,8 @@ type DocumentAuthorization = {
   upload: {
     mode: string;
     endpoint?: string;
-    apiKey?: string;
-    publicId?: string;
-    deliveryType?: string;
-    timestamp: number;
-    signature: string;
-    folder: string;
+    method?: "PUT";
+    headers?: Record<string, string>;
   };
 };
 type Order = {
@@ -43,14 +46,19 @@ type Order = {
     validityDays: number;
   };
   documents: { id: string; type: string; status: string; fileName: string }[];
-  payment?: { provider: string; status: string };
+  payment?: { provider: string; status: string; reference?: string };
   timeline: { from: string | null; to: string; at: string; reason?: string }[];
   usage?: { usedMb: number; totalMb: number; lastCheckedAt?: string };
+  provisioningFailure?: { code: string; message: string };
+  documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
+  documentReviewStatus?: string;
 };
 
-export default function EsimDetails({ id }: { id: string }) {const authFetch=useAuthenticatedFetch();
+export default function EsimDetails({ id }: { id: string }) {
+  const authFetch = useAuthenticatedFetch();
   const [order, setOrder] = useState<Order | null>(null),
     [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
     [busy, setBusy] = useState("");
   const [replacements, setReplacements] = useState<
     Record<string, File | undefined>
@@ -59,7 +67,13 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
     authFetch(`${API}/customer/orders/${id}`, { headers }).then(
       async (response) => {
         const value = await response.json();
-        if (!response.ok) throw new Error(apiErrorMessage(value.error?.code ?? "", value.error?.message ?? "Something went wrong"));
+        if (!response.ok)
+          throw new Error(
+            apiErrorMessage(
+              value.error?.code ?? "",
+              value.error?.message ?? "Something went wrong",
+            ),
+          );
         setOrder(value.data);
       },
     );
@@ -92,24 +106,24 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
       );
       const authorizationValue = await authorizationResponse.json();
       if (!authorizationResponse.ok)
-        throw new Error(apiErrorMessage(authorizationValue.error?.code ?? "", authorizationValue.error?.message ?? "Something went wrong"));
+        throw new Error(
+          apiErrorMessage(
+            authorizationValue.error?.code ?? "",
+            authorizationValue.error?.message ?? "Something went wrong",
+          ),
+        );
       const authorization = authorizationValue.data as DocumentAuthorization;
       if (
-        authorization.upload.mode !== "cloudinary-signed" ||
+        authorization.upload.mode !== "s3-presigned" ||
         !authorization.upload.endpoint
       )
         throw new Error("Private document storage is unavailable");
-      const form = new FormData();
-      form.append("file", file);
-      form.append("api_key", authorization.upload.apiKey!);
-      form.append("timestamp", String(authorization.upload.timestamp));
-      form.append("signature", authorization.upload.signature);
-      form.append("folder", authorization.upload.folder);
-      form.append("public_id", authorization.upload.publicId!);
-      form.append("type", authorization.upload.deliveryType!);
-      const uploaded = await authFetch(authorization.upload.endpoint, {
-        method: "POST",
-        body: form,
+      const uploaded = await fetch(authorization.upload.endpoint, {
+        method: authorization.upload.method ?? "PUT",
+        ...(authorization.upload.headers
+          ? { headers: authorization.upload.headers }
+          : {}),
+        body: file,
       });
       if (!uploaded.ok) throw new Error("Replacement upload failed");
       const confirmation = await authFetch(
@@ -125,7 +139,13 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
         },
       );
       const confirmationValue = await confirmation.json();
-      if (!confirmation.ok) throw new Error(apiErrorMessage(confirmationValue.error?.code ?? "", confirmationValue.error?.message ?? "Something went wrong"));
+      if (!confirmation.ok)
+        throw new Error(
+          apiErrorMessage(
+            confirmationValue.error?.code ?? "",
+            confirmationValue.error?.message ?? "Something went wrong",
+          ),
+        );
       setReplacements({});
       await load();
     } catch (cause) {
@@ -136,10 +156,76 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
       setBusy("");
     }
   };
+  const resendQrAction = async () => {
+    setBusy("qr-resend");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(
+        `${API}/customer/orders/${id}/resend-qr`,
+        {
+          method: "POST",
+          headers: {
+            ...headers,
+            "content-type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+          },
+          body: "{}",
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          apiErrorMessage(
+            value.error?.code ?? "",
+            value.error?.message ?? "Something went wrong",
+          ),
+        );
+      setNotice(
+        "QR email sent — check your inbox (and spam) for the QR image.",
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "The QR could not be resent",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+  const downloadQrAction = async () => {
+    setBusy("qr-download");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(
+        `${API}/customer/orders/${id}/activation-qr`,
+        { headers },
+      );
+      if (!response.ok) throw new Error("The QR document could not be loaded");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${order?.orderNumber ?? "esim"}-esim.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setNotice("QR PDF downloaded. No password is required.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "The QR document could not be loaded",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
   if (error && !order)
     return (
       <main className="section">
-        <div className="shell form-error">{error}</div>
+        <ErrorModal error={error} onClose={() => setError("")} />
       </main>
     );
   if (!order)
@@ -149,19 +235,33 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
         Loading secure order…
       </main>
     );
-  const resumable = ["DRAFT", "PAYMENT_PENDING"].includes(order.status);
-  const needsReupload = order.status === "AWAITING_CUSTOMER";
+  const resumable = ["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(
+    order.status,
+  );
+  const paymentPending =
+    order.status === "PAYMENT_PENDING" && Boolean(order.payment?.reference);
+  const needsReupload = order.documents.some(
+    (document) => document.status === "REUPLOAD_REQUIRED",
+  );
+  const documentReviewPending = ["MANUAL_REVIEW", "OCR_BACKGROUND"].includes(
+    order.documentReviewStatus ?? "",
+  );
+  const resumeLabel = paymentPending
+    ? "Check payment status"
+    : order.status === "PAYMENT_FAILED"
+      ? "Retry payment"
+      : "Resume checkout";
   return (
     <main className="detail-page">
       <div className="shell">
-        <Link className="back-link-detail" href="/account/esims">
+        <Link className="back-link-detail" href="/account/orders">
           <ChevronLeft size={16} />
-          My eSIMs
+          Orders
         </Link>
         <div className="detail-head">
           <div>
             <span className={`status-chip ${order.status.toLowerCase()}`}>
-              {order.status.replaceAll("_", " ")}
+              {orderStatusLabel(order.status)}
             </span>
             <h1>{order.plan.name}</h1>
             <p>
@@ -174,18 +274,25 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
             <b>NPR {order.totalAmountNpr.toLocaleString()}</b>
           </div>
         </div>
-        {error && <div className="form-error">{error}</div>}
+        {error && <ErrorModal error={error} onClose={() => setError("")} />}
+        {notice && <div className="qr-notice ok">{notice}</div>}
         {resumable && (
           <section className="customer-action-banner">
             <AlertCircle />
             <span>
-              <b>Complete your purchase</b>
+              <b>
+                {paymentPending
+                  ? "Confirm your payment"
+                  : "Complete your purchase"}
+              </b>
               <small>
-                Your saved traveller and document information will be restored.
+                {paymentPending
+                  ? "Your payment returned to us but is still being confirmed. We re-check it automatically."
+                  : "Your saved traveller and document information will be restored."}
               </small>
             </span>
             <Link className="button" href={`/esim/checkout?order=${order.id}`}>
-              Resume checkout
+              {resumeLabel}
             </Link>
           </section>
         )}
@@ -199,6 +306,18 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                   .reverse()
                   .find((event) => event.to === "AWAITING_CUSTOMER")?.reason ??
                   "Upload the requested document to submit the order again."}
+              </small>
+            </span>
+          </section>
+        )}
+        {documentReviewPending && !needsReupload && (
+          <section className="customer-action-banner">
+            <Clock3 />
+            <span>
+              <b>Your documents are being reviewed separately</b>
+              <small>
+                Your payment and eSIM activation continue normally. Our team
+                will contact you only if another document is required.
               </small>
             </span>
           </section>
@@ -221,7 +340,7 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                       )}
                     </i>
                     <span>
-                      <b>{event.to.replaceAll("_", " ")}</b>
+                      <b>{orderStatusLabel(event.to)}</b>
                       <small>
                         {new Date(event.at).toLocaleString()}
                         {event.reason ? ` · ${event.reason}` : ""}
@@ -239,10 +358,10 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                   key={document.id}
                 >
                   <span>
-                    {document.type} · {document.fileName}
+                    {documentTypeLabel(document.type)} · {document.fileName}
                   </span>
-                  <b>{document.status}</b>
-                  {needsReupload && document.status === "REUPLOAD_REQUIRED" && (
+                  <b>{documentStatusLabel(document.status)}</b>
+                  {document.status === "REUPLOAD_REQUIRED" && (
                     <div className="replacement-control">
                       <input
                         type="file"
@@ -280,38 +399,105 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
             {resumable ? (
               <>
                 <p>
-                  Continue checkout to submit traveller documents and complete
-                  payment.
+                  {paymentPending
+                    ? "We re-check the payment with your wallet automatically and will activate the eSIM as soon as it is confirmed."
+                    : "Continue checkout to submit traveller documents and complete payment."}
                 </p>
                 <Link
                   className="button"
                   href={`/esim/checkout?order=${order.id}`}
                 >
-                  Resume purchase
+                  {resumeLabel}
                 </Link>
               </>
             ) : order.status === "QR_READY" ? (
               <>
                 <p>
-                  Your activation QR was emailed to you as a password-protected
-                  PDF. Install the eSIM and connect once to activate it — your
-                  order will then be marked complete.
+                  Your activation QR was emailed to you as an image. Install the
+                  eSIM and connect once to activate it — your order will then be
+                  marked complete.
                 </p>
                 <div className="processing">
                   <QrCode size={18} />
                   Activation QR delivered — awaiting activation
                 </div>
+                <div className="qr-recovery">
+                  <b>Did the QR email not arrive?</b>
+                  <small>
+                    Resend the QR image or download an unencrypted PDF here. No
+                    password is required.
+                  </small>
+                  <div className="qr-recovery-buttons">
+                    <button
+                      className="button secondary"
+                      disabled={Boolean(busy)}
+                      onClick={() => void resendQrAction()}
+                    >
+                      {busy === "qr-resend" ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <Mail size={16} />
+                      )}{" "}
+                      Resend email
+                    </button>
+                    <button
+                      className="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => void downloadQrAction()}
+                    >
+                      {busy === "qr-download" ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <QrCode size={16} />
+                      )}{" "}
+                      Download QR PDF
+                    </button>
+                  </div>
+                </div>
               </>
             ) : order.status === "COMPLETED" ? (
               <>
                 <p>
-                  Your activation QR was emailed to you as a password-protected
-                  PDF. Open the PDF on your phone and enter the eSIM number
-                  (MSISDN) shown in your email to reveal the QR.
+                  Your activation QR was emailed to you as an image. Open it on
+                  another screen and scan it from your phone&apos;s eSIM
+                  settings.
                 </p>
                 <div className="processing">
                   <Mail size={18} />
                   Check your email for the attachment
+                </div>
+                <div className="qr-recovery">
+                  <b>Did the QR email not arrive?</b>
+                  <small>
+                    Resend the QR image or download an unencrypted PDF here. No
+                    password is required.
+                  </small>
+                  <div className="qr-recovery-buttons">
+                    <button
+                      className="button secondary"
+                      disabled={Boolean(busy)}
+                      onClick={() => void resendQrAction()}
+                    >
+                      {busy === "qr-resend" ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <Mail size={16} />
+                      )}{" "}
+                      Resend email
+                    </button>
+                    <button
+                      className="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => void downloadQrAction()}
+                    >
+                      {busy === "qr-download" ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <QrCode size={16} />
+                      )}{" "}
+                      Download QR PDF
+                    </button>
+                  </div>
                 </div>
                 {order.usage ? (
                   <div className="usage-panel">
@@ -330,10 +516,8 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                       />
                     </div>
                     <p>
-                      <b>
-                        {order.usage.usedMb.toLocaleString()} MB
-                      </b>{" "}
-                      of {order.usage.totalMb.toLocaleString()} MB used
+                      <b>{order.usage.usedMb.toLocaleString()} MB</b> of{" "}
+                      {order.usage.totalMb.toLocaleString()} MB used
                     </p>
                     <small>
                       Remaining:{" "}
@@ -353,6 +537,39 @@ export default function EsimDetails({ id }: { id: string }) {const authFetch=use
                     reconciled.
                   </p>
                 )}
+              </>
+            ) : order.status === "PAYMENT_REVIEW_REQUIRED" ? (
+              <p>
+                Your payment needs confirmation. Our operations team can recheck
+                it without creating another charge.
+              </p>
+            ) : order.status === "ACTIVATION_ATTENTION" ? (
+              <p>
+                Your QR remains available. Network activation confirmation is
+                delayed and our operations team is reconciling it.
+              </p>
+            ) : order.status === "PROVISIONING_FAILED" ? (
+              <>
+                <p>
+                  {order.provisioningFailure?.message ??
+                    "We could not activate your eSIM right now. Our team is reviewing it and will contact you."}
+                </p>
+                <div className="processing">
+                  <AlertTriangle size={18} />
+                  Activation unsuccessful
+                </div>
+                <div className="qr-recovery">
+                  <b>Need help?</b>
+                  <small>
+                    Our team reviews failed activations. You can also choose
+                    another plan without being charged.
+                  </small>
+                  <div className="qr-recovery-buttons">
+                    <Link className="button" href="/#plans">
+                      Choose another plan
+                    </Link>
+                  </div>
+                </div>
               </>
             ) : (
               <>

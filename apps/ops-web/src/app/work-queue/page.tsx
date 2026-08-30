@@ -1,13 +1,13 @@
-import OrdersClient from '../orders/orders-client';
-import { PageHeader } from '@/components/page-header';
+import QueueClient from "./queue-client";
+import { PageHeader } from "@/components/page-header";
 export default function Queue() {
   return (
     <>
       <PageHeader
-        title="Work queue"
-        description="Orders that require an operations decision."
+        title="To-do list"
+        description="Orders grouped by what they need from your team."
       />
-      <OrdersClient queueOnly />
+      <QueueClient />
     </>
   );
 }

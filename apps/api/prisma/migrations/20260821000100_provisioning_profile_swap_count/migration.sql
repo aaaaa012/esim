@@ -1,0 +1,1 @@
+ALTER TABLE "ProvisioningOperation" ADD COLUMN IF NOT EXISTS "profileSwapCount" INT4 NOT NULL DEFAULT 0;

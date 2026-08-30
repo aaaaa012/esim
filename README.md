@@ -17,11 +17,11 @@ API documentation is available at `http://localhost:4000/api/docs` after the API
 
 - Node.js 22 or newer
 - pnpm 11.9.0 (`corepack enable` is recommended)
-- A CockroachDB or CockroachDB-compatible PostgreSQL connection
+- A PostgreSQL 15+ connection
 - A Clerk development application
 - Redis with a TCP/TLS endpoint when BullMQ processing is required
 
-Cloudinary, Gmail, Khalti, WhatsApp, and live connectivity-provider credentials are optional for simulator-based development.
+Amazon S3, Amazon SES, Khalti, WhatsApp, and live connectivity-provider credentials are optional for simulator-based development.
 
 ## First-time installation
 
@@ -50,7 +50,8 @@ openssl rand -hex 32
 Put the first result in `APP_ENCRYPTION_KEY_BASE64` and the second in `PII_HASH_KEY`. Then configure at least:
 
 ```dotenv
-DATABASE_URL=postgresql://user:password@host:26257/visa_compass?sslmode=require
+DATABASE_URL=postgresql://app_user:password@host:5432/postgres?schema=visa_compass&sslmode=require
+DIRECT_DATABASE_URL=postgresql://migration_user:password@host:5432/postgres?schema=visa_compass&sslmode=require
 PERSISTENCE_MODE=prisma
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
@@ -130,7 +131,7 @@ The default development configuration uses:
 
 - Payment gateway simulators
 - Transatel connectivity (production provider; requires credentials in `.env`)
-- Simulated notifications unless Gmail OAuth is configured
+- Simulated notifications unless Amazon SES is configured
 - In-process queue simulation unless `REDIS_URL` is configured
 
 Do not claim sandbox or live-provider certification until the corresponding credentials and provider contracts have been smoke-tested.
@@ -144,7 +145,7 @@ Do not claim sandbox or live-provider certification until the corresponding cred
 - **Health** — `/health/ready` reports real database and queue state.
 - **Provider audit trail** — every outbound Transatel call (token, provisioning, usage, catalog, eligibility, webhooks) is persisted to `IntegrationLog` with HTTP status, duration, and the provider's raw error text; ops can query `GET /operations/integration-logs`. Inbound webhooks are stored in `WebhookEvent` with signature validity and processing errors.
 - **Provisioning forensics** — `ProvisioningAttempt` stores the exact request snapshot, response snapshot, and a typed `errorCode` (`PROVISIONING_FAILED (HTTP 502): <provider detail>`) for every attempt.
-- **Least-privilege responses** — customer order endpoints strip internal fields (`ownerId`, provider subscription IDs, Cloudinary asset ids, payment correlation ids, operator clerk ids from timeline reasons); ops endpoints receive the full record.
+- **Least-privilege responses** — customer order endpoints strip internal fields (`ownerId`, provider subscription IDs, Amazon S3 asset ids, payment correlation ids, operator clerk ids from timeline reasons); ops endpoints receive the full record.
 
 ## Bulk data management
 

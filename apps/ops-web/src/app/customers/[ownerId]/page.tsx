@@ -5,5 +5,7 @@ export default async function Page({
 }: {
   params: Promise<{ ownerId: string }>;
 }) {
-  return <CustomerProfile ownerId={decodeURIComponent((await params).ownerId)} />;
+  return (
+    <CustomerProfile ownerId={decodeURIComponent((await params).ownerId)} />
+  );
 }

@@ -9,11 +9,11 @@ docs. Use it to confirm what you want before go-live, then flag anything you wan
 
 ## 1. The three pieces
 
-| Piece | Port | Who uses it | What it does |
-| --- | --- | --- | --- |
-| Customer website (`customer-web`) | 3000 | Everyone, no login needed to browse | Storefront, checkout, "My eSIMs" account |
-| Ops portal (`ops-web`) | 3001 | OPS + Super Admin staff only | Review orders, inventory, admin panel |
-| API (`api`) | 4000 | Both websites + partners + webhooks | All business logic, payments, provisioning |
+| Piece                             | Port | Who uses it                         | What it does                               |
+| --------------------------------- | ---- | ----------------------------------- | ------------------------------------------ |
+| Customer website (`customer-web`) | 3000 | Everyone, no login needed to browse | Storefront, checkout, "My eSIMs" account   |
+| Ops portal (`ops-web`)            | 3001 | OPS + Super Admin staff only        | Review orders, inventory, admin panel      |
+| API (`api`)                       | 4000 | Both websites + partners + webhooks | All business logic, payments, provisioning |
 
 There are **three account types**: `CUSTOMER`, `OPERATIONS`, `SUPER_ADMIN`.
 
@@ -38,8 +38,8 @@ There are **three account types**: `CUSTOMER`, `OPERATIONS`, `SUPER_ADMIN`.
      and on each plan card).
    - A **"Choose your destination"** dropdown (flags included) showing every country that has
      at least one plan.
-   - A **top-up box**: *"Already have a Visa Compass eSIM? Enter your mobile number to see your
-     current plan and recharge it."*
+   - A **top-up box**: _"Already have a Visa Compass eSIM? Enter your mobile number to see your
+     current plan and recharge it."_
    - Plan cards for the chosen destination: name, flag, data amount, validity days, NPR price,
      and a **Choose** button. Only plans with status `ACTIVE` are shown — anything `DRAFT`,
      `DISABLED` or `ARCHIVED` is invisible to customers.
@@ -81,7 +81,7 @@ Anyone can buy without an account. This is a full, real purchase.
      passport expiry, nationality, country of residence, city, email, mobile/WhatsApp, and an
      optional employer/business field.
    - **Documents** — **Passport** and **Travel ticket** are required; **Visa** is optional.
-     PDF/JPG/PNG, max 10 MB, uploaded to the private document store (Cloudinary) using a
+     PDF/JPG/PNG, max 10 MB, uploaded to the private document store (Amazon S3) using a
      short-lived signed upload, or to a local simulator when storage isn't configured. The
      server verifies the upload landed.
    - **Payment** — Khalti.
@@ -135,8 +135,8 @@ for top-ups.
      a **"Your eSIM is ready"** email is queued.
    - On failure after all retries the order becomes **`PROVISIONING_FAILED`**, an ops alert
      email is queued, and an ops person can press **Retry provisioning**.
-5. **The QR delivery:** the customer gets an email with a **password-protected PDF** of the QR.
-   The email also includes the **eSIM number (MSISDN)**; that MSISDN is the PDF password. They
+5. **The QR delivery:** the customer gets an email with an **unencrypted PNG image** of the QR.
+   No password or MSISDN is required to open the attachment. They
    open the PDF on their phone and type the eSIM number shown in the email, then scan the QR in
    their phone's eSIM settings.
 6. The customer can also see everything under **My eSIMs** in their account: status, the full
@@ -147,6 +147,7 @@ for top-ups.
    customer (`PLAN_EXPIRED` / `PLAN_EXHAUSTED`).
 
 ### Notes about document verification in this flow
+
 - **Documents are verified at upload time** (the file really landed, is the right size/format)
   and **payment requires that a traveller + passport + ticket already exist**.
 - But in the normal flow **no human checks the photo contents before the eSIM activates**,
@@ -170,13 +171,13 @@ for top-ups.
 
 ## 8. Payments, failures, cancellations, refunds
 
-| Situation | What happens |
-| --- | --- |
+| Situation                                                                | What happens                                                                                                                 |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | Payment window expires (still `PAYMENT_PENDING` past the gateway expiry) | Ops (or the admin panel button) runs **"Expire stale payments"** → order becomes `PAYMENT_FAILED` ("Payment window expired") |
-| Customer abandons payment | Order becomes `PAYMENT_FAILED` with the given reason |
-| Customer cancels a draft / unpaid order | Order becomes `CANCELLED` (also possible from ops portal) |
-| Ops refunds a **paid** order | Khalti refund is called; order moves `REFUND_PENDING → REFUNDED`; payment marked refunded |
-| Payment is still being confirmed after redirect | The checkout page polls the order until it settles (up to ~90 seconds), then shows the result |
+| Customer abandons payment                                                | Order becomes `PAYMENT_FAILED` with the given reason                                                                         |
+| Customer cancels a draft / unpaid order                                  | Order becomes `CANCELLED` (also possible from ops portal)                                                                    |
+| Ops refunds a **paid** order                                             | Khalti refund is called; order moves `REFUND_PENDING → REFUNDED`; payment marked refunded                                    |
+| Payment is still being confirmed after redirect                          | The checkout page polls the order until it settles (up to ~90 seconds), then shows the result                                |
 
 Only orders in `DRAFT`, `PAYMENT_PENDING` or `PAYMENT_FAILED` can be cancelled. Refunds only
 apply to paid, non-refunded orders.
@@ -215,6 +216,7 @@ Sidebar (Super Admin only): the **Administration** item appears.
   sensitive action (who did what).
 
 ### How inventory works (important for ops)
+
 - Imported SIM profiles land in a `PENDING` batch with rows in `IMPORTED` state. **Nothing is
   sellable yet.**
 - A **Super Admin must approve the batch** → rows become `AVAILABLE`. Rejecting leaves them
@@ -232,7 +234,7 @@ Sidebar (Super Admin only): the **Administration** item appears.
   upload a CSV/XLSX to import plans (they land as `DRAFT`), **Approve** a draft (becomes
   `ACTIVE` and visible to customers), **Reject** (archived), edit the selling price, toggle
   popular, and change status.
-- **Integrations** — live health of email, Khalti, Transatel, Cloudinary, WhatsApp; "Test"
+- **Integrations** — live health of email, Khalti, Transatel, Amazon S3, WhatsApp; "Test"
   buttons; Transatel actions (**Sync catalog**, **Register webhook**, **Eligibility check** for
   a subscriber number); integration call log. Credentials are never shown — the UI explains how
   to set them in the environment.
@@ -268,6 +270,7 @@ Sidebar (Super Admin only): the **Administration** item appears.
    sign-up is treated as a customer identity that cannot access the console.
 
 ### How the very first Super Admin is created
+
 - Set `BOOTSTRAP_SUPER_ADMIN_EMAIL` in the environment. When **no active Super Admin exists
   yet**, the person who registers that exact email automatically becomes Super Admin. (In
   production this also requires `BOOTSTRAP_SUPER_ADMIN_TOKEN` to be set — see §14, it is only
@@ -285,7 +288,7 @@ Sidebar (Super Admin only): the **Administration** item appears.
   (paying/reviewing/activating), **Needs action** (draft, needs re-upload, payment failed).
 - **Order detail** — status chip, order number + date, order total, the full event timeline,
   each document with its status, a **"Resume checkout"** banner for incomplete orders, and the
-  **eSIM activation card**: after completion it explains the emailed password-protected QR, and
+  **eSIM activation card**: after completion it explains the emailed QR image, and
   shows the data usage bar; when a replacement document is needed it shows a banner and upload
   buttons.
 - **Notifications** — the notification history for their orders.
@@ -348,11 +351,11 @@ These are **current behaviours** you should consciously accept or change:
 7. **Guest purchases leave no account.** If a guest buys without signing up, their completed
    order is found later only via mobile number (for top-ups) or by the token in that browser.
 
-8. **Notifications need real providers in production** (Gmail OAuth for email, optional
+8. **Notifications need real providers in production** (Amazon SES for email, optional
    WhatsApp). Without them, email delivery is simulated and the customer will **not** receive
-   the QR PDF.
+   the QR attachment.
 
 ---
 
-*This document mirrors the code as of go-live. If you change any behaviour, update this file so
-it stays the single source of truth.*
+_This document mirrors the code as of go-live. If you change any behaviour, update this file so
+it stays the single source of truth._

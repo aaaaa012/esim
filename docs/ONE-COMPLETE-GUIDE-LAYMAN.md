@@ -7,26 +7,26 @@ point at the exact source so you can verify any claim.
 
 > Two portals (customer + operations) talk to one backend (the API) which talks to
 > five outside services: **Clerk** (who you are), **Khalti** (payments), **Transatel**
-> (the actual mobile-network eSIMs), **Cloudinary** (secure document storage) and
-> **Gmail / WhatsApp** (messages). The product sells international travel eSIM data
+> (the actual mobile-network eSIMs), **Amazon S3** (secure document storage) and
+> **Amazon SES / WhatsApp** (messages). The product sells international travel eSIM data
 > plans in Nepali Rupees (NPR).
 
 ---
 
 ## 1. The cast of characters
 
-| Who | Where they live | What they can do |
-| --- | --- | --- |
-| **Customer** (signed in) | customer-web, port 3000 | Browse plans, buy, upload documents, pay, download their eSIM QR, view usage. Owns their own orders only. |
-| **Guest** (no account) | customer-web, checkout | Same purchase flow but without signing in. Gets a one-time secret token attached to their order. |
-| **Operations staff** | ops-web, port 3001 | Review documents, approve orders, retry failures, import eSIM inventory, refunds, top-up lookup. |
-| **Super Admin** | ops-web, port 3001 | Everything ops can do, plus: manage users/staff invitations, edit plans, trigger Transatel catalog sync, system config. |
-| **Partner** | A third-party API consumer | Uses their own API key to create orders and check status for their own customers (B2B). |
-| **Clerk** | External | Login/registration. Issues the "I am this person" tokens (JWTs). |
-| **Khalti** | External | Takes customer money. |
-| **Transatel** | External | Actually provisions the eSIM on the mobile network and reports usage. |
-| **Cloudinary** | External | Holds uploaded passport/ticket scans privately. |
-| **Gmail / WhatsApp** | External | Deliver eSIM QR PDFs and status messages. |
+| Who                      | Where they live            | What they can do                                                                                                        |
+| ------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Customer** (signed in) | customer-web, port 3000    | Browse plans, buy, upload documents, pay, download their eSIM QR, view usage. Owns their own orders only.               |
+| **Guest** (no account)   | customer-web, checkout     | Same purchase flow but without signing in. Gets a one-time secret token attached to their order.                        |
+| **Operations staff**     | ops-web, port 3001         | Review documents, approve orders, retry failures, import eSIM inventory, refunds, top-up lookup.                        |
+| **Super Admin**          | ops-web, port 3001         | Everything ops can do, plus: manage users/staff invitations, edit plans, trigger Transatel catalog sync, system config. |
+| **Partner**              | A third-party API consumer | Uses their own API key to create orders and check status for their own customers (B2B).                                 |
+| **Clerk**                | External                   | Login/registration. Issues the "I am this person" tokens (JWTs).                                                        |
+| **Khalti**               | External                   | Takes customer money.                                                                                                   |
+| **Transatel**            | External                   | Actually provisions the eSIM on the mobile network and reports usage.                                                   |
+| **Amazon S3**           | External                   | Holds uploaded passport/ticket scans privately.                                                                         |
+| **Amazon SES / WhatsApp**    | External                   | Deliver eSIM QR images and status messages.                                                                             |
 
 ---
 
@@ -92,13 +92,13 @@ does the calling; the server checks who you are on every request.
    7–20 digits, passport 5–30 chars. Anything weird → clear validation error, nothing
    is stored.
 
-5. **Upload documents.** `POST .../documents` returns a **signed Cloudinary upload URL**
-   (with a signature and expiry) so the browser can upload the file *straight to
-   Cloudinary* — the passport/ticket never passes through our server. Then
+5. **Upload documents.** `POST .../documents` returns a **presigned Amazon S3 upload URL**
+   (with a required method, headers, and expiry) so the browser can upload the file _straight to
+   Amazon S3_ — the passport/ticket never passes through our server. Then
    `POST .../documents/:docId/confirm` makes the server check the file really exists
    and is a PDF/JPG/PNG under 10 MB. Passport and Ticket are required; Visa is
    optional.
-   → `apps/api/src/infrastructure/cloudinary-storage.service.ts`
+   → `apps/api/src/infrastructure/s3-storage.service.ts`
 
 6. **Pay.** `POST .../payment` with provider `KHALTI`. The server double-checks the
    traveler is filled in and both documents are uploaded **and verified**; only then
@@ -109,8 +109,8 @@ does the calling; the server checks who you are on every request.
 7. **Return + verify.** Khalti bounces the customer back to
    `/esim/checkout?order=...&reference=...`. The browser calls
    `POST .../payment/verify` with that reference. The server **does not trust the
-   browser** — it asks Khalti directly: *is this payment Completed? does it belong to
-   this order? is the amount exactly right?* Only if all three match does it mark
+   browser** — it asks Khalti directly: _is this payment Completed? does it belong to
+   this order? is the amount exactly right?_ Only if all three match does it mark
    `PAYMENT_CONFIRMED`. Amount/order mismatch → error, order stays unpaid.
    → `PaymentsService.verify`, `KhaltiGateway.verify`
 
@@ -129,24 +129,24 @@ does the calling; the server checks who you are on every request.
     becomes `ASSIGNED` and the order moves to `COMPLETED`.
     → `OrdersService.processProvisioning`, `TransatelProvider.provision`
 
-11. **The QR arrives by email.** A background job renders a PDF containing the QR and
-    emails it via Gmail. The PDF is **password protected** — the password is the mobile
-    number the customer gave. The QR is *the credential that installs the eSIM*, so the
-    email template warns the customer not to share it.
-    → `apps/api/src/modules/notification/qr-pdf.service.ts`, `gmail.channel.ts`
+11. **The QR arrives by email.** A background job renders the QR as an unencrypted
+    PNG image and emails it through Amazon SES. The QR is _the credential that installs
+    the eSIM_, so the email template warns the customer not to share it.
+    → `apps/api/src/jobs/integration.processor.ts`, `ses-email.channel.ts`
 
 12. **Watch usage.** `GET .../usage` shows used MB / total MB. This comes fresh from
     Transatel's balance API, cached per subscription and refreshed by a background job.
     → `InventoryService.refreshUsage`, `TransatelProvider.getUsage`
 
 ### First purchase — edge cases worth knowing
+
 - **Plan becomes inactive** mid-buy → order creation fails with "Invalid or inactive plan".
 - **Docs already uploaded but you refresh** → checkout resumes the order by id (only if it
   is still `DRAFT`/`PAYMENT_PENDING`; anything later is "no longer resumable").
 - **You close the tab after paying** → the browser checks for a return reference and
   verifies automatically on reload.
 - **Passport/ticket missing when paying** → hard error, you cannot pay until they exist.
-- **Document is the wrong type or too big** → Cloudinary verify rejects it.
+- **Document is the wrong type or too big** → Amazon S3 verify rejects it.
 - **QR not ready when Transatel answers** (provisioning status `DELAYED`) → the server
   waits for Transatel's **webhook** to deliver activation, then completes the order.
   → `OrdersService.applyProviderEvent`
@@ -169,6 +169,7 @@ The browser keeps the token in `sessionStorage` (`vc_guest_token`) and simply re
 → `apps/customer-web/src/app/esim/checkout/checkout-client.tsx`
 
 Guest edge cases:
+
 - **Token lost** (cleared storage) → every call returns 403 "Invalid or expired guest token";
   the order is orphaned. (There is no account to fall back on by design.)
 - **Guest order abandoned** → `POST .../payment/abandon` (with token) marks it
@@ -190,25 +191,28 @@ it reuses the stored identity and jumps straight to payment.
 (`POST /api/v1/guest/orders/topup-lookup`). The server checks whether that number has a
 previous `COMPLETED` order and returns the **current plan, country, usage, expiry and
 "has an active eSIM"**. This is a privacy-sensitive lookup, so it's heavily rate-limited
-*per number* and *per IP* (see Security).
+_per number_ and _per IP_ (see Security).
 → `OrdersService.topUpLookup`, `apps/api/src/common/guest-lookup.rate-limit.guard.ts`
 
 If found, checkout is pre-filled: it remembers the mobile, skips traveler+documents
 (`step 4` = payment directly), and when the order is created the server pulls the email
-from the prior completed order so the new QR PDF can be emailed.
+from the prior completed order so the QR image can be emailed.
 
 ### Country change (the subtle one)
+
 At provisioning, the server compares the **prior order's country** with the **new plan's
 country**:
-- **Same country** → it reuses the *same physical eSIM* (a second "subscription" stacked
+
+- **Same country** → it reuses the _same physical eSIM_ (a second "subscription" stacked
   onto it). `assignTopup` links the new order to the existing inventory, so plans can
   stack and expire independently.
 - **Different country** → it must provision a **new physical eSIM** for the new country,
   reserving fresh inventory. Your old eSIM for the old country remains whatever it is;
   the new country gets its own SIM profile.
-→ `OrdersService.processProvisioning` (`reuseExisting` logic), `InventoryService.assignTopup`
+  → `OrdersService.processProvisioning` (`reuseExisting` logic), `InventoryService.assignTopup`
 
 Top-up edge cases:
+
 - **Number doesn't exist** → `found: false`; they're sent to the normal first-purchase flow.
 - **Prior order's email missing** → the QR can't be emailed; notification is silently
   skipped (logged), order still completes.
@@ -220,15 +224,16 @@ Top-up edge cases:
 
 There are two "payments worlds" controlled by config (`PAYMENT_MODE`):
 
-| Mode | What actually happens |
-| --- | --- |
-| `simulator` (default in dev) | A fake gateway creates a reference; the browser is redirected to `?simulated=1&reference=...`. A dev-only endpoint `POST .../payment/simulate` completes/fails it. |
-| `khalti` (sandbox or production) | Real money. `KHALTI_BASE_URL` dev/sandbox vs `https://khalti.com/api/v2`. |
+| Mode                             | What actually happens                                                                                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `simulator` (default in dev)     | A fake gateway creates a reference; the browser is redirected to `?simulated=1&reference=...`. A dev-only endpoint `POST .../payment/simulate` completes/fails it. |
+| `khalti` (sandbox or production) | Real money. `KHALTI_BASE_URL` dev/sandbox vs `https://khalti.com/api/v2`.                                                                                          |
 
 Every payment record tracks: **reference**, **status** (INITIATED/PENDING/COMPLETED/
 FAILED/CANCELLED/REFUNDED), optional **correlationId**, **expiry**, and **returnUrl**.
 
 Life of a payment:
+
 1. `initiate` — DRAFT→PAYMENT_PENDING, store reference.
 2. `verify` — server-side lookup; success only on COMPLETED + order match + amount match.
 3. `confirmPayment` — PAYMENT_CONFIRMED, then auto-approve/provision.
@@ -239,6 +244,7 @@ Life of a payment:
    → `apps/api/src/modules/webhooks/webhooks.controller.ts`, `IntegrationProcessor.payment`
 
 ### Payment failure / cancellation / timeout — every branch
+
 - **User abandons the Khalti page** → they hit `.../payment/abandon` → `PAYMENT_FAILED`.
   They can try again (`PAYMENT_FAILED → PAYMENT_PENDING`) or cancel.
 - **Khalti reports "Expired"/"User canceled"** → `FAILED`/`CANCELLED`.
@@ -247,15 +253,16 @@ Life of a payment:
   overdue `PAYMENT_PENDING` orders and marks them `PAYMENT_FAILED`.
 - **Refund** (ops only) → `requestRefund` (only from a paid, non-cancelled order, only if
   not already refunded) → `REFUND_PENDING` → Khalti refund API → `REFUNDED`. The "final
-  super admin" rule does *not* apply here; any ops/super-admin can trigger a refund.
+  super admin" rule does _not_ apply here; any ops/super-admin can trigger a refund.
 - **Simulator timeout scenario** is blocked in production (`simulate` endpoint refuses to
   run when `NODE_ENV=production`).
 
 ### Replay protection
+
 - **Idempotency keys**: the browser sends a fresh `x-idempotency-key` header on every
   mutation. The server stores (route+actor+key) → (request hash → response). Replaying
-  the same key with the same body returns the *stored response* (no double-charge); the
-  same key with a *different* body is rejected with a conflict.
+  the same key with the same body returns the _stored response_ (no double-charge); the
+  same key with a _different_ body is rejected with a conflict.
   → `apps/api/src/common/idempotency.interceptor.ts`
 - **Duplicate webhook events** are dropped by `(provider, eventId)`.
 
@@ -273,10 +280,10 @@ file: `apps/api/src/modules/integration/transatel.provider.ts`.
 
 Every SIM has **two** numbers, and Transatel keys different APIs on different ones:
 
-| Identifier | What it is | Where Transatel requires it |
-| --- | --- | --- |
-| **ICCID** | The SIM's **serial number** (15–25 digits), printed on the plastic card and in Transatel's delivery file. | The eSIM-details endpoint (`sim-serial/{iccid}`), and webhooks arrive identified by it. |
-| **MSISDN** | The **phone number** attached to the SIM (6–15 digits, **no `+` and no leading `00`**). | The order-binding call (`bind.msisdn`) and the usage-balance call (`?msisdn=...`). |
+| Identifier | What it is                                                                                                | Where Transatel requires it                                                             |
+| ---------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **ICCID**  | The SIM's **serial number** (15–25 digits), printed on the plastic card and in Transatel's delivery file. | The eSIM-details endpoint (`sim-serial/{iccid}`), and webhooks arrive identified by it. |
+| **MSISDN** | The **phone number** attached to the SIM (6–15 digits, **no `+` and no leading `00`**).                   | The order-binding call (`bind.msisdn`) and the usage-balance call (`?msisdn=...`).      |
 
 When Transatel ships SIMs, the delivery file (CSV/Excel) contains the columns
 **ICCID, MSISDN, PIN, PUK, Status**. Ops imports that file; if the file has the
@@ -317,15 +324,15 @@ exactly this JSON:
 
 Field by field:
 
-| Field | Value | Meaning |
-| --- | --- | --- |
-| `bind.msisdn` | The SIM's stored MSISDN (falls back to its ICCID) | "Attach this plan to this subscriber." Transatel binds by phone number. |
-| `source` | `api` (always) | We are an API integration, not a portal user. |
-| `orderType` | `preload` (always) | Buy the data up-front; it activates when the SIM first connects. |
-| `mvnoRef` | `TRANSATEL_MVNO_REF` | Our MVNO agreement reference (e.g. `M2MA_WW_TSL_VISA...`). |
-| `product.productId` | `plan.providerPlanId` | Transatel's id for the plan (from catalog sync), *not* our plan UUID. |
-| `payment.provider` | `customer` (always) | The end customer pays. (There is no longer a `TRANSATEL_PAYMENT_PROVIDER` env switch.) |
-| `transactionReference` | our order UUID | Lets us/Transatel tie the OCS record back to our order. |
+| Field                  | Value                                             | Meaning                                                                                |
+| ---------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `bind.msisdn`          | The SIM's stored MSISDN (falls back to its ICCID) | "Attach this plan to this subscriber." Transatel binds by phone number.                |
+| `source`               | `api` (always)                                    | We are an API integration, not a portal user.                                          |
+| `orderType`            | `preload` (always)                                | Buy the data up-front; it activates when the SIM first connects.                       |
+| `mvnoRef`              | `TRANSATEL_MVNO_REF`                              | Our MVNO agreement reference (e.g. `M2MA_WW_TSL_VISA...`).                             |
+| `product.productId`    | `plan.providerPlanId`                             | Transatel's id for the plan (from catalog sync), _not_ our plan UUID.                  |
+| `payment.provider`     | `customer` (always)                               | The end customer pays. (There is no longer a `TRANSATEL_PAYMENT_PROVIDER` env switch.) |
+| `transactionReference` | our order UUID                                    | Lets us/Transatel tie the OCS record back to our order.                                |
 
 Response (201, `status: "done"`): `{ id, orderReference, status, submissionDate,
 bind: { msisdn }, source, mvnoRef, subscriptionId?, transactionReference }`. The
@@ -341,7 +348,7 @@ completes at once; if not (`DELAYED`), the order waits for Transatel's activatio
 `{ simSerial, status, statusDate?, activationCode?, eid?, matchingId?,
 smdpAddress?, qrCode: { value, dataUrl }? }`. The QR we store/send to the customer
 is `qrCode.value ?? activationCode` — that string is what installs the eSIM. The
-ICCID is used here because this is a query about the *physical SIM*, not about a
+ICCID is used here because this is a query about the _physical SIM_, not about a
 subscription.
 
 ### Usage balance — keyed on the MSISDN
@@ -387,7 +394,7 @@ and either create or update the matching `(country, providerplanid)` plan.
 `parseValidityToDays`)
 
 **Validity semantics.** `validityDays` is always counted **from the activation day**:
-a plan of `7 days` means the data is usable for 7 days *after the eSIM is activated*
+a plan of `7 days` means the data is usable for 7 days _after the eSIM is activated_
 (the server sets `expiresAt = completion/activation time + validityDays × 86400000`
 when provisioning succeeds).
 
@@ -410,15 +417,22 @@ when provisioning succeeds).
   fields **only** from these exact locations — no fallbacks:
   ```json
   {
-    "header": { "eventId": "627e77fc-...", "eventType": "OCS/PRODUCT/ACTIVATED", "eventDate": "..." },
+    "header": {
+      "eventId": "627e77fc-...",
+      "eventType": "OCS/PRODUCT/ACTIVATED",
+      "eventDate": "..."
+    },
     "body": {
-      "mvnoRef": "...", "cos": "...",
+      "mvnoRef": "...",
+      "cos": "...",
       "msisdn": "33612345678",
       "iccid": "8988247076000000319",
       "externalReference": "<our order UUID — echoes our transactionReference>",
       "productSubscription": {
         "subscriptionId": "8c2ef95f-...",
-        "subscriptionDate": "...", "activationDate": "...", "expirationDate": "..."
+        "subscriptionDate": "...",
+        "activationDate": "...",
+        "expirationDate": "..."
       }
     }
   }
@@ -452,14 +466,14 @@ config).
 - **Dashboard** — counts of pending reviews, awaiting customers, failed provisioning,
   completed today, plus integration health (Transatel/Khalti configured?).
 - **Work queue / review** — orders in `REVIEW_PENDING`. Ops opens a customer's documents
-  (private preview via signed Cloudinary URL) and either **approves** or **requests
+  (private preview via signed Amazon S3 URL) and either **approves** or **requests
   re-upload** (with a reason). Approving both passport+ticket moves the order to
   APPROVED → PROVISIONING → and reserves inventory. Re-upload moves it to
   `AWAITING_CUSTOMER`; the customer gets a "DOCUMENT_REUPLOAD" email and re-uploads;
   `AWAITING_CUSTOMER → REVIEW_PENDING` again.
   → `OrdersService.reviewDocument`, `requestReupload`
 - **Customers** — a list of all customers (name, email, order count, completed eSIMs),
-  and a profile page with their orders, eSIMs and usage. This view shows the *expanded*
+  and a profile page with their orders, eSIMs and usage. This view shows the _expanded_
   order (including the QR payload and internal ids) — staff only.
 - **eSIM inventory** — live counts of Available/Reserved/Assigned/Activated, a low-stock
   warning at ≤ 10 available, batch history, and **importing**:
@@ -472,7 +486,7 @@ config).
     number in `bind.msisdn`.
   - Every import creates a **batch** for traceability (which file, when, how many).
   - In dev only, 20 mock profiles are auto-seeded so flows work without real inventory.
-  → `apps/api/src/modules/inventory/inventory.service.ts`
+    → `apps/api/src/modules/inventory/inventory.service.ts`
 - **Top-up lookup** — enter any mobile, get the subscriber + identity (staff sees more).
 - **Refunds** — trigger refund for a paid order (see Journey 4).
 - **Usage refresh / retry** — force a usage refresh; retry a `PROVISIONING_FAILED` order.
@@ -490,7 +504,7 @@ Beyond all ops abilities, super admin gets `admin/*` endpoints (all MFA-gated):
   (columns: countryISO2, name, providerPlanId, dataAllowance, validityDays, costprice,
   sellingprice; validated row-by-row, capped at 2,000 rows).
   → `apps/api/src/modules/admin/admin.service.ts`
-- **Integrations** — view configuration health for Gmail/Khalti/Transatel/Cloudinary/
+- **Integrations** — view configuration health for Amazon SES/Khalti/Transatel/Amazon S3/
   WhatsApp; trigger Transatel **catalog sync** (pull products → create/update plans) and
   **webhook registration**; eligibility checks.
 - **Users** — list all users; change account type (CUSTOMER → OPERATIONS/SUPER_ADMIN, with
@@ -501,6 +515,7 @@ Beyond all ops abilities, super admin gets `admin/*` endpoints (all MFA-gated):
 - **System config** — (ops-web) surface for the settings in this document.
 
 ### The bootstrap super-admin path
+
 If `BOOTSTRAP_SUPER_ADMIN_EMAIL` is set and there are **zero active super admins**, the
 first person to sign up with that exact (verified) email is promoted to SUPER_ADMIN —
 intended for first-time setup. **In production this now additionally requires
@@ -518,7 +533,7 @@ A partner has an API key. Only its **SHA-256 hash** is stored in config
 
 Partner calls are namespaced: orders are created with an owner like
 `partner:<partnerId>:<externalCustomerId>` and every order call checks that prefix, so a
-partner can only ever see/manage their *own* customers' orders (a "tenant" boundary).
+partner can only ever see/manage their _own_ customers' orders (a "tenant" boundary).
 They can quote, create orders, set traveler, upload documents, pay, read status/usage,
 and trigger notifications. → `apps/api/src/modules/partners/partners.controller.ts`
 
@@ -529,13 +544,13 @@ and trigger notifications. → `apps/api/src/modules/partners/partners.controlle
 Two run-modes: with `REDIS_URL` set → real **BullMQ** queues; blank → everything runs
 **in-process** (simulated queue) so the whole product works on a laptop.
 
-| Queue | What it does |
-| --- | --- |
-| `provisioning` | Call Transatel to activate the eSIM (3 attempts, exponential backoff). |
-| `payments` | Process a payment callback/webhook (re-verify with the gateway). |
-| `provider-callbacks` | Turn a Transatel webhook into an order/inventory update. |
-| `notifications` | Send email/WhatsApp (QR PDF, re-upload, plan exhausted/expired). |
-| `reconciliation` | Every ~15 min: refresh usage for active subscriptions; mark plans EXPIRED when the date passes or data runs out, then email the customer. |
+| Queue                | What it does                                                                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `provisioning`       | Call Transatel to activate the eSIM (3 attempts, exponential backoff).                                                                    |
+| `payments`           | Process a payment callback/webhook (re-verify with the gateway).                                                                          |
+| `provider-callbacks` | Turn a Transatel webhook into an order/inventory update.                                                                                  |
+| `notifications`      | Send email/WhatsApp (QR image, re-upload, plan exhausted/expired).                                                                        |
+| `reconciliation`     | Every ~15 min: refresh usage for active subscriptions; mark plans EXPIRED when the date passes or data runs out, then email the customer. |
 
 Every job that touches money/activation is **idempotent** (event id, subscription id, or
 idempotency key) so retries are safe. → `apps/api/src/jobs/`
@@ -545,6 +560,7 @@ idempotency key) so retries are safe. → `apps/api/src/jobs/`
 ## 12. Security — how it defends itself (plain English)
 
 **Identity**
+
 - Every API request is authenticated: Clerk issues a JWT, the API verifies its signature
   with `CLERK_SECRET_KEY` **and** checks the token was issued for one of our two known
   web origins. Then the account is loaded and disabled/blocked users are refused.
@@ -556,6 +572,7 @@ idempotency key) so retries are safe. → `apps/api/src/jobs/`
 **Guest tokens** — HMAC-signed, constant-time compared, bound to the order id.
 
 **Rate limiting** (in-memory, per process):
+
 - 300 req/min default per IP+route; 60 req/min on auth/public; the top-up lookup gets an
   extra, aggressive 6/min per (IP + number).
 - The client IP is taken from the socket / Express `req.ip` **only** — never from a
@@ -563,6 +580,7 @@ idempotency key) so retries are safe. → `apps/api/src/jobs/`
   `apps/api/src/common/client-ip.ts` and `main.ts`.
 
 **Input safety**
+
 - Strict Zod schemas + global `whitelist` pipe (unknown fields stripped → no mass
   assignment).
 - Body size cap (`BODY_LIMIT`, default 5 MB) and per-file caps (2,000 plan rows, 5,000
@@ -571,6 +589,7 @@ idempotency key) so retries are safe. → `apps/api/src/jobs/`
   logged server-side only and never sent to the browser.
 
 **Secrets & crypto**
+
 - No `.env` is committed; `.env.example` documents placeholders.
 - PII (passport number, DOB, passport expiry, and the eSIM QR) is encrypted with
   **AES-256-GCM** using `APP_ENCRYPTION_KEY_BASE64`; searching by passport uses an HMAC
@@ -584,12 +603,14 @@ idempotency key) so retries are safe. → `apps/api/src/jobs/`
   from user input.
 
 **Transport & response hygiene**
+
 - helmet security headers, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on
   all API responses (personal data can't be cached by shared proxies), CORS locked to the
   two known origins with credentials.
 - Swagger docs are disabled unless `SWAGGER_ENABLED=true`.
 
 **Observability without leaking PII**
+
 - Correlation ids on every request/response for tracing.
 - Logs mask user ids and **redact query parameters** (mobile, email, token, reference,
   iccid, eid, …) so phone numbers never land in logs.
@@ -603,16 +624,16 @@ integration calls are recorded.
 
 ## 13. "Simulated vs real" cheat sheet
 
-| Capability | Simulated (dev) | Real (production) |
-| --- | --- | --- |
-| Accounts | Clerk test app | Clerk live |
-| Payments | `PAYMENT_MODE=simulator`, fake gateway, `simulate` endpoint | Khalti (`PAYMENT_MODE=sandbox` or production) |
-| eSIM activation | Needs Transatel **test** credentials; without them orders end in PROVISIONING_FAILED | Transatel live |
-| Inventory | 20 mock eSIMs auto-seeded (non-prod only) | Imported by ops via CSV/Excel |
-| Documents | Local "simulator" signed upload | Cloudinary authenticated upload |
-| Email/WhatsApp | `NOTIFICATION_MODE=simulator` (no real send) | Gmail OAuth / WhatsApp Cloud API |
-| Jobs | In-process "fake" queue | BullMQ + Redis |
-| Persistence | In-memory order map (lost on restart) | CockroachDB/Postgres via Prisma (`PERSISTENCE_MODE=prisma`) |
+| Capability      | Simulated (dev)                                                                      | Real (production)                                           |
+| --------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| Accounts        | Clerk test app                                                                       | Clerk live                                                  |
+| Payments        | `PAYMENT_MODE=simulator`, fake gateway, `simulate` endpoint                          | Khalti (`PAYMENT_MODE=sandbox` or production)               |
+| eSIM activation | Needs Transatel **test** credentials; without them orders end in PROVISIONING_FAILED | Transatel live                                              |
+| Inventory       | 20 mock eSIMs auto-seeded (non-prod only)                                            | Imported by ops via CSV/Excel                               |
+| Documents       | Local "simulator" signed upload                                                      | Amazon S3 authenticated upload                             |
+| Email/WhatsApp  | `NOTIFICATION_MODE=simulator` (no real send)                                         | Amazon SES / WhatsApp Cloud API                                 |
+| Jobs            | In-process "fake" queue                                                              | BullMQ + Redis                                              |
+| Persistence     | In-memory order map (lost on restart)                                                | PostgreSQL/Postgres via Prisma (`PERSISTENCE_MODE=prisma`) |
 
 ---
 
@@ -643,19 +664,19 @@ integration calls are recorded.
 
 ## 15. Where to look for what
 
-| Topic | File |
-| --- | --- |
-| Order states & rules | `apps/api/src/modules/orders/order-machine.ts` |
-| Order logic (buy, docs, pay, provision, refund) | `apps/api/src/modules/orders/orders.service.ts` |
-| Guest checkout + tokens | `apps/api/src/modules/orders/guest-orders.controller.ts` |
-| Payments (simulator/Khalti) | `apps/api/src/modules/payments/` |
-| eSIM inventory | `apps/api/src/modules/inventory/inventory.service.ts` |
-| Transatel integration | `apps/api/src/modules/integration/transatel.provider.ts` |
-| Auth, roles, MFA | `apps/api/src/common/auth.guard.ts` |
-| Rate limiting + client IP | `apps/api/src/common/rate-limit.guard.ts`, `guest-lookup.rate-limit.guard.ts`, `client-ip.ts` |
-| Webhooks + signatures | `apps/api/src/modules/webhooks/webhooks.controller.ts` |
-| Background jobs | `apps/api/src/jobs/` |
-| PII encryption | `apps/api/src/infrastructure/crypto.service.ts` |
-| Shared schemas/contracts | `packages/shared/src/` |
-| Customer portal | `apps/customer-web/src/app/` |
-| Ops portal | `apps/ops-web/src/app/` |
+| Topic                                           | File                                                                                          |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Order states & rules                            | `apps/api/src/modules/orders/order-machine.ts`                                                |
+| Order logic (buy, docs, pay, provision, refund) | `apps/api/src/modules/orders/orders.service.ts`                                               |
+| Guest checkout + tokens                         | `apps/api/src/modules/orders/guest-orders.controller.ts`                                      |
+| Payments (simulator/Khalti)                     | `apps/api/src/modules/payments/`                                                              |
+| eSIM inventory                                  | `apps/api/src/modules/inventory/inventory.service.ts`                                         |
+| Transatel integration                           | `apps/api/src/modules/integration/transatel.provider.ts`                                      |
+| Auth, roles, MFA                                | `apps/api/src/common/auth.guard.ts`                                                           |
+| Rate limiting + client IP                       | `apps/api/src/common/rate-limit.guard.ts`, `guest-lookup.rate-limit.guard.ts`, `client-ip.ts` |
+| Webhooks + signatures                           | `apps/api/src/modules/webhooks/webhooks.controller.ts`                                        |
+| Background jobs                                 | `apps/api/src/jobs/`                                                                          |
+| PII encryption                                  | `apps/api/src/infrastructure/crypto.service.ts`                                               |
+| Shared schemas/contracts                        | `packages/shared/src/`                                                                        |
+| Customer portal                                 | `apps/customer-web/src/app/`                                                                  |
+| Ops portal                                      | `apps/ops-web/src/app/`                                                                       |

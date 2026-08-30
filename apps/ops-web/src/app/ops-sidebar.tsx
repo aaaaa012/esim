@@ -3,18 +3,24 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
+  AlertTriangle,
   Bell,
   Boxes,
   ClipboardCheck,
+  Compass,
   Gauge,
+  Handshake,
   History,
   PackageSearch,
-  PlugZap,
+  RadioTower,
+  RotateCw,
   Settings,
+  Undo2,
   Users,
-  Compass,
+  X,
 } from "lucide-react";
 import { useAuthenticatedFetch } from "./authenticated-api-provider";
+import { humane } from "@/components/status-badge";
 import { cn } from "@/lib/utils";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type NavItem = {
@@ -22,15 +28,24 @@ type NavItem = {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 };
-const baseItems: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: Gauge },
-  { href: "/work-queue", label: "Work Queue", icon: ClipboardCheck },
+const overviewItems: NavItem[] = [
+  { href: "/", label: "Home", icon: Gauge },
+  { href: "/work-queue", label: "To-do list", icon: ClipboardCheck },
+  { href: "/attention", label: "Attention queue", icon: AlertTriangle },
   { href: "/orders", label: "Orders", icon: PackageSearch },
   { href: "/customers", label: "Customers", icon: Users },
-  { href: "/inventory", label: "Inventory", icon: Boxes },
-  { href: "/notifications", label: "Notifications", icon: Bell },
-  { href: "/integration-events", label: "Integration Events", icon: PlugZap },
-  { href: "/audit", label: "Audit Log", icon: History },
+  { href: "/inventory", label: "eSIM stock", icon: Boxes },
+  { href: "/transatel", label: "Provider status", icon: RadioTower },
+  {
+    href: "/provisioning-operations",
+    label: "Pending activations",
+    icon: RotateCw,
+  },
+];
+const systemItems: NavItem[] = [
+  { href: "/manual-refunds", label: "Refunds", icon: Undo2 },
+  { href: "/notifications", label: "Messages", icon: Bell },
+  { href: "/logs", label: "Logs", icon: History },
 ];
 type Profile = {
   email: string;
@@ -43,76 +58,102 @@ function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
   return (
     <Link
       href={item.href}
-      className={cn(
-        "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-        active
-          ? "bg-primary/10 text-primary"
-          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-      )}
+      className={cn("ops-sidebar-link", active && "active")}
     >
-      <Icon className="size-4 shrink-0" />
+      <Icon className="size-4" />
       {item.label}
     </Link>
   );
 }
 
-export default function OpsSidebar() {
-  const path = usePathname(),
-    authFetch = useAuthenticatedFetch();
+function isActive(path: string, href: string) {
+  return href === "/" ? path === "/" : path.startsWith(href);
+}
+
+export default function OpsSidebar({
+  open = false,
+  onClose,
+}: {
+  open?: boolean;
+  onClose?: () => void;
+}) {
+  const authFetch = useAuthenticatedFetch();
   const [profile, setProfile] = useState<Profile | null>(null);
   useEffect(() => {
     void authFetch(`${API}/auth/me`)
       .then((response) => response.json())
       .then((value) => setProfile(value.data ?? null));
   }, [authFetch]);
-  const adminItem: NavItem = { href: "/admin", label: "Administration", icon: Settings };
-  const items = profile?.effectiveCapabilities.includes("admin:portal")
-    ? [...baseItems, adminItem]
-    : baseItems;
+  const isAdmin =
+    profile?.effectiveCapabilities.includes("admin:portal") ?? false;
+  const adminItem: NavItem = {
+    href: "/admin",
+    label: "Settings",
+    icon: Settings,
+  };
+  const showcaseItem: NavItem = {
+    href: "/admin/partners-showcase",
+    label: "Partners",
+    icon: Handshake,
+  };
+  const path = usePathname();
+  const items = isAdmin
+    ? [...overviewItems, ...systemItems, adminItem, showcaseItem]
+    : [...overviewItems, ...systemItems];
   return (
-    <aside className="sticky top-0 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar">
-      <div className="border-b border-sidebar-border px-5 py-5">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+    <>
+      <button
+        type="button"
+        aria-label="Close operations navigation"
+        className={cn("ops-sidebar-backdrop", open && "open")}
+        onClick={onClose}
+      />
+      <aside
+        className={cn("ops-sidebar", open && "open")}
+        aria-label="Operations navigation"
+      >
+        <div className="ops-sidebar-brand">
+          <span className="mark">
             <Compass className="size-4" />
           </span>
-          <div className="leading-tight">
-            <p className="font-semibold tracking-tight">Visa Compass</p>
-            <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-              Operations
-            </p>
+          <div className="word">
+            <b>Visa Compass</b>
+            <span>Operations</span>
+          </div>
+          <button
+            type="button"
+            className="ops-sidebar-close"
+            aria-label="Close navigation"
+            onClick={onClose}
+          >
+            <X className="size-5" />
+          </button>
+        </div>
+
+        <nav className="ops-sidebar-nav">
+          {items.map((item) => (
+            <SidebarLink
+              key={item.href}
+              item={item}
+              active={isActive(path, item.href)}
+            />
+          ))}
+        </nav>
+
+        <div className="ops-sidebar-foot">
+          <div className="ops-sidebar-user">
+            <span className="avatar">
+              {profile?.email.slice(0, 1).toUpperCase() ?? "…"}
+            </span>
+            <div className="meta">
+              <b>{profile?.email ?? "Loading…"}</b>
+              <span>
+                {profile ? humane(profile.accountType) : "Authenticating"}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-        <p className="px-3 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Menu
-        </p>
-        {items.map((item) => (
-          <SidebarLink
-            key={item.href}
-            item={item}
-            active={
-              item.href === "/"
-                ? path === "/"
-                : path.startsWith(item.href)
-            }
-          />
-        ))}
-      </nav>
-      <div className="border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-3 rounded-lg bg-secondary px-3 py-2.5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
-            {profile?.email.slice(0, 1).toUpperCase() ?? "…"}
-          </span>
-          <div className="min-w-0 leading-tight">
-            <p className="truncate text-xs font-medium">{profile?.email ?? "Loading…"}</p>
-            <p className="text-[11px] text-muted-foreground">
-              {profile?.accountType.replace("_", " ") ?? "Authenticating"}
-            </p>
-          </div>
-        </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

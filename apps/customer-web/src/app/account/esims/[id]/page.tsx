@@ -1,4 +1,5 @@
-import EsimDetails from './esim-details';
-import '../esims.css';
-import './details.css';
-export default async function Page({params}:{params:Promise<{id:string}>}){return <EsimDetails id={(await params).id}/>}
+import { redirect } from "next/navigation";
+
+export default function Page() {
+  redirect("/account/esims");
+}

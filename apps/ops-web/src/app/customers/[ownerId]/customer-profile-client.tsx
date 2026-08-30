@@ -5,20 +5,35 @@ import Link from "next/link";
 import { ArrowLeft, RefreshCcw, UserRound } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import ErrorDialog from "@/components/error-dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { LifecycleActions } from "../../transatel/lifecycle-actions";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = { "content-type": "application/json" };
 type Esim = {
   iccid: string;
   status: string;
+  providerStatus?: string | null;
   activatedAt?: string;
   expiresAt?: string;
-  usage?: { usedMb: number; totalMb: number; lastCheckedAt: string };
+  usage?: {
+    usedMb: number;
+    totalMb: number;
+    remainingMb: number;
+    lastCheckedAt: string;
+  };
 };
 type Order = {
   id: string;
@@ -34,7 +49,12 @@ type Order = {
     countryCode: string;
     countryName: string;
   };
-  traveler?: { firstName: string; surname: string; mobile?: string; email?: string };
+  traveler?: {
+    firstName: string;
+    surname: string;
+    mobile?: string;
+    email?: string;
+  };
   esim?: Esim;
 };
 type Profile = {
@@ -53,13 +73,16 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [canTerminate, setCanTerminate] = useState(false);
   const load = useCallback(() => {
     setError("");
     return authFetch(`${API}/operations/customers/${ownerId}`, { headers })
       .then(async (response) => {
         const value = await response.json();
         if (!response.ok)
-          throw new Error(value.error?.message ?? "Profile could not be loaded");
+          throw new Error(
+            value.error?.message ?? "Profile could not be loaded",
+          );
         setProfile(value.data);
       })
       .catch((cause) =>
@@ -68,6 +91,11 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   }, [authFetch, ownerId]);
   useEffect(() => {
     void load();
+    void authFetch(`${API}/auth/me`, { headers })
+      .then((response) => response.json())
+      .then((value) =>
+        setCanTerminate(value.data?.accountType === "SUPER_ADMIN"),
+      );
   }, [load]);
   const refreshUsage = async (orderId: string) => {
     setBusy(orderId);
@@ -109,13 +137,14 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         title={profile ? (profile.name ?? "Customer profile") : "Loading…"}
         description={
           profile
-            ? `${profile.customerCode ?? profile.ownerId}${profile.email ? ` · ${profile.email}` : ""}`
+            ? `${profile.customerCode ?? "Customer"}${profile.email ? ` · ${profile.email}` : ""}`
             : "Identity and order history"
         }
         badge={
           <span className="inline-flex items-center gap-2 rounded-full bg-success-soft px-3 py-1 text-xs font-semibold text-success-foreground">
             <UserRound className="size-3.5" />
-            {profile?.orders?.length ?? "—"} orders · {completed.length} completed eSIM
+            {profile?.orders?.length ?? "—"} orders · {completed.length}{" "}
+            completed eSIM
             {completed.length === 1 ? "" : "s"}
           </span>
         }
@@ -127,11 +156,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
           </Button>
         }
       />
-      {error && (
-        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <ErrorDialog error={error} onClose={() => setError("")} />
       {!profile && !error ? (
         <div className="flex h-40 items-center justify-center">
           <Spinner />
@@ -144,7 +169,10 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
           noPadding
         >
           {!profile.orders.length ? (
-            <EmptyState title="No orders yet" description="This customer has no orders." />
+            <EmptyState
+              title="No orders yet"
+              description="This customer has no orders."
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -152,7 +180,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                   <TableHead>Order</TableHead>
                   <TableHead>Plan</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Traveler</TableHead>
+                  <TableHead>Traveller</TableHead>
                   <TableHead>eSIM / Usage</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead></TableHead>
@@ -166,16 +194,24 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                   return (
                     <TableRow key={order.id}>
                       <TableCell>
-                        <p className="font-medium">{order.orderNumber}</p>
+                        <Link
+                          className="font-medium text-primary underline-offset-4 hover:underline"
+                          href={`/orders/${order.id}`}
+                        >
+                          {order.orderNumber}
+                        </Link>
                         <p className="text-xs text-muted-foreground">
                           {new Date(order.createdAt).toLocaleDateString()}
                         </p>
                       </TableCell>
                       <TableCell>
-                        <span className="font-medium">{order.plan.countryCode}</span> ·{" "}
-                        {order.plan.name}
+                        <span className="font-medium">
+                          {order.plan.countryCode}
+                        </span>{" "}
+                        · {order.plan.name}
                         <p className="text-xs text-muted-foreground">
-                          {order.plan.dataAllowance} · {order.plan.validityDays} days
+                          {order.plan.dataAllowance} · {order.plan.validityDays}{" "}
+                          days
                         </p>
                       </TableCell>
                       <TableCell>
@@ -202,16 +238,23 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                                 <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
                                   <div
                                     className="h-full rounded-full bg-primary"
-                                    style={{ width: `${usageTone(used, total)}%` }}
+                                    style={{
+                                      width: `${usageTone(used, total)}%`,
+                                    }}
                                   />
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                  {used?.toLocaleString() ?? 0} / {total?.toLocaleString() ?? "?"} MB
+                                  {used?.toLocaleString() ?? 0} /{" "}
+                                  {total?.toLocaleString() ?? "?"} MB
+                                </p>
+                                <p className="text-xs font-medium text-foreground">
+                                  {usage.remainingMb.toLocaleString()} MB
+                                  remaining
                                 </p>
                               </div>
                             ) : (
                               <p className="text-xs text-muted-foreground">
-                                Status: {order.esim.status}
+                                Status: {humane(order.esim.status)}
                               </p>
                             )}
                           </>
@@ -223,23 +266,39 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                         NPR {order.totalAmountNpr.toLocaleString()}
                       </TableCell>
                       <TableCell>
-                        {order.esim?.usage ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={busy === order.id}
-                            onClick={() => refreshUsage(order.id)}
-                          >
-                            {busy === order.id ? (
-                              <Spinner />
-                            ) : (
-                              <RefreshCcw className="size-3.5" />
-                            )}
-                            Refresh usage
+                        <div className="space-y-2">
+                          {order.esim ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy === order.id}
+                              onClick={() => refreshUsage(order.id)}
+                            >
+                              {busy === order.id ? (
+                                <Spinner />
+                              ) : (
+                                <RefreshCcw className="size-3.5" />
+                              )}{" "}
+                              Update data
+                            </Button>
+                          ) : null}
+                          {order.esim ? (
+                            <LifecycleActions
+                              orderId={order.id}
+                              iccid={order.esim.iccid}
+                              providerStatus={
+                                order.esim.providerStatus ?? order.esim.status
+                              }
+                              canTerminate={canTerminate}
+                              onCompleted={() => void load()}
+                            />
+                          ) : (
+                            "—"
+                          )}
+                          <Button asChild variant="outline" size="sm">
+                            <Link href={`/orders/${order.id}`}>Open order</Link>
                           </Button>
-                        ) : (
-                          "—"
-                        )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   );

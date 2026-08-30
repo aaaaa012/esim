@@ -1,0 +1,98 @@
+import { Injectable, Logger, Optional } from "@nestjs/common";
+import { createPrivateKey, createSign } from "node:crypto";
+import QRCode from "qrcode";
+import { z } from "zod";
+import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
+import { ApiException } from "../../../common/api-error.js";
+import { PrismaService } from "../../../infrastructure/prisma.service.js";
+import type { PaymentContext, PaymentGateway, PaymentInitiation, PaymentVerification } from "../payment-gateway.js";
+
+type Bank = { bankName: string; bankCode: string; bankIcon?: string; packageName?: string; intentScheme: string };
+
+const authResponseSchema = z.object({ accessToken: z.string().min(1) });
+const bankSchema = z.object({
+  bankName: z.string().min(1),
+  bankCode: z.string().min(1),
+  bankIcon: z.string().optional(),
+  packageName: z.string().optional(),
+  intentScheme: z.string().min(1),
+});
+const bankListSchema = z.object({ bankDetails: z.array(bankSchema).default([]) });
+const qrResponseSchema = z.object({
+  prn: z.string().min(1),
+  qrMessage: z.string().min(1).optional(),
+  qrString: z.string().min(1).optional(),
+  websocketId: z.string().url().optional(),
+}).refine((value) => value.qrMessage || value.qrString, "QR payload is missing");
+const statusResponseSchema = z.object({
+  prn: z.string().min(1),
+  merchantCode: z.string().min(1),
+  paymentStatus: z.string().min(1),
+  requestedAmount: z.coerce.number().finite().nonnegative(),
+  fonepayTraceId: z.union([z.string(), z.number()]).optional(),
+});
+
+/** Fonepay Checkout Intent/Dynamic-QR adapter. Credentials and payload signing never leave the API. */
+@Injectable()
+export class FonepayGateway implements PaymentGateway {
+  readonly provider = "FONEPAY";
+  private readonly logger = new Logger(FonepayGateway.name);
+  private token?: { value: string; expiresAt: number };
+  constructor(@Optional() private readonly prisma?: PrismaService) {}
+  private get base() { return (process.env.FONEPAY_BASE_URL ?? "").replace(/\/+$/, ""); }
+  private configured() {
+    return process.env.FONEPAY_ENABLED === "true" && this.base && process.env.FONEPAY_USERNAME && process.env.FONEPAY_PASSWORD && process.env.FONEPAY_TERMINAL_ID && process.env.FONEPAY_PRIVATE_KEY_BASE64;
+  }
+  private fail(details: string): never { throw new ApiException({ code: ApiErrorCode.PAYMENT_PROVIDER_ERROR, message: "Fonepay is temporarily unavailable. Please choose Khalti or try again shortly.", status: 503, details }); }
+  private sign(payload: unknown) {
+    const value = JSON.stringify(payload);
+    try {
+      const raw = process.env.FONEPAY_PRIVATE_KEY_BASE64!;
+      const key = raw.includes("BEGIN") ? raw : createPrivateKey({ key: Buffer.from(raw, "base64"), format: "der", type: "pkcs8" });
+      const signer = createSign("RSA-SHA256"); signer.update(value); signer.end(); return signer.sign(key, "base64");
+    } catch { return this.fail("FONEPAY_PRIVATE_KEY_BASE64 is invalid"); }
+  }
+  private async auth() {
+    if (!this.configured()) return this.fail("Fonepay is not enabled or fully configured");
+    if (this.token && this.token.expiresAt > Date.now() + 30_000) return this.token.value;
+    const body = { username: process.env.FONEPAY_USERNAME!, password: process.env.FONEPAY_PASSWORD! };
+    const response = await fetch(`${this.base}/api/merchant/merchantDetailsForThirdParty/v2/login`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Basic ${Buffer.from(`${body.username}:${body.password}`).toString("base64")}`, signature: this.sign(body) }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) }).catch(() => this.fail("Fonepay OAuth network request failed"));
+    const raw = await response.json().catch(() => ({}));
+    if (!response.ok) return this.fail("Fonepay OAuth authentication failed");
+    const parsed = authResponseSchema.safeParse(raw);
+    if (!parsed.success) return this.fail("Fonepay OAuth response was invalid");
+    const data = parsed.data;
+    this.token = { value: data.accessToken.replace(/^Bearer\s+/i, ""), expiresAt: Date.now() + 10 * 60_000 };
+    return this.token.value;
+  }
+  private async request(path: string, method: "GET" | "POST", body?: Record<string, unknown>, extra: Record<string, string> = {}) {
+    const token = await this.auth(); const payload = body ?? {};
+    const response = await fetch(`${this.base}${path}`, { method, headers: { Authorization: `Bearer ${token}`, signature: this.sign(payload), ...(method === "POST" ? { "Content-Type": "application/json" } : {}), ...extra }, ...(method === "POST" ? { body: JSON.stringify(payload) } : {}), signal: AbortSignal.timeout(15_000) }).catch(() => this.fail(`Fonepay ${path} network request failed`));
+    const data = await response.json().catch(() => ({})); if (!response.ok) return this.fail(`Fonepay ${path} failed (${response.status})`); return data as Record<string, unknown>;
+  }
+  async initiate(input: { attemptId: string; orderId: string; orderNumber: string; amountNpr: number; returnUrl: string }): Promise<PaymentInitiation> {
+    const reference = `VC${input.attemptId.replace(/[^A-Za-z0-9]/g, "").slice(0, 28)}`;
+    const banksRaw = await this.request("/api/merchant/third-party/v2/banks/list", "GET", undefined, { paymentMode: "INTENT" });
+    const banks = bankListSchema.safeParse(banksRaw);
+    if (!banks.success) return this.fail("Fonepay bank-list response was invalid");
+    const qrRaw = await this.request("/api/merchant/third-party/v2/generate-intent-qr", "POST", { amount: input.amountNpr, billId: input.orderNumber, terminalId: process.env.FONEPAY_TERMINAL_ID!, paymentMode: "QR", referenceLabel: reference, qrType: "INTENT_QR" });
+    const parsedQr = qrResponseSchema.safeParse(qrRaw);
+    if (!parsedQr.success) return this.fail("Fonepay QR response was invalid");
+    const qr = parsedQr.data;
+    if (qr.prn !== reference) return this.fail("Fonepay QR reference did not match the request");
+    const qrPayload = qr.qrMessage ?? qr.qrString!;
+    return { reference, redirectUrl: "", expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), correlationId: reference, qrPayload, qrDataUrl: await QRCode.toDataURL(qrPayload, { margin: 1, width: 360 }), ...(qr.websocketId ? { websocketUrl: qr.websocketId } : {}), banks: banks.data.bankDetails as Bank[] };
+  }
+  async verify(reference: string, context: PaymentContext): Promise<PaymentVerification> {
+    const raw = await this.request("/api/merchant/third-party/v2/thirdPartyDynamicQrGetStatus", "POST", { terminalId: process.env.FONEPAY_TERMINAL_ID!, referenceLabel: reference });
+    const parsed = statusResponseSchema.safeParse(raw);
+    if (!parsed.success) return this.fail("Fonepay payment-status response was invalid");
+    const data = parsed.data;
+    if (data.prn !== reference) return this.fail("Fonepay payment reference did not match the request");
+    if (data.merchantCode !== process.env.FONEPAY_TERMINAL_ID) return this.fail("Fonepay merchant terminal did not match the request");
+    const status = String(data.paymentStatus ?? "").toLowerCase();
+    if (!["success", "pending", "failed", "cancelled"].includes(status))
+      return this.fail(`Fonepay returned an unknown payment status: ${status}`);
+    return { reference, orderId: context.orderId, amountNpr: data.requestedAmount, currency: "NPR", ...(data.fonepayTraceId ? { providerTransactionId: String(data.fonepayTraceId) } : {}), status: status === "success" ? PaymentStatus.COMPLETED : status === "pending" ? PaymentStatus.PENDING : status === "cancelled" ? PaymentStatus.CANCELLED : PaymentStatus.FAILED };
+  }
+}

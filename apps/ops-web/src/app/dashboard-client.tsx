@@ -15,7 +15,8 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Panel } from "@/components/panel";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, humane } from "@/components/status-badge";
+import ErrorDialog from "@/components/error-dialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import {
@@ -57,19 +58,36 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1",
 export default function DashboardClient() {
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Dashboard | null>(null);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     void authFetch(`${API}/operations/dashboard`, { headers })
-      .then((r) => r.json())
-      .then((v) => setData(v.data));
+      .then(async (r) => {
+        const v = await r.json();
+        if (!r.ok) throw new Error(v?.error?.message ?? 'Could not load the overview');
+        setData(v.data);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Could not load the overview'));
   }, []);
 
   if (!data)
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> Loading live overview…
+      <>
+        <ErrorDialog error={error} onClose={() => setError(null)} />
+        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
+          {error ? (
+            <>
+              <p className="max-w-md text-center text-sm text-muted-foreground">
+                Could not load the operations overview. Please try again.
+              </p>
+              <Button onClick={() => window.location.reload()}>Try again</Button>
+            </>
+          ) : (
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <Spinner /> Loading live overview…
+            </div>
+          )}
         </div>
-      </div>
+      </>
     );
 
   const metrics = [
@@ -78,7 +96,8 @@ export default function DashboardClient() {
       value: data.counts.reviewPending,
       icon: <ClipboardCheck className="size-4" />,
       tone: "info" as const,
-      hint: "Orders awaiting an operations decision",
+      hint: "Orders waiting for your review",
+      href: "/work-queue?status=REVIEW_PENDING",
     },
     {
       label: "Awaiting customer",
@@ -86,27 +105,31 @@ export default function DashboardClient() {
       icon: <RotateCcw className="size-4" />,
       tone: "warning" as const,
       hint: "Waiting on customer documents",
+      href: "/work-queue?status=AWAITING_CUSTOMER",
     },
     {
       label: "Provisioning failed",
       value: data.counts.provisioningFailed,
       icon: <ServerCrash className="size-4" />,
       tone: "danger" as const,
-      hint: "Require attention",
+      hint: "Set-up failed — needs your attention",
+      href: "/work-queue?status=PROVISIONING_FAILED",
     },
     {
       label: "QR sent — awaiting activation",
       value: data.counts.qrReady,
       icon: <QrCode className="size-4" />,
       tone: "info" as const,
-      hint: "Provisioned, waiting for the device to activate",
+      hint: "QR sent; waiting for the customer to install it",
+      href: "/orders?status=QR_READY",
     },
     {
       label: "Activated today",
       value: data.counts.activatedToday,
       icon: <CheckCircle2 className="size-4" />,
       tone: "success" as const,
-      hint: "eSIMs truly activated since midnight",
+      hint: "eSIMs activated since midnight",
+      href: "/orders?status=COMPLETED",
     },
     {
       label: "Expired",
@@ -114,11 +137,19 @@ export default function DashboardClient() {
       icon: <Clock3 className="size-4" />,
       tone: "warning" as const,
       hint: "Completed plans past their validity window",
+      href: "/orders",
     },
   ];
 
+  const customerLabel = (order: Order) => {
+    if (order.traveler)
+      return `${order.traveler.firstName} ${order.traveler.surname}`;
+    return "Guest customer";
+  };
+
   return (
     <>
+      <ErrorDialog error={error} onClose={() => setError(null)} />
       <PageHeader
         title="Operations overview"
         description={`${new Intl.DateTimeFormat("en-NP", {
@@ -136,7 +167,12 @@ export default function DashboardClient() {
       />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {metrics.map((metric) => (
-          <StatCard key={metric.label} {...metric} />
+          <Link key={metric.label} href={metric.href} className="group">
+            <StatCard
+              {...metric}
+              className="transition-all group-hover:-translate-y-0.5 group-hover:border-primary/40 group-hover:shadow-md"
+            />
+          </Link>
         ))}
       </div>
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
@@ -144,7 +180,7 @@ export default function DashboardClient() {
           title="Integration health"
           actions={
             <Link
-              href="/integration-events"
+              href="/logs"
               className="text-sm font-medium text-primary hover:underline"
             >
               View events
@@ -168,12 +204,12 @@ export default function DashboardClient() {
                   <div className="leading-tight">
                     <p className="text-sm font-medium">{item.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {item.status.replaceAll("_", " ")}
+                      {humane(item.status)}
                     </p>
                   </div>
                 </div>
                 <StatusBadge
-                  label={item.status}
+                  label={humane(item.status)}
                   tone={item.status === "UP" ? "success" : "warning"}
                 />
               </li>
@@ -195,50 +231,90 @@ export default function DashboardClient() {
           noPadding
         >
           {data.recentOrders.length === 0 ? (
-            <EmptyState title="No orders yet" description="New orders will appear here." />
+            <EmptyState
+              title="No orders yet"
+              description="New orders will appear here."
+            />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Order</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Destination</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              <div className="divide-y sm:hidden">
                 {data.recentOrders.map((order) => (
-                  <TableRow key={order.id}>
-                    <TableCell>
-                      <Link
-                        href={`/orders/${order.id}`}
-                        className="font-medium text-primary hover:underline"
-                      >
-                        {order.orderNumber}
-                      </Link>
-                    </TableCell>
-                    <TableCell>
-                      {order.traveler
-                        ? `${order.traveler.firstName} ${order.traveler.surname}`
-                        : order.ownerId}
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-medium">
-                        {order.plan.countryCode}
-                      </span>{" "}
-                      · {order.plan.name}
-                    </TableCell>
-                    <TableCell>
+                  <Link
+                    key={order.id}
+                    href={`/orders/${order.id}`}
+                    className="block space-y-2 px-4 py-4 active:bg-muted/60"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-primary">
+                          {order.orderNumber}
+                        </p>
+                        <p className="truncate text-sm text-muted-foreground">
+                          {customerLabel(order)}
+                        </p>
+                      </div>
                       <StatusBadge label={order.status} />
-                    </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
-                      {new Date(order.createdAt).toLocaleDateString()}
-                    </TableCell>
-                  </TableRow>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span className="truncate">
+                        <b className="text-foreground">
+                          {order.plan.countryCode}
+                        </b>{" "}
+                        · {order.plan.name}
+                      </span>
+                      <span className="shrink-0">
+                        {new Date(order.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </Link>
                 ))}
-              </TableBody>
-            </Table>
+              </div>
+              <div className="hidden sm:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Order</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Destination</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Created</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.recentOrders.map((order) => (
+                      <TableRow key={order.id}>
+                        <TableCell>
+                          <Link
+                            href={`/orders/${order.id}`}
+                            className="font-medium text-primary hover:underline"
+                          >
+                            {order.orderNumber}
+                          </Link>
+                        </TableCell>
+                        <TableCell
+                          className="max-w-52 truncate"
+                          title={order.ownerId}
+                        >
+                          {customerLabel(order)}
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium">
+                            {order.plan.countryCode}
+                          </span>{" "}
+                          · {order.plan.name}
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge label={order.status} />
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {new Date(order.createdAt).toLocaleDateString()}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </Panel>
       </div>

@@ -24,20 +24,18 @@ is documented in `docs/05-authentication-authorization.md`.
 
 ### `POST /webhooks/payments/:provider`
 
-`webhooks.controller.ts:34-45`:
+`webhooks.controller.ts`:
 
-- Body `{ eventId? }` — required.
-- Deduplicates via in-memory set + `WebhookEvent` row (returns
+- Only Khalti is accepted. Body requires `eventId` and supports payment
+  reference/order fields plus dispute event/case evidence.
+- Requires `x-visa-signature` HMAC-SHA256 over the exact raw request body.
+- Deduplicates via a durable `WebhookEvent` inbox row (returns
   `{ accepted: true, duplicate: true }`).
-- Outside production, verifies `x-visa-signature` HMAC (SHA-256,
-  `PAYMENT_SIMULATOR_SECRET`) when provided.
 - Persists the webhook event then enqueues
   `payments:payment-callback { provider, eventId, payload }`.
+- Persisted but unprocessed duplicate delivery is re-enqueued; the independent
+  reconciliation process also sweeps abandoned inbox rows.
 - Returns `{ accepted: true, queued: true }`.
-
-Note: no production-grade signature is enforced for this endpoint beyond the
-optional HMAC (non-production only). In production the signature is not
-verified — this is flagged in `docs/20-documentation-gaps.md`.
 
 ### `POST /webhooks/connectivity/:provider`
 

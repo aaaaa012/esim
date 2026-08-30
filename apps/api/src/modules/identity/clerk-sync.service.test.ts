@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { UserRoleName, UserStatus } from "@prisma/client";
 import { ClerkSyncService } from "./clerk-sync.service.js";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
+import type { EmailChannel } from "../notification/email.channel.js";
 
 function prismaStub(overrides: Record<string, unknown> = {}) {
   const user = {
@@ -50,6 +51,37 @@ const createdEvent = (clerkId: string, email: string) => ({
   },
 });
 
+describe("ClerkSyncService emergency email", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("uses the provider-neutral email channel with a stable idempotency key", async () => {
+    vi.stubEnv("OPS_ALERT_EMAIL", "ops@example.com");
+    const email = {
+      send: vi.fn().mockResolvedValue({
+        providerMessageId: "email-1",
+        simulated: false,
+      }),
+    } as EmailChannel;
+    const service = new ClerkSyncService(prismaStub(), email);
+
+    await (
+      service as unknown as {
+        alertIdentityEmergency(message: string): Promise<void>;
+      }
+    ).alertIdentityEmergency("Last super admin was deleted");
+
+    expect(email.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "ops@example.com",
+        subject: "[Ops Alert] Super Admin identity emergency",
+        idempotencyKey: expect.stringMatching(
+          /^identity-emergency-[a-f0-9]{64}$/,
+        ),
+      }),
+    );
+  });
+});
+
 describe("ClerkSyncService re-registration recovery", () => {
   afterEach(() => vi.unstubAllEnvs());
 
@@ -75,7 +107,9 @@ describe("ClerkSyncService re-registration recovery", () => {
     );
     const service = new ClerkSyncService(prisma);
 
-    const result = await service.sync(createdEvent("new-clerk-id", "user@example.com"));
+    const result = await service.sync(
+      createdEvent("new-clerk-id", "user@example.com"),
+    );
 
     expect(result.persisted).toBe(true);
     expect(result.accountType).toBe(UserRoleName.CUSTOMER);
@@ -91,12 +125,56 @@ describe("ClerkSyncService re-registration recovery", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it("relinks an ACTIVE account when Clerk recreates the same verified email with a new user id", async () => {
+    vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_EMAIL", "");
+    const active = {
+      id: "admin-1",
+      clerkId: "old-clerk-id",
+      email: "admin@example.com",
+      accountType: UserRoleName.SUPER_ADMIN,
+      status: UserStatus.ACTIVE,
+    };
+    const prisma = prismaStub();
+    (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockImplementation(
+      (args: { where: { clerkId?: string; email?: string } }) =>
+        Promise.resolve(
+          args.where.clerkId
+            ? null
+            : args.where.email === "admin@example.com"
+              ? active
+              : null,
+        ),
+    );
+    const service = new ClerkSyncService(prisma);
+
+    const result = await service.sync(
+      createdEvent("new-clerk-id", "admin@example.com"),
+    );
+
+    expect(result).toEqual({
+      persisted: true,
+      accountType: UserRoleName.SUPER_ADMIN,
+    });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "admin-1" },
+      data: {
+        clerkId: "new-clerk-id",
+        email: "admin@example.com",
+        status: UserStatus.ACTIVE,
+      },
+    });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it("still creates a new CUSTOMER when the email is not taken", async () => {
     vi.stubEnv("BOOTSTRAP_SUPER_ADMIN_EMAIL", "");
     const prisma = prismaStub();
     const service = new ClerkSyncService(prisma);
 
-    const result = await service.sync(createdEvent("brand-new", "fresh@example.com"));
+    const result = await service.sync(
+      createdEvent("brand-new", "fresh@example.com"),
+    );
 
     expect(result.persisted).toBe(true);
     expect(result.accountType).toBe(UserRoleName.CUSTOMER);

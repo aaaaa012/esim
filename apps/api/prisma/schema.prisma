@@ -3,44 +3,58 @@ generator client {
 }
 
 datasource db {
-  provider = "cockroachdb"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 enum UserStatus {
   ACTIVE
   DISABLED
 }
+
 enum UserRoleName {
   CUSTOMER
   OPERATIONS
   SUPER_ADMIN
 }
+
 enum StaffInvitationStatus {
   PENDING
   ACCEPTED
   REVOKED
   EXPIRED
 }
+
 enum CustomerSource {
   WEBSITE
   PARTNER
   KHALTI
 }
+
 enum CustomerStatus {
   ACTIVE
   BLOCKED
 }
+
 enum PlanStatus {
   DRAFT
   ACTIVE
   DISABLED
   ARCHIVED
 }
+
 enum OrderType {
   INITIAL_PURCHASE
   TOPUP
 }
+
+enum OrderChannel {
+  CUSTOMER_WEB
+  PARTNER_API
+  PARTNER_HOSTED
+}
+
 enum OrderStatus {
   DRAFT
   PAYMENT_PENDING
@@ -52,52 +66,126 @@ enum OrderStatus {
   QR_READY
   COMPLETED
   PAYMENT_FAILED
+  PAYMENT_REVIEW_REQUIRED
   CANCELLED
   PROVISIONING_FAILED
+  ACTIVATION_ATTENTION
   REFUND_PENDING
   REFUNDED
 }
+
 enum PaymentProvider {
   KHALTI
+  FONEPAY
 }
+
 enum PaymentStatus {
   INITIATED
   PENDING
   COMPLETED
   FAILED
   CANCELLED
+  REVIEW_REQUIRED
   REFUNDED
+  DISPUTED
+  CHARGED_BACK
 }
+
+enum PaymentInitiationStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum PaymentDisputeType {
+  CHARGEBACK
+  DISPUTE
+}
+
+enum PaymentDisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  WON
+  LOST
+  RESOLVED
+}
+
 enum DocumentType {
   PASSPORT
   TICKET
   VISA
 }
+
 enum DocumentStatus {
   PENDING
   APPROVED
   REJECTED
   REUPLOAD_REQUIRED
 }
+
 enum InventoryStatus {
   IMPORTED
+  PENDING_PROVIDER_CHECK
   AVAILABLE
   RESERVED
   ASSIGNED
   ACTIVATED
   EXPIRED
   TERMINATED
+  QUARANTINED
 }
+
 enum BatchStatus {
   PENDING
   APPROVED
   REJECTED
 }
+
 enum ReviewDecision {
   APPROVED
   REJECTED
   REUPLOAD_REQUIRED
 }
+
+enum DocumentReviewPolicy {
+  AUTO_OCR
+  MANUAL_REVIEW
+  NO_REVIEW
+}
+
+enum OperationalDisposition {
+  RETRY_AUTOMATIC
+  RECONCILE_PROVIDER
+  MANUAL_ACTION
+  REFUND_ELIGIBLE
+  TERMINAL_REJECTION
+}
+
+enum AttentionCaseStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum OutboxStatus {
+  PENDING
+  DISPATCHED
+  ENQUEUED
+  PROCESSED
+  FAILED
+}
+
+enum DocumentReviewStatus {
+  NOT_STARTED
+  OCR_PENDING
+  OCR_BACKGROUND
+  VERIFIED
+  MANUAL_REVIEW
+  REUPLOAD_REQUIRED
+  MANUALLY_APPROVED
+  SKIPPED
+}
+
 enum ProvisioningStatus {
   QUEUED
   RUNNING
@@ -106,343 +194,1127 @@ enum ProvisioningStatus {
   RETRYING
   FAILED
 }
+
+enum ProvisioningOperationState {
+  CREATED
+  SUBMITTING
+  ACCEPTED
+  WAITING_FOR_QR
+  QR_READY
+  ACTIVATED
+  RECONCILE_REQUIRED
+  REJECTED
+  MANUAL_REVIEW
+  CANCELLED
+}
+
+enum TransatelLifecycleAction {
+  SUSPEND
+  TERMINATE
+}
+
+enum TransatelLifecycleState {
+  CREATED
+  SUBMITTING
+  ACCEPTED
+  CONFIRMED
+  RECONCILE_REQUIRED
+  FAILED
+}
+
+enum ManualRefundStatus {
+  REQUESTED
+  APPROVED
+  COMPLETED
+  REJECTED
+}
+
+enum ManualRefundReason {
+  PROVISIONING_FAILURE
+  INCORRECT_FULFILLMENT
+  DUPLICATE_CHARGE
+  PROVIDER_SERVICE_FAILURE
+  INTERNAL_OPERATIONAL_ERROR
+}
+
 enum SubscriptionStatus {
   PENDING
   ACTIVE
+  SUSPENDED
   EXPIRED
   TERMINATED
   FAILED
 }
 
-model User {
-  id String @id @default(uuid()) @db.Uuid
-  clerkId String @unique
-  email String @unique
-  status UserStatus @default(ACTIVE)
-  accountType UserRoleName @default(CUSTOMER)
-  mustChangePassword Boolean @default(false)
-  roles UserRole[]
-  customer Customer?
-  reviews OrderReview[]
-  auditLogs AuditLog[]
-  staffInvitationsSent StaffInvitation[] @relation("StaffInvitationInviter")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+enum AssignmentVerificationStatus {
+  PENDING
+  VERIFIED
+  MISMATCH
 }
+
+enum PartnerStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum PartnerCredentialStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum PartnerPriceListStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum PartnerSettlementMethod {
+  PARTNER_ACCOUNT
+  HOSTED_PAYMENT
+}
+
+enum PartnerIntegrationType {
+  API
+  CHECKOUT_LINK
+}
+
+enum PartnerQuoteStatus {
+  ACTIVE
+  CONSUMED
+  EXPIRED
+  CANCELLED
+}
+
+enum PartnerLedgerEntryType {
+  CREDIT
+  DEBIT
+  RESERVATION
+  CAPTURE
+  RELEASE
+  REFUND
+  ADJUSTMENT
+}
+
+enum PartnerRefundStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum PartnerWebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  RETRYING
+  FAILED
+}
+
+enum PartnerIdempotencyStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ApiIdempotencyStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id                           String                        @id @default(uuid()) @db.Uuid
+  clerkId                      String                        @unique
+  email                        String                        @unique
+  status                       UserStatus                    @default(ACTIVE)
+  accountType                  UserRoleName                  @default(CUSTOMER)
+  mustChangePassword           Boolean                       @default(false)
+  roles                        UserRole[]
+  customer                     Customer?
+  reviews                      OrderReview[]
+  auditLogs                    AuditLog[]
+  transatelLifecycleOperations TransatelLifecycleOperation[]
+  manualRefundsRequested       ManualRefund[]                @relation("ManualRefundRequester")
+  manualRefundsReviewed        ManualRefund[]                @relation("ManualRefundReviewer")
+  staffInvitationsSent         StaffInvitation[]             @relation("StaffInvitationInviter")
+  createdAt                    DateTime                      @default(now())
+  updatedAt                    DateTime                      @updatedAt
+}
+
 model StaffInvitation {
-  id String @id @default(uuid()) @db.Uuid
-  email String
-  accountType UserRoleName
-  status StaffInvitationStatus @default(PENDING)
-  clerkInvitationId String? @unique
-  invitedById String @db.Uuid
-  invitedBy User @relation("StaffInvitationInviter", fields: [invitedById], references: [id])
-  acceptedById String? @db.Uuid
-  expiresAt DateTime
-  acceptedAt DateTime?
-  revokedAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String                @id @default(uuid()) @db.Uuid
+  email             String
+  accountType       UserRoleName
+  status            StaffInvitationStatus @default(PENDING)
+  clerkInvitationId String?               @unique
+  invitedById       String                @db.Uuid
+  invitedBy         User                  @relation("StaffInvitationInviter", fields: [invitedById], references: [id])
+  acceptedById      String?               @db.Uuid
+  expiresAt         DateTime
+  acceptedAt        DateTime?
+  revokedAt         DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
   @@index([email, status])
 }
+
 model Role {
-  id String @id @default(uuid()) @db.Uuid
-  name UserRoleName @unique
+  id    String       @id @default(uuid()) @db.Uuid
+  name  UserRoleName @unique
   users UserRole[]
 }
+
 model UserRole {
   userId String @db.Uuid
   roleId String @db.Uuid
-  user User @relation(fields: [userId], references: [id])
-  role Role @relation(fields: [roleId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+  role   Role   @relation(fields: [roleId], references: [id])
+
   @@id([userId, roleId])
 }
+
 model Customer {
-  id String @id @default(uuid()) @db.Uuid
-  userId String? @unique @db.Uuid
-  user User? @relation(fields: [userId], references: [id])
-  customerCode String @unique
-  source CustomerSource @default(WEBSITE)
-  email String @unique
-  phone String?
-  preferredLanguage String @default("en")
-  status CustomerStatus @default(ACTIVE)
-  orders Order[]
-  esims CustomerEsim[]
-  consents CustomerConsent[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  deletedAt DateTime?
+  id                String            @id @default(uuid()) @db.Uuid
+  userId            String?           @unique @db.Uuid
+  user              User?             @relation(fields: [userId], references: [id])
+  customerCode      String            @unique
+  source            CustomerSource    @default(WEBSITE)
+  email             String            @unique
+  phone             String?
+  preferredLanguage String            @default("en")
+  status            CustomerStatus    @default(ACTIVE)
+  orders            Order[]
+  esims             CustomerEsim[]
+  consents          CustomerConsent[]
+  partnerIdentity   PartnerCustomer?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  deletedAt         DateTime?
 }
+
 model Country {
-  id String @id @default(uuid()) @db.Uuid
-  isoCode String @unique
-  name String
-  active Boolean @default(true)
-  plans Plan[]
+  id      String  @id @default(uuid()) @db.Uuid
+  isoCode String  @unique
+  name    String
+  active  Boolean @default(true)
+  plans   Plan[]
 }
+
 model Plan {
-  id String @id @default(uuid()) @db.Uuid
-  countryId String @db.Uuid
-  country Country @relation(fields: [countryId], references: [id])
+  id             String                 @id @default(uuid()) @db.Uuid
+  countryId      String                 @db.Uuid
+  country        Country                @relation(fields: [countryId], references: [id])
   providerPlanId String
-  name String
-  dataAllowance String
-  validityDays Int
-  costPrice Decimal @db.Decimal(12,2)
-  sellingPrice Decimal @db.Decimal(12,2)
-  currency String @default("NPR")
-  coverage Json
-  popular Boolean @default(false)
-  status PlanStatus @default(DRAFT)
-  orders Order[]
+  name           String
+  dataAllowance  String
+  validityDays   Int
+  costPrice      Decimal                @db.Decimal(12, 2)
+  sellingPrice   Decimal                @db.Decimal(12, 2)
+  currency       String                 @default("NPR")
+  coverage       Json
+  popular        Boolean                @default(false)
+  status         PlanStatus             @default(DRAFT)
+  orders         Order[]
+  partnerPrices  PartnerPriceListItem[]
+  partnerQuotes  PartnerQuote[]
+  updatedAt      DateTime               @updatedAt
+
   @@unique([countryId, providerPlanId])
 }
+
 model Order {
-  id String @id @default(uuid()) @db.Uuid
-  orderNumber String @unique
-  customerId String @db.Uuid
-  customer Customer @relation(fields: [customerId], references: [id])
-  planId String @db.Uuid
-  plan Plan @relation(fields: [planId], references: [id])
-  orderType OrderType @default(INITIAL_PURCHASE)
-  status OrderStatus @default(DRAFT)
-  currency String @default("NPR")
-  subtotal Decimal @db.Decimal(12,2)
-  discount Decimal @default(0) @db.Decimal(12,2)
-  tax Decimal @default(0) @db.Decimal(12,2)
-  totalAmount Decimal @db.Decimal(12,2)
-  pricingSnapshot Json
-  compatibilityAcceptedAt DateTime
-  providerSubscriptionId String?
-  providerStatus String?
-  qrDeliveredAt DateTime?
-  activatedAt DateTime?
-  traveler Traveler?
-  documents TravelerDocument[]
-  payments Payment[]
-  inventory EsimInventory?
-  customerEsim CustomerEsim?
-  reviews OrderReview[]
-  events OrderEvent[]
-  provisioningAttempts ProvisioningAttempt[]
-  notifications Notification[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  version Int @default(0)
+  id                           String                         @id @default(uuid()) @db.Uuid
+  orderNumber                  String                         @unique
+  customerId                   String                         @db.Uuid
+  customer                     Customer                       @relation(fields: [customerId], references: [id])
+  partnerId                    String?                        @db.Uuid
+  partner                      Partner?                       @relation(fields: [partnerId], references: [id])
+  partnerCustomerId            String?                        @db.Uuid
+  partnerCustomer              PartnerCustomer?               @relation(fields: [partnerCustomerId], references: [id])
+  externalOrderId              String?
+  partnerQuoteId               String?                        @unique @db.Uuid
+  partnerQuote                 PartnerQuote?                  @relation(fields: [partnerQuoteId], references: [id])
+  partnerSettlementMethod      PartnerSettlementMethod?
+  partnerPaymentProvider       PaymentProvider?
+  partnerMetadata              Json?
+  planId                       String                         @db.Uuid
+  plan                         Plan                           @relation(fields: [planId], references: [id])
+  orderType                    OrderType                      @default(INITIAL_PURCHASE)
+  channel                      OrderChannel                   @default(CUSTOMER_WEB)
+  status                       OrderStatus                    @default(DRAFT)
+  currency                     String                         @default("NPR")
+  subtotal                     Decimal                        @db.Decimal(12, 2)
+  discount                     Decimal                        @default(0) @db.Decimal(12, 2)
+  tax                          Decimal                        @default(0) @db.Decimal(12, 2)
+  totalAmount                  Decimal                        @db.Decimal(12, 2)
+  pricingSnapshot              Json
+  compatibilityAcceptedAt      DateTime
+  providerSubscriptionId       String?
+  providerStatus               String?
+  qrDeliveredAt                DateTime?
+  activatedAt                  DateTime?
+  documentReviewPolicy         DocumentReviewPolicy           @default(AUTO_OCR)
+  documentReviewStatus         DocumentReviewStatus           @default(NOT_STARTED)
+  documentReviewStartedAt      DateTime?
+  documentCheckoutReleaseAt    DateTime?
+  activationRefetchAttempts    Int                            @default(0)
+  lastProvisioningRecoveryAt   DateTime?
+  operationalDisposition       OperationalDisposition?
+  traveler                     Traveler?
+  documents                    TravelerDocument[]
+  payments                     Payment[]
+  paymentInitiation            PaymentInitiation?
+  inventory                    EsimInventory?
+  customerEsim                 CustomerEsim?
+  reviews                      OrderReview[]
+  events                       OrderEvent[]
+  provisioningAttempts         ProvisioningAttempt[]
+  provisioningOperation        ProvisioningOperation?
+  transatelLifecycleOperations TransatelLifecycleOperation[]
+  manualRefunds                ManualRefund[]
+  paymentDisputes              PaymentDispute[]
+  notifications                Notification[]
+  partnerLedgerEntries         PartnerLedgerEntry[]
+  partnerHostedSessions        PartnerHostedCheckoutSession[]
+  partnerRefundRequests        PartnerRefundRequest[]
+  partnerEvents                PartnerEvent[]
+  attentionCases               AttentionCase[]
+  outboxMessages               OutboxMessage[]
+  createdAt                    DateTime                       @default(now())
+  updatedAt                    DateTime                       @updatedAt
+  version                      Int                            @default(0)
+
+  @@unique([partnerId, externalOrderId])
   @@index([customerId, status])
   @@index([status, createdAt])
+  @@index([partnerId])
 }
+
+model PlatformConfiguration {
+  id                   String               @id @default("platform")
+  documentReviewPolicy DocumentReviewPolicy @default(AUTO_OCR)
+  ocrCheckoutWaitMs    Int                  @default(8000)
+  updatedById          String?              @db.Uuid
+  updatedAt            DateTime             @updatedAt
+}
+
 model Traveler {
-  id String @id @default(uuid()) @db.Uuid
-  orderId String @unique @db.Uuid
-  order Order @relation(fields: [orderId], references: [id])
-  title String
-  firstName String
-  middleName String?
-  surname String
-  dateOfBirthEncrypted String
-  nationality String
-  city String
-  countryOfResidence String
-  employerOrBusinessName String?
-  email String
-  mobile String
+  id                      String  @id @default(uuid()) @db.Uuid
+  orderId                 String  @unique @db.Uuid
+  order                   Order   @relation(fields: [orderId], references: [id])
+  title                   String
+  firstName               String
+  middleName              String?
+  surname                 String
+  dateOfBirthEncrypted    String
+  nationality             String
+  city                    String
+  countryOfResidence      String
+  employerOrBusinessName  String?
+  email                   String
+  mobile                  String
   passportNumberEncrypted String
-  passportNumberHash String @unique
+  passportNumberHash      String
   passportExpiryEncrypted String
-  pointOfSaleCode String?
-  countryOfPurchase String @default("NP")
-  subscriberLanguage String @default("en")
+  pointOfSaleCode         String?
+  countryOfPurchase       String  @default("NP")
+  subscriberLanguage      String  @default("en")
+
+  @@index([passportNumberHash])
 }
+
 model TravelerDocument {
-  id String @id @default(uuid()) @db.Uuid
-  orderId String @db.Uuid
-  order Order @relation(fields: [orderId], references: [id])
-  type DocumentType
-  fileName String
-  privateAssetId String
-  status DocumentStatus @default(PENDING)
-  reviewedById String? @db.Uuid
-  reviewedAt DateTime?
-  createdAt DateTime @default(now())
+  id                         String         @id @default(uuid()) @db.Uuid
+  orderId                    String         @db.Uuid
+  order                      Order          @relation(fields: [orderId], references: [id])
+  type                       DocumentType
+  fileName                   String
+  privateAssetId             String
+  status                     DocumentStatus @default(PENDING)
+  uploadVerified             Boolean        @default(false)
+  reviewedById               String?        @db.Uuid
+  reviewedAt                 DateTime?
+  passportVerificationStatus String?
+  passportVerificationMethod String?
+  passportMatchedFields      Json?
+  passportConfidence         Float?
+  passportVerifiedAt         DateTime?
+  createdAt                  DateTime       @default(now())
+
   @@unique([orderId, type])
   @@index([status])
 }
+
 model Payment {
-  id String @id @default(uuid()) @db.Uuid
-  orderId String @db.Uuid
-  order Order @relation(fields: [orderId], references: [id])
-  provider PaymentProvider
+  id                    String           @id @default(uuid()) @db.Uuid
+  orderId               String           @db.Uuid
+  order                 Order            @relation(fields: [orderId], references: [id])
+  manualRefunds         ManualRefund[]
+  disputes              PaymentDispute[]
+  provider              PaymentProvider
   providerTransactionId String?
   providerCorrelationId String?
-  paymentReference String @unique
-  amount Decimal @db.Decimal(12,2)
-  currency String @default("NPR")
-  status PaymentStatus @default(INITIATED)
-  paidAt DateTime?
-  expiresAt DateTime?
-  returnUrl String?
-  redirectUrl String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  paymentReference      String           @unique
+  amount                Decimal          @db.Decimal(12, 2)
+  currency              String           @default("NPR")
+  status                PaymentStatus    @default(INITIATED)
+  paidAt                DateTime?
+  expiresAt             DateTime?
+  returnUrl             String?
+  redirectUrl           String?
+  verificationAttempts  Int              @default(0)
+  lastVerifiedAt        DateTime?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
   @@unique([provider, providerTransactionId])
+  @@index([orderId])
 }
+
+model PaymentInitiation {
+  id             String                  @id @default(uuid()) @db.Uuid
+  orderId        String                  @unique @db.Uuid
+  order          Order                   @relation(fields: [orderId], references: [id])
+  provider       PaymentProvider
+  amountNpr      Int
+  status         PaymentInitiationStatus @default(PROCESSING)
+  claimToken     String                  @db.Uuid
+  leaseExpiresAt DateTime
+  result         Json?
+  errorCode      String?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@index([status, leaseExpiresAt])
+}
+
 model InventoryBatch {
-  id String @id @default(uuid()) @db.Uuid
-  batchReference String @unique
-  totalProfiles Int
-  importedCount Int @default(0)
-  failedCount Int @default(0)
-  status BatchStatus @default(PENDING)
-  submittedById String? @db.Uuid
-  approvedById String? @db.Uuid
-  rejectedById String? @db.Uuid
-  approvedAt DateTime?
-  rejectedAt DateTime?
-  rejectionReason String?
-  inventory EsimInventory[]
-  createdAt DateTime @default(now())
+  id                 String                       @id @default(uuid()) @db.Uuid
+  batchReference     String                       @unique
+  totalProfiles      Int
+  importedCount      Int                          @default(0)
+  failedCount        Int                          @default(0)
+  status             BatchStatus                  @default(PENDING)
+  submittedById      String?                      @db.Uuid
+  approvedById       String?                      @db.Uuid
+  rejectedById       String?                      @db.Uuid
+  approvedAt         DateTime?
+  rejectedAt         DateTime?
+  rejectionReason    String?
+  inventory          EsimInventory[]
+  reconciliationRuns InventoryReconciliationRun[]
+  createdAt          DateTime                     @default(now())
 }
+
 model EsimInventory {
-  id String @id @default(uuid()) @db.Uuid
-  batchId String @db.Uuid
-  batch InventoryBatch @relation(fields: [batchId], references: [id])
-  iccid String @unique
-  eid String @unique
-  msisdn String? @unique
-  status InventoryStatus @default(IMPORTED)
-  assignedOrderId String? @unique @db.Uuid
-  assignedOrder Order? @relation(fields: [assignedOrderId], references: [id])
+  id                      String                        @id @default(uuid()) @db.Uuid
+  batchId                 String                        @db.Uuid
+  batch                   InventoryBatch                @relation(fields: [batchId], references: [id])
+  iccid                   String                        @unique
+  eid                     String                        @unique
+  msisdn                  String?                       @unique
+  status                  InventoryStatus               @default(IMPORTED)
+  assignedOrderId         String?                       @unique @db.Uuid
+  assignedOrder           Order?                        @relation(fields: [assignedOrderId], references: [id])
   activationCodeEncrypted String?
-  smDpAddress String?
-  providerSubscriptionId String?
-  providerStatus String?
-  activatedAt DateTime?
-  expiresAt DateTime?
-  customerEsims CustomerEsim[]
-  version Int @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  smDpAddress             String?
+  providerSubscriptionId  String?
+  providerStatus          String?
+  lastProviderCheckedAt   DateTime?
+  providerCheckError      String?
+  quarantineReason        String?
+  activatedAt             DateTime?
+  expiresAt               DateTime?
+  customerEsims           CustomerEsim[]
+  reconciliationItems     InventoryReconciliationItem[]
+  version                 Int                           @default(0)
+  createdAt               DateTime                      @default(now())
+  updatedAt               DateTime                      @updatedAt
+
   @@index([status])
 }
+
+model InventoryReconciliationRun {
+  id            String                        @id @default(uuid()) @db.Uuid
+  trigger       String
+  status        String                        @default("QUEUED")
+  selection     String
+  batchId       String?                       @db.Uuid
+  batch         InventoryBatch?               @relation(fields: [batchId], references: [id])
+  requestedById String?                       @db.Uuid
+  total         Int
+  items         InventoryReconciliationItem[]
+  createdAt     DateTime                      @default(now())
+  completedAt   DateTime?
+
+  @@index([status, createdAt])
+  @@index([batchId])
+}
+
+model InventoryReconciliationItem {
+  id          String                     @id @default(uuid()) @db.Uuid
+  runId       String                     @db.Uuid
+  run         InventoryReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  inventoryId String                     @db.Uuid
+  inventory   EsimInventory              @relation(fields: [inventoryId], references: [id])
+  status      String                     @default("QUEUED")
+  error       String?
+  checkedAt   DateTime?
+
+  @@unique([runId, inventoryId])
+  @@index([runId, status])
+  @@index([inventoryId])
+}
+
 model CustomerEsim {
-  id String @id @default(uuid()) @db.Uuid
-  customerId String @db.Uuid
-  customer Customer @relation(fields: [customerId], references: [id])
-  inventoryId String @db.Uuid
-  inventory EsimInventory @relation(fields: [inventoryId], references: [id])
-  orderId String @unique @db.Uuid
-  order Order @relation(fields: [orderId], references: [id])
+  id                 String         @id @default(uuid()) @db.Uuid
+  customerId         String         @db.Uuid
+  customer           Customer       @relation(fields: [customerId], references: [id])
+  inventoryId        String         @db.Uuid
+  inventory          EsimInventory  @relation(fields: [inventoryId], references: [id])
+  orderId            String         @unique @db.Uuid
+  order              Order          @relation(fields: [orderId], references: [id])
   qrPayloadEncrypted String
-  assignedAt DateTime @default(now())
-  subscriptions Subscription[]
+  assignedAt         DateTime       @default(now())
+  subscriptions      Subscription[]
 }
+
 model Subscription {
-  id String @id @default(uuid()) @db.Uuid
-  customerEsimId String @db.Uuid
-  customerEsim CustomerEsim @relation(fields: [customerEsimId], references: [id])
-  provider String
-  providerSubscriptionId String @unique
-  status SubscriptionStatus @default(PENDING)
-  activatedAt DateTime?
-  expiresAt DateTime?
-  usedMb Int @default(0)
-  totalMb Int @default(0)
-  usageLastCheckedAt DateTime?
+  id                           String                       @id @default(uuid()) @db.Uuid
+  customerEsimId               String                       @db.Uuid
+  customerEsim                 CustomerEsim                 @relation(fields: [customerEsimId], references: [id])
+  provider                     String
+  providerSubscriptionId       String                       @unique
+  status                       SubscriptionStatus           @default(PENDING)
+  activatedAt                  DateTime?
+  expiresAt                    DateTime?
+  usedMb                       Int                          @default(0)
+  totalMb                      Int                          @default(0)
+  usageLastCheckedAt           DateTime?
+  assignmentVerificationStatus AssignmentVerificationStatus @default(PENDING)
+  assignmentVerifiedAt         DateTime?
+  providerLastSeenAt           DateTime?
 }
+
+model Partner {
+  id                       String                         @id @default(uuid()) @db.Uuid
+  code                     String                         @unique
+  name                     String
+  slug                     String?                        @unique
+  brand                    Json?
+  status                   PartnerStatus                  @default(PENDING)
+  integrationType          PartnerIntegrationType         @default(API)
+  allowedSettlementMethods Json
+  rateLimitPerMinute       Int                            @default(120)
+  redirectAllowlist        Json
+  credentials              PartnerCredential[]
+  customers                PartnerCustomer[]
+  priceLists               PartnerPriceList[]
+  quotes                   PartnerQuote[]
+  orders                   Order[]
+  account                  PartnerAccount?
+  ledgerEntries            PartnerLedgerEntry[]
+  webhooks                 PartnerWebhookEndpoint[]
+  events                   PartnerEvent[]
+  idempotencyRecords       PartnerIdempotencyRecord[]
+  refundRequests           PartnerRefundRequest[]
+  hostedSessions           PartnerHostedCheckoutSession[]
+  rateBuckets              PartnerRateBucket[]
+  documentUploadIntents    PartnerDocumentUploadIntent[]
+  documentVerifications    PartnerDocumentVerification[]
+  createdAt                DateTime                       @default(now())
+  updatedAt                DateTime                       @updatedAt
+}
+
+model PartnerDocumentUploadIntent {
+  id                 String                       @id @default(uuid()) @db.Uuid
+  partnerId          String                       @db.Uuid
+  partner            Partner                      @relation(fields: [partnerId], references: [id])
+  verificationId     String?                      @db.Uuid
+  verification       PartnerDocumentVerification? @relation(fields: [verificationId], references: [id])
+  externalOrderId    String
+  type               DocumentType
+  fileName           String
+  contentType        String
+  declaredSizeBytes  Int
+  privateAssetId     String                       @unique
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  consumedOrderId    String?                      @db.Uuid
+  verificationStatus String                       @default("AWAITING_UPLOAD")
+  uploadVerified     Boolean                      @default(false)
+  verificationCode   String?
+  verificationResult Json?
+  verifiedAt         DateTime?
+  createdAt          DateTime                     @default(now())
+
+  @@index([partnerId, externalOrderId, expiresAt])
+  @@index([partnerId, consumedAt])
+}
+
+model PartnerDocumentVerification {
+  id                String                        @id @default(uuid()) @db.Uuid
+  partnerId         String                        @db.Uuid
+  partner           Partner                       @relation(fields: [partnerId], references: [id])
+  externalOrderId   String
+  activeExternalOrderKey String?                  @unique
+  status            String                        @default("AWAITING_UPLOAD")
+  travelerSnapshot  Json
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  consumedOrderId   String?                       @unique @db.Uuid
+  failureCode       String?
+  reviewPolicy      DocumentReviewPolicy          @default(AUTO_OCR)
+  checkoutReleaseAt DateTime?
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+  documents         PartnerDocumentUploadIntent[]
+
+  @@index([partnerId, externalOrderId])
+  @@index([status, expiresAt])
+}
+
+model PartnerCredential {
+  id         String                  @id @default(uuid()) @db.Uuid
+  partnerId  String                  @db.Uuid
+  partner    Partner                 @relation(fields: [partnerId], references: [id])
+  name       String
+  keyPrefix  String                  @unique
+  secretHash String
+  scopes     Json
+  status     PartnerCredentialStatus @default(ACTIVE)
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime                @default(now())
+
+  @@index([partnerId, status])
+}
+
+model PartnerCustomer {
+  id                 String   @id @default(uuid()) @db.Uuid
+  partnerId          String   @db.Uuid
+  partner            Partner  @relation(fields: [partnerId], references: [id])
+  externalCustomerId String
+  customerId         String   @unique @db.Uuid
+  customer           Customer @relation(fields: [customerId], references: [id])
+  orders             Order[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([partnerId, externalCustomerId])
+}
+
+model PartnerPriceList {
+  id            String                 @id @default(uuid()) @db.Uuid
+  partnerId     String                 @db.Uuid
+  partner       Partner                @relation(fields: [partnerId], references: [id])
+  name          String
+  version       Int
+  currency      String                 @default("NPR")
+  status        PartnerPriceListStatus @default(DRAFT)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  items         PartnerPriceListItem[]
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  @@unique([partnerId, version])
+  @@index([partnerId, status, effectiveFrom])
+}
+
+model PartnerPriceListItem {
+  id                   String           @id @default(uuid()) @db.Uuid
+  priceListId          String           @db.Uuid
+  priceList            PartnerPriceList @relation(fields: [priceListId], references: [id])
+  planId               String           @db.Uuid
+  plan                 Plan             @relation(fields: [planId], references: [id])
+  wholesaleAmountPaisa Int
+  retailAmountPaisa    Int
+
+  @@unique([priceListId, planId])
+}
+
+model PartnerQuote {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  partnerId            String                  @db.Uuid
+  partner              Partner                 @relation(fields: [partnerId], references: [id])
+  planId               String                  @db.Uuid
+  plan                 Plan                    @relation(fields: [planId], references: [id])
+  priceListId          String?                 @db.Uuid
+  settlementMethod     PartnerSettlementMethod
+  wholesaleAmountPaisa Int
+  retailAmountPaisa    Int
+  currency             String                  @default("NPR")
+  pricingSnapshot      Json
+  status               PartnerQuoteStatus      @default(ACTIVE)
+  expiresAt            DateTime
+  consumedAt           DateTime?
+  order                Order?
+  createdAt            DateTime                @default(now())
+
+  @@index([partnerId, status, expiresAt])
+}
+
+model PartnerAccount {
+  id               String   @id @default(uuid()) @db.Uuid
+  partnerId        String   @unique @db.Uuid
+  partner          Partner  @relation(fields: [partnerId], references: [id])
+  balancePaisa     Int      @default(0)
+  creditLimitPaisa Int      @default(0)
+  reservedPaisa    Int      @default(0)
+  version          Int      @default(0)
+  updatedAt        DateTime @updatedAt
+}
+
+model PartnerLedgerEntry {
+  id                String                 @id @default(uuid()) @db.Uuid
+  partnerId         String                 @db.Uuid
+  partner           Partner                @relation(fields: [partnerId], references: [id])
+  orderId           String?                @db.Uuid
+  order             Order?                 @relation(fields: [orderId], references: [id])
+  type              PartnerLedgerEntryType
+  amountPaisa       Int
+  balanceAfterPaisa Int
+  reference         String                 @unique
+  metadata          Json?
+  createdAt         DateTime               @default(now())
+
+  @@index([partnerId, createdAt])
+  @@index([orderId])
+}
+
+model PartnerHostedCheckoutSession {
+  id          String    @id @default(uuid()) @db.Uuid
+  partnerId   String    @db.Uuid
+  partner     Partner   @relation(fields: [partnerId], references: [id])
+  orderId     String    @db.Uuid
+  order       Order     @relation(fields: [orderId], references: [id])
+  tokenHash   String    @unique
+  redirectUrl String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([partnerId, expiresAt])
+}
+
+model PartnerRefundRequest {
+  id          String              @id @default(uuid()) @db.Uuid
+  partnerId   String              @db.Uuid
+  partner     Partner             @relation(fields: [partnerId], references: [id])
+  orderId     String              @db.Uuid
+  order       Order               @relation(fields: [orderId], references: [id])
+  amountPaisa Int
+  reason      String
+  status      PartnerRefundStatus @default(REQUESTED)
+  decidedById String?             @db.Uuid
+  decidedAt   DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([partnerId, status, createdAt])
+}
+
+model PartnerWebhookEndpoint {
+  id              String                   @id @default(uuid()) @db.Uuid
+  partnerId       String                   @db.Uuid
+  partner         Partner                  @relation(fields: [partnerId], references: [id])
+  url             String
+  secretEncrypted String
+  eventTypes      Json
+  active          Boolean                  @default(true)
+  deliveries      PartnerWebhookDelivery[]
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+}
+
+model PartnerEvent {
+  id            String                   @id @default(uuid()) @db.Uuid
+  partnerId     String                   @db.Uuid
+  partner       Partner                  @relation(fields: [partnerId], references: [id])
+  orderId       String?                  @db.Uuid
+  order         Order?                   @relation(fields: [orderId], references: [id])
+  type          String
+  version       String                   @default("1.0")
+  resourceId    String
+  correlationId String
+  payload       Json
+  occurredAt    DateTime                 @default(now())
+  deliveries    PartnerWebhookDelivery[]
+
+  @@index([partnerId, occurredAt])
+}
+
+model PartnerWebhookDelivery {
+  id             String                       @id @default(uuid()) @db.Uuid
+  eventId        String                       @db.Uuid
+  event          PartnerEvent                 @relation(fields: [eventId], references: [id])
+  endpointId     String                       @db.Uuid
+  endpoint       PartnerWebhookEndpoint       @relation(fields: [endpointId], references: [id])
+  status         PartnerWebhookDeliveryStatus @default(PENDING)
+  attempt        Int                          @default(0)
+  responseStatus Int?
+  latencyMs      Int?
+  nextRetryAt    DateTime?
+  errorMessage   String?
+  deliveredAt    DateTime?
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+
+  @@unique([eventId, endpointId])
+  @@index([status, nextRetryAt])
+}
+
+model PartnerIdempotencyRecord {
+  id             String                   @id @default(uuid()) @db.Uuid
+  partnerId      String                   @db.Uuid
+  partner        Partner                  @relation(fields: [partnerId], references: [id])
+  method         String
+  route          String
+  key            String
+  requestHash    String
+  status         PartnerIdempotencyStatus @default(PROCESSING)
+  responseStatus Int?
+  response       Json?
+  expiresAt      DateTime
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@unique([partnerId, method, route, key])
+  @@index([expiresAt])
+}
+
+model ApiIdempotencyRecord {
+  id             String               @id @default(uuid()) @db.Uuid
+  principalId    String
+  method         String
+  route          String
+  key            String
+  requestHash    String
+  status         ApiIdempotencyStatus @default(PROCESSING)
+  responseStatus Int?
+  response       Json?
+  claimExpiresAt DateTime
+  expiresAt      DateTime
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@unique([principalId, method, route, key])
+  @@index([status, claimExpiresAt])
+  @@index([expiresAt])
+}
+
+model PartnerRateBucket {
+  id          String   @id @default(uuid()) @db.Uuid
+  partnerId   String   @db.Uuid
+  partner     Partner  @relation(fields: [partnerId], references: [id])
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@unique([partnerId, windowStart])
+}
+
 model OrderReview {
-  id String @id @default(uuid()) @db.Uuid
-  orderId String @db.Uuid
-  order Order @relation(fields: [orderId], references: [id])
-  reviewerId String @db.Uuid
-  reviewer User @relation(fields: [reviewerId], references: [id])
-  decision ReviewDecision
-  reasons Json
-  comments String?
-  reviewedAt DateTime @default(now())
+  id         String         @id @default(uuid()) @db.Uuid
+  orderId    String         @db.Uuid
+  order      Order          @relation(fields: [orderId], references: [id])
+  reviewerId String         @db.Uuid
+  reviewer   User           @relation(fields: [reviewerId], references: [id])
+  decision   ReviewDecision
+  reasons    Json
+  comments   String?
+  reviewedAt DateTime       @default(now())
 }
+
 model OrderEvent {
-  id String @id @default(uuid()) @db.Uuid
-  orderId String @db.Uuid
-  order Order @relation(fields: [orderId], references: [id])
+  id         String       @id @default(uuid()) @db.Uuid
+  orderId    String       @db.Uuid
+  order      Order        @relation(fields: [orderId], references: [id])
   fromStatus OrderStatus?
-  toStatus OrderStatus
-  actorId String?
-  reason String?
-  metadata Json?
-  createdAt DateTime @default(now())
+  toStatus   OrderStatus
+  actorId    String?
+  reason     String?
+  metadata   Json?
+  createdAt  DateTime     @default(now())
+
   @@index([orderId, createdAt])
 }
+
 model ProvisioningAttempt {
-  id String @id @default(uuid()) @db.Uuid
-  orderId String @db.Uuid
-  order Order @relation(fields: [orderId], references: [id])
-  provider String
-  status ProvisioningStatus
-  correlationId String @unique
-  attempt Int
-  requestSnapshot Json
+  id               String             @id @default(uuid()) @db.Uuid
+  orderId          String             @db.Uuid
+  order            Order              @relation(fields: [orderId], references: [id])
+  provider         String
+  status           ProvisioningStatus
+  correlationId    String             @unique
+  attempt          Int
+  requestSnapshot  Json
   responseSnapshot Json?
-  errorCode String?
-  createdAt DateTime @default(now())
-  completedAt DateTime?
+  errorCode        String?
+  createdAt        DateTime           @default(now())
+  completedAt      DateTime?
 }
+
+model ProvisioningOperation {
+  id                     String                     @id @default(uuid()) @db.Uuid
+  orderId                String                     @unique @db.Uuid
+  order                  Order                      @relation(fields: [orderId], references: [id])
+  provider               String                     @default("TRANSATEL")
+  state                  ProvisioningOperationState @default(CREATED)
+  idempotencyKey         String                     @unique
+  iccid                  String
+  providerProductId      String
+  providerOrderId        String?
+  providerSubscriptionId String?
+  requestSnapshot        Json
+  responseSnapshot       Json?
+  attemptCount           Int                        @default(0)
+  profileSwapCount       Int                        @default(0)
+  lastErrorCategory      String?
+  lastErrorMessage       String?
+  submittedAt            DateTime?
+  acceptedAt             DateTime?
+  nextReconcileAt        DateTime?
+  reconcileDeadlineAt    DateTime?
+  completedAt            DateTime?
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+  version                Int                        @default(0)
+
+  @@index([state, nextReconcileAt])
+  @@index([providerSubscriptionId])
+}
+
+model TransatelLifecycleOperation {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  orderId               String                   @db.Uuid
+  order                 Order                    @relation(fields: [orderId], references: [id])
+  action                TransatelLifecycleAction
+  state                 TransatelLifecycleState  @default(CREATED)
+  idempotencyKey        String                   @unique
+  reason                String
+  performedById         String                   @db.Uuid
+  performedBy           User                     @relation(fields: [performedById], references: [id])
+  providerTransactionId String?
+  requestSnapshot       Json
+  responseSnapshot      Json?
+  errorMessage          String?
+  submittedAt           DateTime?
+  acceptedAt            DateTime?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  @@index([orderId, createdAt])
+  @@index([state, createdAt])
+}
+
+model ManualRefund {
+  id                String             @id @default(uuid()) @db.Uuid
+  orderId           String             @db.Uuid
+  order             Order              @relation(fields: [orderId], references: [id])
+  paymentId         String             @db.Uuid
+  payment           Payment            @relation(fields: [paymentId], references: [id])
+  status            ManualRefundStatus @default(REQUESTED)
+  activeKey         String?            @unique
+  reason            ManualRefundReason
+  explanation       String
+  amount            Decimal            @db.Decimal(12, 2)
+  requestedById     String             @db.Uuid
+  requestedBy       User               @relation("ManualRefundRequester", fields: [requestedById], references: [id])
+  reviewedById      String?            @db.Uuid
+  reviewedBy        User?              @relation("ManualRefundReviewer", fields: [reviewedById], references: [id])
+  reviewNote        String?
+  providerReference String?            @unique
+  completionNote    String?
+  completedAt       DateTime?
+  rejectedAt        DateTime?
+  approvedAt        DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([status, createdAt])
+  @@index([orderId, createdAt])
+}
+
+model PaymentDispute {
+  id               String               @id @default(uuid()) @db.Uuid
+  orderId          String               @db.Uuid
+  order            Order                @relation(fields: [orderId], references: [id])
+  paymentId        String               @db.Uuid
+  payment          Payment              @relation(fields: [paymentId], references: [id])
+  provider         PaymentProvider
+  providerCaseId   String
+  openedEventId    String
+  type             PaymentDisputeType
+  status           PaymentDisputeStatus @default(OPEN)
+  amount           Decimal?             @db.Decimal(12, 2)
+  currency         String               @default("NPR")
+  reason           String?
+  providerEvidence Json?
+  resolutionNote   String?
+  openedAt         DateTime             @default(now())
+  resolvedAt       DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@unique([provider, providerCaseId])
+  @@unique([provider, openedEventId])
+  @@index([status, openedAt])
+  @@index([orderId, status])
+}
+
 model WebhookEvent {
-  id String @id @default(uuid()) @db.Uuid
-  source String
-  eventId String
-  payload Json
-  signatureValid Boolean
-  processedAt DateTime?
-  errorMessage String?
-  createdAt DateTime @default(now())
+  id                  String    @id @default(uuid()) @db.Uuid
+  source              String
+  eventId             String
+  payload             Json
+  signatureValid      Boolean
+  processedAt         DateTime?
+  processingStartedAt DateTime?
+  attemptCount        Int       @default(0)
+  nextAttemptAt       DateTime?
+  deadLetteredAt      DateTime?
+  errorMessage        String?
+  createdAt           DateTime  @default(now())
+
   @@unique([source, eventId])
+  @@index([processedAt, deadLetteredAt, nextAttemptAt])
 }
 
 model IntegrationLog {
-  id String @id @default(uuid()) @db.Uuid
-  operation String
-  method String
-  endpoint String
-  status Int
-  durationMs Int?
-  errorCode String?
-  errorMessage String?
+  id            String   @id @default(uuid()) @db.Uuid
+  operation     String
+  method        String
+  endpoint      String
+  status        Int
+  durationMs    Int?
+  errorCode     String?
+  errorMessage  String?
   correlationId String?
-  createdAt DateTime @default(now())
+  requestBody   Json?
+  responseBody  Json?
+  createdAt     DateTime @default(now())
+
   @@index([operation, createdAt])
   @@index([status])
 }
+
 model Notification {
-  id String @id @default(uuid()) @db.Uuid
-  orderId String? @db.Uuid
-  order Order? @relation(fields: [orderId], references: [id])
-  channel String
-  template String
-  status String
-  sentAt DateTime?
-  createdAt DateTime @default(now())
+  id            String    @id @default(uuid()) @db.Uuid
+  orderId       String?   @db.Uuid
+  order         Order?    @relation(fields: [orderId], references: [id])
+  channel       String
+  template      String
+  recipient     String?
+  orderNumber   String?
+  reason        String?
+  status        String
+  sentAt        DateTime?
+  attemptCount  Int       @default(0)
+  nextAttemptAt DateTime?
+  errorMessage  String?
+  createdAt     DateTime  @default(now())
+
+  @@index([status, nextAttemptAt])
 }
+
+model AttentionCase {
+  id                 String              @id @default(uuid()) @db.Uuid
+  dedupeKey          String              @unique
+  category           String
+  status             AttentionCaseStatus @default(OPEN)
+  severity           String              @default("WARNING")
+  orderId            String?             @db.Uuid
+  order              Order?              @relation(fields: [orderId], references: [id])
+  entityType         String
+  entityId           String
+  summary            String
+  detail             String?
+  localState         String?
+  externalState      String?
+  lastSuccessfulStep String?
+  failureCategory    String?
+  retryCount         Int                 @default(0)
+  nextRetryAt        DateTime?
+  availableActions   Json
+  assignedToId       String?             @db.Uuid
+  resolvedById       String?             @db.Uuid
+  resolution         String?
+  resolvedAt         DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([status, category, createdAt])
+  @@index([orderId, status])
+}
+
+model OutboxMessage {
+  id            String       @id @default(uuid()) @db.Uuid
+  dedupeKey     String       @unique
+  topic         String
+  jobName       String
+  payload       Json
+  orderId       String?      @db.Uuid
+  order         Order?       @relation(fields: [orderId], references: [id])
+  status        OutboxStatus @default(PENDING)
+  attemptCount  Int          @default(0)
+  nextAttemptAt DateTime     @default(now())
+  dispatchedAt  DateTime?
+  errorMessage  String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([status, nextAttemptAt])
+}
+
+model WorkerHeartbeat {
+  worker     String   @id
+  instanceId String
+  status     String   @default("RUNNING")
+  lastSeenAt DateTime @default(now())
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
 model CustomerConsent {
-  id String @id @default(uuid()) @db.Uuid
-  customerId String @db.Uuid
-  customer Customer @relation(fields: [customerId], references: [id])
-  type String
-  version String
-  ipAddress String
-  userAgent String
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id])
+  type       String
+  version    String
+  ipAddress  String
+  userAgent  String
   acceptedAt DateTime @default(now())
 }
-model AuditLog {
-  id String @id @default(uuid()) @db.Uuid
-  module String
-  entity String
-  entityId String
-  action String
-  performedById String? @db.Uuid
-  performedBy User? @relation(fields: [performedById], references: [id])
-  previousValue Json?
-  newValue Json?
+
+model PartnerShowcase {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  logoUrl   String?
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, sortOrder])
+}
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  module        String
+  entity        String
+  entityId      String
+  action        String
+  performedById String?  @db.Uuid
+  performedBy   User?    @relation(fields: [performedById], references: [id])
+  previousValue Json?
+  newValue      Json?
+  createdAt     DateTime @default(now())
 }

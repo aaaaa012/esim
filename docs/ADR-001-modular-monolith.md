@@ -2,7 +2,7 @@
 
 ## Decision
 
-Use a NestJS modular monolith with explicit domain modules, two independently deployable Next.js portals, and one CockroachDB database.
+Use a NestJS modular monolith with explicit domain modules, two independently deployable Next.js portals, and one PostgreSQL database.
 
 ## Consequences
 

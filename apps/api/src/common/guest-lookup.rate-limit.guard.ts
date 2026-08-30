@@ -1,7 +1,14 @@
-import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { createHash } from 'node:crypto';
-import { normalizeMsisdn } from './msisdn.util.js';
-import { clientIp } from './client-ip.js';
+import {
+  CanActivate,
+  ExecutionContext,
+  HttpException,
+  HttpStatus,
+  Injectable,
+} from "@nestjs/common";
+import { createHash } from "node:crypto";
+import { normalizeMsisdn } from "./msisdn.util.js";
+import { clientIp } from "./client-ip.js";
+import { QueueService } from "../jobs/queue.service.js";
 
 type Bucket = { tokens: number; lastRefill: number };
 
@@ -17,19 +24,67 @@ type Bucket = { tokens: number; lastRefill: number };
 @Injectable()
 export class GuestLookupRateLimitGuard implements CanActivate {
   private readonly buckets = new Map<string, Bucket>();
-  private readonly perNumberLimit = Number(process.env.TOPUP_LOOKUP_LIMIT_PER_MINUTE ?? 6);
-  private readonly perIpLimit = Number(process.env.TOPUP_LOOKUP_IP_LIMIT_PER_MINUTE ?? 30);
+  private readonly perNumberLimit = Number(
+    process.env.TOPUP_LOOKUP_LIMIT_PER_MINUTE ?? 6,
+  );
+  private readonly perIpLimit = Number(
+    process.env.TOPUP_LOOKUP_IP_LIMIT_PER_MINUTE ?? 30,
+  );
   private readonly windowMs = 60_000;
 
-  canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest<{ ip?: string; socket?: { remoteAddress?: string }; body?: { mobile?: unknown } }>();
-    const ip = clientIp(request);
-    const mobile = typeof request.body?.mobile === 'string' ? request.body.mobile : '';
-    const mobileHash = createHash('sha256').update(normalizeMsisdn(mobile) || mobile).digest('hex').slice(0, 16);
+  constructor(private readonly queues?: QueueService) {}
 
-    const response = context.switchToHttp().getResponse<{ setHeader(name: string, value: string | number): void }>();
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context
+      .switchToHttp()
+      .getRequest<{
+        ip?: string;
+        socket?: { remoteAddress?: string };
+        body?: { mobile?: unknown };
+      }>();
+    const ip = clientIp(request);
+    const mobile =
+      typeof request.body?.mobile === "string" ? request.body.mobile : "";
+    const mobileHash = createHash("sha256")
+      .update(normalizeMsisdn(mobile) || mobile)
+      .digest("hex")
+      .slice(0, 16);
+
+    const response = context
+      .switchToHttp()
+      .getResponse<{ setHeader(name: string, value: string | number): void }>();
     const now = Date.now();
     this.prune(now);
+
+    if (this.queues?.enabled) {
+      try {
+        const [ipBucket, numberBucket] = await Promise.all([
+          this.queues.consumeRateLimit(`topup-lookup:ip:${ip}`, this.windowMs),
+          this.queues.consumeRateLimit(
+            `topup-lookup:num:${ip}:${mobileHash}`,
+            this.windowMs,
+          ),
+        ]);
+        const allowed =
+          ipBucket.count <= this.perIpLimit &&
+          numberBucket.count <= this.perNumberLimit;
+        response.setHeader("x-ratelimit-limit", this.perNumberLimit);
+        response.setHeader(
+          "x-ratelimit-remaining",
+          Math.max(0, this.perNumberLimit - numberBucket.count),
+        );
+        if (!allowed) {
+          response.setHeader(
+            "retry-after",
+            Math.max(ipBucket.retryAfterSeconds, numberBucket.retryAfterSeconds),
+          );
+          throw this.rejected();
+        }
+        return true;
+      } catch (error) {
+        if (error instanceof HttpException) throw error;
+      }
+    }
 
     const consume = (key: string, capacity: number): boolean => {
       let bucket = this.buckets.get(key);
@@ -46,16 +101,40 @@ export class GuestLookupRateLimitGuard implements CanActivate {
     };
 
     const perIpAllowed = consume(`ip:${ip}`, this.perIpLimit);
-    const perNumberAllowed = consume(`num:${ip}:${mobileHash}`, this.perNumberLimit);
+    const perNumberAllowed = consume(
+      `num:${ip}:${mobileHash}`,
+      this.perNumberLimit,
+    );
     const allowed = perIpAllowed && perNumberAllowed;
 
-    response.setHeader('x-ratelimit-limit', this.perNumberLimit);
-    response.setHeader('x-ratelimit-remaining', allowed ? Math.max(0, Math.floor((this.buckets.get(`num:${ip}:${mobileHash}`)?.tokens ?? 0))) : 0);
+    response.setHeader("x-ratelimit-limit", this.perNumberLimit);
+    response.setHeader(
+      "x-ratelimit-remaining",
+      allowed
+        ? Math.max(
+            0,
+            Math.floor(
+              this.buckets.get(`num:${ip}:${mobileHash}`)?.tokens ?? 0,
+            ),
+          )
+        : 0,
+    );
     if (!allowed) {
-      response.setHeader('retry-after', Math.ceil(this.windowMs / 1000));
-      throw new HttpException({ code: 'RATE_LIMITED', message: 'Too many lookup attempts. Please wait a moment and try again.' }, HttpStatus.TOO_MANY_REQUESTS);
+      response.setHeader("retry-after", Math.ceil(this.windowMs / 1000));
+      throw this.rejected();
     }
     return true;
+  }
+
+  private rejected() {
+    return new HttpException(
+        {
+          code: "RATE_LIMITED",
+          message:
+            "Too many lookup attempts. Please wait a moment and try again.",
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+    );
   }
 
   private prune(now: number) {

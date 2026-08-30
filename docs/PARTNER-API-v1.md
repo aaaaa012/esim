@@ -23,7 +23,7 @@ Base URL: `/api/v1/partners`
 
 - `POST /orders/:id/traveler` — validated Transatel-compatible traveller fields.
 - `POST /orders/:id/documents` — create a short-lived signed private upload authorization.
-- Upload bytes directly to the returned Cloudinary endpoint.
+- Upload bytes directly to the returned Amazon S3 endpoint.
 - `POST /orders/:id/documents/:documentId/confirm` — server-verifies file existence, type and size.
 
 Passport and ticket are mandatory. Visa remains configuration-driven.

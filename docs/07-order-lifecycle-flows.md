@@ -17,7 +17,7 @@ Routes: `OrdersController` (`orders.controller.ts:10-23`), `PaymentsController`
 2. **Traveler**: `PATCH /customer/orders/:id/traveler` — only while `DRAFT`
    (`orders.service.ts:104`).
 3. **Documents**: `POST /customer/orders/:id/documents` returns a signed upload
-   authorization; client uploads to Cloudinary (or simulator) then
+   authorization; client uploads to Amazon S3 (or simulator) then
    `POST .../documents/:documentId/confirm` verifies it
    (`orders.service.ts:105-106`; see `docs/14-document-storage.md`).
 4. **Payment**: `POST /customer/orders/:id/payment` → `PaymentsService.initiate`
@@ -34,7 +34,7 @@ Routes: `OrdersController` (`orders.controller.ts:10-23`), `PaymentsController`
    → Transatel → on success assigns inventory, transitions to `COMPLETED`,
    enqueues `QR_READY` email (`orders.service.ts:215`,
    `provisioning.processor.ts:10`).
-7. **Notification**: QR email with password-protected PDF attachment
+7. **Notification**: QR email with unencrypted PNG attachment
    (`integration.processor.ts:23-24`, `docs/11-notifications.md`).
 
 ## 2. Guest checkout flow
