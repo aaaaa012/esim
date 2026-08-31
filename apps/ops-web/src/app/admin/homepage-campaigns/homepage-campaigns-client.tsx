@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
@@ -170,12 +171,21 @@ function customerOrigin() {
 }
 
 export function resolveCampaignArtwork(imageUrl: string) {
+  let apiOrigin: string;
+  try {
+    apiOrigin = new URL(API).origin;
+  } catch {
+    apiOrigin = typeof window === "undefined" ? "" : window.location.origin;
+  }
+  try {
+    const artwork = new URL(imageUrl, apiOrigin || customerOrigin());
+    if (artwork.pathname.startsWith("/api/v1/public/marketing-assets/"))
+      return `${apiOrigin || artwork.origin}${artwork.pathname}${artwork.search}`;
+  } catch {
+    // Continue to bundled customer artwork resolution below.
+  }
   if (imageUrl.startsWith("/api/v1/")) {
-    try {
-      return `${new URL(API).origin}${imageUrl}`;
-    } catch {
-      return imageUrl;
-    }
+    return `${apiOrigin}${imageUrl}`;
   }
   return imageUrl.startsWith("/") ? `${customerOrigin()}${imageUrl}` : imageUrl;
 }
@@ -213,10 +223,12 @@ function Artwork({ campaign }: { campaign: Campaign }) {
       </span>
     );
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
+    <Image
       src={resolveCampaignArtwork(campaign.imageUrl)}
       alt={campaign.altText}
+      width={campaign.imageWidth}
+      height={campaign.imageHeight}
+      sizes="(max-width: 900px) 90vw, 36vw"
       className="max-h-[34rem] size-full object-contain"
       loading="lazy"
       onError={() => setBroken(true)}
@@ -462,14 +474,17 @@ export default function HomepageCampaignsClient() {
                     editing && !filePreview && setPreviewing(editing)
                   }
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={
-                      filePreview || resolveCampaignArtwork(editing!.imageUrl)
-                    }
-                    alt="Campaign artwork preview"
-                    className="size-full object-contain"
-                  />
+                  {filePreview ? (
+                    // Blob URLs are local-only previews and cannot use next/image.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={filePreview}
+                      alt="New campaign artwork preview"
+                      className="size-full object-contain"
+                    />
+                  ) : editing ? (
+                    <Artwork campaign={editing} />
+                  ) : null}
                 </button>
               )}
               {busy && (

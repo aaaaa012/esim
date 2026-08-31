@@ -30,6 +30,16 @@ describe("homepage campaign Nepal scheduling", () => {
     );
   });
 
+  it("rewrites stale internal media origins through the configured API", () => {
+    expect(
+      resolveCampaignArtwork(
+        "http://127.0.0.1:4000/api/v1/public/marketing-assets/campaign_example.jpg",
+      ),
+    ).toBe(
+      "http://localhost:4000/api/v1/public/marketing-assets/campaign_example.jpg",
+    );
+  });
+
   it("reports only the actual invalid field instead of blaming valid inputs", () => {
     expect(
       validateCampaignForm({
