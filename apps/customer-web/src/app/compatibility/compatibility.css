@@ -16,7 +16,7 @@
 .compatibility-hero {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
-  align-items: center;
+  align-items: start;
   gap: 58px;
 }
 .compatibility-page h1 {
@@ -54,7 +54,8 @@
 }
 .compatibility-visual {
   position: relative;
-  min-height: 430px;
+  width: min(100%, 460px);
+  justify-self: end;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
@@ -62,24 +63,9 @@
   box-shadow: var(--shadow-lg);
 }
 .compatibility-visual img {
-  object-fit: cover;
-}
-.visual-trust {
-  position: absolute;
-  left: 20px;
-  bottom: 20px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.86);
-  color: #0f3140;
-  font-size: 12px;
-  font-weight: 800;
-  box-shadow: var(--shadow-md);
-  backdrop-filter: blur(10px);
+  display: block;
+  width: 100%;
+  height: auto;
 }
 .compatibility-guide {
   display: grid;
@@ -169,7 +155,8 @@
     gap: 30px;
   }
   .compatibility-visual {
-    min-height: 360px;
+    width: min(100%, 520px);
+    justify-self: center;
   }
   .compatibility-guide {
     grid-template-columns: 1fr;
@@ -182,9 +169,6 @@
   }
   .compatibility-intro {
     font-size: 16px;
-  }
-  .compatibility-visual {
-    min-height: 300px;
   }
   .check-card {
     padding: 20px;
