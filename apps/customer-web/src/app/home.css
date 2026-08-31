@@ -451,6 +451,58 @@
   background: color-mix(in srgb, var(--bg) 78%, var(--surface));
   font-size: 24px;
 }
+
+/* Country Flag Images */
+.country-flag-img {
+  display: inline-block;
+  width: 1.35em;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.16);
+  vertical-align: middle;
+}
+.destination-flag .country-flag-img {
+  width: 28px;
+  height: 21px;
+  border-radius: 4px;
+}
+.directory-grid .destination-flag .country-flag-img {
+  width: 22px;
+  height: 16.5px;
+  border-radius: 3px;
+}
+.cp-flag .country-flag-img {
+  width: 22px;
+  height: 16.5px;
+  border-radius: 3px;
+}
+.card .flag .country-flag-img {
+  width: 36px;
+  height: 27px;
+  border-radius: 5px;
+}
+.summary-flag .country-flag-img {
+  width: 32px;
+  height: 24px;
+  border-radius: 4px;
+}
+.plan-chip .flag .country-flag-img {
+  width: 24px;
+  height: 18px;
+  border-radius: 3px;
+}
+.country-flag-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.72em;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
 .destination-label {
   display: grid;
   gap: 3px;
