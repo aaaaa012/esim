@@ -5,23 +5,24 @@ const workspaceRoot = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const publicAssetBase = process.env.NEXT_PUBLIC_ASSET_BASE_URL;
-const remoteAssetPattern = (() => {
-  if (!publicAssetBase) return [];
+const imageBaseUrls = [
+  process.env.NEXT_PUBLIC_ASSET_BASE_URL,
+  process.env.NEXT_PUBLIC_API_URL,
+].filter((url): url is string => Boolean(url));
+
+const remoteAssetPatterns = imageBaseUrls.flatMap((baseUrl) => {
   try {
-    const url = new URL(publicAssetBase);
-    return [
-      {
-        protocol: url.protocol.replace(":", "") as "http" | "https",
-        hostname: url.hostname,
-        port: url.port,
-        pathname: `${url.pathname.replace(/\/$/, "")}/**`,
-      },
-    ];
+    const url = new URL(baseUrl);
+    return [{
+      protocol: url.protocol.replace(":", "") as "http" | "https",
+      hostname: url.hostname,
+      port: url.port,
+      pathname: `${url.pathname.replace(/\/$/, "")}/**`,
+    }];
   } catch {
     return [];
   }
-})();
+});
 const config: NextConfig = {
   transpilePackages: ["@visa-compass/shared"],
   // Keep an active dev server isolated from `next build`. Sharing `.next`
@@ -30,6 +31,6 @@ const config: NextConfig = {
   // Prevent Next from tracing the parent directory when another unrelated
   // lockfile exists on the developer machine or build host.
   outputFileTracingRoot: workspaceRoot,
-  images: { remotePatterns: remoteAssetPattern },
+  images: { remotePatterns: remoteAssetPatterns },
 };
 export default config;

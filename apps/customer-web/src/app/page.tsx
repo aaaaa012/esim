@@ -14,7 +14,6 @@ import {
   Zap,
 } from "lucide-react";
 import CatalogPlans from "./catalog-plans";
-import { flagEmoji } from "./country-picker";
 import TopupLookup from "./topup-lookup";
 import Faq from "./faq";
 import PartnersShowcase from "./partners-showcase";
@@ -86,7 +85,9 @@ export default function Home() {
                     </span>
                   </div>
                   <div className="plan-chip">
-                    <span className="flag">{flagEmoji("AE")}</span>
+                    <span className="flag" role="img" aria-label="United Arab Emirates">
+                      🇦🇪
+                    </span>
                     <span className="pc-txt">
                       <small>Active plan</small>
                       <b>UAE Essential · 5 GB</b>
