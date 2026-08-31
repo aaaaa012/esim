@@ -132,18 +132,20 @@ export default function Home() {
 
         <section className="section" id="plans">
           <div className="shell">
-            <div className="section-title">
-              <span className="eyebrow">
-                <Globe2 size={14} />
-                Popular destinations
-              </span>
-              <h2>One plan. Zero roaming surprises.</h2>
-              <p>
-                Clear NPR pricing, trusted coverage, and a secure digital
-                delivery experience from checkout to activation.
-              </p>
+            <div className="plans-intro">
+              <div className="section-title">
+                <span className="eyebrow">
+                  <Globe2 size={14} />
+                  Popular destinations
+                </span>
+                <h2>One plan. Zero roaming surprises.</h2>
+                <p>
+                  Clear NPR pricing, trusted coverage, and a secure digital
+                  delivery experience from checkout to activation.
+                </p>
+              </div>
+              <TopupLookup />
             </div>
-            <TopupLookup />
             <Suspense fallback={null}>
               <CatalogPlans />
             </Suspense>

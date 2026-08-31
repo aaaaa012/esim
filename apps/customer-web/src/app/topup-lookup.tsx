@@ -143,12 +143,16 @@ export default function TopupLookup() {
     <>
       <div className="topup-box">
         <div className="topup-head">
-          <Smartphone size={16} />
-          <b>Already have a Visa Compass eSIM?</b>
-          <small>Check your eSIM and recharge it in a few steps.</small>
+          <span className="topup-entry-icon" aria-hidden="true">
+            <Smartphone size={18} />
+          </span>
+          <span className="topup-entry-copy">
+            <b>Already using Visa Compass?</b>
+            <small>Keep your eSIM and add another data plan.</small>
+          </span>
         </div>
         <button className="button topup-open" onClick={() => setOpen(true)}>
-          <RefreshCcw size={16} /> Recharge an existing eSIM
+          <RefreshCcw size={16} aria-hidden="true" /> Recharge your eSIM
         </button>
       </div>
 

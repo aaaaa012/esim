@@ -41,7 +41,7 @@
 .campaign-section-heading,
 .campaign-gallery-head {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
   margin-bottom: 22px;
@@ -1082,42 +1082,74 @@
 
 /* ---------- Top-up lookup ---------- */
 
+.plans-intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  align-items: flex-end;
+  gap: clamp(32px, 6vw, 80px);
+  margin-bottom: 48px;
+}
+
+.plans-intro .section-title {
+  max-width: 680px;
+  margin: 0;
+  text-align: left;
+}
+
 .topup-box {
-  max-width: 760px;
-  margin: 0 auto 34px;
+  width: 100%;
+  margin: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 24px;
+  padding: 18px;
   background: linear-gradient(
-    160deg,
+    145deg,
     var(--surface),
-    color-mix(in srgb, var(--accent-soft) 35%, var(--surface))
+    color-mix(in srgb, var(--accent-soft) 48%, var(--surface))
   );
   box-shadow: var(--shadow-sm);
 }
 
 .topup-box .topup-head {
   display: flex;
-  align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
   color: var(--accent-strong);
+}
+
+.topup-entry-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.topup-entry-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .topup-box .topup-head b {
   color: var(--text);
   font-size: 15px;
+  line-height: 1.35;
 }
 
 .topup-box .topup-head small {
-  flex-basis: 100%;
   color: var(--text-3);
   font-size: 13px;
-  margin-left: 25px;
+  line-height: 1.45;
 }
 
 .topup-open {
-  margin-top: 16px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 14px;
 }
 
 .topup-modal-backdrop {
@@ -2276,6 +2308,19 @@
 }
 
 @media (max-width: 860px) {
+  .plans-intro {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 24px;
+  }
+  .plans-intro .section-title {
+    margin-inline: auto;
+    text-align: center;
+  }
+  .plans-intro .topup-box {
+    width: min(100%, 520px);
+    margin-inline: auto;
+  }
   .campaign-card {
     flex-basis: calc((100% - 18px) / 2);
   }
@@ -2506,10 +2551,7 @@
     min-height: 48px;
   }
   .topup-box {
-    padding: 20px;
-  }
-  .topup-box .topup-head small {
-    margin-left: 0;
+    padding: 16px;
   }
   .topup-row {
     flex-direction: column;
