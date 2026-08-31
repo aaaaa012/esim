@@ -1517,8 +1517,15 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException("Re-upload reason is required");
     order.documentReviewStatus = "REUPLOAD_REQUIRED";
     order.documents.forEach((d) => {
-      d.status = DocumentStatus.REUPLOAD_REQUIRED;
+      if ([DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type))
+        d.status = DocumentStatus.REUPLOAD_REQUIRED;
     });
+    if (order.partner && order.status === OrderStatus.REVIEW_PENDING)
+      this.transition(
+        order,
+        OrderStatus.AWAITING_CUSTOMER,
+        "Operations requested required document replacements",
+      );
     order.timeline.push({
       from: order.status,
       to: order.status,
@@ -1526,6 +1533,39 @@ export class OrdersService implements OnModuleInit {
       reason: `Documents requested again: ${reason.trim()}`,
     });
     await this.persistence.save(order);
+    if (order.partner) {
+      const verification =
+        await this.prisma.partnerDocumentVerification.findFirst({
+          where: { consumedOrderId: id, partnerId: order.partner.id },
+          select: { id: true },
+        });
+      if (verification)
+        await this.prisma.$transaction([
+          this.prisma.partnerDocumentVerification.update({
+            where: { id: verification.id },
+            data: {
+              status: "REUPLOAD_REQUIRED",
+              failureCode: "DOCUMENT_REUPLOAD_REQUIRED",
+            },
+          }),
+          this.prisma.partnerDocumentUploadIntent.updateMany({
+            where: {
+              verificationId: verification.id,
+              type: { in: [DocumentType.PASSPORT, DocumentType.TICKET] },
+            },
+            data: {
+              verificationStatus: "REUPLOAD_REQUIRED",
+              verificationCode: "DOCUMENT_REUPLOAD_REQUIRED",
+            },
+          }),
+        ]);
+    }
+    if (order.partner)
+      await this.emitPartnerDocumentEvent(
+        order,
+        "document.verification.reupload_required",
+        "DOCUMENT_REUPLOAD_REQUIRED",
+      );
     await this.safeNotify(order, "DOCUMENT_REUPLOAD", reason.trim());
     return order;
   }
@@ -1562,6 +1602,10 @@ export class OrdersService implements OnModuleInit {
         });
       else if (!allRequiredApproved) return this.redact(order);
     } else {
+      if (document.type === DocumentType.VISA)
+        throw new BadRequestException(
+          "Visa is optional and cannot block fulfillment or require replacement",
+        );
       if (document.status === DocumentStatus.APPROVED)
         throw new BadRequestException(
           "A final manual approval cannot be replaced by a re-upload request",
@@ -1570,6 +1614,12 @@ export class OrdersService implements OnModuleInit {
         throw new BadRequestException("Re-upload reason is required");
       document.status = DocumentStatus.REUPLOAD_REQUIRED;
       order.documentReviewStatus = "REUPLOAD_REQUIRED";
+      if (order.partner && order.status === OrderStatus.REVIEW_PENDING)
+        this.transition(
+          order,
+          OrderStatus.AWAITING_CUSTOMER,
+          "Operations requested a required document replacement",
+        );
       order.timeline.push({
         from: order.status,
         to: order.status,
@@ -1578,6 +1628,44 @@ export class OrdersService implements OnModuleInit {
       });
     }
     await this.persistence.save(order);
+    if (order.partner) {
+      const verification =
+        await this.prisma.partnerDocumentVerification.findFirst({
+          where: { consumedOrderId: order.id, partnerId: order.partner.id },
+          select: { id: true },
+        });
+      if (verification) {
+        if (decision === "REUPLOAD")
+          await this.prisma.$transaction([
+            this.prisma.partnerDocumentVerification.update({
+              where: { id: verification.id },
+              data: {
+                status: "REUPLOAD_REQUIRED",
+                failureCode: "DOCUMENT_REUPLOAD_REQUIRED",
+              },
+            }),
+            this.prisma.partnerDocumentUploadIntent.updateMany({
+              where: { verificationId: verification.id, type: document.type },
+              data: {
+                verificationStatus: "REUPLOAD_REQUIRED",
+                verificationCode: "DOCUMENT_REUPLOAD_REQUIRED",
+              },
+            }),
+          ]);
+        else if (order.documentReviewStatus === "MANUALLY_APPROVED")
+          await this.prisma.partnerDocumentVerification.update({
+            where: { id: verification.id },
+            data: { status: "MANUALLY_APPROVED", failureCode: null },
+          });
+      }
+    }
+    if (order.partner && decision === "REUPLOAD")
+      await this.emitPartnerDocumentEvent(
+        order,
+        "document.verification.reupload_required",
+        "DOCUMENT_REUPLOAD_REQUIRED",
+        document.type,
+      );
     if (recordDecision)
       await this.persistence.recordReview(
         order.id,
@@ -1610,9 +1698,88 @@ export class OrdersService implements OnModuleInit {
       });
     return this.redact(order);
   }
+
+  async rejectPartnerDocuments(id: string, actorId: string, reason: string) {
+    await this.refreshOne(id, true);
+    const order = this.get(id);
+    if (!order.partner)
+      throw new BadRequestException(
+        "Terminal document rejection is available only for partner orders",
+      );
+    if (
+      ![OrderStatus.REVIEW_PENDING, OrderStatus.AWAITING_CUSTOMER].includes(
+        order.status,
+      )
+    )
+      throw new ConflictException(
+        "Only an uncharged pending partner order can be rejected",
+      );
+    if (!reason.trim())
+      throw new BadRequestException("Document rejection reason is required");
+    if (reason.trim().length > 1000)
+      throw new BadRequestException(
+        "Document rejection reason must be 1000 characters or fewer",
+      );
+    const from = order.status;
+    order.documents.forEach((document) => {
+      if ([DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type))
+        document.status = DocumentStatus.REJECTED;
+    });
+    order.operationalDisposition = "TERMINAL_REJECTION";
+    order.timeline.push({
+      from,
+      to: OrderStatus.CANCELLED,
+      at: new Date().toISOString(),
+      reason: `Documents terminally rejected: ${reason.trim()}`,
+    });
+    order.status = OrderStatus.CANCELLED;
+    await this.persistence.save(order);
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { consumedOrderId: id, partnerId: order.partner.id },
+        select: { id: true },
+      });
+    if (verification)
+      await this.prisma.$transaction([
+        this.prisma.partnerDocumentVerification.update({
+          where: { id: verification.id },
+          data: { status: "INVALID", failureCode: "DOCUMENTS_REJECTED" },
+        }),
+        this.prisma.partnerDocumentUploadIntent.updateMany({
+          where: {
+            verificationId: verification.id,
+            type: { in: [DocumentType.PASSPORT, DocumentType.TICKET] },
+          },
+          data: {
+            verificationStatus: "REJECTED",
+            verificationCode: "DOCUMENTS_REJECTED",
+          },
+        }),
+      ]);
+    await this.emitPartnerDocumentEvent(
+      order,
+      "document.verification.rejected",
+      "DOCUMENTS_REJECTED",
+    );
+    await this.safeResolveAttention(
+      `document-review:${id}`,
+      "Partner documents terminally rejected",
+      actorId,
+    );
+    return this.redact(order);
+  }
   async approve(id: string, actorId: string) {
     await this.refreshOne(id, true);
     const order = this.get(id);
+    if (
+      order.partner &&
+      order.externalOrderId &&
+      !order.payment &&
+      order.status === OrderStatus.REVIEW_PENDING
+    )
+      throw new ConflictException(
+        "Verified direct partner orders must be finalized by the partner before provisioning",
+      );
     const required = order.documents.filter((document) =>
       [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type),
     );
@@ -2113,10 +2280,7 @@ export class OrdersService implements OnModuleInit {
       try {
         await this.persistence.save(order);
       } catch (error) {
-        if (
-          this.isOptimisticOrderConflict(error) &&
-          attempt < maxAttempts
-        ) {
+        if (this.isOptimisticOrderConflict(error) && attempt < maxAttempts) {
           this.logger.warn(
             `QR-ready recovery for ${order.id} raced with another update; retrying from fresh state (${attempt}/${maxAttempts})`,
           );
@@ -3040,6 +3204,51 @@ export class OrdersService implements OnModuleInit {
         `Attention resolution ${dedupeKey} was deferred: ${error instanceof Error ? error.message : "unknown"}`,
       );
     }
+  }
+  private async emitPartnerDocumentEvent(
+    order: DemoOrder,
+    type: string,
+    failureCode: string,
+    documentType?: DocumentType,
+  ) {
+    if (!order.partner) return;
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { consumedOrderId: order.id, partnerId: order.partner.id },
+        select: { id: true },
+      });
+    if (!verification) return;
+    const endpoints = await this.prisma.partnerWebhookEndpoint.findMany({
+      where: { partnerId: order.partner.id, active: true },
+    });
+    const eligible = endpoints.filter((endpoint) => {
+      const types = Array.isArray(endpoint.eventTypes)
+        ? endpoint.eventTypes.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : [];
+      return types.includes("*") || types.includes(type);
+    });
+    await this.prisma.partnerEvent.create({
+      data: {
+        partnerId: order.partner.id,
+        orderId: order.id,
+        type,
+        resourceId: verification.id,
+        correlationId: randomUUID(),
+        payload: {
+          orderId: order.id,
+          externalOrderId: order.externalOrderId ?? null,
+          verificationId: verification.id,
+          status: failureCode === "DOCUMENTS_REJECTED" ? "INVALID" : "REUPLOAD_REQUIRED",
+          failureCode,
+          ...(documentType ? { documentType } : {}),
+        },
+        deliveries: {
+          create: eligible.map((endpoint) => ({ endpointId: endpoint.id })),
+        },
+      },
+    });
   }
   private expand(order: DemoOrder) {
     const { qrPayload: _qrPayload, ...safe } = order;

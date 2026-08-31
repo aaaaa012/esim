@@ -2286,7 +2286,8 @@ function ConfigPanel({
           },
           {
             label: "Travel ticket",
-            value: "Required for records; review never pauses paid fulfillment",
+            value:
+              "Required for every initial purchase; structurally validated",
           },
           { label: "Supported formats", value: "JPEG, PNG, or PDF" },
           { label: "Maximum file size", value: "10 MB" },
@@ -2294,11 +2295,11 @@ function ConfigPanel({
             label: "Review",
             value:
               documentPolicy === "MANUAL_REVIEW"
-                ? "Manual review (non-blocking)"
+                ? "Manual review blocks debit and provisioning"
                 : documentPolicy === "NO_REVIEW"
                   ? "Records only; verification skipped"
                   : documentPolicy === "AUTO_OCR"
-                    ? "OCR with 8-second checkout wait and manual failover"
+                    ? "Passport OCR with blocking manual failover"
                     : "Loading…",
           },
         ]
@@ -2423,8 +2424,8 @@ function ConfigPanel({
             No verification
           </Button>
           <p className="text-xs text-muted-foreground">
-            Only this global policy changes OCR behavior. Neither mode pauses
-            provisioning after payment.
+            This global policy controls the document gate. Debit and
+            provisioning remain blocked until the configured review succeeds.
           </p>
         </div>
       ) : null}

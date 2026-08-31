@@ -7,7 +7,15 @@ import {
 } from "@nestjs/common";
 import { ApiIdempotencyStatus, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
-import { catchError, from, map, of, switchMap, throwError, type Observable } from "rxjs";
+import {
+  catchError,
+  from,
+  map,
+  of,
+  switchMap,
+  throwError,
+  type Observable,
+} from "rxjs";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 
 const conflict = (message: string) =>
@@ -42,11 +50,16 @@ export class IdempotencyInterceptor implements NestInterceptor {
     )
       return next.handle();
 
-    const key = request.headers["x-idempotency-key"];
+    const key =
+      request.headers["idempotency-key"] ??
+      request.headers["x-idempotency-key"];
     if (!key) {
       if (request.partner)
         throw new HttpException(
-          { code: "IDEMPOTENCY_KEY_REQUIRED", message: "Idempotency-Key is required for partner mutations" },
+          {
+            code: "IDEMPOTENCY_KEY_REQUIRED",
+            message: "Idempotency-Key is required for partner mutations",
+          },
           400,
         );
       return next.handle();
@@ -63,7 +76,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const requestHash = createHash("sha256")
       .update(canonicalJson(request.body ?? null))
       .digest("hex");
-    const response = http.getResponse<{ statusCode?: number; status(code: number): unknown }>();
+    const response = http.getResponse<{
+      statusCode?: number;
+      status(code: number): unknown;
+    }>();
 
     return from(this.claim(principalId, method, route, key, requestHash)).pipe(
       switchMap((claim) => {
@@ -88,8 +104,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
           catchError((error) =>
             from(
               this.prisma.apiIdempotencyRecord.updateMany({
-                where: { id: claim.id, status: ApiIdempotencyStatus.PROCESSING },
-                data: { status: ApiIdempotencyStatus.FAILED, claimExpiresAt: new Date() },
+                where: {
+                  id: claim.id,
+                  status: ApiIdempotencyStatus.PROCESSING,
+                },
+                data: {
+                  status: ApiIdempotencyStatus.FAILED,
+                  claimExpiresAt: new Date(),
+                },
               }),
             ).pipe(switchMap(() => throwError(() => error))),
           ),
@@ -127,16 +149,24 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const deadline = Date.now() + CLAIM_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const record = await this.prisma.apiIdempotencyRecord.findUnique({
-        where: { principalId_method_route_key: { principalId, method, route, key } },
+        where: {
+          principalId_method_route_key: { principalId, method, route, key },
+        },
       });
       if (!record) {
         await wait();
         continue;
       }
       if (record.requestHash !== requestHash)
-        throw conflict("Idempotency key was already used with a different request");
+        throw conflict(
+          "Idempotency key was already used with a different request",
+        );
       if (record.status === ApiIdempotencyStatus.COMPLETED)
-        return { owned: false, response: record.response, responseStatus: record.responseStatus };
+        return {
+          owned: false,
+          response: record.response,
+          responseStatus: record.responseStatus,
+        };
       if (
         record.status === ApiIdempotencyStatus.FAILED ||
         record.claimExpiresAt.getTime() <= Date.now()
@@ -147,7 +177,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
             requestHash,
             OR: [
               { status: ApiIdempotencyStatus.FAILED },
-              { status: ApiIdempotencyStatus.PROCESSING, claimExpiresAt: { lte: new Date() } },
+              {
+                status: ApiIdempotencyStatus.PROCESSING,
+                claimExpiresAt: { lte: new Date() },
+              },
             ],
           },
           data: {
@@ -162,7 +195,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
       }
       await wait();
     }
-    throw conflict("Idempotent request is still being processed; retry shortly");
+    throw conflict(
+      "Idempotent request is still being processed; retry shortly",
+    );
   }
 }
 

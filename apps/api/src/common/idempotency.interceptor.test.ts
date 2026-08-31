@@ -3,7 +3,11 @@ import { lastValueFrom, of } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 import { IdempotencyInterceptor } from "./idempotency.interceptor.js";
 
-function context(body: unknown, responseStatus = 201) {
+function context(
+  body: unknown,
+  responseStatus = 201,
+  headerName: "idempotency-key" | "x-idempotency-key" = "idempotency-key",
+) {
   const response = { statusCode: responseStatus, status: vi.fn() };
   return {
     value: {
@@ -12,7 +16,7 @@ function context(body: unknown, responseStatus = 201) {
           method: "POST",
           path: "/api/v1/customer/orders/11111111-1111-4111-8111-111111111111/pay",
           body,
-          headers: { "x-idempotency-key": "retry-key-123" },
+          headers: { [headerName]: "retry-key-123" },
           user: { id: "customer-1" },
         }),
         getResponse: () => response,
@@ -23,6 +27,46 @@ function context(body: unknown, responseStatus = 201) {
 }
 
 describe("IdempotencyInterceptor", () => {
+  it("accepts the documented Idempotency-Key header", async () => {
+    const prisma = {
+      enabled: true,
+      apiIdempotencyRecord: {
+        create: vi.fn().mockResolvedValue({ id: "claim-1" }),
+        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn(),
+      },
+    };
+    const interceptor = new IdempotencyInterceptor(prisma as never);
+    const ctx = context({ order: "one" });
+    await expect(
+      lastValueFrom(
+        interceptor.intercept(ctx.value, {
+          handle: () => of({ ok: true }),
+        }),
+      ),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("keeps x-idempotency-key as a compatibility alias", async () => {
+    const prisma = {
+      enabled: true,
+      apiIdempotencyRecord: {
+        create: vi.fn().mockResolvedValue({ id: "claim-1" }),
+        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn(),
+      },
+    };
+    const interceptor = new IdempotencyInterceptor(prisma as never);
+    const ctx = context({ order: "one" }, 201, "x-idempotency-key");
+    await expect(
+      lastValueFrom(
+        interceptor.intercept(ctx.value, {
+          handle: () => of({ ok: true }),
+        }),
+      ),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("persists completion before releasing a successful response", async () => {
     const prisma = {
       enabled: true,
@@ -35,12 +79,17 @@ describe("IdempotencyInterceptor", () => {
     const interceptor = new IdempotencyInterceptor(prisma as never);
     const ctx = context({ b: 2, a: 1 });
     await expect(
-      lastValueFrom(interceptor.intercept(ctx.value, { handle: () => of({ ok: true }) })),
+      lastValueFrom(
+        interceptor.intercept(ctx.value, { handle: () => of({ ok: true }) }),
+      ),
     ).resolves.toEqual({ ok: true });
     expect(prisma.apiIdempotencyRecord.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "claim-1" },
-        data: expect.objectContaining({ status: "COMPLETED", responseStatus: 201 }),
+        data: expect.objectContaining({
+          status: "COMPLETED",
+          responseStatus: 201,
+        }),
       }),
     );
   });
@@ -64,7 +113,9 @@ describe("IdempotencyInterceptor", () => {
     const interceptor = new IdempotencyInterceptor(prisma as never);
     const ctx = context({ b: 2, a: 1 });
     const handler = { handle: vi.fn() };
-    await expect(lastValueFrom(interceptor.intercept(ctx.value, handler))).resolves.toEqual({
+    await expect(
+      lastValueFrom(interceptor.intercept(ctx.value, handler)),
+    ).resolves.toEqual({
       reference: "pidx-1",
     });
     expect(handler.handle).not.toHaveBeenCalled();
@@ -83,10 +134,14 @@ describe("IdempotencyInterceptor", () => {
     const interceptor = new IdempotencyInterceptor(prisma as never);
     const ctx = context({ a: 1 });
     await expect(
-      lastValueFrom(interceptor.intercept(ctx.value, { handle: () => of({ ok: true }) })),
+      lastValueFrom(
+        interceptor.intercept(ctx.value, { handle: () => of({ ok: true }) }),
+      ),
     ).rejects.toThrow("database unavailable");
     expect(prisma.apiIdempotencyRecord.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "FAILED" }),
+      }),
     );
   });
 });

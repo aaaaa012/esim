@@ -19,10 +19,7 @@ import { ProductionResilienceService } from "./production-resilience.service.js"
 import { ManualRefundsService } from "../modules/payments/manual-refunds.service.js";
 import { ApiException } from "../common/api-error.js";
 import { ApiErrorCode } from "@visa-compass/shared";
-import {
-  ocrJobOptions,
-  ocrRecoveryConfig,
-} from "./ocr-recovery.config.js";
+import { ocrJobOptions, ocrRecoveryConfig } from "./ocr-recovery.config.js";
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -102,7 +99,8 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const intervalMs =
       Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 15 * 60_000;
     this.timer = setInterval(
-      () => void this.runAsLeader().catch((error) => this.recordRunFailure(error)),
+      () =>
+        void this.runAsLeader().catch((error) => this.recordRunFailure(error)),
       intervalMs,
     );
     void this.runAsLeader().catch((error) => this.recordRunFailure(error));
@@ -163,7 +161,6 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     return result.value;
   }
 
-
   private async pendingPaymentsAsLeader() {
     const result = await this.queues.withDistributedLock(
       "pending-payment-reconciliation",
@@ -185,7 +182,9 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       () => this.reconcileOcrAvailability(),
     );
     if (!result.acquired)
-      this.logger.debug("Skipped OCR recovery; another replica holds the lease");
+      this.logger.debug(
+        "Skipped OCR recovery; another replica holds the lease",
+      );
     return result.value;
   }
 
@@ -280,21 +279,77 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const partnerVerifications =
       await this.prisma.partnerDocumentVerification.findMany({
         where: { status: "PROCESSING" },
-        select: { id: true, updatedAt: true },
+        select: { id: true, updatedAt: true, consumedOrderId: true },
         take: 100,
         orderBy: { updatedAt: "asc" },
       });
     for (const verification of partnerVerifications) {
       if (verification.updatedAt <= cutoff) {
-        const updated =
-          await this.prisma.partnerDocumentVerification.updateMany({
+        const result = await this.prisma.$transaction(async (tx) => {
+          const updated = await tx.partnerDocumentVerification.updateMany({
             where: { id: verification.id, status: "PROCESSING" },
             data: {
               status: "MANUAL_REVIEW",
               failureCode: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
             },
           });
-        manual += updated.count;
+          if (!updated.count || !verification.consumedOrderId)
+            return { verificationUpdated: updated.count, order: null };
+          const linkedOrder = await tx.order.findFirst({
+            where: {
+              id: verification.consumedOrderId,
+              status: { in: ["REVIEW_PENDING", "AWAITING_CUSTOMER"] },
+              documentReviewStatus: { in: ["OCR_PENDING", "OCR_BACKGROUND"] },
+            },
+            select: { id: true, status: true, version: true },
+          });
+          if (!linkedOrder)
+            return { verificationUpdated: updated.count, order: null };
+          const orderUpdated = await tx.order.updateMany({
+            where: {
+              id: linkedOrder.id,
+              version: linkedOrder.version,
+              documentReviewStatus: { in: ["OCR_PENDING", "OCR_BACKGROUND"] },
+            },
+            data: {
+              documentReviewStatus: "MANUAL_REVIEW",
+              version: { increment: 1 },
+            },
+          });
+          if (!orderUpdated.count)
+            return { verificationUpdated: updated.count, order: null };
+          await tx.orderEvent.create({
+            data: {
+              orderId: linkedOrder.id,
+              fromStatus: linkedOrder.status,
+              toStatus: linkedOrder.status,
+              reason:
+                "Automated partner passport verification remained unavailable through the recovery window; manual review is required before finalization",
+              metadata: {
+                documentReviewStatus: "MANUAL_REVIEW",
+                failureCategory: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
+              },
+            },
+          });
+          return {
+            verificationUpdated: updated.count,
+            order: { id: linkedOrder.id, status: linkedOrder.status },
+          };
+        });
+        manual += result.verificationUpdated;
+        if (result.order)
+          await this.resilience.attention({
+            dedupeKey: `document-review:${result.order.id}`,
+            category: "DOCUMENT_MANUAL_REVIEW",
+            entityType: "Order",
+            entityId: result.order.id,
+            orderId: result.order.id,
+            summary: "Partner OCR remained unavailable; documents need manual review",
+            localState: result.order.status,
+            failureCategory: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
+            lastSuccessfulStep: "DOCUMENTS_UPLOADED",
+            availableActions: [],
+          });
         continue;
       }
       try {
@@ -312,7 +367,56 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
-    return { retried, manual };
+    let expired = 0;
+    const expiredPartnerDrafts =
+      await this.prisma.partnerDocumentVerification.findMany({
+        where: {
+          expiresAt: { lte: new Date() },
+          consumedOrderId: { not: null },
+          status: { notIn: ["EXPIRED", "INVALID"] },
+        },
+        select: { id: true, consumedOrderId: true },
+        take: 100,
+      });
+    for (const verification of expiredPartnerDrafts) {
+      if (!verification.consumedOrderId) continue;
+      const pendingOrder = await this.prisma.order.findFirst({
+        where: {
+          id: verification.consumedOrderId,
+          status: { in: ["REVIEW_PENDING", "AWAITING_CUSTOMER"] },
+        },
+        select: { status: true },
+      });
+      if (!pendingOrder) continue;
+      await this.prisma.$transaction(async (tx) => {
+        const cancelled = await tx.order.updateMany({
+          where: {
+            id: verification.consumedOrderId!,
+            status: { in: ["REVIEW_PENDING", "AWAITING_CUSTOMER"] },
+          },
+          data: {
+            status: "CANCELLED",
+            operationalDisposition: "TERMINAL_REJECTION",
+            version: { increment: 1 },
+          },
+        });
+        if (!cancelled.count) return;
+        await tx.partnerDocumentVerification.update({
+          where: { id: verification.id },
+          data: { status: "EXPIRED", failureCode: "VERIFICATION_EXPIRED" },
+        });
+        await tx.orderEvent.create({
+          data: {
+            orderId: verification.consumedOrderId!,
+            fromStatus: pendingOrder.status,
+            toStatus: "CANCELLED",
+            reason: "Document verification expired before partner finalization",
+          },
+        });
+        expired += 1;
+      });
+    }
+    return { retried, manual, expired };
   }
 
   private async run(signal: AbortSignal) {
@@ -324,7 +428,10 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       ["provisioning-operations", () => this.reconcileProvisioningOperations()],
       ["lifecycle-operations", () => this.reconcileLifecycleOperations()],
       ["activation", () => this.orders.reconcileStaleActivationOrders()],
-      ["stuck-provisioning", () => this.orders.recoverStuckProvisioningOrders()],
+      [
+        "stuck-provisioning",
+        () => this.orders.recoverStuckProvisioningOrders(),
+      ],
       ["approved-orders", () => this.orders.recoverApprovedOrders()],
       ["payments", () => this.payments.reconcilePendingPayments()],
       ["reservations", () => this.inventory.reconcileStaleReservations()],
@@ -337,12 +444,16 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     if (!this.repairedReusableInventory) {
-      const repaired = await this.runStep("repair-reusable-inventory", signal, () =>
-        this.repairReusableEsims(),
+      const repaired = await this.runStep(
+        "repair-reusable-inventory",
+        signal,
+        () => this.repairReusableEsims(),
       );
       this.repairedReusableInventory = repaired;
     }
-    await this.runStep("subscription-lifecycle", signal, () => this.sweepLifecycle());
+    await this.runStep("subscription-lifecycle", signal, () =>
+      this.sweepLifecycle(),
+    );
     await this.runStep("inventory-reconciliation", signal, () =>
       this.queueInventoryReconciliation(),
     );
@@ -405,20 +516,22 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       const message = error instanceof Error ? error.message : "unknown";
       this.logger.error(`Reconciliation step ${name} failed: ${message}`);
       this.metrics?.recordFailure("reconciliation", name);
-      await this.resilience.attention({
-        dedupeKey: `reconciliation-step:${name}`,
-        category: "RECONCILIATION",
-        entityType: "ReconciliationStep",
-        entityId: name,
-        severity: "WARNING",
-        summary: `Reconciliation step ${name} failed`,
-        detail: message.slice(0, 1000),
-        failureCategory: "RECONCILIATION_STEP_FAILED",
-      }).catch((attentionError) =>
-        this.logger.error(
-          `Could not persist reconciliation attention for ${name}: ${attentionError instanceof Error ? attentionError.message : "unknown"}`,
-        ),
-      );
+      await this.resilience
+        .attention({
+          dedupeKey: `reconciliation-step:${name}`,
+          category: "RECONCILIATION",
+          entityType: "ReconciliationStep",
+          entityId: name,
+          severity: "WARNING",
+          summary: `Reconciliation step ${name} failed`,
+          detail: message.slice(0, 1000),
+          failureCategory: "RECONCILIATION_STEP_FAILED",
+        })
+        .catch((attentionError) =>
+          this.logger.error(
+            `Could not persist reconciliation attention for ${name}: ${attentionError instanceof Error ? attentionError.message : "unknown"}`,
+          ),
+        );
       return false;
     }
     return true;
@@ -428,20 +541,22 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const message = error instanceof Error ? error.message : "unknown";
     this.logger.error(`Reconciliation ${run} run failed: ${message}`);
     this.metrics?.recordFailure("reconciliation-run", run);
-    await this.resilience.attention({
-      dedupeKey: `reconciliation-run:${run}`,
-      category: "RECONCILIATION",
-      entityType: "ReconciliationRun",
-      entityId: run,
-      severity: "CRITICAL",
-      summary: `Reconciliation ${run} run failed`,
-      detail: message.slice(0, 1000),
-      failureCategory: "RECONCILIATION_RUN_FAILED",
-    }).catch((attentionError) =>
-      this.logger.error(
-        `Could not persist reconciliation run attention: ${attentionError instanceof Error ? attentionError.message : "unknown"}`,
-      ),
-    );
+    await this.resilience
+      .attention({
+        dedupeKey: `reconciliation-run:${run}`,
+        category: "RECONCILIATION",
+        entityType: "ReconciliationRun",
+        entityId: run,
+        severity: "CRITICAL",
+        summary: `Reconciliation ${run} run failed`,
+        detail: message.slice(0, 1000),
+        failureCategory: "RECONCILIATION_RUN_FAILED",
+      })
+      .catch((attentionError) =>
+        this.logger.error(
+          `Could not persist reconciliation run attention: ${attentionError instanceof Error ? attentionError.message : "unknown"}`,
+        ),
+      );
   }
 
   private async cleanupExpiredRecords() {
@@ -461,11 +576,13 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       take: 100,
     });
     for (const document of staleDocuments) {
-      await this.storage.deleteDocument(document.privateAssetId).catch((error) =>
-        this.logger.warn(
-          `Could not delete expired document asset: ${error instanceof Error ? error.message : "unknown"}`,
-        ),
-      );
+      await this.storage
+        .deleteDocument(document.privateAssetId)
+        .catch((error) =>
+          this.logger.warn(
+            `Could not delete expired document asset: ${error instanceof Error ? error.message : "unknown"}`,
+          ),
+        );
       const removed = await this.prisma.travelerDocument.deleteMany({
         where: { id: document.id, uploadVerified: false, status: "PENDING" },
       });

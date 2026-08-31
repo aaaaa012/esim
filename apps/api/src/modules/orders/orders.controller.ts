@@ -53,7 +53,10 @@ export class OrdersController {
   @Get(":id") get(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
     return this.orders.view(id, req.user!.id);
   }
-  @Post() async create(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
+  @Post() async create(
+    @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
+  ) {
     const input = createOrderSchema.parse(body);
     const candidate = body as { mobile?: unknown; lookupToken?: unknown };
     if (candidate.mobile !== undefined && typeof candidate.mobile !== "string")
@@ -691,6 +694,18 @@ export class OperationsController {
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     return this.orders.requestReupload(id, body.reason);
+  }
+  @Post("orders/:id/reject-documents") rejectDocuments(
+    @Param("id") id: string,
+    @Body() body: { reason?: string },
+    @Req() req: AuthenticatedRequest,
+  ) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.orders.rejectPartnerDocuments(
+      id,
+      req.user!.id,
+      body.reason ?? "",
+    );
   }
   @Post("orders/:id/documents/:documentId/approve") approveDocument(
     @Param("id") id: string,

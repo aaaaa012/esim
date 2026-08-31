@@ -75,55 +75,66 @@ export const uploadSessionSchema = z.object({
       "Passport and ticket are required",
     ),
 });
-export const completeCreateSchema = z.object({
-  externalOrderId: z.string().trim().min(1).max(120),
-  externalCustomerId: z.string().trim().min(1).max(120),
-  planId: z.string().uuid(),
-  purchaseType: z.enum(["INITIAL_PURCHASE", "TOPUP"]).optional(),
-  settlement: z
-    .discriminatedUnion("method", [
-      z.object({ method: z.literal("PARTNER_ACCOUNT") }),
-      z.object({
-        method: z.literal("HOSTED_PAYMENT"),
-        provider: z.enum(PaymentProvider),
-        redirectUrl: z.url(),
-      }),
-    ])
-    .optional(),
-  documentVerificationId: z.string().uuid().optional(),
-  topUpMobile: z
-    .string()
-    .trim()
-    .min(1)
-    .max(20)
-    .optional()
-    .describe("Mobile number of the existing eSIM to top up"),
-  consent: z.object({
-    compatibilityAccepted: z.literal(true),
-    termsAccepted: z.literal(true),
-    privacyAccepted: z.literal(true),
-    acceptedAt: z.iso.datetime(),
-  }),
-  metadata: z.record(z.string(), z.string().max(500)).optional(),
-}).superRefine((value, context) => {
-  const purchaseType = value.purchaseType ?? (value.topUpMobile ? "TOPUP" : "INITIAL_PURCHASE");
-  if (purchaseType === "TOPUP" && !value.topUpMobile)
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["topUpMobile"], message: "topUpMobile is required for a top-up" });
-  if (purchaseType === "INITIAL_PURCHASE" && !value.documentVerificationId)
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["documentVerificationId"],
-      message: "Document verification is required for an initial purchase",
-    });
-  if (purchaseType === "TOPUP" && value.documentVerificationId)
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["documentVerificationId"],
-      message: "Document verification must not be supplied for a top-up",
-    });
-  if (purchaseType === "INITIAL_PURCHASE" && value.topUpMobile)
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["topUpMobile"], message: "topUpMobile must not be supplied for an initial purchase" });
-});
+export const completeCreateSchema = z
+  .object({
+    externalOrderId: z.string().trim().min(1).max(120),
+    externalCustomerId: z.string().trim().min(1).max(120),
+    planId: z.string().uuid(),
+    purchaseType: z.enum(["INITIAL_PURCHASE", "TOPUP"]).optional(),
+    settlement: z
+      .discriminatedUnion("method", [
+        z.object({ method: z.literal("PARTNER_ACCOUNT") }),
+        z.object({
+          method: z.literal("HOSTED_PAYMENT"),
+          provider: z.enum(PaymentProvider),
+          redirectUrl: z.url(),
+        }),
+      ])
+      .optional(),
+    documentVerificationId: z.string().uuid().optional(),
+    topUpMobile: z
+      .string()
+      .trim()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe("Mobile number of the existing eSIM to top up"),
+    consent: z.object({
+      compatibilityAccepted: z.literal(true),
+      termsAccepted: z.literal(true),
+      privacyAccepted: z.literal(true),
+      acceptedAt: z.iso.datetime(),
+    }),
+    metadata: z.record(z.string(), z.string().max(500)).optional(),
+  })
+  .superRefine((value, context) => {
+    const purchaseType =
+      value.purchaseType ?? (value.topUpMobile ? "TOPUP" : "INITIAL_PURCHASE");
+    if (purchaseType === "TOPUP" && !value.topUpMobile)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["topUpMobile"],
+        message: "topUpMobile is required for a top-up",
+      });
+    if (purchaseType === "INITIAL_PURCHASE" && !value.documentVerificationId)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["documentVerificationId"],
+        message: "Document verification is required for an initial purchase",
+      });
+    if (purchaseType === "TOPUP" && value.documentVerificationId)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["documentVerificationId"],
+        message: "Document verification must not be supplied for a top-up",
+      });
+    if (purchaseType === "INITIAL_PURCHASE" && value.topUpMobile)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["topUpMobile"],
+        message: "topUpMobile must not be supplied for an initial purchase",
+      });
+  });
 const createSchema = z.union([completeCreateSchema, legacyCreateSchema]);
 export const hostedCheckoutSessionSchema = z.object({
   planId: z.string().uuid(),
@@ -150,6 +161,16 @@ const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 const reasonSchema = z.object({ reason: z.string().trim().min(3).max(1000) });
+const replacementDocumentSchema = z.object({
+  type: z.enum([DocumentType.PASSPORT, DocumentType.TICKET]),
+  fileName: z.string().trim().min(1).max(180),
+  contentType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
+  sizeBytes: z
+    .number()
+    .int()
+    .min(1)
+    .max(10 * 1024 * 1024),
+});
 const notificationSchema = z.object({
   channel: z.enum(["EMAIL", "WHATSAPP"]),
   template: z.enum(["ORDER_STATUS", "QR_READY", "DOCUMENT_REUPLOAD"]),
@@ -420,6 +441,46 @@ export class PartnersController {
   @PartnerScopes("orders:read")
   status(@Param("id") id: string, @Req() request: PartnerRequest) {
     return this.partners.order(request.partner!.id, id);
+  }
+
+  @Post("orders/:id/finalize")
+  @PartnerScopes("orders:write")
+  @PartnerMutation()
+  @ApiOperation({
+    summary: "Debit and provision a document-verified pending order",
+  })
+  finalize(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.finalizeOrder(request.partner!.id, id);
+  }
+
+  @Post("orders/:id/document-replacements")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  declareReplacement(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.declareDocumentReplacement(
+      request.partner!.id,
+      id,
+      replacementDocumentSchema.parse(body),
+    );
+  }
+
+  @Post("orders/:id/document-replacements/:documentId/confirm")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  confirmReplacement(
+    @Param("id") id: string,
+    @Param("documentId") documentId: string,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.confirmDocumentReplacement(
+      request.partner!.id,
+      id,
+      documentId,
+    );
   }
 
   @Get("orders/:id/esim")

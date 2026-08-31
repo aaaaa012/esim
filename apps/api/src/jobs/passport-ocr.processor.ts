@@ -313,7 +313,11 @@ export class PassportOcrProcessor implements OnModuleInit {
         this.prisma.partnerDocumentVerification.update({
           where: { id: verification.id },
           data: {
-            status: accepted ? "VERIFIED" : partial ? "MANUAL_REVIEW" : "INVALID",
+            status: accepted
+              ? "VERIFIED"
+              : partial
+                ? "MANUAL_REVIEW"
+                : "INVALID",
             failureCode:
               accepted || partial ? null : "PASSPORT_REUPLOAD_REQUIRED",
           },
@@ -324,6 +328,11 @@ export class PassportOcrProcessor implements OnModuleInit {
           this.prisma.order.update({
             where: { id: verification.consumedOrderId },
             data: {
+              status: accepted
+                ? "REVIEW_PENDING"
+                : partial
+                  ? "REVIEW_PENDING"
+                  : "AWAITING_CUSTOMER",
               documentReviewStatus: accepted
                 ? "VERIFIED"
                 : partial
@@ -338,7 +347,11 @@ export class PassportOcrProcessor implements OnModuleInit {
               type: DocumentType.PASSPORT,
             },
             data: {
-              status: accepted ? "APPROVED" : partial ? "PENDING" : "REUPLOAD_REQUIRED",
+              status: accepted
+                ? "APPROVED"
+                : partial
+                  ? "PENDING"
+                  : "REUPLOAD_REQUIRED",
               passportVerificationStatus: result.status,
               passportVerificationMethod: result.method,
               passportMatchedFields:
@@ -347,13 +360,22 @@ export class PassportOcrProcessor implements OnModuleInit {
               passportVerifiedAt: new Date(result.checkedAt),
             },
           }),
+          ...(accepted
+            ? [
+                this.prisma.travelerDocument.updateMany({
+                  where: {
+                    orderId: verification.consumedOrderId,
+                    type: { in: [DocumentType.TICKET, DocumentType.VISA] },
+                  },
+                  data: { status: "APPROVED", uploadVerified: true },
+                }),
+              ]
+            : []),
         ]);
         if (!accepted)
           await this.resilience.attention({
             dedupeKey: `document-review:${verification.consumedOrderId}`,
-            category: partial
-              ? "DOCUMENT_MANUAL_REVIEW"
-              : "DOCUMENT_REUPLOAD",
+            category: partial ? "DOCUMENT_MANUAL_REVIEW" : "DOCUMENT_REUPLOAD",
             entityType: "Order",
             entityId: verification.consumedOrderId,
             orderId: verification.consumedOrderId,
@@ -459,6 +481,11 @@ export class PassportOcrProcessor implements OnModuleInit {
     documentId: string,
     code: string,
   ) {
+    const verification =
+      await this.prisma.partnerDocumentVerification.findUnique({
+        where: { id: verificationId },
+        select: { consumedOrderId: true },
+      });
     await this.prisma.$transaction([
       this.prisma.partnerDocumentUploadIntent.update({
         where: { id: documentId },
@@ -472,6 +499,25 @@ export class PassportOcrProcessor implements OnModuleInit {
         where: { id: verificationId },
         data: { status: "INVALID", failureCode: code },
       }),
+      ...(verification?.consumedOrderId
+        ? [
+            this.prisma.order.update({
+              where: { id: verification.consumedOrderId },
+              data: {
+                status: "AWAITING_CUSTOMER",
+                documentReviewStatus: "REUPLOAD_REQUIRED",
+                version: { increment: 1 },
+              },
+            }),
+            this.prisma.travelerDocument.updateMany({
+              where: {
+                orderId: verification.consumedOrderId,
+                type: DocumentType.PASSPORT,
+              },
+              data: { status: "REUPLOAD_REQUIRED" },
+            }),
+          ]
+        : []),
     ]);
   }
 

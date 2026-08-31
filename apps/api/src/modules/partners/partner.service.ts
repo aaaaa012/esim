@@ -258,7 +258,8 @@ export class PartnerService {
             !existing.consumedAt &&
             existing.expiresAt > now &&
             !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
-          if (resumable) return await this.uploadSessionResponse(existing, true);
+          if (resumable)
+            return await this.uploadSessionResponse(existing, true);
           await tx.partnerDocumentVerification.update({
             where: { id: existing.id },
             data: {
@@ -412,19 +413,55 @@ export class PartnerService {
         data: { status: "PROCESSING_BACKGROUND" },
         include: { documents: true },
       });
+    const allRequiredUploadsConfirmed = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].every((type) =>
+      verification.documents.some(
+        (document) => document.type === type && document.uploadVerified,
+      ),
+    );
+    const draftCreationAllowed =
+      allRequiredUploadsConfirmed &&
+      verification.status !== "EXPIRED" &&
+      verification.failureCode !== "DOCUMENTS_REJECTED";
+    const linkedOrder = verification.consumedOrderId
+      ? await this.prisma.order.findUnique({
+          where: { id: verification.consumedOrderId },
+          select: {
+            status: true,
+            documentReviewPolicy: true,
+            documentReviewStatus: true,
+          },
+        })
+      : null;
+    const fulfillmentAllowed = linkedOrder
+      ? linkedOrder.status === OrderStatus.REVIEW_PENDING &&
+        ((linkedOrder.documentReviewPolicy === "AUTO_OCR" &&
+          ["VERIFIED", "MANUALLY_APPROVED"].includes(
+            linkedOrder.documentReviewStatus,
+          )) ||
+          (linkedOrder.documentReviewPolicy === "MANUAL_REVIEW" &&
+            linkedOrder.documentReviewStatus === "MANUALLY_APPROVED") ||
+          (linkedOrder.documentReviewPolicy === "NO_REVIEW" &&
+            linkedOrder.documentReviewStatus === "SKIPPED"))
+      : (verification.reviewPolicy === "AUTO_OCR" &&
+          verification.status === "VERIFIED") ||
+        (verification.reviewPolicy === "NO_REVIEW" &&
+          verification.status === "SKIPPED");
     return {
       id: verification.id,
       externalOrderId: verification.externalOrderId,
       status: verification.status,
+      reviewPolicy: verification.reviewPolicy,
       failureCode: verification.failureCode,
       expiresAt: verification.expiresAt,
       consumedAt: verification.consumedAt,
-      orderCreationAllowed: [
-        "VERIFIED",
-        "MANUAL_REVIEW",
-        "PROCESSING_BACKGROUND",
-        "SKIPPED",
-      ].includes(verification.status),
+      linkedOrderId: verification.consumedOrderId,
+      requiredDocuments: [DocumentType.PASSPORT, DocumentType.TICKET],
+      draftCreationAllowed,
+      orderCreationAllowed: draftCreationAllowed,
+      fulfillmentAllowed,
       documents: verification.documents.map((document) => ({
         id: document.id,
         type: document.type,
@@ -432,6 +469,15 @@ export class PartnerService {
         status: document.verificationStatus,
         code: document.verificationCode,
         verifiedAt: document.verifiedAt,
+        replacementEligible:
+          Boolean(verification.consumedOrderId) &&
+          verification.failureCode !== "DOCUMENTS_REJECTED" &&
+          ["INVALID", "MANUAL_REVIEW", "REUPLOAD_REQUIRED"].includes(
+            verification.status,
+          ) &&
+          (
+            [DocumentType.PASSPORT, DocumentType.TICKET] as DocumentType[]
+          ).includes(document.type),
       })),
     };
   }
@@ -460,11 +506,52 @@ export class PartnerService {
         message: "Document not found",
       });
     if (!document.uploadVerified) {
-      await this.verifyUploadedDocument(document.privateAssetId);
+      const asset = await this.verifyUploadedDocument(document.privateAssetId);
+      if (
+        asset.bytes !== document.declaredSizeBytes ||
+        !this.formatMatchesContentType(asset.format ?? "", document.contentType)
+      )
+        throw new ApiException({
+          code: "UPLOAD_DECLARATION_MISMATCH",
+          message:
+            "Uploaded bytes do not match the declared size or content type",
+          status: 422,
+        });
       await this.prisma.partnerDocumentUploadIntent.update({
         where: { id: document.id },
         data: { uploadVerified: true, verificationStatus: "UPLOADED" },
       });
+      if (verification.consumedOrderId)
+        await this.prisma.$transaction([
+          this.prisma.travelerDocument.updateMany({
+            where: {
+              orderId: verification.consumedOrderId,
+              type: document.type,
+            },
+            data: {
+              fileName: document.fileName,
+              privateAssetId: document.privateAssetId,
+              uploadVerified: true,
+              status: DocumentStatus.PENDING,
+              ...(document.type === DocumentType.PASSPORT
+                ? {
+                    passportVerificationStatus: null,
+                    passportVerificationMethod: null,
+                    passportMatchedFields: Prisma.DbNull,
+                    passportConfidence: null,
+                    passportVerifiedAt: null,
+                  }
+                : {}),
+            },
+          }),
+          this.prisma.order.update({
+            where: { id: verification.consumedOrderId },
+            data: {
+              status: OrderStatus.REVIEW_PENDING,
+              version: { increment: 1 },
+            },
+          }),
+        ]);
     }
     const remaining = await this.prisma.partnerDocumentUploadIntent.count({
       where: { verificationId, uploadVerified: false },
@@ -483,6 +570,24 @@ export class PartnerService {
         where: { id: verificationId },
         data: { status, failureCode: null },
       });
+      if (verification.consumedOrderId) {
+        await this.prisma.order.update({
+          where: { id: verification.consumedOrderId },
+          data: {
+            status: OrderStatus.REVIEW_PENDING,
+            documentReviewStatus: status,
+            version: { increment: 1 },
+          },
+        });
+        if (status === "SKIPPED")
+          await this.prisma.travelerDocument.updateMany({
+            where: {
+              orderId: verification.consumedOrderId,
+              type: { in: [DocumentType.PASSPORT, DocumentType.TICKET] },
+            },
+            data: { status: DocumentStatus.APPROVED },
+          });
+      }
       return {
         id: document.id,
         uploadVerified: true,
@@ -490,6 +595,50 @@ export class PartnerService {
         remaining: 0,
         status,
       };
+    }
+    if (verification.consumedOrderId && document.type === DocumentType.TICKET) {
+      const verifiedPassport = await this.prisma.travelerDocument.findFirst({
+        where: {
+          orderId: verification.consumedOrderId,
+          type: DocumentType.PASSPORT,
+          status: DocumentStatus.APPROVED,
+          passportVerificationStatus: "VERIFIED",
+        },
+      });
+      if (verifiedPassport) {
+        await this.prisma.$transaction([
+          this.prisma.partnerDocumentUploadIntent.update({
+            where: { id: document.id },
+            data: { verificationStatus: "VERIFIED", verifiedAt: new Date() },
+          }),
+          this.prisma.partnerDocumentVerification.update({
+            where: { id: verificationId },
+            data: { status: "VERIFIED", failureCode: null },
+          }),
+          this.prisma.travelerDocument.updateMany({
+            where: {
+              orderId: verification.consumedOrderId,
+              type: DocumentType.TICKET,
+            },
+            data: { status: DocumentStatus.APPROVED },
+          }),
+          this.prisma.order.update({
+            where: { id: verification.consumedOrderId },
+            data: {
+              status: OrderStatus.REVIEW_PENDING,
+              documentReviewStatus: "VERIFIED",
+              version: { increment: 1 },
+            },
+          }),
+        ]);
+        return {
+          id: document.id,
+          uploadVerified: true,
+          verificationQueued: false,
+          remaining: 0,
+          status: "VERIFIED",
+        };
+      }
     }
     await this.prisma.partnerDocumentVerification.updateMany({
       where: { id: verificationId, status: "AWAITING_UPLOAD" },
@@ -526,6 +675,136 @@ export class PartnerService {
       verificationQueued: true,
       remaining: 0,
     };
+  }
+
+  async declareDocumentReplacement(
+    partnerId: string,
+    orderId: string,
+    input: {
+      type: DocumentType;
+      fileName: string;
+      contentType: string;
+      sizeBytes: number;
+    },
+  ) {
+    if (
+      !(
+        [DocumentType.PASSPORT, DocumentType.TICKET] as DocumentType[]
+      ).includes(input.type)
+    )
+      throw new ApiException({
+        code: "DOCUMENT_REPLACEMENT_NOT_ALLOWED",
+        message: "Only a required passport or ticket can be replaced",
+        status: 400,
+      });
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        partnerId,
+        status: {
+          in: [OrderStatus.REVIEW_PENDING, OrderStatus.AWAITING_CUSTOMER],
+        },
+      },
+      include: { documents: true },
+    });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_INVALID_STATE",
+        message: "Only an uncharged pending order can accept replacements",
+        status: 409,
+      });
+    const orderDocument = order.documents.find(
+      (document) => document.type === input.type,
+    );
+    if (
+      !orderDocument ||
+      orderDocument.status !== DocumentStatus.REUPLOAD_REQUIRED
+    )
+      throw new ApiException({
+        code: "DOCUMENT_REPLACEMENT_NOT_REQUESTED",
+        message: "This document was not requested for replacement",
+        status: 409,
+      });
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { partnerId, consumedOrderId: orderId },
+        include: { documents: true },
+      });
+    if (!verification || verification.expiresAt <= new Date())
+      throw new GoneException({
+        code: "VERIFICATION_EXPIRED",
+        message: "Document verification has expired",
+      });
+    const intent = verification.documents.find(
+      (document) => document.type === input.type,
+    );
+    if (!intent)
+      throw new NotFoundException({
+        code: "PARTNER_DOCUMENT_NOT_FOUND",
+        message: "Document not found",
+      });
+    const signed = await this.storage.createPartnerDocumentUpload(
+      intent.id,
+      input.type as unknown as SharedDocumentType,
+      input.contentType,
+    );
+    await this.prisma.$transaction([
+      this.prisma.partnerDocumentUploadIntent.update({
+        where: { id: intent.id },
+        data: {
+          fileName: input.fileName,
+          contentType: input.contentType,
+          declaredSizeBytes: input.sizeBytes,
+          privateAssetId: signed.assetId,
+          uploadVerified: false,
+          verificationStatus: "AWAITING_UPLOAD",
+          verificationCode: null,
+          verificationResult: {
+            replacement: true,
+            previousFileName: intent.fileName,
+            previousStatus: intent.verificationStatus,
+            previousCode: intent.verificationCode,
+            previousVerifiedAt: intent.verifiedAt?.toISOString() ?? null,
+            declaredAt: new Date().toISOString(),
+          },
+          verifiedAt: null,
+        },
+      }),
+      this.prisma.partnerDocumentVerification.update({
+        where: { id: verification.id },
+        data: { status: "AWAITING_UPLOAD", failureCode: null },
+      }),
+    ]);
+    return {
+      verificationId: verification.id,
+      orderId,
+      documentId: intent.id,
+      type: input.type,
+      expiresAt: verification.expiresAt,
+      upload: signed.upload,
+    };
+  }
+
+  async confirmDocumentReplacement(
+    partnerId: string,
+    orderId: string,
+    documentId: string,
+  ) {
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { partnerId, consumedOrderId: orderId },
+        select: { id: true },
+      });
+    if (!verification)
+      throw new NotFoundException({
+        code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+        message: "Document verification not found",
+      });
+    return this.confirmVerificationDocument(
+      partnerId,
+      verification.id,
+      documentId,
+    );
   }
 
   async createCompleteOrder(
@@ -591,23 +870,14 @@ export class PartnerService {
         message: "Document verification was already consumed",
       });
     if (
-      ![
-        "VERIFIED",
-        "MANUAL_REVIEW",
-        "PROCESSING_BACKGROUND",
-        "SKIPPED",
-      ].includes(verification.status)
+      verification.status === "EXPIRED" ||
+      (verification.status === "INVALID" &&
+        verification.failureCode === "DOCUMENTS_REJECTED")
     )
       throw new ApiException({
-        code:
-          verification.status === "INVALID"
-            ? "DOCUMENT_REUPLOAD_REQUIRED"
-            : "VERIFICATION_NOT_READY",
-        message:
-          verification.status === "INVALID"
-            ? "Documents are invalid; upload replacements"
-            : "Document verification is not complete",
-        status: verification.status === "INVALID" ? 422 : 409,
+        code: "DOCUMENT_REUPLOAD_REQUIRED",
+        message: "Documents are invalid or expired; upload replacements",
+        status: 422,
       });
     const required = this.requiredDocuments(plan.country.isoCode);
     const suppliedTypes = new Set(
@@ -627,7 +897,6 @@ export class PartnerService {
           "Confirm every required document upload before placing the order",
         status: 409,
       });
-    await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const uploadIds = intents.map((item) => item.id);
     const amountPaisa = Math.round(Number(plan.sellingPrice) * 100);
     const orderId = randomUUID();
@@ -662,21 +931,11 @@ export class PartnerService {
           where: {
             id: verification.id,
             partnerId,
-            status: {
-              in: [
-                "VERIFIED",
-                "MANUAL_REVIEW",
-                "PROCESSING_BACKGROUND",
-                "SKIPPED",
-              ],
-            },
+            status: { not: "EXPIRED" },
             consumedAt: null,
             expiresAt: { gt: new Date() },
           },
           data: {
-            ...(verification.status === "VERIFIED"
-              ? { status: "CONSUMED" }
-              : {}),
             consumedAt: new Date(),
             consumedOrderId: orderId,
             activeExternalOrderKey: null,
@@ -694,7 +953,10 @@ export class PartnerService {
         partnerId,
         input.externalCustomerId,
       );
-      const status = OrderStatus.APPROVED;
+      const status =
+        verification.status === "INVALID"
+          ? OrderStatus.AWAITING_CUSTOMER
+          : OrderStatus.REVIEW_PENDING;
       const pricingSnapshot = {
         pricingSource: "PUBLIC_CATALOGUE",
         planId: plan.id,
@@ -728,7 +990,9 @@ export class PartnerService {
                 ? "MANUAL_REVIEW"
                 : verification.status === "SKIPPED"
                   ? "SKIPPED"
-                  : "OCR_BACKGROUND",
+                  : verification.status === "INVALID"
+                    ? "REUPLOAD_REQUIRED"
+                    : "OCR_BACKGROUND",
           subtotal: amountPaisa / 100,
           totalAmount: amountPaisa / 100,
           pricingSnapshot,
@@ -748,10 +1012,15 @@ export class PartnerService {
                 type: intent.type,
                 fileName: intent.fileName,
                 privateAssetId: intent.privateAssetId,
+                uploadVerified: true,
                 status:
                   verification.status === "VERIFIED"
                     ? DocumentStatus.APPROVED
-                    : DocumentStatus.PENDING,
+                    : ["INVALID", "REUPLOAD_REQUIRED"].includes(
+                          intent.verificationStatus,
+                        )
+                      ? DocumentStatus.REUPLOAD_REQUIRED
+                      : DocumentStatus.PENDING,
                 ...(intent.type === DocumentType.PASSPORT &&
                 verification.status === "VERIFIED"
                   ? {
@@ -779,38 +1048,27 @@ export class PartnerService {
           acceptedAt: new Date(input.consent.acceptedAt),
         })),
       });
-      await this.debitAccount(
-        tx,
-        partnerId,
-        orderId,
-        amountPaisa,
-        input.externalOrderId,
-      );
       await this.createEvent(
         tx,
         partnerId,
         orderId,
-        "order.accepted",
+        status === OrderStatus.AWAITING_CUSTOMER
+          ? "order.awaiting_customer"
+          : "order.review_pending",
         orderId,
         {
           orderId,
           externalOrderId: input.externalOrderId,
           status,
-          fulfillmentStatus: "PENDING",
+          fulfillmentStatus:
+            status === OrderStatus.AWAITING_CUSTOMER
+              ? "REUPLOAD_REQUIRED"
+              : "BLOCKED_ON_DOCUMENTS",
           version: 0,
           amountPaisa,
           currency: "NPR",
         },
       );
-      await tx.outboxMessage.create({
-        data: {
-          dedupeKey: `partner-fulfillment-${orderId}`,
-          topic: "provisioning",
-          jobName: "advance-approved-order",
-          payload: { orderId },
-          orderId,
-        },
-      });
     });
     const handoff = await Promise.allSettled([
       this.applicationOrders.refreshFromPersistence(orderId),
@@ -823,19 +1081,175 @@ export class PartnerService {
             ? result.reason.message
             : "Partner order post-commit handoff failed",
         );
-    try {
-      await this.applicationOrders.approveToProvisioning(
-        orderId,
-        "Partner order auto-approved",
-      );
-    } catch (error) {
-      this.logger.error(
-        `Partner order provision handoff failed for ${orderId}: ${
-          error instanceof Error ? error.message : "unknown"
-        }`,
-      );
-    }
     return this.order(partnerId, orderId);
+  }
+
+  async finalizeOrder(partnerId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, partnerId },
+      include: {
+        plan: { include: { country: true } },
+        documents: true,
+      },
+    });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
+    if (
+      (
+        [
+          OrderStatus.APPROVED,
+          OrderStatus.PROVISIONING,
+          OrderStatus.QR_READY,
+          OrderStatus.ACTIVATION_ATTENTION,
+          OrderStatus.COMPLETED,
+        ] as OrderStatus[]
+      ).includes(order.status)
+    )
+      return this.order(partnerId, orderId);
+    if (order.status === OrderStatus.CANCELLED)
+      throw new ApiException({
+        code: "DOCUMENTS_REJECTED",
+        message: "The documented purchase was rejected and cannot be finalized",
+        status: 422,
+      });
+    if (order.status !== OrderStatus.REVIEW_PENDING)
+      throw new ApiException({
+        code: "VERIFICATION_NOT_READY",
+        message: "Document verification is not complete",
+        status: 409,
+      });
+
+    const fulfillmentAllowed =
+      (order.documentReviewPolicy === "AUTO_OCR" &&
+        ["VERIFIED", "MANUALLY_APPROVED"].includes(
+          order.documentReviewStatus,
+        )) ||
+      (order.documentReviewPolicy === "MANUAL_REVIEW" &&
+        order.documentReviewStatus === "MANUALLY_APPROVED") ||
+      (order.documentReviewPolicy === "NO_REVIEW" &&
+        order.documentReviewStatus === "SKIPPED");
+    if (!fulfillmentAllowed)
+      throw new ApiException({
+        code:
+          order.documentReviewStatus === "REUPLOAD_REQUIRED"
+            ? "DOCUMENT_REUPLOAD_REQUIRED"
+            : "VERIFICATION_NOT_READY",
+        message:
+          order.documentReviewStatus === "REUPLOAD_REQUIRED"
+            ? "A required document must be replaced before finalization"
+            : "Document verification is not complete",
+        status: order.documentReviewStatus === "REUPLOAD_REQUIRED" ? 422 : 409,
+      });
+    const requiredDocumentsApproved = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].every((type) =>
+      order.documents.some(
+        (document) =>
+          document.type === type &&
+          document.uploadVerified &&
+          document.status === DocumentStatus.APPROVED,
+      ),
+    );
+    if (!requiredDocumentsApproved)
+      throw new ApiException({
+        code: "VERIFICATION_NOT_READY",
+        message: "Passport and ticket are not both approved",
+        status: 409,
+      });
+
+    const activePlan = await this.prisma.plan.findFirst({
+      where: {
+        id: order.planId,
+        status: "ACTIVE",
+        country: {
+          active: true,
+          ...(RESTRICTED_PLAN_COUNTRY_CODES.length
+            ? { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } }
+            : {}),
+        },
+      },
+    });
+    if (!activePlan)
+      throw new ApiException({
+        code: "PLAN_UNAVAILABLE",
+        message: "Plan is unavailable",
+        status: 409,
+      });
+    await this.applicationOrders.assertInventoryAvailableForNewOrder();
+
+    const amountPaisa = Math.round(Number(order.totalAmount) * 100);
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.order.updateMany({
+        where: {
+          id: order.id,
+          partnerId,
+          version: order.version,
+          status: OrderStatus.REVIEW_PENDING,
+          documentReviewStatus: order.documentReviewStatus,
+        },
+        data: { status: OrderStatus.APPROVED, version: { increment: 1 } },
+      });
+      if (updated.count !== 1)
+        throw new ApiException({
+          code: "ORDER_CONFLICT",
+          message: "Order changed while finalizing; reload and retry",
+          status: 409,
+        });
+      await this.debitAccount(
+        tx,
+        partnerId,
+        order.id,
+        amountPaisa,
+        order.externalOrderId ?? order.id,
+      );
+      await tx.orderEvent.create({
+        data: {
+          orderId: order.id,
+          fromStatus: OrderStatus.REVIEW_PENDING,
+          toStatus: OrderStatus.APPROVED,
+          reason: "Partner explicitly finalized verified documents",
+        },
+      });
+      await this.createEvent(
+        tx,
+        partnerId,
+        order.id,
+        "order.accepted",
+        order.id,
+        {
+          orderId: order.id,
+          externalOrderId: order.externalOrderId,
+          status: OrderStatus.APPROVED,
+          fulfillmentStatus: "PENDING",
+          amountPaisa,
+          currency: "NPR",
+        },
+      );
+      await tx.outboxMessage.create({
+        data: {
+          dedupeKey: `partner-fulfillment-${order.id}`,
+          topic: "provisioning",
+          jobName: "advance-approved-order",
+          payload: { orderId: order.id },
+          orderId: order.id,
+        },
+      });
+    });
+
+    await this.applicationOrders.refreshFromPersistence(order.id);
+    await Promise.allSettled([
+      this.partnerWebhooks.enqueuePending(),
+      this.applicationOrders.approveToProvisioning(
+        order.id,
+        "Partner finalized verified order",
+      ),
+    ]);
+    return this.order(partnerId, order.id);
   }
 
   private async createCompleteTopUpOrder(
@@ -2428,8 +2842,7 @@ export class PartnerService {
         reason: "NOT_HOSTED_CHECKOUT",
       };
     if (
-      order.partnerSettlementMethod !==
-      PartnerSettlementMethod.PARTNER_ACCOUNT
+      order.partnerSettlementMethod !== PartnerSettlementMethod.PARTNER_ACCOUNT
     )
       return {
         orderId,
@@ -2826,6 +3239,19 @@ export class PartnerService {
         at: event.createdAt,
       })),
       fulfillmentStatus: this.fulfillmentStatus(order.status),
+      documentReviewPolicy: order.documentReviewPolicy,
+      documentReviewStatus: order.documentReviewStatus,
+      requiredDocuments: [DocumentType.PASSPORT, DocumentType.TICKET],
+      fulfillmentAllowed:
+        order.status === OrderStatus.REVIEW_PENDING &&
+        ((order.documentReviewPolicy === "AUTO_OCR" &&
+          ["VERIFIED", "MANUALLY_APPROVED"].includes(
+            order.documentReviewStatus,
+          )) ||
+          (order.documentReviewPolicy === "MANUAL_REVIEW" &&
+            order.documentReviewStatus === "MANUALLY_APPROVED") ||
+          (order.documentReviewPolicy === "NO_REVIEW" &&
+            order.documentReviewStatus === "SKIPPED")),
       links: {
         order: `/api/v1/partners/orders/${order.id}`,
         events: `/api/v1/partners/orders/${order.id}/events`,
@@ -3194,20 +3620,8 @@ export class PartnerService {
     };
   }
 
-  private requiredDocuments(countryCode: string): DocumentType[] {
-    const visaCountries = new Set(
-      (process.env.VISA_REQUIRED_COUNTRIES ?? "")
-        .split(",")
-        .map((value) => value.trim().toUpperCase())
-        .filter(Boolean),
-    );
-    return [
-      DocumentType.PASSPORT,
-      DocumentType.TICKET,
-      ...(visaCountries.has(countryCode.toUpperCase())
-        ? [DocumentType.VISA]
-        : []),
-    ];
+  private requiredDocuments(_countryCode: string): DocumentType[] {
+    return [DocumentType.PASSPORT, DocumentType.TICKET];
   }
 
   private formatMatchesContentType(format: string, contentType: string) {

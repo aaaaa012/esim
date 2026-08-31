@@ -147,4 +147,32 @@ describe("simplified partner order contract", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("requires passport and ticket while keeping visa optional", () => {
+    const document = (type: "PASSPORT" | "TICKET" | "VISA") => ({
+      type,
+      fileName: `${type.toLowerCase()}.pdf`,
+      contentType: "application/pdf" as const,
+      sizeBytes: 100,
+    });
+    const base = { externalOrderId: "agency-order-1045", traveler };
+    expect(
+      uploadSessionSchema.safeParse({
+        ...base,
+        documents: [document("PASSPORT"), document("TICKET")],
+      }).success,
+    ).toBe(true);
+    expect(
+      uploadSessionSchema.safeParse({
+        ...base,
+        documents: [document("PASSPORT"), document("TICKET"), document("VISA")],
+      }).success,
+    ).toBe(true);
+    expect(
+      uploadSessionSchema.safeParse({
+        ...base,
+        documents: [document("PASSPORT"), document("VISA")],
+      }).success,
+    ).toBe(false);
+  });
 });

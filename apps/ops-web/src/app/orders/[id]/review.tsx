@@ -79,7 +79,7 @@ export default function OrderReview({ id }: { id: string }) {
     "Please upload a clearer, complete copy",
   );
   const [confirmAction, setConfirmAction] = useState<{
-    kind: "cancel";
+    kind: "cancel" | "reject-documents";
     reason: string;
   } | null>(null);
   const [previewDocument, setPreviewDocument] = useState<{
@@ -180,7 +180,9 @@ export default function OrderReview({ id }: { id: string }) {
       </>
     );
 
-  const canAdvanceOrder = order.status === "REVIEW_PENDING";
+  const partnerPendingOrder = Boolean(order.partner && order.externalOrderId);
+  const canAdvanceOrder =
+    order.status === "REVIEW_PENDING" && !partnerPendingOrder;
   const canReviewDocuments =
     order.documentReviewPolicy !== "NO_REVIEW" &&
     !["CANCELLED", "REFUNDED"].includes(order.status) &&
@@ -250,10 +252,15 @@ export default function OrderReview({ id }: { id: string }) {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Cancel order</DialogTitle>
+            <DialogTitle>
+              {confirmAction?.kind === "reject-documents"
+                ? "Terminally reject documents"
+                : "Cancel order"}
+            </DialogTitle>
             <DialogDescription>
               This action cannot be undone and will be recorded in the order
-              history. Please add a reason.
+              history. The pending partner order will remain uncharged. Please
+              add a reason.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -285,11 +292,17 @@ export default function OrderReview({ id }: { id: string }) {
               onClick={() => {
                 if (confirmAction?.kind === "cancel")
                   action("cancel", { reason: confirmAction.reason.trim() });
+                if (confirmAction?.kind === "reject-documents")
+                  action("reject-documents", {
+                    reason: confirmAction.reason.trim(),
+                  });
                 setConfirmAction(null);
               }}
             >
               {busy ? <Spinner /> : null}
-              Confirm cancellation
+              {confirmAction?.kind === "reject-documents"
+                ? "Confirm terminal rejection"
+                : "Confirm cancellation"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -426,6 +439,23 @@ export default function OrderReview({ id }: { id: string }) {
             )}
           </Panel>
 
+          {partnerPendingOrder &&
+          ["REVIEW_PENDING", "AWAITING_CUSTOMER"].includes(order.status) ? (
+            <Button
+              variant="destructive"
+              disabled={Boolean(busy)}
+              onClick={() =>
+                setConfirmAction({
+                  kind: "reject-documents",
+                  reason: "",
+                })
+              }
+            >
+              <AlertTriangle className="size-4" />
+              Terminally reject documents
+            </Button>
+          ) : null}
+
           <Panel
             title={
               <span className="flex items-center gap-2">
@@ -547,26 +577,31 @@ export default function OrderReview({ id }: { id: string }) {
                       Approve
                     </Button>
                   )}
-                  {canReviewDocuments && document.status !== "APPROVED" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={Boolean(busy)}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            "Ask the customer to upload a clearer copy? The reason below will be shared with them.",
+                  {canReviewDocuments &&
+                    document.type !== "VISA" &&
+                    document.status !== "APPROVED" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={Boolean(busy)}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              "Ask the customer to upload a clearer copy? The reason below will be shared with them.",
+                            )
                           )
-                        )
-                          action(`documents/${document.id}/request-reupload`, {
-                            reason,
-                          });
-                      }}
-                    >
-                      <RefreshCcw className="size-4" />
-                      Re-upload
-                    </Button>
-                  )}
+                            action(
+                              `documents/${document.id}/request-reupload`,
+                              {
+                                reason,
+                              },
+                            );
+                        }}
+                      >
+                        <RefreshCcw className="size-4" />
+                        Re-upload
+                      </Button>
+                    )}
                 </div>
               </div>
             ))}
