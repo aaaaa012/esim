@@ -463,6 +463,12 @@
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.16);
   vertical-align: middle;
 }
+.country-flag-emoji {
+  display: inline-block;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  line-height: 1;
+  vertical-align: middle;
+}
 .destination-flag .country-flag-img {
   width: 28px;
   height: 21px;

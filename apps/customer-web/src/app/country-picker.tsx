@@ -53,10 +53,9 @@ export function CountryFlag({
   alt?: string;
   className?: string;
 }) {
-  const [failed, setFailed] = useState(false);
   const iso2 = getIso2Code(code);
 
-  if (!iso2 || failed) {
+  if (!iso2) {
     return (
       <span className={`country-flag-fallback ${className}`} aria-label={alt || code || "Flag"}>
         {code && code.length <= 3 ? code.toUpperCase() : <Globe2 size={16} />}
@@ -65,14 +64,15 @@ export function CountryFlag({
   }
 
   return (
-    <img
-      src={`https://flagcdn.com/w40/${iso2}.png`}
-      srcSet={`https://flagcdn.com/w80/${iso2}.png 2x`}
-      alt={alt || code || "Country flag"}
-      className={`country-flag-img ${className}`}
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
+    <span
+      className={`country-flag-emoji ${className}`}
+      role="img"
+      aria-label={alt || code || "Country flag"}
+    >
+      {String.fromCodePoint(
+        ...iso2.toUpperCase().split("").map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65),
+      )}
+    </span>
   );
 }
 
