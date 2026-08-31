@@ -267,12 +267,14 @@ describe("InventoryService bulk reconciliation selection", () => {
                 { providerStatus: null },
                 {
                   providerStatus: {
-                    notIn: [
+                    notIn: expect.arrayContaining([
                       "available",
                       "allocated",
+                      "released",
                       "AVAILABLE",
                       "ALLOCATED",
-                    ],
+                      "RELEASED",
+                    ]),
                   },
                 },
               ],
@@ -393,7 +395,7 @@ describe("InventoryService.assertAvailableForNewOrder", () => {
     const count = vi.fn().mockResolvedValue(0);
     const prisma = {
       enabled: true,
-      esimInventory: { count },
+      esimInventory: { count, findFirst: vi.fn().mockResolvedValue(null) },
     } as unknown as PrismaService;
     const inventory = new InventoryService(
       prisma,
@@ -430,6 +432,77 @@ describe("InventoryService.assertAvailableForNewOrder", () => {
     await expect(
       inventory.assertAvailableForNewOrder(),
     ).resolves.toBeUndefined();
+  });
+
+  it("refreshes stale safe stock on demand before rejecting checkout", async () => {
+    const count = vi
+      .fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
+    const findFirst = vi.fn().mockResolvedValueOnce({ id: "stale-inv-1" });
+    const prisma = {
+      enabled: true,
+      esimInventory: { count, findFirst },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    const reconcile = vi
+      .spyOn(inventory, "reconcileProviderProfile")
+      .mockResolvedValue({
+        id: "stale-inv-1",
+        iccid: "8988247076000000319",
+        localStatus: "AVAILABLE",
+        providerStatus: "released",
+        inSync: true,
+        checkedAt: new Date().toISOString(),
+      });
+
+    await expect(
+      inventory.assertAvailableForNewOrder(),
+    ).resolves.toBeUndefined();
+    expect(reconcile).toHaveBeenCalledWith("stale-inv-1");
+    expect(count).toHaveBeenCalledTimes(2);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: "AVAILABLE",
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          providerStatus: {
+            in: expect.arrayContaining(["released", "RELEASED"]),
+          },
+        }),
+      }),
+    );
+  });
+
+  it("fails closed when stale stock cannot be freshly verified", async () => {
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "stale-inv-1" })
+      .mockResolvedValueOnce(null);
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        count: vi.fn().mockResolvedValue(0),
+        findFirst,
+      },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    vi.spyOn(inventory, "reconcileProviderProfile").mockRejectedValue(
+      new Error("provider unavailable"),
+    );
+
+    await expect(inventory.assertAvailableForNewOrder()).rejects.toThrow(
+      "No eSIM inventory is currently available",
+    );
   });
 });
 
@@ -759,6 +832,49 @@ describe("InventoryService.reserve provider safety", () => {
     expect(
       results.filter((result) => result.status === "rejected"),
     ).toHaveLength(1);
+  });
+
+  it("rechecks stale safe stock before reserving it", async () => {
+    const candidate = {
+      id: "stale-inv-1",
+      iccid: "8988247000000000999",
+      eid: "eid-stale",
+      status: "AVAILABLE",
+      assignedOrderId: null,
+      providerStatus: "released",
+    };
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: candidate.id })
+      .mockResolvedValueOnce(candidate);
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst,
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    vi.spyOn(inventory, "reconcileProviderProfile").mockResolvedValue({
+      id: candidate.id,
+      iccid: candidate.iccid,
+      localStatus: "AVAILABLE",
+      providerStatus: "released",
+      inSync: true,
+      checkedAt: new Date().toISOString(),
+    });
+
+    await expect(inventory.reserve("order-1")).resolves.toMatchObject({
+      id: candidate.id,
+      status: "RESERVED",
+      assignedOrderId: "order-1",
+    });
   });
 });
 

@@ -70,12 +70,7 @@ export class InventoryService implements OnModuleInit {
                     { providerStatus: null },
                     {
                       providerStatus: {
-                        notIn: [
-                          "available",
-                          "allocated",
-                          "AVAILABLE",
-                          "ALLOCATED",
-                        ],
+                        notIn: SELLABLE_PROVIDER_STATUSES,
                       },
                     },
                   ],
@@ -259,6 +254,7 @@ export class InventoryService implements OnModuleInit {
       Number(process.env.INVENTORY_PROVIDER_FRESHNESS_HOURS ?? 24),
     );
     const freshAfter = new Date(Date.now() - freshnessHours * 60 * 60_000);
+    let refreshedStaleStock = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       const candidate = await this.prisma.esimInventory.findFirst({
         where: {
@@ -274,6 +270,10 @@ export class InventoryService implements OnModuleInit {
         },
         orderBy: { createdAt: "asc" },
       });
+      if (!candidate && !refreshedStaleStock) {
+        refreshedStaleStock = true;
+        if (await this.refreshStaleSellableCandidate(freshAfter)) continue;
+      }
       if (!candidate)
         throw new ConflictException("No eSIM inventory is currently available");
       const claimed = await this.prisma.esimInventory.updateMany({
@@ -314,23 +314,76 @@ export class InventoryService implements OnModuleInit {
       1,
       Number(process.env.INVENTORY_PROVIDER_FRESHNESS_HOURS ?? 24),
     );
-    const available = await this.prisma.esimInventory.count({
-      where: {
-        status: InventoryStatus.AVAILABLE,
-        assignedOrderId: null,
-        providerSubscriptionId: null,
-        providerStatus: {
-          in: SELLABLE_PROVIDER_STATUSES,
+    const freshAfter = new Date(Date.now() - freshnessHours * 60 * 60_000);
+    const countAvailable = () =>
+      this.prisma.esimInventory.count({
+        where: {
+          status: InventoryStatus.AVAILABLE,
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          providerStatus: {
+            in: SELLABLE_PROVIDER_STATUSES,
+          },
+          lastProviderCheckedAt: { gte: freshAfter },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          batch: { status: BatchStatus.APPROVED },
         },
-        lastProviderCheckedAt: {
-          gte: new Date(Date.now() - freshnessHours * 60 * 60_000),
-        },
-        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-        batch: { status: BatchStatus.APPROVED },
-      },
-    });
+      });
+    let available = await countAvailable();
+    if (
+      available === 0 &&
+      (await this.refreshStaleSellableCandidate(freshAfter))
+    )
+      available = await countAvailable();
     if (available === 0)
       throw new ConflictException("No eSIM inventory is currently available");
+  }
+
+  /**
+   * Refreshes one otherwise-eligible stale profile on demand. Checkout never
+   * trusts the local AVAILABLE label by itself: reconcileProviderProfile must
+   * obtain fresh provider evidence and will quarantine an unsafe or failed
+   * profile before this method can return true.
+   */
+  private async refreshStaleSellableCandidate(freshAfter: Date) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const stale = await this.prisma.esimInventory.findFirst({
+        where: {
+          status: InventoryStatus.AVAILABLE,
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          providerStatus: { in: SELLABLE_PROVIDER_STATUSES },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          batch: { status: BatchStatus.APPROVED },
+          AND: [
+            {
+              OR: [
+                { lastProviderCheckedAt: null },
+                { lastProviderCheckedAt: { lt: freshAfter } },
+              ],
+            },
+          ],
+        },
+        orderBy: [
+          { lastProviderCheckedAt: { sort: "asc", nulls: "first" } },
+          { createdAt: "asc" },
+        ],
+        select: { id: true },
+      });
+      if (!stale) return false;
+      try {
+        const result = await this.reconcileProviderProfile(stale.id);
+        if (
+          result.localStatus === InventoryStatus.AVAILABLE &&
+          isSellableProviderStatus(result.providerStatus)
+        )
+          return true;
+      } catch {
+        // Reconciliation records/quarantines the failed profile. Try the next
+        // stale candidate without weakening the provider-evidence requirement.
+      }
+    }
+    return false;
   }
 
   async profileForOrder(orderId: string) {
