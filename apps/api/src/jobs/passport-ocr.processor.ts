@@ -215,9 +215,14 @@ export class PassportOcrProcessor implements OnModuleInit {
       });
     if (
       !verification ||
-      ["VERIFIED", "INVALID", "CONSUMED", "MANUAL_REVIEW", "EXPIRED"].includes(
-        verification.status,
-      )
+      [
+        "VERIFIED",
+        "INVALID",
+        "REUPLOAD_REQUIRED",
+        "CONSUMED",
+        "MANUAL_REVIEW",
+        "EXPIRED",
+      ].includes(verification.status)
     )
       return { skipped: true };
     if (verification.expiresAt <= new Date()) {
@@ -295,9 +300,32 @@ export class PassportOcrProcessor implements OnModuleInit {
         ? "VERIFIED"
         : partial
           ? "PENDING"
-          : "INVALID";
-      await this.prisma.$transaction([
-        this.prisma.partnerDocumentUploadIntent.update({
+          : "REUPLOAD_REQUIRED";
+      let linkedOrderId: string | null = null;
+      let verdictPersisted = false;
+      let linkedOrderUpdated = false;
+      await this.prisma.$transaction(async (tx) => {
+        const verificationClaim =
+          await tx.partnerDocumentVerification.updateMany({
+            where: {
+              id: verification.id,
+              status: {
+                in: ["AWAITING_UPLOAD", "PROCESSING", "PROCESSING_BACKGROUND"],
+              },
+            },
+            data: {
+              status: accepted
+                ? "VERIFIED"
+                : partial
+                  ? "MANUAL_REVIEW"
+                  : "REUPLOAD_REQUIRED",
+              failureCode:
+                accepted || partial ? null : "PASSPORT_REUPLOAD_REQUIRED",
+            },
+          });
+        if (verificationClaim.count === 0) return;
+        verdictPersisted = true;
+        await tx.partnerDocumentUploadIntent.update({
           where: { id: passport.id },
           data: {
             verificationStatus: intentStatus,
@@ -309,76 +337,76 @@ export class PassportOcrProcessor implements OnModuleInit {
             } as Prisma.InputJsonValue,
             verifiedAt: new Date(result.checkedAt),
           },
-        }),
-        this.prisma.partnerDocumentVerification.update({
-          where: { id: verification.id },
+        });
+        const persistedVerification =
+          await tx.partnerDocumentVerification.findUnique({
+            where: { id: verification.id },
+            select: { consumedOrderId: true },
+          });
+        linkedOrderId = persistedVerification?.consumedOrderId ?? null;
+        if (!linkedOrderId) return;
+        const orderClaim = await tx.order.updateMany({
+          where: {
+            id: linkedOrderId,
+            status: { in: ["REVIEW_PENDING", "AWAITING_CUSTOMER"] },
+            documentReviewStatus: {
+              in: ["OCR_PENDING", "OCR_BACKGROUND", "REUPLOAD_REQUIRED"],
+            },
+          },
           data: {
             status: accepted
+              ? "REVIEW_PENDING"
+              : partial
+                ? "REVIEW_PENDING"
+                : "AWAITING_CUSTOMER",
+            documentReviewStatus: accepted
               ? "VERIFIED"
               : partial
                 ? "MANUAL_REVIEW"
-                : "INVALID",
-            failureCode:
-              accepted || partial ? null : "PASSPORT_REUPLOAD_REQUIRED",
+                : "REUPLOAD_REQUIRED",
+            version: { increment: 1 },
           },
-        }),
-      ]);
-      if (verification.consumedOrderId) {
-        await this.prisma.$transaction([
-          this.prisma.order.update({
-            where: { id: verification.consumedOrderId },
-            data: {
-              status: accepted
-                ? "REVIEW_PENDING"
-                : partial
-                  ? "REVIEW_PENDING"
-                  : "AWAITING_CUSTOMER",
-              documentReviewStatus: accepted
-                ? "VERIFIED"
-                : partial
-                  ? "MANUAL_REVIEW"
-                  : "REUPLOAD_REQUIRED",
-              version: { increment: 1 },
-            },
-          }),
-          this.prisma.travelerDocument.updateMany({
+        });
+        if (orderClaim.count === 0) return;
+        linkedOrderUpdated = true;
+        await tx.travelerDocument.updateMany({
+          where: {
+            orderId: linkedOrderId,
+            type: DocumentType.PASSPORT,
+          },
+          data: {
+            status: accepted
+              ? "APPROVED"
+              : partial
+                ? "PENDING"
+                : "REUPLOAD_REQUIRED",
+            passportVerificationStatus: result.status,
+            passportVerificationMethod: result.method,
+            passportMatchedFields:
+              result.matchedFields as Prisma.InputJsonValue,
+            passportConfidence: result.confidence ?? null,
+            passportVerifiedAt: new Date(result.checkedAt),
+          },
+        });
+        if (accepted)
+          await tx.travelerDocument.updateMany({
             where: {
-              orderId: verification.consumedOrderId,
-              type: DocumentType.PASSPORT,
+              orderId: linkedOrderId,
+              type: { in: [DocumentType.TICKET, DocumentType.VISA] },
             },
-            data: {
-              status: accepted
-                ? "APPROVED"
-                : partial
-                  ? "PENDING"
-                  : "REUPLOAD_REQUIRED",
-              passportVerificationStatus: result.status,
-              passportVerificationMethod: result.method,
-              passportMatchedFields:
-                result.matchedFields as Prisma.InputJsonValue,
-              passportConfidence: result.confidence ?? null,
-              passportVerifiedAt: new Date(result.checkedAt),
-            },
-          }),
-          ...(accepted
-            ? [
-                this.prisma.travelerDocument.updateMany({
-                  where: {
-                    orderId: verification.consumedOrderId,
-                    type: { in: [DocumentType.TICKET, DocumentType.VISA] },
-                  },
-                  data: { status: "APPROVED", uploadVerified: true },
-                }),
-              ]
-            : []),
-        ]);
+            data: { status: "APPROVED", uploadVerified: true },
+          });
+      });
+      if (!verdictPersisted)
+        return { skipped: true, reviewAlreadyDecided: true };
+      if (linkedOrderId && linkedOrderUpdated) {
         if (!accepted)
           await this.resilience.attention({
-            dedupeKey: `document-review:${verification.consumedOrderId}`,
+            dedupeKey: `document-review:${linkedOrderId}`,
             category: partial ? "DOCUMENT_MANUAL_REVIEW" : "DOCUMENT_REUPLOAD",
             entityType: "Order",
-            entityId: verification.consumedOrderId,
-            orderId: verification.consumedOrderId,
+            entityId: linkedOrderId,
+            orderId: linkedOrderId,
             summary: partial
               ? "Document processing needs manual review"
               : "Document verification requires a clearer upload",
@@ -396,9 +424,13 @@ export class PassportOcrProcessor implements OnModuleInit {
           : partial
             ? "document.verification.manual_review"
             : "document.verification.reupload_required",
+        linkedOrderUpdated ? linkedOrderId : null,
       );
       return result;
     } catch (error) {
+      this.logger.error(
+        `Partner document verification ${verification.id} failed: ${error instanceof Error ? error.message : "unknown"}`,
+      );
       const exhausted = job.attemptsMade + 1 >= Number(job.opts.attempts ?? 1);
       await this.prisma.partnerDocumentVerification.update({
         where: { id: verification.id },
@@ -497,7 +529,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       }),
       this.prisma.partnerDocumentVerification.update({
         where: { id: verificationId },
-        data: { status: "INVALID", failureCode: code },
+        data: { status: "REUPLOAD_REQUIRED", failureCode: code },
       }),
       ...(verification?.consumedOrderId
         ? [
@@ -526,6 +558,7 @@ export class PassportOcrProcessor implements OnModuleInit {
     verificationId: string,
     externalOrderId: string,
     type: string,
+    orderId?: string | null,
   ) {
     const endpoints = await this.prisma.partnerWebhookEndpoint.findMany({
       where: { partnerId, active: true },
@@ -539,6 +572,7 @@ export class PassportOcrProcessor implements OnModuleInit {
     await this.prisma.partnerEvent.create({
       data: {
         partnerId,
+        ...(orderId ? { orderId } : {}),
         type,
         resourceId: verificationId,
         correlationId: randomUUID(),

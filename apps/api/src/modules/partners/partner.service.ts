@@ -54,19 +54,23 @@ function decodeCursor(
   cursor?: string | undefined,
 ): { createdAt: Date; id: string } | null {
   if (!cursor) return null;
-  let raw: string;
-  try {
-    raw = Buffer.from(cursor, "base64url").toString("utf8");
-  } catch {
-    return null;
-  }
+  const invalid = () =>
+    new ApiException({
+      code: "INVALID_CURSOR",
+      message: "Cursor is malformed or expired",
+      status: 400,
+    });
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) throw invalid();
+  const raw = Buffer.from(cursor, "base64url").toString("utf8");
   const separator = raw.lastIndexOf("|");
-  if (separator <= 0) return null;
+  if (separator <= 0 || separator !== raw.indexOf("|")) throw invalid();
   const iso = raw.slice(0, separator);
   const id = raw.slice(separator + 1);
-  if (!id) return null;
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))
+    throw invalid();
   const createdAt = new Date(iso);
-  if (Number.isNaN(createdAt.getTime())) return null;
+  if (Number.isNaN(createdAt.getTime()) || createdAt.toISOString() !== iso)
+    throw invalid();
   return { createdAt, id };
 }
 
@@ -394,24 +398,15 @@ export class PartnerService {
   }
 
   async documentVerification(partnerId: string, verificationId: string) {
-    let verification = await this.prisma.partnerDocumentVerification.findFirst({
-      where: { id: verificationId, partnerId },
-      include: { documents: true },
-    });
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { id: verificationId, partnerId },
+        include: { documents: true },
+      });
     if (!verification)
       throw new NotFoundException({
         code: "DOCUMENT_VERIFICATION_NOT_FOUND",
         message: "Document verification not found",
-      });
-    if (
-      ["AWAITING_UPLOAD", "PROCESSING"].includes(verification.status) &&
-      verification.checkoutReleaseAt &&
-      verification.checkoutReleaseAt <= new Date()
-    )
-      verification = await this.prisma.partnerDocumentVerification.update({
-        where: { id: verification.id },
-        data: { status: "PROCESSING_BACKGROUND" },
-        include: { documents: true },
       });
     const allRequiredUploadsConfirmed = [
       DocumentType.PASSPORT,
@@ -548,6 +543,12 @@ export class PartnerService {
             where: { id: verification.consumedOrderId },
             data: {
               status: OrderStatus.REVIEW_PENDING,
+              documentReviewStatus:
+                verification.reviewPolicy === "AUTO_OCR"
+                  ? "OCR_PENDING"
+                  : verification.reviewPolicy === "MANUAL_REVIEW"
+                    ? "MANUAL_REVIEW"
+                    : "SKIPPED",
               version: { increment: 1 },
             },
           }),
@@ -947,16 +948,39 @@ export class PartnerService {
           message: "Document verification was already consumed",
           status: 409,
         });
+      const currentVerification =
+        await tx.partnerDocumentVerification.findUnique({
+          where: { id: verification.id },
+          include: { documents: true },
+        });
+      if (!currentVerification)
+        throw new ApiException({
+          code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+          message: "Document verification not found",
+          status: 404,
+        });
+      if (
+        currentVerification.status === "EXPIRED" ||
+        (currentVerification.status === "INVALID" &&
+          currentVerification.failureCode === "DOCUMENTS_REJECTED")
+      )
+        throw new ApiException({
+          code: "DOCUMENTS_REJECTED",
+          message: "The documented purchase was rejected",
+          status: 422,
+        });
+      const currentIntents = currentVerification.documents;
       const partnerCustomer = await this.ensurePartnerCustomer(
         tx,
         partner.code,
         partnerId,
         input.externalCustomerId,
       );
-      const status =
-        verification.status === "INVALID"
-          ? OrderStatus.AWAITING_CUSTOMER
-          : OrderStatus.REVIEW_PENDING;
+      const status = ["INVALID", "REUPLOAD_REQUIRED"].includes(
+        currentVerification.status,
+      )
+        ? OrderStatus.AWAITING_CUSTOMER
+        : OrderStatus.REVIEW_PENDING;
       const pricingSnapshot = {
         pricingSource: "PUBLIC_CATALOGUE",
         planId: plan.id,
@@ -982,15 +1006,17 @@ export class PartnerService {
           partnerMetadata: input.metadata ?? Prisma.JsonNull,
           planId: plan.id,
           status,
-          documentReviewPolicy: verification.reviewPolicy,
+          documentReviewPolicy: currentVerification.reviewPolicy,
           documentReviewStatus:
-            verification.status === "VERIFIED"
+            currentVerification.status === "VERIFIED"
               ? "VERIFIED"
-              : verification.status === "MANUAL_REVIEW"
+              : currentVerification.status === "MANUAL_REVIEW"
                 ? "MANUAL_REVIEW"
-                : verification.status === "SKIPPED"
+                : currentVerification.status === "SKIPPED"
                   ? "SKIPPED"
-                  : verification.status === "INVALID"
+                  : ["INVALID", "REUPLOAD_REQUIRED"].includes(
+                        currentVerification.status,
+                      )
                     ? "REUPLOAD_REQUIRED"
                     : "OCR_BACKGROUND",
           subtotal: amountPaisa / 100,
@@ -999,10 +1025,10 @@ export class PartnerService {
           compatibilityAcceptedAt: new Date(input.consent.acceptedAt),
           traveler: {
             create:
-              verification.travelerSnapshot as Prisma.TravelerUncheckedCreateWithoutOrderInput,
+              currentVerification.travelerSnapshot as Prisma.TravelerUncheckedCreateWithoutOrderInput,
           },
           documents: {
-            create: intents.map((intent) => {
+            create: currentIntents.map((intent) => {
               const result = intent.verificationResult as {
                 method?: string;
                 matchedFields?: unknown;
@@ -1014,7 +1040,7 @@ export class PartnerService {
                 privateAssetId: intent.privateAssetId,
                 uploadVerified: true,
                 status:
-                  verification.status === "VERIFIED"
+                  currentVerification.status === "VERIFIED"
                     ? DocumentStatus.APPROVED
                     : ["INVALID", "REUPLOAD_REQUIRED"].includes(
                           intent.verificationStatus,
@@ -1022,7 +1048,7 @@ export class PartnerService {
                       ? DocumentStatus.REUPLOAD_REQUIRED
                       : DocumentStatus.PENDING,
                 ...(intent.type === DocumentType.PASSPORT &&
-                verification.status === "VERIFIED"
+                currentVerification.status === "VERIFIED"
                   ? {
                       passportVerificationStatus: "VERIFIED",
                       passportVerificationMethod: result?.method ?? null,

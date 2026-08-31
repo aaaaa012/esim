@@ -79,12 +79,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const response = http.getResponse<{
       statusCode?: number;
       status(code: number): unknown;
+      setHeader(name: string, value: string): unknown;
     }>();
 
     return from(this.claim(principalId, method, route, key, requestHash)).pipe(
       switchMap((claim) => {
         if (!claim.owned) {
           if (claim.responseStatus) response.status(claim.responseStatus);
+          response.setHeader("Idempotency-Replayed", "true");
           return of(claim.response);
         }
         return next.handle().pipe(

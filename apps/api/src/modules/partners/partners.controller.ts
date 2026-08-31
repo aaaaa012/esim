@@ -154,8 +154,8 @@ export const hostedCheckoutSessionSchema = z.object({
       "Explicit customer-approved fallback when the supplied mobile cannot be used for a top-up",
     ),
 });
-const listSchema = z.object({
-  cursor: z.string().uuid().optional(),
+export const listSchema = z.object({
+  cursor: z.string().trim().min(1).max(256).optional(),
   status: z.enum(OrderStatus).optional(),
   externalOrderId: z.string().max(120).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -175,8 +175,8 @@ const notificationSchema = z.object({
   channel: z.enum(["EMAIL", "WHATSAPP"]),
   template: z.enum(["ORDER_STATUS", "QR_READY", "DOCUMENT_REUPLOAD"]),
 });
-const ledgerSchema = z.object({
-  cursor: z.string().uuid().optional(),
+export const ledgerSchema = z.object({
+  cursor: z.string().trim().min(1).max(256).optional(),
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),
   externalOrderId: z.string().max(120).optional(),

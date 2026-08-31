@@ -8,7 +8,11 @@ function context(
   responseStatus = 201,
   headerName: "idempotency-key" | "x-idempotency-key" = "idempotency-key",
 ) {
-  const response = { statusCode: responseStatus, status: vi.fn() };
+  const response = {
+    statusCode: responseStatus,
+    status: vi.fn(),
+    setHeader: vi.fn(),
+  };
   return {
     value: {
       switchToHttp: () => ({
@@ -120,6 +124,27 @@ describe("IdempotencyInterceptor", () => {
     });
     expect(handler.handle).not.toHaveBeenCalled();
     expect(ctx.response.status).toHaveBeenCalledWith(201);
+    expect(ctx.response.setHeader).toHaveBeenCalledWith(
+      "Idempotency-Replayed",
+      "true",
+    );
+  });
+
+  it("does not mark the original response as a replay", async () => {
+    const prisma = {
+      enabled: true,
+      apiIdempotencyRecord: {
+        create: vi.fn().mockResolvedValue({ id: "claim-1" }),
+        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn(),
+      },
+    };
+    const interceptor = new IdempotencyInterceptor(prisma as never);
+    const ctx = context({ order: "one" });
+    await lastValueFrom(
+      interceptor.intercept(ctx.value, { handle: () => of({ ok: true }) }),
+    );
+    expect(ctx.response.setHeader).not.toHaveBeenCalled();
   });
 
   it("marks a claim failed when completion cannot be persisted", async () => {

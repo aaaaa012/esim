@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   completeCreateSchema,
+  ledgerSchema,
+  listSchema,
   uploadSessionSchema,
 } from "./partners.controller.js";
 
@@ -19,6 +21,22 @@ const traveler = {
 } as const;
 
 describe("simplified partner order contract", () => {
+  it("accepts opaque pagination cursors returned by the API", () => {
+    const cursor = Buffer.from(
+      "2026-08-31T12:00:00.000Z|00000000-0000-4000-8000-000000000001",
+    ).toString("base64url");
+    expect(listSchema.safeParse({ cursor }).success).toBe(true);
+    expect(ledgerSchema.safeParse({ cursor }).success).toBe(true);
+  });
+
+  it("rejects oversized pagination cursors at the contract boundary", () => {
+    expect(listSchema.safeParse({ cursor: "a".repeat(257) }).success).toBe(
+      false,
+    );
+    expect(ledgerSchema.safeParse({ cursor: "a".repeat(257) }).success).toBe(
+      false,
+    );
+  });
   it("accepts one complete ledger order", () => {
     expect(
       completeCreateSchema.safeParse({
