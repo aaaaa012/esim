@@ -66,9 +66,19 @@ type Order = {
   provisioningFailure?: { code: string; message: string };
 };
 type Payment = {
-  reference: string; redirectUrl: string; expiresAt: string;
-  qrDataUrl?: string; qrPayload?: string; websocketUrl?: string;
-  banks?: { bankName: string; bankCode: string; bankIcon?: string; intentScheme: string }[];
+  reference: string;
+  redirectUrl: string;
+  expiresAt: string;
+  qrDataUrl?: string;
+  qrPayload?: string;
+  websocketUrl?: string;
+  banks?: {
+    bankName: string;
+    bankCode: string;
+    bankIcon?: string;
+    packageName?: string;
+    intentScheme: string;
+  }[];
 };
 type DocumentAuthorization = {
   id: string;
@@ -241,9 +251,11 @@ export default function CheckoutClient({
       !response.ok &&
       isLoaded &&
       isSignedIn !== true &&
-      ["AUTHENTICATION_REQUIRED", "FORBIDDEN", "ACCOUNT_TYPE_FORBIDDEN"].includes(
-        payload.error?.code ?? "",
-      ) &&
+      [
+        "AUTHENTICATION_REQUIRED",
+        "FORBIDDEN",
+        "ACCOUNT_TYPE_FORBIDDEN",
+      ].includes(payload.error?.code ?? "") &&
       currentToken()
     ) {
       toGuest();
@@ -370,18 +382,15 @@ export default function CheckoutClient({
           throw new Error(
             apiErrorMessage(
               payload.error?.code ?? "UNEXPECTED",
-              payload.error?.message ?? "This recovery link is invalid or expired",
+              payload.error?.message ??
+                "This recovery link is invalid or expired",
             ),
           );
         if (cancelled) return;
         setGuest(true);
         guestRef.current = true;
         storeGuestToken(payload.data.token, orderId);
-        storeRecovery(
-          orderId,
-          saved.token,
-          payload.data.recoveryExpiresAt,
-        );
+        storeRecovery(orderId, saved.token, payload.data.recoveryExpiresAt);
         setOrder(payload.data.order);
       } catch (cause) {
         if (!cancelled)
@@ -422,11 +431,16 @@ export default function CheckoutClient({
   // (instead of exiting the page), and the on-page Back button shares the same
   // stack. Programmatic/mount transitions still use setStep directly.
   const stepFromUrl = () => {
-    const value = Number(new URLSearchParams(window.location.search).get("step"));
+    const value = Number(
+      new URLSearchParams(window.location.search).get("step"),
+    );
     return Number.isInteger(value) && value >= 1 && value <= 4 ? value : 1;
   };
   const advance = (next: number) => {
-    if (typeof window === "undefined") { setStep(next); return; }
+    if (typeof window === "undefined") {
+      setStep(next);
+      return;
+    }
     try {
       const url = new URL(window.location.href);
       url.searchParams.set("step", String(next));
@@ -471,15 +485,16 @@ export default function CheckoutClient({
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
   const [verifyingPassport, setVerifyingPassport] = useState(false);
-  const [availableProviders, setAvailableProviders] = useState<PaymentProvider[]>([
-    PaymentProvider.KHALTI,
-  ]);
+  const [availableProviders, setAvailableProviders] = useState<
+    PaymentProvider[]
+  >([PaymentProvider.KHALTI]);
   useEffect(() => {
     void api<{ providers: PaymentProvider[] }>("/payments/providers")
       .then((value) => {
         if (!value.providers.length) return;
         setAvailableProviders(value.providers);
-        if (!value.providers.includes(provider)) setProvider(value.providers[0]!);
+        if (!value.providers.includes(provider))
+          setProvider(value.providers[0]!);
       })
       .catch(() => undefined);
   }, []);
@@ -788,18 +803,15 @@ export default function CheckoutClient({
           order: Order;
           token: string;
           recovery: { token: string; expiresAt: string };
-        }>(
-          "/customer/orders",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              planId,
-              compatibilityAccepted: true,
-              mobile: mobile || traveler.mobile || undefined,
-              lookupToken: lookupToken || undefined,
-            }),
-          },
-        );
+        }>("/customer/orders", {
+          method: "POST",
+          body: JSON.stringify({
+            planId,
+            compatibilityAccepted: true,
+            mobile: mobile || traveler.mobile || undefined,
+            lookupToken: lookupToken || undefined,
+          }),
+        });
         setOrder(created.order);
         storeGuestToken(created.token, created.order.id);
         storeRecovery(
@@ -901,7 +913,8 @@ export default function CheckoutClient({
         throw new Error(
           apiErrorMessage(
             payload.error?.code ?? "UNEXPECTED",
-            payload.error?.message ?? "We could not save this order to your account",
+            payload.error?.message ??
+              "We could not save this order to your account",
           ),
         );
       try {
@@ -1103,7 +1116,9 @@ export default function CheckoutClient({
     try {
       socket = new WebSocket(payment.websocketUrl);
       socket.onmessage = () => complete(); // Socket is only a prompt; API verification remains authoritative.
-    } catch { /* Manual status verification remains available. */ }
+    } catch {
+      /* Manual status verification remains available. */
+    }
     return () => socket?.close();
   }, [payment?.websocketUrl, order?.id]);
   useEffect(() => {
@@ -1125,7 +1140,9 @@ export default function CheckoutClient({
       setCopiedRecovery(true);
       window.setTimeout(() => setCopiedRecovery(false), 2_500);
     } catch {
-      setError("Copy was blocked. Keep this tab open or use the emailed link after entering your details.");
+      setError(
+        "Copy was blocked. Keep this tab open or use the emailed link after entering your details.",
+      );
     }
   };
 
@@ -1189,7 +1206,11 @@ export default function CheckoutClient({
                 >
                   <i>{step > index + 1 ? <Check size={13} /> : index + 1}</i>
                   {step > index + 1 ? (
-                    <button type="button" onClick={() => jumpTo(index + 1)} title={`Go back to ${label}`}>
+                    <button
+                      type="button"
+                      onClick={() => jumpTo(index + 1)}
+                      title={`Go back to ${label}`}
+                    >
                       <span>{label}</span>
                     </button>
                   ) : (
@@ -1200,9 +1221,16 @@ export default function CheckoutClient({
             </div>
             {error && <ErrorModal error={error} onClose={() => setError("")} />}
             {showAccountChoice && (
-              <div className="form-section account-choice" aria-labelledby="checkout-account-title">
-                <span className="form-icon"><UserRound /></span>
-                <h2 id="checkout-account-title">How would you like to continue?</h2>
+              <div
+                className="form-section account-choice"
+                aria-labelledby="checkout-account-title"
+              >
+                <span className="form-icon">
+                  <UserRound />
+                </span>
+                <h2 id="checkout-account-title">
+                  How would you like to continue?
+                </h2>
                 <p>
                   Sign in to keep this order in My eSIMs and check verification
                   status from any device.
@@ -1211,14 +1239,28 @@ export default function CheckoutClient({
                   <div className="account-choice-primary">
                     <span className="choice-badge">Recommended</span>
                     <b>Continue with an account</b>
-                    <small>Order history, easier status checks, and secure access across devices.</small>
+                    <small>
+                      Order history, easier status checks, and secure access
+                      across devices.
+                    </small>
                     {isSignedIn === true ? (
-                      <button className="button wide" disabled={busy} onClick={() => { setShowAccountChoice(false); void createOrder(false); }}>
+                      <button
+                        className="button wide"
+                        disabled={busy}
+                        onClick={() => {
+                          setShowAccountChoice(false);
+                          void createOrder(false);
+                        }}
+                      >
                         Continue with my account <ChevronRight size={18} />
                       </button>
                     ) : (
                       <SignInButton mode="modal">
-                        <button className="button wide" disabled={busy} onClick={() => setPendingSignIn(true)}>
+                        <button
+                          className="button wide"
+                          disabled={busy}
+                          onClick={() => setPendingSignIn(true)}
+                        >
                           Sign in or create account <ChevronRight size={18} />
                         </button>
                       </SignInButton>
@@ -1226,43 +1268,81 @@ export default function CheckoutClient({
                   </div>
                   <div className="account-choice-guest">
                     <b>Continue as guest</b>
-                    <small>No account required. You’ll receive a private recovery link to keep this order.</small>
-                    <button className="button secondary wide" disabled={busy} onClick={() => { setShowAccountChoice(false); void createOrder(true); }}>
+                    <small>
+                      No account required. You’ll receive a private recovery
+                      link to keep this order.
+                    </small>
+                    <button
+                      className="button secondary wide"
+                      disabled={busy}
+                      onClick={() => {
+                        setShowAccountChoice(false);
+                        void createOrder(true);
+                      }}
+                    >
                       Continue as guest
                     </button>
                   </div>
                 </div>
-                <button className="account-choice-back" type="button" onClick={() => setShowAccountChoice(false)}>
+                <button
+                  className="account-choice-back"
+                  type="button"
+                  onClick={() => setShowAccountChoice(false)}
+                >
                   <ChevronLeft size={16} /> Back to compatibility
                 </button>
               </div>
             )}
             {!showAccountChoice && guest && order && recovery && (
               <div className="guest-recovery-card" role="note">
-                <span className="guest-recovery-icon"><Link2 /></span>
+                <span className="guest-recovery-icon">
+                  <Link2 />
+                </span>
                 <div>
                   <b>Keep your private order link</b>
                   <p>
-                    Save this link before closing the tab. It restores order {order.orderNumber} and its verification status for 30 days. Anyone with the link can access this order.
+                    Save this link before closing the tab. It restores order{" "}
+                    {order.orderNumber} and its verification status for 30 days.
+                    Anyone with the link can access this order.
                   </p>
-                  <small>After you save traveller details, we’ll also email a recovery link to the address provided.</small>
+                  <small>
+                    After you save traveller details, we’ll also email a
+                    recovery link to the address provided.
+                  </small>
                   <div className="guest-recovery-actions">
-                    <button className="button secondary" type="button" onClick={() => void copyRecoveryLink()}>
-                      <Copy size={16} /> {copiedRecovery ? "Link copied" : "Copy private link"}
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={() => void copyRecoveryLink()}
+                    >
+                      <Copy size={16} />{" "}
+                      {copiedRecovery ? "Link copied" : "Copy private link"}
                     </button>
                     {isSignedIn === true ? (
-                      <button className="button secondary" type="button" disabled={busy} onClick={() => void claimGuestOrder()}>
+                      <button
+                        className="button secondary"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void claimGuestOrder()}
+                      >
                         Save to My eSIMs
                       </button>
                     ) : (
                       <SignInButton mode="modal">
-                        <button className="button secondary" type="button" disabled={busy} onClick={() => setClaimIntent(true)}>
+                        <button
+                          className="button secondary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setClaimIntent(true)}
+                        >
                           Sign in and save to My eSIMs
                         </button>
                       </SignInButton>
                     )}
                   </div>
-                  <span className="sr-only" aria-live="polite">{copiedRecovery ? "Private recovery link copied" : ""}</span>
+                  <span className="sr-only" aria-live="polite">
+                    {copiedRecovery ? "Private recovery link copied" : ""}
+                  </span>
                 </div>
               </div>
             )}
@@ -1651,8 +1731,8 @@ export default function CheckoutClient({
                     <span>{order?.orderNumber}</span>
                     <p>
                       We are checking with your payment provider. Your order
-                      will only be marked as paid after the gateway confirms
-                      the transaction.
+                      will only be marked as paid after the gateway confirms the
+                      transaction.
                     </p>
                   </div>
                 ) : (
@@ -1685,14 +1765,27 @@ export default function CheckoutClient({
                       NPR amount.
                     </p>
                     <div className="gateway-grid">
-                      <button className={provider === PaymentProvider.KHALTI ? "selected" : ""} onClick={() => setProvider(PaymentProvider.KHALTI)}>
+                      <button
+                        className={
+                          provider === PaymentProvider.KHALTI ? "selected" : ""
+                        }
+                        onClick={() => setProvider(PaymentProvider.KHALTI)}
+                      >
                         <b>Khalti</b>
                         <small>Digital wallet</small>
                       </button>
-                      {availableProviders.includes(PaymentProvider.FONEPAY) ? <button className={provider === PaymentProvider.FONEPAY ? "selected" : ""} onClick={() => setProvider(PaymentProvider.FONEPAY)}>
-                        <b>Fonepay</b>
-                        <small>Mobile banking & QR</small>
-                      </button> : null}
+                      {availableProviders.includes(PaymentProvider.FONEPAY) ? (
+                        <button
+                          className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
+                          onClick={() => setProvider(PaymentProvider.FONEPAY)}
+                        >
+                          <img
+                            src="/brand/fonepay-logo.png"
+                            alt="Checkout by Fonepay"
+                          />
+                          <small>Mobile banking &amp; QR</small>
+                        </button>
+                      ) : null}
                     </div>
                     {payment ? (
                       SIMULATOR ? (
@@ -1712,14 +1805,97 @@ export default function CheckoutClient({
                           </Action>
                         </div>
                       ) : payment.qrDataUrl ? (
-                        <div className="simulator-box">
-                          <span>Scan with Fonepay mobile banking</span>
-                          <img src={payment.qrDataUrl} alt="Fonepay payment QR code" style={{ width: 220, height: 220, alignSelf: "center" }} />
-                          {payment.banks?.length ? <div className="gateway-grid">{payment.banks.map((bank) => <button key={bank.bankCode} onClick={() => { if (!payment.qrPayload) return; const target = fonepayBankIntentUrl(bank.intentScheme, payment.qrPayload); if (target) window.location.assign(target); }}><b>{bank.bankName}</b><small>Open banking app</small></button>)}</div> : null}
-                          <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>I&apos;ve paid — check status</Action>
-                        </div>
+                        <section
+                          className="fonepay-checkout"
+                          aria-labelledby="fonepay-checkout-title"
+                        >
+                          <img
+                            className="fonepay-checkout-logo"
+                            src="/brand/fonepay-logo.png"
+                            alt="Checkout by Fonepay"
+                          />
+                          <div className="fonepay-qr-stage">
+                            <h2 id="fonepay-checkout-title">Scan to pay</h2>
+                            <p>
+                              Scan this QR with a Fonepay-supported mobile
+                              banking app.
+                            </p>
+                            <img
+                              className="fonepay-qr"
+                              src={payment.qrDataUrl}
+                              alt="Fonepay payment QR code"
+                            />
+                          </div>
+                          {payment.banks?.length ? (
+                            <div className="fonepay-bank-section">
+                              <div className="fonepay-bank-heading">
+                                <b>Or pay with your banking app</b>
+                                <small>
+                                  Select your bank to continue securely.
+                                </small>
+                              </div>
+                              <div className="fonepay-bank-list">
+                                {payment.banks.map((bank) => (
+                                  <button
+                                    key={bank.bankCode}
+                                    onClick={() => {
+                                      if (!payment.qrPayload) return;
+                                      const target = fonepayBankIntentUrl(
+                                        bank.intentScheme,
+                                        payment.qrPayload,
+                                      );
+                                      if (target)
+                                        window.location.assign(target);
+                                    }}
+                                  >
+                                    <span className="fonepay-bank-identity">
+                                      {bank.bankIcon ? (
+                                        <img
+                                          src={bank.bankIcon}
+                                          alt={`${bank.bankName} logo`}
+                                        />
+                                      ) : (
+                                        <span
+                                          className="fonepay-bank-fallback"
+                                          aria-hidden="true"
+                                        >
+                                          {bank.bankName.slice(0, 1)}
+                                        </span>
+                                      )}
+                                      <b>{bank.bankName}</b>
+                                    </span>
+                                    <span className="fonepay-bank-open">
+                                      Open app
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                          <Action
+                            busy={busy}
+                            disabled={
+                              verifyingPassport || !passportGatePassed(order)
+                            }
+                            onClick={complete}
+                          >
+                            Check payment status
+                          </Action>
+                          <small className="fonepay-security-note">
+                            Your order is completed only after Fonepay confirms
+                            the payment.
+                          </small>
+                        </section>
                       ) : (
-                        <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>Check payment status</Action>
+                        <Action
+                          busy={busy}
+                          disabled={
+                            verifyingPassport || !passportGatePassed(order)
+                          }
+                          onClick={complete}
+                        >
+                          Check payment status
+                        </Action>
                       )
                     ) : isTopUp && !order ? (
                       <Action busy={busy} onClick={begin}>
@@ -1733,7 +1909,10 @@ export default function CheckoutClient({
                         }
                         onClick={() => void initiate()}
                       >
-                        Continue to {provider === PaymentProvider.FONEPAY ? "Fonepay" : "Khalti"}
+                        Continue to{" "}
+                        {provider === PaymentProvider.FONEPAY
+                          ? "Fonepay"
+                          : "Khalti"}
                       </Action>
                     )}
                   </>

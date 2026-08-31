@@ -23,6 +23,7 @@ describe("FonepayGateway", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     for (const key of Object.keys(process.env))
       if (key.startsWith("FONEPAY_")) delete process.env[key];
@@ -65,6 +66,38 @@ describe("FonepayGateway", () => {
     expect(result.qrPayload).toBe("fonepay-qr-payload");
     expect(result.websocketUrl).toBe("wss://fonepay.example/status/1");
     expect(result.banks).toHaveLength(1);
+    const bankHeaders = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
+    const qrHeaders = new Headers(fetchMock.mock.calls[2]?.[1]?.headers);
+    expect(bankHeaders.has("signature")).toBe(false);
+    expect(qrHeaders.get("signature")).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+  });
+
+  it("refreshes authentication according to Fonepay expiresIn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-31T00:00:00Z"));
+    const status = {
+      prn: "VCREF",
+      merchantCode: "VC-TERMINAL",
+      paymentStatus: "pending",
+      requestedAmount: 2499,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token-1", expiresIn: 60 }))
+      .mockResolvedValueOnce(json(status))
+      .mockResolvedValueOnce(json({ accessToken: "token-2", expiresIn: 3600 }))
+      .mockResolvedValueOnce(json(status));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new FonepayGateway();
+
+    await gateway.verify("VCREF", { orderId: "order-1", amountNpr: 2499 });
+    vi.advanceTimersByTime(31_000);
+    await gateway.verify("VCREF", { orderId: "order-1", amountNpr: 2499 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[3]?.[1]?.headers.Authorization)).toBe(
+      "Bearer token-2",
+    );
   });
 
   it("uses requestedAmount and rejects an unknown provider status", async () => {

@@ -2,9 +2,17 @@
   min-height: calc(100vh - 150px);
   padding: 60px 24px 100px;
   background:
-    radial-gradient(circle at 88% 6%, rgba(15, 118, 110, 0.12), transparent 30%),
+    radial-gradient(
+      circle at 88% 6%,
+      rgba(15, 118, 110, 0.12),
+      transparent 30%
+    ),
     radial-gradient(circle at 6% 92%, rgba(7, 89, 133, 0.1), transparent 34%),
-    linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 40%, var(--bg)) 0%, var(--bg) 30%);
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-soft) 40%, var(--bg)) 0%,
+      var(--bg) 30%
+    );
 }
 
 .checkout-shell {
@@ -129,7 +137,9 @@
 .checkout-card {
   overflow: hidden;
 }
-.account-choice { text-align: center; }
+.account-choice {
+  text-align: center;
+}
 .account-choice-grid {
   display: grid;
   grid-template-columns: 1.12fr 0.88fr;
@@ -155,7 +165,10 @@
   box-shadow: 0 12px 26px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 .account-choice-primary > b,
-.account-choice-guest > b { color: var(--text); font-size: 17px; }
+.account-choice-guest > b {
+  color: var(--text);
+  font-size: 17px;
+}
 .account-choice-primary > small,
 .account-choice-guest > small {
   min-height: 42px;
@@ -205,21 +218,28 @@
   background: var(--surface);
   color: var(--primary);
 }
-.guest-recovery-card b { color: var(--text); }
+.guest-recovery-card b {
+  color: var(--text);
+}
 .guest-recovery-card p {
   margin: 5px 0;
   color: var(--text-2);
   font-size: 14px;
   line-height: 1.5;
 }
-.guest-recovery-card small { color: var(--text-3); line-height: 1.45; }
+.guest-recovery-card small {
+  color: var(--text-3);
+  line-height: 1.45;
+}
 .guest-recovery-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 9px;
   margin-top: 14px;
 }
-.guest-recovery-actions .button { min-height: 44px; }
+.guest-recovery-actions .button {
+  min-height: 44px;
+}
 .sr-only {
   position: absolute;
   width: 1px;
@@ -503,8 +523,11 @@
 .step-tabs .done button i {
   background: var(--success-soft);
   color: var(--success);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 30%, transparent);
-  transition: box-shadow 0.15s ease, transform 0.15s ease;
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--success) 30%, transparent);
+  transition:
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
 
 .step-tabs .done button:hover i {
@@ -828,6 +851,184 @@
 
 .gateway-grid small {
   color: var(--text-3);
+}
+
+.gateway-grid .fonepay-provider {
+  min-height: 72px;
+  background: #ffffff;
+}
+
+.gateway-grid .fonepay-provider img {
+  width: 132px;
+  height: auto;
+  object-fit: contain;
+}
+
+.gateway-grid .fonepay-provider.selected {
+  border-color: #d2202f;
+  box-shadow: 0 0 0 3px rgb(210 32 47 / 14%);
+  background: #fff7f7;
+}
+
+.fonepay-checkout {
+  --fonepay-red: #d2202f;
+  --fonepay-black: #000000;
+  display: grid;
+  gap: 22px;
+  margin-top: 22px;
+  padding: clamp(22px, 4vw, 34px);
+  border: 1px solid #e8e8e8;
+  border-radius: 18px;
+  background: #ffffff;
+  color: var(--fonepay-black);
+}
+
+.fonepay-checkout-logo {
+  width: 150px;
+  height: auto;
+  margin-inline: auto;
+  object-fit: contain;
+}
+
+.fonepay-qr-stage {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  text-align: center;
+}
+
+.fonepay-qr-stage h2 {
+  margin: 0;
+  color: var(--fonepay-black);
+  font-size: clamp(21px, 3vw, 27px);
+  letter-spacing: -0.025em;
+}
+
+.fonepay-qr-stage p {
+  max-width: 38ch;
+  margin: 0;
+  color: #4a4a4a;
+  line-height: 1.55;
+}
+
+.fonepay-qr {
+  width: min(100%, 244px);
+  height: auto;
+  margin-top: 5px;
+  padding: 12px;
+  border: 1px solid #dedede;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.fonepay-bank-section,
+.fonepay-bank-heading {
+  display: grid;
+  gap: 5px;
+}
+
+.fonepay-bank-heading {
+  padding-top: 20px;
+  border-top: 1px solid #ededed;
+}
+
+.fonepay-bank-heading b {
+  font-size: 16px;
+}
+
+.fonepay-bank-heading small,
+.fonepay-security-note {
+  color: #666666;
+  line-height: 1.45;
+}
+
+.fonepay-bank-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.fonepay-bank-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 62px;
+  padding: 10px 13px;
+  border: 1px solid #e3e3e3;
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--fonepay-black);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.fonepay-bank-list button:hover {
+  border-color: var(--fonepay-red);
+  background: #fff8f8;
+  transform: translateY(-1px);
+}
+
+.fonepay-bank-list button:active {
+  transform: translateY(0);
+}
+
+.fonepay-bank-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fonepay-bank-identity > img,
+.fonepay-bank-fallback {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.fonepay-bank-fallback {
+  display: grid;
+  place-items: center;
+  background: #f3f3f3;
+  color: #333333;
+  font-weight: 700;
+}
+
+.fonepay-bank-identity b {
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fonepay-bank-open {
+  flex: 0 0 auto;
+  color: var(--fonepay-red);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fonepay-checkout > .button {
+  width: 100%;
+  border-color: var(--fonepay-red);
+  background: var(--fonepay-red);
+  color: #ffffff;
+}
+
+.fonepay-checkout > .button:hover {
+  border-color: #b71926;
+  background: #b71926;
+}
+
+.fonepay-security-note {
+  text-align: center;
 }
 
 .simulator-box {
