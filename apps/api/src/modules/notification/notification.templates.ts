@@ -2,6 +2,7 @@ export type NotificationTemplate =
   | "ORDER_STATUS"
   | "QR_READY"
   | "DOCUMENT_REUPLOAD"
+  | "GUEST_ORDER_RECOVERY"
   | "PLAN_EXHAUSTED"
   | "PLAN_EXPIRED"
   | "OPS_ALERT";
@@ -10,6 +11,7 @@ type TemplateData = {
   orderNumber: string;
   reason?: string;
   msisdn?: string;
+  recoveryUrl?: string;
 };
 
 type NotificationContent = {
@@ -84,6 +86,22 @@ export function renderNotification(
   template: NotificationTemplate,
   data: TemplateData,
 ) {
+  if (template === "GUEST_ORDER_RECOVERY")
+    return branded({
+      subject: `Keep access to ${data.orderNumber}`,
+      paragraphs: [
+        `Use this private link to resume checkout or check verification progress for ${data.orderNumber}.`,
+        "The link expires in 30 days. Anyone with the link can access this guest order, so keep it private.",
+      ],
+      ...(data.recoveryUrl
+        ? {
+            cta: {
+              label: "Resume or check order",
+              href: data.recoveryUrl,
+            },
+          }
+        : {}),
+    });
   if (template === "OPS_ALERT")
     return branded({
       subject: `[Ops Alert] ${data.reason ?? "Action required"}`,

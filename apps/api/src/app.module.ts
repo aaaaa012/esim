@@ -14,6 +14,7 @@ import {
 } from "./modules/orders/orders.controller.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
 import { GuestOrdersController } from "./modules/orders/guest-orders.controller.js";
+import { GuestOrderAccessService } from "./modules/orders/guest-order-access.service.js";
 import {
   PaymentProvidersController,
   PaymentsController,
@@ -135,6 +136,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     CatalogService,
     OrdersService,
     OrdersPersistenceService,
+    GuestOrderAccessService,
     InventoryService,
     AdminService,
     PaymentsService,

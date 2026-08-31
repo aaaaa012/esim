@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Get,
   Headers,
+  Logger,
   Param,
   Patch,
   Post,
@@ -12,7 +13,6 @@ import {
   NotFoundException,
   UseGuards,
 } from "@nestjs/common";
-import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   createOrderSchema,
   documentRequestSchema,
@@ -25,63 +25,22 @@ import { clientIp } from "../../common/client-ip.js";
 import { PaymentsService } from "../payments/payments.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { OrdersService } from "./orders.service.js";
-
-const guestTokenTtlMs = 24 * 60 * 60_000;
-const tokenFor = (orderId: string) => {
-  const secret = process.env.GUEST_ORDER_SECRET;
-  if (!secret && process.env.NODE_ENV === "production")
-    throw new Error("GUEST_ORDER_SECRET is required in production");
-  const payload = Buffer.from(
-    JSON.stringify({ orderId, expiresAt: Date.now() + guestTokenTtlMs }),
-  ).toString("base64url");
-  return `${payload}.${createHmac(
-    "sha256",
-    secret ?? "local-guest-checkout-secret",
-  )
-    .update(payload)
-    .digest("base64url")}`;
-};
-const lookupTokenFor = (mobile: string) => {
-  const secret =
-    process.env.GUEST_ORDER_SECRET ?? "local-guest-checkout-secret";
-  const payload = Buffer.from(
-    JSON.stringify({ mobile, expiresAt: Date.now() + 15 * 60_000 }),
-  ).toString("base64url");
-  return `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
-};
-const mobileFromLookupToken = (token: string) => {
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature)
-    throw new ForbiddenException("Invalid or expired top-up lookup");
-  const expected = Buffer.from(
-    createHmac(
-      "sha256",
-      process.env.GUEST_ORDER_SECRET ?? "local-guest-checkout-secret",
-    )
-      .update(payload)
-      .digest("base64url"),
-  );
-  const actual = Buffer.from(signature);
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual))
-    throw new ForbiddenException("Invalid or expired top-up lookup");
-  const value = JSON.parse(Buffer.from(payload, "base64url").toString()) as {
-    mobile?: string;
-    expiresAt?: number;
-  };
-  if (!value.mobile || !value.expiresAt || value.expiresAt < Date.now())
-    throw new ForbiddenException("Invalid or expired top-up lookup");
-  return value.mobile;
-};
+import { GuestOrderAccessService } from "./guest-order-access.service.js";
+import { NotificationService } from "../notification/notification.service.js";
 
 // Login-free ("guest") checkout. Orders are created with no owner and every
 // mutation is gated by an HMAC token bound to the order id, so the browser can
 // drive the whole purchase without signing in.
 @Controller("guest/orders")
 export class GuestOrdersController {
+  private readonly logger = new Logger(GuestOrdersController.name);
+
   constructor(
     private readonly orders: OrdersService,
     private readonly payments: PaymentsService,
     private readonly prisma: PrismaService,
+    private readonly access: GuestOrderAccessService,
+    private readonly notifications: NotificationService,
   ) {}
 
   @Post() async create(
@@ -113,7 +72,7 @@ export class GuestOrdersController {
     const userAgent = req.headers?.["user-agent"];
     const verifiedMobile =
       candidate.lookupToken !== undefined
-        ? mobileFromLookupToken(String(candidate.lookupToken))
+        ? this.access.mobileFromLookupToken(String(candidate.lookupToken))
         : undefined;
     if (candidate.mobile !== undefined && !verifiedMobile)
       throw new ForbiddenException("A valid top-up lookup is required");
@@ -130,27 +89,72 @@ export class GuestOrdersController {
         ...(userAgent ? { userAgent } : {}),
       },
     );
-    return { order, token: tokenFor(order.id) };
+    const recovery = await this.access.issue(order.id, "DISPLAY");
+    return {
+      order,
+      token: this.access.createSessionToken(order.id),
+      recovery,
+    };
   }
 
-  @Get(":id") get(
+  @Post(":id/recover")
+  async recover(
+    @Param("id") id: string,
+    @Body() body: { token?: unknown },
+  ) {
+    await this.orders.refreshOne(id, true);
+    if (!this.orders.get(id)) throw new NotFoundException("Order not found");
+    const recovered = await this.access.recover(
+      id,
+      typeof body.token === "string" ? body.token : "",
+    );
+    const ownerId = await this.guestOwner(id);
+    return {
+      order: ownerId
+        ? await this.orders.view(id, ownerId)
+        : await this.orders.guestView(id),
+      ...recovered,
+    };
+  }
+
+  @Get(":id") async get(
     @Param("id") id: string,
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
-    return this.orders.guestView(id);
+    const ownerId = await this.assert(id, token);
+    return ownerId
+      ? this.orders.view(id, ownerId)
+      : this.orders.guestView(id);
   }
 
-  @Patch(":id/traveler") traveler(
+  @Patch(":id/traveler") async traveler(
     @Param("id") id: string,
     @Body() body: Record<string, unknown>,
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
-    return this.orders.setTraveler(id, null, travelerSchema.parse(body));
+    const ownerId = await this.assert(id, token);
+    const traveler = travelerSchema.parse(body);
+    const order = await this.orders.setTraveler(id, ownerId, traveler);
+    try {
+      const recovery = await this.access.issue(id, "EMAIL", traveler.email);
+      if (recovery)
+        await this.notifications.enqueue({
+          orderId: id,
+          channel: "EMAIL",
+          template: "GUEST_ORDER_RECOVERY",
+          recipient: traveler.email,
+          orderNumber: order.orderNumber,
+          recoveryUrl: this.recoveryUrl(id, recovery.token),
+        });
+    } catch (error) {
+      this.logger.warn(
+        `Guest recovery email could not be queued for ${id}: ${error instanceof Error ? error.message : "unknown"}`,
+      );
+    }
+    return order;
   }
 
-  @Post(":id/documents") document(
+  @Post(":id/documents") async document(
     @Param("id") id: string,
     @Body()
     body: {
@@ -160,10 +164,10 @@ export class GuestOrdersController {
     },
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
+    const ownerId = await this.assert(id, token);
     return this.orders.addDocument(
       id,
-      null,
+      ownerId,
       documentRequestSchema.parse({
         type: body.type,
         fileName: body.fileName,
@@ -172,45 +176,45 @@ export class GuestOrdersController {
     );
   }
 
-  @Post(":id/documents/:documentId/confirm") confirmDocument(
+  @Post(":id/documents/:documentId/confirm") async confirmDocument(
     @Param("id") id: string,
     @Param("documentId") documentId: string,
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
-    return this.orders.confirmDocument(id, documentId, null);
+    const ownerId = await this.assert(id, token);
+    return this.orders.confirmDocument(id, documentId, ownerId);
   }
 
   @Post(":id/verify-passport")
   @UseGuards(PassportVerificationRateLimitGuard)
-  verifyPassport(
+  async verifyPassport(
     @Param("id") id: string,
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
-    return this.orders.verifyPassport(id, null);
+    const ownerId = await this.assert(id, token);
+    return this.orders.verifyPassport(id, ownerId);
   }
 
-  @Post(":id/payment") payment(
+  @Post(":id/payment") async payment(
     @Param("id") id: string,
     @Body() body: { provider: unknown },
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
+    const ownerId = await this.assert(id, token);
     const input = initiatePaymentSchema.parse({ provider: body.provider });
-    return this.payments.initiate(id, null, input.provider);
+    return this.payments.initiate(id, ownerId, input.provider);
   }
 
-  @Post(":id/payment/verify") verify(
+  @Post(":id/payment/verify") async verify(
     @Param("id") id: string,
     @Body() body: { reference: string },
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
-    return this.payments.verify(id, null, body.reference);
+    const ownerId = await this.assert(id, token);
+    return this.payments.verify(id, ownerId, body.reference);
   }
 
-  @Post(":id/payment/simulate") simulate(
+  @Post(":id/payment/simulate") async simulate(
     @Param("id") id: string,
     @Body()
     body: {
@@ -225,30 +229,34 @@ export class GuestOrdersController {
     },
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
-    return this.payments.simulate(id, null, body.reference, body.scenario);
+    const ownerId = await this.assert(id, token);
+    return this.payments.simulate(id, ownerId, body.reference, body.scenario);
   }
 
-  @Post(":id/payment/abandon") abandon(
+  @Post(":id/payment/abandon") async abandon(
     @Param("id") id: string,
     @Body() body: { reason?: string },
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
+    const ownerId = await this.assert(id, token);
     return this.orders.resolvePaymentFailure(
       id,
-      null,
+      ownerId,
       body.reason ?? "Payment abandoned by guest",
     );
   }
 
-  @Post(":id/cancel") cancel(
+  @Post(":id/cancel") async cancel(
     @Param("id") id: string,
     @Body() body: { reason?: string },
     @Headers("x-guest-order-token") token: string,
   ) {
-    this.assert(id, token);
-    return this.orders.cancel(id, null, body.reason ?? "Cancelled by guest");
+    const ownerId = await this.assert(id, token);
+    return this.orders.cancel(
+      id,
+      ownerId,
+      body.reason ?? "Cancelled by guest",
+    );
   }
 
   @Post("topup-lookup")
@@ -267,7 +275,7 @@ export class GuestOrdersController {
       return {
         ...result,
         ...(result.found
-          ? { lookupToken: lookupTokenFor(body.mobile.trim()) }
+          ? { lookupToken: this.access.createLookupToken(body.mobile.trim()) }
           : {}),
       };
     } catch (error) {
@@ -292,7 +300,7 @@ export class GuestOrdersController {
     try {
       if (!body.planId?.trim())
         throw new BadRequestException("planId is required");
-      const mobile = mobileFromLookupToken(body.lookupToken ?? "");
+      const mobile = this.access.mobileFromLookupToken(body.lookupToken ?? "");
       if (body.mobile && body.mobile !== mobile)
         throw new ForbiddenException(
           "Top-up lookup does not match this mobile number",
@@ -370,37 +378,24 @@ export class GuestOrdersController {
     }
   }
 
-  private assert(id: string, token: string) {
-    if (!this.orders.get(id)) throw new NotFoundException("Order not found");
-    if (!token) throw new ForbiddenException("Guest token is required");
-    const [payload, signature] = token.split(".");
-    if (!payload || !signature)
-      throw new ForbiddenException("Invalid or expired guest token");
-    const expected = Buffer.from(
-      createHmac(
-        "sha256",
-        process.env.GUEST_ORDER_SECRET ?? "local-guest-checkout-secret",
-      )
-        .update(payload)
-        .digest("base64url"),
-    );
-    const actual = Buffer.from(signature);
-    if (expected.length !== actual.length || !timingSafeEqual(expected, actual))
-      throw new ForbiddenException("Invalid or expired guest token");
-    let claims: { orderId?: string; expiresAt?: number };
-    try {
-      claims = JSON.parse(Buffer.from(payload, "base64url").toString()) as {
-        orderId?: string;
-        expiresAt?: number;
-      };
-    } catch {
-      throw new ForbiddenException("Invalid or expired guest token");
-    }
-    if (
-      claims.orderId !== id ||
-      !claims.expiresAt ||
-      claims.expiresAt <= Date.now()
-    )
-      throw new ForbiddenException("Invalid or expired guest token");
+  private async assert(id: string, token: string) {
+    this.access.assertSessionToken(id, token);
+    return this.guestOwner(id);
+  }
+
+  private async guestOwner(id: string) {
+    await this.orders.refreshOne(id, true);
+    const order = this.orders.get(id);
+    if (!order) throw new NotFoundException("Order not found");
+    if (order.ownerId && !order.ownerId.startsWith("guest-"))
+      throw new ForbiddenException("Guest access has been revoked");
+    return order.ownerId;
+  }
+
+  private recoveryUrl(orderId: string, token: string) {
+    const base = (
+      process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"
+    ).replace(/\/$/, "");
+    return `${base}/esim/checkout?order=${encodeURIComponent(orderId)}#resume=${encodeURIComponent(token)}`;
   }
 }

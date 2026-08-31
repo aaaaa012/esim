@@ -38,6 +38,7 @@ type NotificationJob = {
   recipient: string;
   orderNumber: string;
   reason?: string;
+  recoveryUrl?: string;
 };
 @Injectable()
 export class IntegrationProcessor implements OnModuleInit {
@@ -155,6 +156,9 @@ export class IntegrationProcessor implements OnModuleInit {
       const message = renderNotification(job.data.template, {
         orderNumber: job.data.orderNumber,
         ...(job.data.reason ? { reason: job.data.reason } : {}),
+        ...(job.data.recoveryUrl
+          ? { recoveryUrl: job.data.recoveryUrl }
+          : {}),
         ...(msisdn ? { msisdn } : {}),
       });
       let result;

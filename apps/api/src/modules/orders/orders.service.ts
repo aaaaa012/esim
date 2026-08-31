@@ -421,6 +421,81 @@ export class OrdersService implements OnModuleInit {
   async assertInventoryAvailableForNewOrder() {
     await this.inventory.assertAvailableForNewOrder();
   }
+
+  async claimGuestOrder(
+    orderId: string,
+    ownerId: string,
+    performedById?: string,
+  ) {
+    await this.refreshOne(orderId, this.prisma.enabled);
+    const memoryOrder = this.orders.get(orderId);
+    if (!memoryOrder) throw new NotFoundException("Order not found");
+    if (!this.prisma.enabled) {
+      if (memoryOrder.ownerId && memoryOrder.ownerId !== ownerId)
+        throw new ApiException({
+          code: "ORDER_ALREADY_CLAIMED",
+          message: "This guest order belongs to another account",
+          status: 409,
+        });
+      memoryOrder.ownerId = ownerId;
+      return this.redact(memoryOrder);
+    }
+    const target = await this.prisma.customer.findFirst({
+      where: { OR: this.customerMatch(ownerId) },
+      select: { id: true },
+    });
+    if (!target) throw new NotFoundException("Customer account not found");
+    const source = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        customerId: true,
+        customer: { select: { user: { select: { clerkId: true } } } },
+      },
+    });
+    if (!source) throw new NotFoundException("Order not found");
+    if (source.customerId !== target.id) {
+      if (!source.customer.user?.clerkId.startsWith("guest-"))
+        throw new ApiException({
+          code: "ORDER_ALREADY_CLAIMED",
+          message: "This guest order belongs to another account",
+          status: 409,
+        });
+      await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.order.updateMany({
+          where: { id: orderId, customerId: source.customerId },
+          data: { customerId: target.id },
+        });
+        if (claimed.count !== 1)
+          throw new ApiException({
+            code: "ORDER_ALREADY_CLAIMED",
+            message: "This guest order was claimed by another account",
+            status: 409,
+          });
+        await tx.customerEsim.updateMany({
+          where: { orderId, customerId: source.customerId },
+          data: { customerId: target.id },
+        });
+        await tx.customerConsent.updateMany({
+          where: { customerId: source.customerId },
+          data: { customerId: target.id },
+        });
+        await tx.auditLog.create({
+          data: {
+            module: "ORDERS",
+            entity: "Order",
+            entityId: orderId,
+            action: "GUEST_ORDER_CLAIMED",
+            ...(performedById ? { performedById } : {}),
+            previousValue: { ownership: "GUEST" },
+            newValue: { ownership: "CUSTOMER_ACCOUNT" },
+          },
+        });
+      });
+    }
+    memoryOrder.ownerId = ownerId;
+    await this.refreshOne(orderId, true);
+    return this.view(orderId, ownerId);
+  }
   /**
    * Builds the Prisma `OR` filter for looking up a customer by either its
    * internal UUID id or the Clerk identity id. Clerk ids are not UUIDs, so the

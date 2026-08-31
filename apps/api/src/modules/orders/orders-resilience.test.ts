@@ -96,6 +96,28 @@ function ordersService(
   );
 }
 
+describe("OrdersService guest ownership claims", () => {
+  it("allows one explicit claim and rejects a different account afterward", async () => {
+    const instance = ordersService(
+      [readyOrder({ id: "guest-order", ownerId: null })],
+      {},
+    );
+    await instance.refreshFromPersistence();
+
+    await expect(
+      instance.claimGuestOrder("guest-order", "customer-a"),
+    ).resolves.toMatchObject({ id: "guest-order" });
+    await expect(
+      instance.claimGuestOrder("guest-order", "customer-b"),
+    ).rejects.toMatchObject({
+      response: { code: "ORDER_ALREADY_CLAIMED" },
+    });
+    await expect(
+      instance.claimGuestOrder("guest-order", "customer-a"),
+    ).resolves.toMatchObject({ id: "guest-order" });
+  });
+});
+
 describe("OrdersService provider callback conflict safety", () => {
   it("ignores an older preload callback after activation", async () => {
     const order = readyOrder({

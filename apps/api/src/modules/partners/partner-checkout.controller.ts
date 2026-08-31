@@ -1,8 +1,28 @@
-import { Body, Controller, Get, Headers, Ip, Param, Post } from "@nestjs/common";
-import { DocumentType, PaymentProvider } from "@prisma/client";
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Ip,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
+import {
+  DocumentType,
+  PaymentProvider,
+  UserRoleName,
+} from "@prisma/client";
 import { travelerSchema } from "@visa-compass/shared";
 import { z } from "zod";
 import { PartnerService } from "./partner.service.js";
+import {
+  AccountGuard,
+  AccountTypes,
+  AuthGuard,
+  type AuthenticatedRequest,
+} from "../../common/auth.guard.js";
 
 const hostedDocumentSchema = z.object({
   type: z.enum(DocumentType),
@@ -28,6 +48,20 @@ export class PartnerCheckoutController {
   @Get(":token")
   checkout(@Param("token") token: string) {
     return this.partners.hostedCheckout(token);
+  }
+
+  @Post(":token/claim")
+  @UseGuards(AuthGuard, AccountGuard)
+  @AccountTypes(UserRoleName.CUSTOMER)
+  claim(
+    @Param("token") token: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.partners.claimHostedCheckout(
+      token,
+      req.user!.id,
+      req.user!.localUserId,
+    );
   }
 
   @Get(":token/documents")

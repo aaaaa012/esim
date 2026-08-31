@@ -1837,6 +1837,77 @@ export class PartnerService {
     };
   }
 
+  async claimHostedCheckout(
+    token: string,
+    clerkId: string,
+    performedById?: string,
+  ) {
+    const session = await this.hostedCheckoutSession(token);
+    const [target, order] = await Promise.all([
+      this.prisma.customer.findFirst({
+        where: { user: { clerkId } },
+        select: { id: true },
+      }),
+      this.prisma.order.findUnique({
+        where: { id: session.orderId },
+        select: {
+          id: true,
+          status: true,
+          channel: true,
+          customerId: true,
+          customer: { select: { userId: true } },
+        },
+      }),
+    ]);
+    if (!target)
+      throw new ApiException({
+        code: "CUSTOMER_ACCOUNT_NOT_FOUND",
+        message: "Customer account not found",
+        status: 404,
+      });
+    if (!order || order.channel !== OrderChannel.PARTNER_HOSTED)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
+    if (order.customerId === target.id) return this.hostedCheckout(token);
+    if (order.status !== OrderStatus.DRAFT || order.customer.userId)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_ALREADY_CLAIMED",
+        message: "This hosted checkout belongs to another account",
+        status: 409,
+      });
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.order.updateMany({
+        where: {
+          id: order.id,
+          customerId: order.customerId,
+          status: OrderStatus.DRAFT,
+        },
+        data: { customerId: target.id },
+      });
+      if (claimed.count !== 1)
+        throw new ApiException({
+          code: "HOSTED_CHECKOUT_ALREADY_CLAIMED",
+          message: "This hosted checkout was claimed by another account",
+          status: 409,
+        });
+      await tx.auditLog.create({
+        data: {
+          module: "PARTNERS",
+          entity: "Order",
+          entityId: order.id,
+          action: "HOSTED_ORDER_CLAIMED",
+          ...(performedById ? { performedById } : {}),
+          previousValue: { ownership: "PARTNER_GUEST" },
+          newValue: { ownership: "CUSTOMER_ACCOUNT" },
+        },
+      });
+    });
+    return this.hostedCheckout(token);
+  }
+
   async hostedCheckoutDocuments(token: string) {
     const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
     const documents = await this.prisma.travelerDocument.findMany({
@@ -1882,7 +1953,7 @@ export class PartnerService {
         const attached = await tx.partnerCustomer.findFirst({
           where: {
             id: order.partnerCustomerId,
-            customerId: order.customerId,
+            ...(order.partnerId ? { partnerId: order.partnerId } : {}),
           },
           select: { id: true },
         });

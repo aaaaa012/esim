@@ -69,6 +69,7 @@ export class NotificationService {
     recipient: string;
     orderNumber: string;
     reason?: string;
+    recoveryUrl?: string;
   }) {
     const id = randomUUID();
     if (this.prisma.enabled)

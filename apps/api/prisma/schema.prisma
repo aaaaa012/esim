@@ -479,6 +479,7 @@ model Order {
   manualRefunds                ManualRefund[]
   paymentDisputes              PaymentDispute[]
   notifications                Notification[]
+  guestAccessTokens            GuestOrderAccessToken[]
   partnerLedgerEntries         PartnerLedgerEntry[]
   partnerHostedSessions        PartnerHostedCheckoutSession[]
   partnerRefundRequests        PartnerRefundRequest[]
@@ -493,6 +494,21 @@ model Order {
   @@index([customerId, status])
   @@index([status, createdAt])
   @@index([partnerId])
+}
+
+model GuestOrderAccessToken {
+  id            String    @id @default(uuid()) @db.Uuid
+  orderId       String    @db.Uuid
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  tokenHash     String    @unique
+  purpose       String
+  recipientHash String?
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([orderId, purpose, revokedAt, expiresAt])
 }
 
 model PlatformConfiguration {

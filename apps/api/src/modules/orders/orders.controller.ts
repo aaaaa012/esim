@@ -1,7 +1,10 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
+  ForbiddenException,
+  Headers,
   Param,
   Patch,
   Post,
@@ -34,20 +37,33 @@ import { matchesQuery, paginate } from "../../common/paginate.js";
 import { OrdersService } from "./orders.service.js";
 import { InventoryService } from "../inventory/inventory.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { GuestOrderAccessService } from "./guest-order-access.service.js";
 
 @Controller("customer/orders")
 @UseGuards(AuthGuard, AccountGuard)
 @AccountTypes(UserRoleName.CUSTOMER)
 export class OrdersController {
-  constructor(private readonly orders: OrdersService) {}
+  constructor(
+    private readonly orders: OrdersService,
+    private readonly guestAccess: GuestOrderAccessService,
+  ) {}
   @Get() list(@Req() req: AuthenticatedRequest) {
     return this.orders.list(req.user!.id);
   }
   @Get(":id") get(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
     return this.orders.view(id, req.user!.id);
   }
-  @Post() create(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
+  @Post() async create(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
     const input = createOrderSchema.parse(body);
+    const candidate = body as { mobile?: unknown; lookupToken?: unknown };
+    if (candidate.mobile !== undefined && typeof candidate.mobile !== "string")
+      throw new BadRequestException("mobile must be a string");
+    const verifiedMobile =
+      candidate.lookupToken !== undefined
+        ? this.guestAccess.mobileFromLookupToken(String(candidate.lookupToken))
+        : undefined;
+    if (candidate.mobile !== undefined && !verifiedMobile)
+      throw new ForbiddenException("A valid top-up lookup is required");
     const ipAddress = (req as { ip?: string }).ip;
     const userAgent = req.headers["user-agent"];
     return this.orders.create(
@@ -56,10 +72,26 @@ export class OrdersController {
       input.compatibilityAccepted,
       {
         ...(input.targetEsimId ? { targetEsimId: input.targetEsimId } : {}),
+        ...(verifiedMobile ? { mobile: verifiedMobile } : {}),
         ...(ipAddress ? { ipAddress } : {}),
         ...(userAgent ? { userAgent } : {}),
       },
     );
+  }
+  @Post(":id/claim-guest")
+  async claimGuest(
+    @Param("id") id: string,
+    @Headers("x-guest-order-token") token: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    this.guestAccess.assertSessionToken(id, token);
+    const order = await this.orders.claimGuestOrder(
+      id,
+      req.user!.id,
+      req.user!.localUserId,
+    );
+    await this.guestAccess.revokeAll(id);
+    return order;
   }
   @Patch(":id/traveler") traveler(
     @Param("id") id: string,

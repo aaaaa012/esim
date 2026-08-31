@@ -1,4 +1,6 @@
 "use client";
+import { SignInButton, useAuth } from "@clerk/nextjs";
+import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -13,6 +15,8 @@ import {
   ShieldCheck,
   Signal,
   UserRound,
+  Copy,
+  Link2,
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import {
@@ -153,6 +157,8 @@ const api = async <T,>(path: string, init?: RequestInit) => {
 };
 
 export default function HostedCheckoutClient({ token }: { token: string }) {
+  const authFetch = useAuthenticatedFetch();
+  const { isLoaded, isSignedIn } = useAuth();
   const [session, setSession] = useState<Session | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [step, setStep] = useState(1);
@@ -164,6 +170,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [verification, setVerification] = useState<Verification | null>(null);
   const [consent, setConsent] = useState(false);
   const [compatible, setCompatible] = useState(false);
+  const [showAccountChoice, setShowAccountChoice] = useState(false);
+  const [checkoutAccessMode, setCheckoutAccessMode] = useState<
+    "account" | "guest" | null
+  >(null);
+  const [pendingSignIn, setPendingSignIn] = useState(false);
+  const [copiedCheckoutLink, setCopiedCheckoutLink] = useState(false);
   const [busy, setBusy] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyingDoc, setVerifyingDoc] = useState<
@@ -225,7 +237,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           return;
         }
         if (value.order.orderType === "TOPUP") {
-          setStep(4);
+          setStep(1);
           return;
         }
         const uploaded = value.order.requiredDocuments.filter((type) =>
@@ -277,6 +289,53 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const update = (key: keyof Traveler, value: string) => {
     setTraveler((v) => ({ ...v, [key]: value }));
     setFieldErrors((current) => ({ ...current, [key]: undefined }));
+  };
+
+  const advanceAfterAccountChoice = (mode: "account" | "guest") => {
+    setCheckoutAccessMode(mode);
+    setShowAccountChoice(false);
+    setStep(session?.order.orderType === "TOPUP" ? 4 : 2);
+  };
+  const continueWithAccount = () =>
+    run(async () => {
+      if (!isLoaded || isSignedIn !== true)
+        throw new Error("Sign in securely before linking this checkout");
+      const response = await authFetch(
+        `${API}/partner-checkout/${encodeURIComponent(token)}/claim`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+          },
+          body: "{}",
+        },
+      );
+      const payload = (await response.json()) as Envelope<Session>;
+      if (!response.ok || !payload.data)
+        throw new Error(
+          apiErrorMessage(
+            payload.error?.code ?? "UNEXPECTED",
+            payload.error?.message ?? "This checkout could not be linked to your account",
+          ),
+        );
+      setSession(payload.data);
+      advanceAfterAccountChoice("account");
+    });
+  useEffect(() => {
+    if (!pendingSignIn || isSignedIn !== true) return;
+    setPendingSignIn(false);
+    void continueWithAccount();
+  }, [pendingSignIn, isSignedIn]);
+
+  const copyHostedCheckoutLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopiedCheckoutLink(true);
+      window.setTimeout(() => setCopiedCheckoutLink(false), 2_500);
+    } catch {
+      setError("Copy was blocked. Bookmark this private partner checkout link before closing the tab.");
+    }
   };
 
   const stepFromUrl = () => {
@@ -690,7 +749,59 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         </div>
         <div className="checkout-layout">
           <section className="checkout-card">
-            {outcome ? (
+            {checkoutAccessMode === "guest" && !outcome && (
+              <div className="guest-recovery-card" role="note">
+                <span className="guest-recovery-icon"><Link2 /></span>
+                <div>
+                  <b>Keep this private partner checkout link</b>
+                  <p>
+                    Bookmark or copy this link before closing the tab. It lets you return to this order and check its verification status.
+                  </p>
+                  <small>Anyone with this link can access the hosted checkout, so do not share it.</small>
+                  <div className="guest-recovery-actions">
+                    <button className="button secondary" type="button" onClick={() => void copyHostedCheckoutLink()}>
+                      <Copy size={16} /> {copiedCheckoutLink ? "Link copied" : "Copy private link"}
+                    </button>
+                  </div>
+                  <span className="sr-only" aria-live="polite">{copiedCheckoutLink ? "Private partner checkout link copied" : ""}</span>
+                </div>
+              </div>
+            )}
+            {showAccountChoice ? (
+              <div className="form-section account-choice" aria-labelledby="hosted-account-title">
+                <span className="form-icon"><UserRound /></span>
+                <h2 id="hosted-account-title">How would you like to continue?</h2>
+                <p>Sign in to keep this partner order in My eSIMs and check its status from any device.</p>
+                <div className="account-choice-grid">
+                  <div className="account-choice-primary">
+                    <span className="choice-badge">Recommended</span>
+                    <b>Continue with an account</b>
+                    <small>Secure cross-device access and a permanent order history, while keeping the partner attribution.</small>
+                    {isSignedIn === true ? (
+                      <button className="button wide" disabled={busy} onClick={() => void continueWithAccount()}>
+                        Continue with my account <ChevronRight size={18} />
+                      </button>
+                    ) : (
+                      <SignInButton mode="modal">
+                        <button className="button wide" disabled={busy} onClick={() => setPendingSignIn(true)}>
+                          Sign in or create account <ChevronRight size={18} />
+                        </button>
+                      </SignInButton>
+                    )}
+                  </div>
+                  <div className="account-choice-guest">
+                    <b>Continue as guest</b>
+                    <small>No account required. Keep this private partner link so you can return to the order.</small>
+                    <button className="button secondary wide" disabled={busy} onClick={() => advanceAfterAccountChoice("guest")}>
+                      Continue as guest
+                    </button>
+                  </div>
+                </div>
+                <button className="account-choice-back" type="button" onClick={() => setShowAccountChoice(false)}>
+                  <ChevronLeft size={16} /> Back to compatibility
+                </button>
+              </div>
+            ) : outcome ? (
               <div className="form-section">
                 <div
                   className={
@@ -913,7 +1024,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                             throw new Error(
                               "Confirm your device is eSIM compatible first",
                             );
-                          setStep(isTopUp ? 4 : 2);
+                          setShowAccountChoice(true);
                         })
                       }
                     />

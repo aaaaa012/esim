@@ -376,6 +376,89 @@ describe("partner hosted checkout", () => {
     });
   });
 
+  it("claims a draft hosted checkout without changing partner attribution", async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const auditCreate = vi.fn().mockResolvedValue({ id: "audit-1" });
+    const instance = service({
+      partnerHostedCheckoutSession: {
+        findUnique: vi.fn().mockResolvedValue(session),
+      },
+      customer: {
+        findFirst: vi.fn().mockResolvedValue({ id: "account-customer" }),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "order-1",
+          status: "DRAFT",
+          channel: "PARTNER_HOSTED",
+          customerId: "partner-customer-owner",
+          customer: { userId: null },
+        }),
+      },
+      $transaction: vi.fn((callback) =>
+        callback({
+          order: { updateMany },
+          auditLog: { create: auditCreate },
+        }),
+      ),
+    });
+    vi.spyOn(instance, "hostedCheckout").mockResolvedValue({ linked: true } as never);
+
+    await expect(
+      instance.claimHostedCheckout(
+        "abcdefghijklmnopqrstuvwxyz012345",
+        "clerk-customer",
+        "local-user-1",
+      ),
+    ).resolves.toEqual({ linked: true });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "order-1",
+        customerId: "partner-customer-owner",
+        status: "DRAFT",
+      },
+      data: { customerId: "account-customer" },
+    });
+    expect(auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: "HOSTED_ORDER_CLAIMED",
+        performedById: "local-user-1",
+      }),
+    });
+  });
+
+  it("refuses to claim a hosted checkout already owned by an account", async () => {
+    const transaction = vi.fn();
+    const instance = service({
+      partnerHostedCheckoutSession: {
+        findUnique: vi.fn().mockResolvedValue(session),
+      },
+      customer: {
+        findFirst: vi.fn().mockResolvedValue({ id: "new-customer" }),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "order-1",
+          status: "DRAFT",
+          channel: "PARTNER_HOSTED",
+          customerId: "existing-customer",
+          customer: { userId: "existing-user" },
+        }),
+      },
+      $transaction: transaction,
+    });
+
+    await expect(
+      instance.claimHostedCheckout(
+        "abcdefghijklmnopqrstuvwxyz012345",
+        "clerk-customer",
+      ),
+    ).rejects.toMatchObject({
+      response: { code: "HOSTED_CHECKOUT_ALREADY_CLAIMED" },
+    });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
   it("rejects completion when a required document is missing", async () => {
     const instance = service({
       partnerHostedCheckoutSession: {

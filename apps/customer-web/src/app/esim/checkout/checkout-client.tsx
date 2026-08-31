@@ -1,6 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
-import { useAuth } from "@clerk/nextjs";
+import { SignInButton, useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import ErrorModal from "../../../components/error-modal";
@@ -18,6 +18,9 @@ import {
   ShieldCheck,
   Signal,
   AlertTriangle,
+  Copy,
+  Link2,
+  UserRound,
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
 import DatePicker from "./date-picker";
@@ -155,10 +158,31 @@ export default function CheckoutClient({
   guestRef.current = guest;
   useEffect(() => {
     if (!isLoaded) return;
-    const next = isSignedIn !== true;
-    setGuest(next);
-    guestRef.current = next;
+    if (currentToken()) return;
+    if (isSignedIn === true) {
+      setGuest(false);
+      guestRef.current = false;
+    }
   }, [isLoaded, isSignedIn]);
+  const [showAccountChoice, setShowAccountChoice] = useState(false);
+  const [pendingSignIn, setPendingSignIn] = useState(false);
+  const [claimIntent, setClaimIntent] = useState(false);
+  const [copiedRecovery, setCopiedRecovery] = useState(false);
+  const [recovery, setRecovery] = useState<{
+    token: string;
+    expiresAt: string;
+  } | null>(null);
+  const [recoveryReady, setRecoveryReady] = useState(!orderId);
+  const recoveryKey = (id: string) => `vc_guest_recovery_${id}`;
+  const storeRecovery = (id: string, token: string, expiresAt: string) => {
+    const value = { token, expiresAt };
+    setRecovery(value);
+    try {
+      localStorage.setItem(recoveryKey(id), JSON.stringify(value));
+    } catch {
+      /* localStorage unavailable; the copyable link remains usable */
+    }
+  };
 
   const mutationKey = (scope: string) => {
     const storageKey = `vc_mutation_${scope}`;
@@ -292,6 +316,89 @@ export default function CheckoutClient({
     [payment, setPayment] = useState<Payment | null>(null),
     [uxResending, setUxResending] = useState(false);
   const [resumingOrder, setResumingOrder] = useState(Boolean(orderId));
+  useEffect(() => {
+    if (!orderId) {
+      setRecoveryReady(true);
+      return;
+    }
+    let cancelled = false;
+    const restore = async () => {
+      let saved: { token: string; expiresAt?: string } | null = null;
+      try {
+        const fragment = new URLSearchParams(window.location.hash.slice(1));
+        const fragmentToken = fragment.get("resume");
+        if (fragmentToken) {
+          saved = { token: fragmentToken };
+          window.history.replaceState(
+            window.history.state,
+            "",
+            `${window.location.pathname}${window.location.search}`,
+          );
+        } else {
+          const stored = localStorage.getItem(recoveryKey(orderId));
+          saved = stored ? (JSON.parse(stored) as typeof saved) : null;
+        }
+      } catch {
+        saved = null;
+      }
+      if (!saved?.token) {
+        if (!cancelled) setRecoveryReady(true);
+        return;
+      }
+      if (saved.expiresAt)
+        setRecovery({ token: saved.token, expiresAt: saved.expiresAt });
+      if (currentToken()) {
+        if (!cancelled) {
+          setGuest(true);
+          guestRef.current = true;
+          setRecoveryReady(true);
+        }
+        return;
+      }
+      try {
+        const response = await fetch(`${API}/guest/orders/${orderId}/recover`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: saved.token }),
+        });
+        const payload = (await response.json()) as Envelope<{
+          order: Order;
+          token: string;
+          recoveryExpiresAt: string;
+        }>;
+        if (!response.ok || !payload.data)
+          throw new Error(
+            apiErrorMessage(
+              payload.error?.code ?? "UNEXPECTED",
+              payload.error?.message ?? "This recovery link is invalid or expired",
+            ),
+          );
+        if (cancelled) return;
+        setGuest(true);
+        guestRef.current = true;
+        storeGuestToken(payload.data.token, orderId);
+        storeRecovery(
+          orderId,
+          saved.token,
+          payload.data.recoveryExpiresAt,
+        );
+        setOrder(payload.data.order);
+      } catch (cause) {
+        if (!cancelled)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "This recovery link is invalid or expired",
+          );
+      } finally {
+        if (!cancelled) setRecoveryReady(true);
+      }
+    };
+    void restore();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
   const verifyRunToken = useRef(0);
   const passportRetryNoBefore = useRef(0);
   const passportRecoveryNoBefore = useRef(0);
@@ -386,6 +493,7 @@ export default function CheckoutClient({
       setResumingOrder(false);
       return;
     }
+    if (!recoveryReady) return;
     if (!isLoaded && !guestToken) return;
     setResumingOrder(true);
     setBusy(true);
@@ -441,7 +549,7 @@ export default function CheckoutClient({
         setBusy(false);
         setResumingOrder(false);
       });
-  }, [orderId, isLoaded, guestToken]);
+  }, [orderId, isLoaded, guestToken, recoveryReady]);
   const VERIFY_DELAYS = [
     0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000,
   ];
@@ -656,7 +764,7 @@ export default function CheckoutClient({
       setBusy(false);
     }
   };
-  const begin = () =>
+  const createOrder = (asGuest: boolean) =>
     run(async () => {
       if (order) {
         if (isTopUp) {
@@ -673,8 +781,14 @@ export default function CheckoutClient({
       if (!planId) throw new Error("Choose a plan before checkout");
       if (!compatible && !isTopUpIntent)
         throw new Error("Confirm device compatibility");
-      if (guest) {
-        const created = await api<{ order: Order; token: string }>(
+      guestRef.current = asGuest;
+      setGuest(asGuest);
+      if (asGuest) {
+        const created = await api<{
+          order: Order;
+          token: string;
+          recovery: { token: string; expiresAt: string };
+        }>(
           "/customer/orders",
           {
             method: "POST",
@@ -688,6 +802,18 @@ export default function CheckoutClient({
         );
         setOrder(created.order);
         storeGuestToken(created.token, created.order.id);
+        storeRecovery(
+          created.order.id,
+          created.recovery.token,
+          created.recovery.expiresAt,
+        );
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set("order", created.order.id);
+          window.history.replaceState(window.history.state, "", url.toString());
+        } catch {
+          /* history unavailable; the recovery card remains copyable */
+        }
         if (created.order.purchaseType === "TOPUP") {
           setStep(4);
         } else {
@@ -702,6 +828,8 @@ export default function CheckoutClient({
         body: JSON.stringify({
           planId,
           compatibilityAccepted: true,
+          mobile: mobile || traveler.mobile || undefined,
+          lookupToken: lookupToken || undefined,
           ...(targetEsimId ? { targetEsimId } : {}),
         }),
       });
@@ -725,6 +853,75 @@ export default function CheckoutClient({
         setStep(2);
       }
     });
+  const begin = () => {
+    if (order) {
+      void createOrder(guestRef.current);
+      return;
+    }
+    if (!compatible && !isTopUpIntent) {
+      setError("Confirm device compatibility");
+      return;
+    }
+    if (!isLoaded) {
+      setError("Finishing secure sign-in. Please try again in a moment.");
+      return;
+    }
+    if (isSignedIn === true) {
+      void createOrder(false);
+      return;
+    }
+    setShowAccountChoice(true);
+  };
+  useEffect(() => {
+    if (!pendingSignIn || isSignedIn !== true) return;
+    setPendingSignIn(false);
+    setShowAccountChoice(false);
+    void createOrder(false);
+  }, [pendingSignIn, isSignedIn]);
+
+  const claimGuestOrder = () =>
+    run(async () => {
+      if (!order || !currentToken()) return;
+      const mutation = mutationKey(`claim-guest:${order.id}`);
+      const response = await authFetch(
+        `${API}/customer/orders/${order.id}/claim-guest`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-idempotency-key": mutation.key,
+            "x-guest-order-token": currentToken(),
+          },
+          body: "{}",
+        },
+      );
+      releaseMutationKey(mutation.storageKey);
+      const payload = (await response.json()) as Envelope<Order>;
+      if (!response.ok || !payload.data)
+        throw new Error(
+          apiErrorMessage(
+            payload.error?.code ?? "UNEXPECTED",
+            payload.error?.message ?? "We could not save this order to your account",
+          ),
+        );
+      try {
+        sessionStorage.removeItem(tokenKey(order.id));
+        localStorage.removeItem(recoveryKey(order.id));
+      } catch {
+        /* storage unavailable */
+      }
+      guestTokenRef.current = "";
+      setGuestToken("");
+      guestRef.current = false;
+      setGuest(false);
+      setRecovery(null);
+      setOrder(payload.data);
+    });
+  useEffect(() => {
+    if (!claimIntent || isSignedIn !== true) return;
+    setClaimIntent(false);
+    void claimGuestOrder();
+  }, [claimIntent, isSignedIn]);
   const saveTraveler = () =>
     run(async () => {
       if (!order) return;
@@ -917,6 +1114,21 @@ export default function CheckoutClient({
     return () => window.clearInterval(interval);
   }, [payment?.reference, payment?.expiresAt, order?.id]);
 
+  const recoveryUrl =
+    order && recovery && typeof window !== "undefined"
+      ? `${window.location.origin}/esim/checkout?order=${encodeURIComponent(order.id)}#resume=${encodeURIComponent(recovery.token)}`
+      : "";
+  const copyRecoveryLink = async () => {
+    if (!recoveryUrl) return;
+    try {
+      await navigator.clipboard.writeText(recoveryUrl);
+      setCopiedRecovery(true);
+      window.setTimeout(() => setCopiedRecovery(false), 2_500);
+    } catch {
+      setError("Copy was blocked. Keep this tab open or use the emailed link after entering your details.");
+    }
+  };
+
   if ((!planId && !orderId) || planLoadFailed)
     return (
       <main className="checkout-page">
@@ -987,6 +1199,73 @@ export default function CheckoutClient({
               ))}
             </div>
             {error && <ErrorModal error={error} onClose={() => setError("")} />}
+            {showAccountChoice && (
+              <div className="form-section account-choice" aria-labelledby="checkout-account-title">
+                <span className="form-icon"><UserRound /></span>
+                <h2 id="checkout-account-title">How would you like to continue?</h2>
+                <p>
+                  Sign in to keep this order in My eSIMs and check verification
+                  status from any device.
+                </p>
+                <div className="account-choice-grid">
+                  <div className="account-choice-primary">
+                    <span className="choice-badge">Recommended</span>
+                    <b>Continue with an account</b>
+                    <small>Order history, easier status checks, and secure access across devices.</small>
+                    {isSignedIn === true ? (
+                      <button className="button wide" disabled={busy} onClick={() => { setShowAccountChoice(false); void createOrder(false); }}>
+                        Continue with my account <ChevronRight size={18} />
+                      </button>
+                    ) : (
+                      <SignInButton mode="modal">
+                        <button className="button wide" disabled={busy} onClick={() => setPendingSignIn(true)}>
+                          Sign in or create account <ChevronRight size={18} />
+                        </button>
+                      </SignInButton>
+                    )}
+                  </div>
+                  <div className="account-choice-guest">
+                    <b>Continue as guest</b>
+                    <small>No account required. You’ll receive a private recovery link to keep this order.</small>
+                    <button className="button secondary wide" disabled={busy} onClick={() => { setShowAccountChoice(false); void createOrder(true); }}>
+                      Continue as guest
+                    </button>
+                  </div>
+                </div>
+                <button className="account-choice-back" type="button" onClick={() => setShowAccountChoice(false)}>
+                  <ChevronLeft size={16} /> Back to compatibility
+                </button>
+              </div>
+            )}
+            {!showAccountChoice && guest && order && recovery && (
+              <div className="guest-recovery-card" role="note">
+                <span className="guest-recovery-icon"><Link2 /></span>
+                <div>
+                  <b>Keep your private order link</b>
+                  <p>
+                    Save this link before closing the tab. It restores order {order.orderNumber} and its verification status for 30 days. Anyone with the link can access this order.
+                  </p>
+                  <small>After you save traveller details, we’ll also email a recovery link to the address provided.</small>
+                  <div className="guest-recovery-actions">
+                    <button className="button secondary" type="button" onClick={() => void copyRecoveryLink()}>
+                      <Copy size={16} /> {copiedRecovery ? "Link copied" : "Copy private link"}
+                    </button>
+                    {isSignedIn === true ? (
+                      <button className="button secondary" type="button" disabled={busy} onClick={() => void claimGuestOrder()}>
+                        Save to My eSIMs
+                      </button>
+                    ) : (
+                      <SignInButton mode="modal">
+                        <button className="button secondary" type="button" disabled={busy} onClick={() => setClaimIntent(true)}>
+                          Sign in and save to My eSIMs
+                        </button>
+                      </SignInButton>
+                    )}
+                  </div>
+                  <span className="sr-only" aria-live="polite">{copiedRecovery ? "Private recovery link copied" : ""}</span>
+                </div>
+              </div>
+            )}
             {resumingOrder && (
               <div className="form-section" role="status" aria-live="polite">
                 <span className="form-icon">
@@ -999,7 +1278,7 @@ export default function CheckoutClient({
                 </p>
               </div>
             )}
-            {!resumingOrder && step === 1 && (
+            {!showAccountChoice && !resumingOrder && step === 1 && (
               <div className="form-section">
                 <span className="form-icon">
                   <ShieldCheck />
@@ -1028,7 +1307,7 @@ export default function CheckoutClient({
                 </Action>
               </div>
             )}
-            {!resumingOrder && step === 2 && (
+            {!showAccountChoice && !resumingOrder && step === 2 && (
               <div className="form-section">
                 <h2>Traveller information</h2>
                 <p>
@@ -1185,7 +1464,7 @@ export default function CheckoutClient({
                 <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
               </div>
             )}
-            {!resumingOrder && step === 3 && (
+            {!showAccountChoice && !resumingOrder && step === 3 && (
               <div className="form-section">
                 <span className="form-icon">
                   <FileCheck2 />
@@ -1218,7 +1497,7 @@ export default function CheckoutClient({
                 <Nav back={() => goBack()} busy={busy} next={saveDocuments} />
               </div>
             )}
-            {!resumingOrder && step === 4 && (
+            {!showAccountChoice && !resumingOrder && step === 4 && (
               <div className="form-section">
                 <h2>
                   {order &&
