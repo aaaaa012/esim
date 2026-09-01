@@ -162,6 +162,29 @@ describe("AdminService.importPlansFromTabular role-based default status", () => 
     );
   });
 
+  it("round-trips an existing ACTIVE plan for an operations user", async () => {
+    const prisma = prismaStub();
+    prisma.user.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: "u-2", accountType: "OPERATIONS" });
+    prisma.plan.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: "plan-1", status: "ACTIVE" });
+    const admin = new AdminService(prisma, connectivityStub());
+    const fullHeaders =
+      "countryiso2,name,providerplanid,dataallowance,validitydays,costprice,sellingprice,status";
+    await admin.importPlansFromTabular(
+      `${fullHeaders}\nIN,Travel 5GB,TRVL-5GB-15D,5120 MB,7,8,12,ACTIVE`,
+      "catalog.csv",
+      "clerk-2",
+    );
+    expect(prisma.plan.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ sellingPrice: 12, status: "ACTIVE" }),
+      }),
+    );
+  });
+
   it("defaults costPrice to sellingPrice when the cost column is blank", async () => {
     const prisma = prismaStub();
     const admin = new AdminService(prisma, connectivityStub());
@@ -201,39 +224,34 @@ describe("AdminService.exportTransatelCatalog", () => {
   });
 
   it("renders the catalog rows as a CSV report with import-compatible headers", async () => {
-    const connectivity = {
-      catalogReport: vi.fn().mockResolvedValue({
-        rows: [
-          {
-            countryiso2: "IN",
-            countryname: "India",
-            name: "Travel 5GB",
-            providerplanid: "TRVL-5GB-15D",
-            dataallowance: "5120 MB",
-            validitydays: 15,
-            costprice: 8,
-            sellingprice: 10,
-            currency: "NPR",
-            coveragecountries: "IND",
-            status: "",
-          },
-        ],
-        skipped: ["SKIP-1"],
-      }),
-    } as unknown as ConnectivityService;
-    const admin = new AdminService(prismaStub(), connectivity);
+    const prisma = prismaStub();
+    prisma.plan.findMany = vi.fn().mockResolvedValue([
+      {
+        country: { isoCode: "IN", name: "India" },
+        name: "Travel 5GB",
+        providerPlanId: "TRVL-5GB-15D",
+        dataAllowance: "5120 MB",
+        validityDays: 15,
+        costPrice: 8,
+        sellingPrice: 10,
+        currency: "NPR",
+        coverage: ["IND"],
+        popular: true,
+        status: "ACTIVE",
+      },
+    ] as never);
+    const admin = new AdminService(prisma, connectivityStub());
     const result = await admin.exportTransatelCatalog();
-    expect(connectivity.catalogReport).toHaveBeenCalled();
     expect(result.count).toBe(1);
-    expect(result.skipped).toBe(1);
+    expect(result.skipped).toBe(0);
     expect(result.csv).toContain(
-      "countryiso2,countryname,name,providerplanid,dataallowance,validitydays,costprice,sellingprice,currency,coveragecountries,status",
+      "countryiso2,countryname,name,providerplanid,dataallowance,validitydays,costprice,sellingprice,currency,coveragecountries,popular,status",
     );
     expect(result.csv).toContain(
-      "IN,India,Travel 5GB,TRVL-5GB-15D,5120 MB,15,8,10,NPR,IND",
+      "IN,India,Travel 5GB,TRVL-5GB-15D,5120 MB,15,8,10,NPR,IND,true,ACTIVE",
     );
     expect(result.fileName).toMatch(
-      /^transatel-catalog-\d{4}-\d{2}-\d{2}\.csv$/,
+      /^visa-compass-catalog-\d{4}-\d{2}-\d{2}\.csv$/,
     );
   });
 });

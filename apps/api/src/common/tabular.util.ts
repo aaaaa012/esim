@@ -23,7 +23,15 @@ export async function tabularToRecords(
     fileName.endsWith(".xlsx") || fileName.endsWith(".xls");
   if (looksLikeExcel)
     return recordsFromExcel(content, requiredHeaders, options?.maxRows);
-  return csvToRecords(content, requiredHeaders);
+  const result = csvToRecords(content, requiredHeaders);
+  if (options?.maxRows !== undefined && result.records.length > options.maxRows)
+    return {
+      records: [],
+      errors: [
+        `A single upload is limited to ${options.maxRows.toLocaleString()} rows`,
+      ],
+    };
+  return result;
 }
 
 /** Safety ceiling (decoded characters) for any tabular upload, guarding
@@ -79,7 +87,7 @@ async function recordsFromExcel(
     };
 
   const records: TabularRecord[] = [];
-  const rowCount = Math.min(worksheet.rowCount, (maxRows ?? 5000) + 1);
+  const rowCount = worksheet.rowCount;
   for (let rowIndex = 2; rowIndex <= rowCount; rowIndex++) {
     const row = worksheet.getRow(rowIndex);
     const record: TabularRecord = {};
@@ -92,6 +100,13 @@ async function recordsFromExcel(
       record[key] = value;
     }
     if (!empty) records.push(record);
+    if (maxRows !== undefined && records.length > maxRows)
+      return {
+        records: [],
+        errors: [
+          `A single upload is limited to ${maxRows.toLocaleString()} rows`,
+        ],
+      };
   }
   return { records, errors };
 }

@@ -390,7 +390,10 @@ describe("TransatelProvider", () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi
       .fn()
-      .mockResolvedValue({ iccid: "8988247076000000319", msisdn: "33612345678" });
+      .mockResolvedValue({
+        iccid: "8988247076000000319",
+        msisdn: "33612345678",
+      });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -487,7 +490,10 @@ describe("TransatelProvider", () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi
       .fn()
-      .mockResolvedValue({ iccid: "8988247076000000319", msisdn: "33612345678" });
+      .mockResolvedValue({
+        iccid: "8988247076000000319",
+        msisdn: "33612345678",
+      });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -539,7 +545,10 @@ describe("TransatelProvider", () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi
       .fn()
-      .mockResolvedValue({ iccid: "8988247076000000319", msisdn: "33612345678" });
+      .mockResolvedValue({
+        iccid: "8988247076000000319",
+        msisdn: "33612345678",
+      });
     let tokenCalls = 0;
     let productCalls = 0;
     const provider = new TransatelProvider(prisma);
@@ -872,8 +881,11 @@ describe("TransatelProvider", () => {
       costPrice: 5,
       sellingPrice: 5,
       providerPlanId: "TRVL-5GB-15D",
-      status: "ACTIVE",
+      status: "DRAFT",
     });
+    expect(planArgs[0].update).not.toHaveProperty("sellingPrice");
+    expect(planArgs[0].update).not.toHaveProperty("popular");
+    expect(planArgs[0].update).not.toHaveProperty("status");
   });
 
   it("skips restricted destination countries (Nepal) during catalog sync", async () => {

@@ -334,11 +334,9 @@ export class AdminService {
         "costprice",
         "sellingprice",
       ],
-      fileName ? { fileName, maxRows: 2000 } : { maxRows: 2000 },
+      fileName ? { fileName, maxRows: 10000 } : { maxRows: 10000 },
     );
     if (errors.length) throw new BadRequestException(errors.join("; "));
-    if (records.length > 2000)
-      throw new BadRequestException("A single upload is limited to 2,000 rows");
     const rowErrors: string[] = [];
     let imported = 0;
     let updated = 0;
@@ -358,16 +356,16 @@ export class AdminService {
           ? parsedCost
           : sellingPrice;
       const currency = (row.currency ?? "NPR").trim().toUpperCase();
-      const popular =
-        (row.popular ?? "").toLowerCase() === "true" ||
-        (row.popular ?? "").trim() === "1";
+      const popularRaw = (row.popular ?? "").trim().toLowerCase();
+      const popular = popularRaw
+        ? popularRaw === "true" || popularRaw === "1"
+        : undefined;
       const statusRaw = (row.status ?? "").trim().toUpperCase();
-      const status: PlanStatus =
-        statusRaw === "DRAFT" ||
-        statusRaw === "DISABLED" ||
-        statusRaw === "ARCHIVED"
-          ? statusRaw
-          : roleDefaultStatus;
+      const requestedStatus = Object.values(PlanStatus).includes(
+        statusRaw as PlanStatus,
+      )
+        ? (statusRaw as PlanStatus)
+        : undefined;
       const coverageCountries = (row.coveragecountries ?? "")
         .split(/[|;]/)
         .map((value) => value.trim())
@@ -376,6 +374,16 @@ export class AdminService {
         rowErrors.push(
           `Line ${line}: invalid countryIso2 '${countryIso2 || "(empty)"}'`,
         );
+        continue;
+      }
+      if (statusRaw && !requestedStatus) {
+        rowErrors.push(
+          `Line ${line}: status must be ACTIVE, DRAFT, DISABLED, or ARCHIVED`,
+        );
+        continue;
+      }
+      if (popularRaw && !["true", "false", "1", "0"].includes(popularRaw)) {
+        rowErrors.push(`Line ${line}: popular must be true, false, 1, or 0`);
         continue;
       }
       if (isRestrictedPlanCountry(countryIso2)) {
@@ -456,24 +464,39 @@ export class AdminService {
           costPrice,
           sellingPrice,
           currency,
-          popular,
-          status,
           coverage,
         };
         if (existing) {
-          const effectiveStatus = (row.status ?? "").trim().toUpperCase()
-            ? status
-            : existing.status === PlanStatus.ACTIVE
-              ? PlanStatus.ACTIVE
-              : status;
+          // Operators may retain an already-active plan, but only a super
+          // admin may promote a draft/disabled plan to ACTIVE.
+          const effectiveStatus =
+            requestedStatus === PlanStatus.ACTIVE &&
+            actor?.accountType !== UserRoleName.SUPER_ADMIN &&
+            existing.status !== PlanStatus.ACTIVE
+              ? existing.status
+              : (requestedStatus ?? existing.status);
           await this.prisma.plan.update({
             where: { id: existing.id },
-            data: { ...data, status: effectiveStatus },
+            data: {
+              ...data,
+              status: effectiveStatus,
+              ...(popular !== undefined ? { popular } : {}),
+            },
           });
           updated++;
         } else {
           await this.prisma.plan.create({
-            data: { countryId: country.id, providerPlanId, ...data },
+            data: {
+              countryId: country.id,
+              providerPlanId,
+              ...data,
+              popular: popular ?? false,
+              status:
+                requestedStatus === PlanStatus.ACTIVE &&
+                actor?.accountType !== UserRoleName.SUPER_ADMIN
+                  ? PlanStatus.DRAFT
+                  : (requestedStatus ?? roleDefaultStatus),
+            },
           });
           imported++;
         }
@@ -694,16 +717,14 @@ export class AdminService {
     return { synced, failed };
   }
 
-  /**
-   * Fetches the Transatel catalog and renders it as a CSV report that can be
-   * edited and re-imported via the plans import endpoint. Column order matches
-   * the expected import headers (see importPlansFromTabular).
-   */
-  async exportTransatelCatalog(cos?: string) {
-    this.requireTransatel();
-    const { rows, skipped } = await this.connectivity.catalogReport(
-      cos?.trim() || undefined,
-    );
+  /** Exports the current operating catalogue as a lossless import template. */
+  async exportTransatelCatalog(_cos?: string) {
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    const plans = await this.prisma.plan.findMany({
+      include: { country: true },
+      orderBy: [{ country: { isoCode: "asc" } }, { providerPlanId: "asc" }],
+    });
     const columns = [
       "countryiso2",
       "countryname",
@@ -715,24 +736,37 @@ export class AdminService {
       "sellingprice",
       "currency",
       "coveragecountries",
+      "popular",
       "status",
     ] as const;
     const renderRow = (row: Record<string, unknown>) =>
       columns.map((column) => this.csvCell(row[column])).join(",");
     const csv = [
       columns.join(","),
-      ...rows.map((row) =>
+      ...plans.map((plan) =>
         renderRow({
-          ...row,
-          coveragecountries: row.coveragecountries,
+          countryiso2: plan.country.isoCode,
+          countryname: plan.country.name,
+          name: plan.name,
+          providerplanid: plan.providerPlanId,
+          dataallowance: plan.dataAllowance,
+          validitydays: plan.validityDays,
+          costprice: plan.costPrice,
+          sellingprice: plan.sellingPrice,
+          currency: plan.currency,
+          coveragecountries: Array.isArray(plan.coverage)
+            ? plan.coverage.join("|")
+            : "",
+          popular: plan.popular,
+          status: plan.status,
         }),
       ),
     ].join("\n");
     return {
-      fileName: `transatel-catalog-${new Date().toISOString().slice(0, 10)}.csv`,
-      count: rows.length,
-      skipped: skipped.length,
-      skippedIds: skipped,
+      fileName: `visa-compass-catalog-${new Date().toISOString().slice(0, 10)}.csv`,
+      count: plans.length,
+      skipped: 0,
+      skippedIds: [],
       csv,
     };
   }

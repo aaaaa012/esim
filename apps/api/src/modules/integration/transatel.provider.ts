@@ -496,8 +496,12 @@ export class TransatelProvider implements ConnectivityProvider {
           durationMs: entry.durationMs,
           ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
           ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
-          ...(entry.requestBody !== undefined ? { requestBody: entry.requestBody } : {}),
-          ...(entry.responseBody !== undefined ? { responseBody: entry.responseBody } : {}),
+          ...(entry.requestBody !== undefined
+            ? { requestBody: entry.requestBody }
+            : {}),
+          ...(entry.responseBody !== undefined
+            ? { responseBody: entry.responseBody }
+            : {}),
         },
       });
     } catch (error) {
@@ -550,18 +554,26 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   private redactLogBody(value: unknown): Prisma.InputJsonValue {
-    if (Array.isArray(value)) return value.map((item) => this.redactLogBody(item));
+    if (Array.isArray(value))
+      return value.map((item) => this.redactLogBody(item));
     if (value && typeof value === "object") {
       return Object.fromEntries(
         Object.entries(value as Record<string, unknown>).map(([key, item]) => [
           key,
-          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|activation_?code|matching_?id|qr_?(code|payload)|data_?url)$/i.test(key)
+          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|activation_?code|matching_?id|qr_?(code|payload)|data_?url)$/i.test(
+            key,
+          )
             ? "[REDACTED]"
             : this.redactLogBody(item),
         ]),
       );
     }
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    )
+      return value;
     return "";
   }
 
@@ -642,7 +654,9 @@ export class TransatelProvider implements ConnectivityProvider {
     });
     if (inventory?.iccid) {
       const msisdn = sanitizeMsisdn(inventory.msisdn);
-      return msisdn ? { iccid: inventory.iccid, msisdn } : { iccid: inventory.iccid };
+      return msisdn
+        ? { iccid: inventory.iccid, msisdn }
+        : { iccid: inventory.iccid };
     }
 
     const subscription = await this.prisma.subscription.findUnique({
@@ -1320,10 +1334,7 @@ export class TransatelProvider implements ConnectivityProvider {
                   allowanceMb !== null ? `${allowanceMb} MB` : "Unlimited",
                 validityDays,
                 costPrice: price,
-                sellingPrice: price,
                 coverage: definition.countryList ?? [],
-                popular: false,
-                status: "ACTIVE",
               },
               create: {
                 countryId: country.id,
@@ -1336,7 +1347,9 @@ export class TransatelProvider implements ConnectivityProvider {
                 sellingPrice: price,
                 coverage: definition.countryList ?? [],
                 popular: false,
-                status: "ACTIVE",
+                // Newly discovered provider products require commercial
+                // review before they become customer-visible.
+                status: "DRAFT",
               },
             });
           }

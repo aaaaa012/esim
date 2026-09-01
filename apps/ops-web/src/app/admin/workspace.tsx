@@ -472,14 +472,24 @@ export default function AdminWorkspace() {
     }
   };
   const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
+    if (
+      action === "sync-catalog" &&
+      !window.confirm(
+        "Sync provider package data and costs now? Existing selling prices, visibility, and popularity will be preserved. New plans will be created as drafts.",
+      )
+    )
+      return;
     setBusy(`transatel:${action}`);
     try {
-      await request(`/admin/integrations/transatel/${action}`, {
-        method: "POST",
-      });
+      const result = await request<{ synced?: number; skipped?: string[] }>(
+        `/admin/integrations/transatel/${action}`,
+        {
+          method: "POST",
+        },
+      );
       toast.success(
         action === "sync-catalog"
-          ? "Plans synced with the network provider"
+          ? `Synced ${result.synced ?? 0} plan row(s)${result.skipped?.length ? `; ${result.skipped.length} product(s) skipped` : ""}`
           : "Automatic notifications set up",
       );
     } catch (e) {
@@ -906,7 +916,7 @@ export default function AdminWorkspace() {
           <TabsContent value={planTabVisible ? tab : ""} className="mt-0">
             <Panel
               title="Plan catalogue"
-              description="Changes affect new immutable order quotes only."
+              description="Download the current catalogue, edit sellingprice, status, or popular, then upload the same file. Changes affect new immutable order quotes only."
               actions={
                 <div className="flex items-center gap-3">
                   <Button
@@ -919,7 +929,7 @@ export default function AdminWorkspace() {
                     ) : (
                       <Download className="size-4" />
                     )}
-                    Download catalog
+                    Download editable catalog
                   </Button>
                   <Input
                     type="file"
@@ -938,7 +948,7 @@ export default function AdminWorkspace() {
                     ) : (
                       <Upload className="size-4" />
                     )}
-                    Upload CSV
+                    Import updates
                   </Button>
                 </div>
               }
