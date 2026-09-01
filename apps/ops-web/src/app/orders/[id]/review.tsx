@@ -34,6 +34,32 @@ import { ManualRefundCard } from "./manual-refund-card";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Detail = OpsOrder & {
+  providerStatus?: string;
+  customer?: {
+    id: string;
+    customerCode: string;
+    email: string;
+    phone?: string | null;
+    source: string;
+    status: string;
+    createdAt: string;
+  };
+  loginAccount?: {
+    id: string;
+    email: string;
+    status: string;
+    accountType: string;
+    createdAt: string;
+  } | null;
+  partnerCustomer?: {
+    id: string;
+    externalCustomerId: string;
+    partner: { id: string; code: string; name: string };
+  } | null;
+  qrDelivery?: {
+    lastSuccessfulAt: string | null;
+    pending: boolean;
+  };
   documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
   documentReviewStatus?: string;
   traveler?: {
@@ -69,12 +95,25 @@ type Detail = OpsOrder & {
     providerLastSeenAt?: string;
   };
 };
+type ProviderCheck = {
+  classification: string;
+  orderStatus: string;
+  provisioningState?: string | null;
+  profileStatus: string;
+  subscriptionStatus?: string | null;
+  checkedAt: string;
+  recommendedAction: string;
+};
 
 export default function OrderReview({ id }: { id: string }) {
   const authFetch = useAuthenticatedFetch();
   const [order, setOrder] = useState<Detail | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [providerCheck, setProviderCheck] = useState<ProviderCheck | null>(
+    null,
+  );
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [reason, setReason] = useState(
     "Please upload a clearer, complete copy",
   );
@@ -98,6 +137,11 @@ export default function OrderReview({ id }: { id: string }) {
     );
   useEffect(() => {
     void load().catch((error) => setError(error.message));
+    void authFetch(`${API}/auth/me`, { headers: {} })
+      .then((response) => response.json())
+      .then((value) =>
+        setIsSuperAdmin(value.data?.accountType === "SUPER_ADMIN"),
+      );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
   const action = async (path: string, body?: object) => {
@@ -144,6 +188,36 @@ export default function OrderReview({ id }: { id: string }) {
           ?.match(/filename="([^"]+)"/)?.[1] ?? "Travel document",
       contentType: blob.type,
     });
+  };
+  const checkProvider = async () => {
+    if (
+      !window.confirm(
+        "Check Transatel now? This reads provider state and will not create another activation.",
+      )
+    )
+      return;
+    setBusy("provider-status-check");
+    setError("");
+    try {
+      const response = await authFetch(
+        `${API}/operations/orders/${id}/provider-status-check`,
+        {
+          method: "POST",
+          headers: { "x-idempotency-key": crypto.randomUUID() },
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Provider check failed");
+      setProviderCheck(value.data);
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Provider check failed",
+      );
+    } finally {
+      setBusy("");
+    }
   };
 
   if (!order)
@@ -204,6 +278,18 @@ export default function OrderReview({ id }: { id: string }) {
     order.documents.some(
       (document) => document.type === type && document.status === "APPROVED",
     ),
+  );
+  const passportExpiry = order.traveler?.passportExpiryDate
+    ? new Date(order.traveler.passportExpiryDate)
+    : null;
+  const orderedAt = new Date(order.createdAt);
+  const passportValidWhenOrdered = Boolean(
+    passportExpiry && passportExpiry > orderedAt,
+  );
+  const passportNearExpiryWhenOrdered = Boolean(
+    passportExpiry &&
+    passportValidWhenOrdered &&
+    passportExpiry.getTime() - orderedAt.getTime() <= 180 * 24 * 60 * 60 * 1000,
   );
   const decisionTone = (status: string) =>
     status === "COMPLETED"
@@ -452,6 +538,71 @@ export default function OrderReview({ id }: { id: string }) {
             )}
           </Panel>
 
+          <Panel
+            title={
+              <span className="flex items-center gap-2">
+                <UserRound className="size-4 text-primary" />
+                Customer identity
+              </span>
+            }
+          >
+            {order.customer ? (
+              <div className="space-y-4">
+                <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                  <InfoRow
+                    label="Customer"
+                    value={`${order.customer.customerCode} · ${order.customer.email}`}
+                  />
+                  <InfoRow
+                    label="Source"
+                    value={humane(order.customer.source)}
+                  />
+                  <InfoRow
+                    label="Login account"
+                    value={
+                      order.loginAccount
+                        ? `${order.loginAccount.email} · ${humane(order.loginAccount.status)}`
+                        : "Guest / no login account"
+                    }
+                  />
+                  <InfoRow
+                    label="Partner customer"
+                    value={
+                      order.partnerCustomer?.externalCustomerId ?? "Direct"
+                    }
+                  />
+                </dl>
+                <div className="flex flex-wrap gap-2">
+                  <Button asChild variant="outline" size="sm">
+                    <Link href={`/customers/${order.customer.id}`}>
+                      View customer
+                    </Link>
+                  </Button>
+                  {order.loginAccount ? (
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/users/${order.loginAccount.id}`}>
+                        View login account
+                      </Link>
+                    </Button>
+                  ) : null}
+                  {(order.partnerCustomer?.partner ?? order.partner) ? (
+                    <Button asChild variant="outline" size="sm">
+                      <Link
+                        href={`/admin/partners/${(order.partnerCustomer?.partner ?? order.partner)!.id}`}
+                      >
+                        View partner
+                      </Link>
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Customer identity is unavailable.
+              </p>
+            )}
+          </Panel>
+
           {partnerPendingOrder &&
           ["REVIEW_PENDING", "AWAITING_CUSTOMER"].includes(order.status) ? (
             <Button
@@ -493,14 +644,20 @@ export default function OrderReview({ id }: { id: string }) {
                   {order.traveler?.passportExpiryDate && (
                     <Badge
                       variant={
-                        new Date(order.traveler.passportExpiryDate) > new Date()
-                          ? "success"
+                        passportValidWhenOrdered
+                          ? passportNearExpiryWhenOrdered
+                            ? "warning"
+                            : "success"
                           : "destructive"
                       }
                     >
-                      {new Date(order.traveler.passportExpiryDate) > new Date()
-                        ? "Passport valid"
-                        : "Passport expired"}
+                      {passportValidWhenOrdered
+                        ? passportExpiry && passportExpiry <= new Date()
+                          ? `Valid when ordered · expired ${passportExpiry.toLocaleDateString()}`
+                          : passportNearExpiryWhenOrdered
+                            ? `Near expiry · ${passportExpiry?.toLocaleDateString()}`
+                            : "Passport valid"
+                        : "Passport expired when ordered"}
                     </Badge>
                   )}
                 </div>
@@ -531,6 +688,62 @@ export default function OrderReview({ id }: { id: string }) {
                     }
                   />
                 </dl>
+                <div className="rounded-lg border bg-muted/20 p-3">
+                  <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+                    <InfoRow label="Fulfillment" value="QR delivered" />
+                    <InfoRow
+                      label="Customer installation"
+                      value={
+                        providerCheck?.classification === "ACTIVE" ||
+                        order.status === "COMPLETED"
+                          ? "Activated"
+                          : "Awaiting first use"
+                      }
+                    />
+                    <InfoRow
+                      label="Provider profile"
+                      value={providerCheck?.profileStatus ?? "Not checked"}
+                    />
+                    <InfoRow
+                      label="Data subscription"
+                      value={
+                        providerCheck?.subscriptionStatus ??
+                        order.providerStatus ??
+                        "Pending first use"
+                      }
+                    />
+                    <InfoRow
+                      label="Last successful QR delivery"
+                      value={
+                        order.qrDelivery?.lastSuccessfulAt
+                          ? new Date(
+                              order.qrDelivery.lastSuccessfulAt,
+                            ).toLocaleString()
+                          : order.qrDelivery?.pending
+                            ? "Delivery queued"
+                            : "No successful delivery recorded"
+                      }
+                    />
+                  </dl>
+                  {providerCheck ? (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {providerCheck.recommendedAction} Checked{" "}
+                      {new Date(providerCheck.checkedAt).toLocaleString()}.
+                    </p>
+                  ) : null}
+                </div>
+                <Button
+                  variant="outline"
+                  disabled={busy === "provider-status-check"}
+                  onClick={() => void checkProvider()}
+                >
+                  {busy === "provider-status-check" ? (
+                    <Spinner />
+                  ) : (
+                    <RefreshCcw className="size-4" />
+                  )}
+                  Check provider status
+                </Button>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
@@ -730,27 +943,33 @@ export default function OrderReview({ id }: { id: string }) {
                     Check set-up recovery
                   </Link>
                 </Button>
-                <Button
-                  className="w-full"
-                  variant="success"
-                  size="lg"
-                  disabled={Boolean(busy)}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "Try the set-up again? Only do this if you are sure the network did not already accept the order.",
+                {isSuperAdmin ? (
+                  <Button
+                    className="w-full"
+                    variant="success"
+                    size="lg"
+                    disabled={Boolean(busy)}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          "Try the set-up again? Only do this if you are sure the network did not already accept the order.",
+                        )
                       )
-                    )
-                      action("retry");
-                  }}
-                >
-                  {busy === "retry" ? (
-                    <Spinner className="text-success-foreground" />
-                  ) : (
-                    <RefreshCcw className="size-4" />
-                  )}
-                  Try set-up again
-                </Button>
+                        action("retry");
+                    }}
+                  >
+                    {busy === "retry" ? (
+                      <Spinner className="text-success-foreground" />
+                    ) : (
+                      <RefreshCcw className="size-4" />
+                    )}
+                    Try set-up again
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    A Super Admin must approve any retry or replacement.
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">
                   If the network may have already accepted the order, check
                   set-up recovery first to avoid a duplicate.

@@ -31,15 +31,12 @@ type Operation = {
   updatedAt: string;
   order: { orderNumber: string; status: string; orderType: string };
 };
-const recoverable = new Set([
-  "ACCEPTED",
-  "WAITING_FOR_QR",
-  "RECONCILE_REQUIRED",
-  "MANUAL_REVIEW",
-]);
 
 function humaniseTitle(title: string) {
-  return title.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
+  return title
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
 function shortError(item: Operation): string {
@@ -48,7 +45,10 @@ function shortError(item: Operation): string {
     try {
       const parsed = JSON.parse(raw) as { title?: string; detail?: string };
       if (parsed.title) return humaniseTitle(parsed.title);
-      if (parsed.detail) return parsed.detail.length > 120 ? `${parsed.detail.slice(0, 120)}…` : parsed.detail;
+      if (parsed.detail)
+        return parsed.detail.length > 120
+          ? `${parsed.detail.slice(0, 120)}…`
+          : parsed.detail;
     } catch {
       /* not JSON */
     }
@@ -78,12 +78,18 @@ export default function ProvisioningOperationsClient() {
       setError(cause instanceof Error ? cause.message : "Load failed"),
     );
   }, []);
-  const reconcile = async (id: string) => {
-    setBusy(id);
+  const checkProvider = async (item: Operation) => {
+    if (
+      !window.confirm(
+        "Check Transatel now? This reads provider state and will not create another activation.",
+      )
+    )
+      return;
+    setBusy(item.id);
     setError("");
     try {
       const response = await authFetch(
-        `${API}/operations/provisioning-operations/${id}/reconcile`,
+        `${API}/operations/orders/${item.orderId}/provider-status-check`,
         {
           method: "POST",
           headers: { "x-idempotency-key": crypto.randomUUID() },
@@ -111,7 +117,11 @@ export default function ProvisioningOperationsClient() {
         }
       />
       <ErrorDialog error={error} onClose={() => setError("")} />
-      <ErrorDialog error={viewError} title="Full problem details" onClose={() => setViewError(null)} />
+      <ErrorDialog
+        error={viewError}
+        title="Full problem details"
+        onClose={() => setViewError(null)}
+      />
       <Panel
         title="Orders needing attention"
         description="Set-ups that are delayed, uncertain, or waiting for review"
@@ -156,12 +166,19 @@ export default function ProvisioningOperationsClient() {
                     <code className="text-xs">{item.iccid}</code>
                   </TableCell>
                   <TableCell className="max-w-56">
-                    <span className="truncate text-xs text-muted-foreground" title={item.lastErrorMessage ?? undefined}>{shortError(item)}</span>
+                    <span
+                      className="truncate text-xs text-muted-foreground"
+                      title={item.lastErrorMessage ?? undefined}
+                    >
+                      {shortError(item)}
+                    </span>
                     {item.lastErrorMessage && (
                       <button
                         type="button"
                         className="ml-2 text-xs font-medium text-primary hover:underline"
-                        onClick={() => setViewError(item.lastErrorMessage ?? "")}
+                        onClick={() =>
+                          setViewError(item.lastErrorMessage ?? "")
+                        }
                       >
                         View
                       </button>
@@ -175,24 +192,15 @@ export default function ProvisioningOperationsClient() {
                       <Button size="sm" variant="ghost" asChild>
                         <Link href={`/orders/${item.orderId}`}>Open order</Link>
                       </Button>
-                      {recoverable.has(item.state) ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={busy === item.id}
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                "Check this set-up with the network again? This will not create a duplicate order.",
-                              )
-                            )
-                              void reconcile(item.id);
-                          }}
-                        >
-                          <RefreshCcw className="size-3.5" />
-                          Check again
-                        </Button>
-                      ) : null}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy === item.id}
+                        onClick={() => void checkProvider(item)}
+                      >
+                        <RefreshCcw className="size-3.5" />
+                        Check provider status
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>

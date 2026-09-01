@@ -63,6 +63,29 @@ type Profile = {
   email?: string;
   name?: string;
   orders: Order[];
+  identity?: {
+    customer: {
+      id: string;
+      customerCode: string;
+      email: string;
+      phone?: string | null;
+      source: string;
+      status: string;
+      createdAt: string;
+    };
+    loginAccount?: {
+      id: string;
+      email: string;
+      status: string;
+      accountType: string;
+      createdAt: string;
+    } | null;
+    partnerCustomer?: {
+      id: string;
+      externalCustomerId: string;
+      partner: { id: string; code: string; name: string };
+    } | null;
+  };
 };
 
 const usageTone = (used?: number, total?: number) =>
@@ -161,6 +184,64 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         <div className="flex h-40 items-center justify-center">
           <Spinner />
         </div>
+      ) : null}
+      {profile ? (
+        <Panel
+          title="Customer identity"
+          description="Customer, login account, and partner relationship"
+        >
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <p className="text-xs text-muted-foreground">Customer</p>
+              <p className="font-medium">
+                {profile.identity?.customer.customerCode ??
+                  profile.customerCode}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {profile.identity?.customer.email ?? profile.email}
+              </p>
+              {profile.identity?.loginAccount ? (
+                <Button asChild variant="outline" size="sm" className="mt-2">
+                  <Link href={`/users/${profile.identity.loginAccount.id}`}>
+                    View login account
+                  </Link>
+                </Button>
+              ) : null}
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Login account</p>
+              <p className="font-medium">
+                {profile.identity?.loginAccount
+                  ? profile.identity.loginAccount.email
+                  : "Guest / no login account"}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {profile.identity?.loginAccount
+                  ? `${humane(profile.identity.loginAccount.accountType)} · ${humane(profile.identity.loginAccount.status)}`
+                  : "No signed-in user is linked"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Partner</p>
+              {profile.identity?.partnerCustomer ? (
+                <>
+                  <Link
+                    href={`/admin/partners/${profile.identity.partnerCustomer.partner.id}`}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    {profile.identity.partnerCustomer.partner.name}
+                  </Link>
+                  <p className="text-sm text-muted-foreground">
+                    External customer:{" "}
+                    {profile.identity.partnerCustomer.externalCustomerId}
+                  </p>
+                </>
+              ) : (
+                <p className="font-medium">Direct customer</p>
+              )}
+            </div>
+          </div>
+        </Panel>
       ) : null}
       {profile ? (
         <Panel

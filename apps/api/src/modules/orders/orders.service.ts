@@ -206,6 +206,86 @@ export class OrdersService implements OnModuleInit {
       ? this.redact(this.get(id, ownerId))
       : this.expand(this.get(id));
   }
+  async operationsView(id: string) {
+    const order = this.expand(this.get(id));
+    if (!this.prisma.enabled) return order;
+    const identity = await this.prisma.order.findUnique({
+      where: { id },
+      select: {
+        channel: true,
+        notifications: {
+          where: { template: "QR_READY" },
+          orderBy: { createdAt: "desc" },
+          take: 20,
+          select: { status: true, sentAt: true, createdAt: true },
+        },
+        customer: {
+          select: {
+            id: true,
+            customerCode: true,
+            email: true,
+            phone: true,
+            source: true,
+            status: true,
+            createdAt: true,
+            user: {
+              select: {
+                id: true,
+                email: true,
+                status: true,
+                accountType: true,
+                createdAt: true,
+              },
+            },
+            partnerIdentity: {
+              select: {
+                id: true,
+                externalCustomerId: true,
+                partner: { select: { id: true, code: true, name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!identity) return order;
+    return {
+      ...order,
+      channel: identity.channel,
+      customer: {
+        id: identity.customer.id,
+        customerCode: identity.customer.customerCode,
+        email: identity.customer.email,
+        phone: identity.customer.phone,
+        source: identity.customer.source,
+        status: identity.customer.status,
+        createdAt: identity.customer.createdAt.toISOString(),
+      },
+      loginAccount: identity.customer.user
+        ? {
+            ...identity.customer.user,
+            createdAt: identity.customer.user.createdAt.toISOString(),
+          }
+        : null,
+      partnerCustomer: identity.customer.partnerIdentity
+        ? {
+            id: identity.customer.partnerIdentity.id,
+            externalCustomerId:
+              identity.customer.partnerIdentity.externalCustomerId,
+            partner: identity.customer.partnerIdentity.partner,
+          }
+        : null,
+      qrDelivery: {
+        lastSuccessfulAt:
+          identity.notifications
+            .find((item) => item.status === "SENT")
+            ?.sentAt?.toISOString() ?? null,
+        pending: identity.notifications.some((item) =>
+          ["QUEUED", "SENDING"].includes(item.status),
+        ),
+      },
+    };
+  }
   async guestView(id: string) {
     await this.refreshOne(id, true);
     return this.redact(this.get(id));
@@ -228,7 +308,14 @@ export class OrdersService implements OnModuleInit {
     }
     const customer = await this.prisma.customer.findFirst({
       where: { OR: this.customerMatch(ownerId) },
-      include: { user: true },
+      include: {
+        user: true,
+        partnerIdentity: {
+          include: {
+            partner: { select: { id: true, code: true, name: true } },
+          },
+        },
+      },
     });
     if (!customer) throw new NotFoundException("Customer not found");
     const orders = await this.prisma.order.findMany({
@@ -249,6 +336,33 @@ export class OrdersService implements OnModuleInit {
         : customer.email;
     return {
       ownerId: customer.user?.clerkId ?? customer.id,
+      identity: {
+        customer: {
+          id: customer.id,
+          customerCode: customer.customerCode,
+          email: displayEmail,
+          phone: customer.phone,
+          source: customer.source,
+          status: customer.status,
+          createdAt: customer.createdAt.toISOString(),
+        },
+        loginAccount: customer.user
+          ? {
+              id: customer.user.id,
+              email: customer.user.email,
+              status: customer.user.status,
+              accountType: customer.user.accountType,
+              createdAt: customer.user.createdAt.toISOString(),
+            }
+          : null,
+        partnerCustomer: customer.partnerIdentity
+          ? {
+              id: customer.partnerIdentity.id,
+              externalCustomerId: customer.partnerIdentity.externalCustomerId,
+              partner: customer.partnerIdentity.partner,
+            }
+          : null,
+      },
       customerCode: customer.customerCode,
       email: displayEmail,
       name: latestTraveler?.firstName,
@@ -2579,6 +2693,18 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException(
         "Customer email is required to resend the installation QR",
       );
+    if (this.prisma.enabled) {
+      const recent = await this.prisma.notification.findFirst({
+        where: {
+          orderId: order.id,
+          template: "QR_READY",
+          status: { in: ["QUEUED", "SENDING"] },
+          createdAt: { gte: new Date(Date.now() - 60_000) },
+        },
+        select: { id: true },
+      });
+      if (recent) return ownerId ? this.redact(order) : this.expand(order);
+    }
     await this.notifications.enqueue({
       orderId: order.id,
       channel: "EMAIL",
@@ -2626,114 +2752,57 @@ export class OrdersService implements OnModuleInit {
       bytes,
     };
   }
-  /**
-   * Reconciliation sweep for QR_READY orders whose activation window has
-   * elapsed. Transatel eSIM-profile state and OCS-subscription state are
-   * deliberately checked separately: an enabled profile is not proof that the
-   * data subscription has started. Only an active OCS subscription completes
-   * the order.
-   */
+  /** QR_READY is successful fulfilment, not an activation deadline. */
   async reconcileStaleActivationOrders() {
     const now = Date.now();
     const recovered: string[] = [];
     const failed: string[] = [];
     const capabilities = this.connectivity.descriptor().capabilities;
     for (const order of this.orders.values()) {
-      if (
-        order.status !== OrderStatus.QR_READY ||
-        !order.qrDeliveredAt ||
-        !order.plan.validityDays
-      )
+      if (order.status !== OrderStatus.QR_READY || !capabilities.esimDetails)
         continue;
-      const expiry = new Date(
-        new Date(order.qrDeliveredAt).getTime() +
-          order.plan.validityDays * 86_400_000,
-      ).getTime();
-      if (now <= expiry) continue;
-      const attempt = await this.nextActivationRefetchAttempt(order);
-      if (attempt <= this.maxActivationRefetches && capabilities.esimDetails) {
-        try {
-          const details = await this.connectivity.getEsimDetails(
-            await this.providerRefFor(order),
+      const last = order.lastProvisioningRecoveryAt
+        ? new Date(order.lastProvisioningRecoveryAt).getTime()
+        : 0;
+      if (now - last < 24 * 60 * 60_000) continue;
+      await this.markProvisioningRecovery(order, now);
+      try {
+        const providerRef = await this.providerRefFor(order);
+        const details = await this.connectivity.getEsimDetails(providerRef);
+        const subscriptionActive =
+          this.connectivity.descriptor().provider === "TRANSATEL"
+            ? (
+                await this.connectivity.getUsage(providerRef)
+              ).subscriptions?.some(
+                (subscription) =>
+                  (!order.providerSubscriptionId ||
+                    subscription.providerSubscriptionId ===
+                      order.providerSubscriptionId) &&
+                  subscription.status.toUpperCase() === "ACTIVE",
+              ) === true
+            : ["ACTIVE", "ACTIVATED"].includes(details.status.toUpperCase());
+        if (subscriptionActive) {
+          await this.completeProviderActivation(order, {
+            qrPayload:
+              (details as { qrPayload?: string }).qrPayload ?? order.qrPayload!,
+            ...(order.providerSubscriptionId
+              ? { subscriptionId: order.providerSubscriptionId }
+              : {}),
+            label: "activation re-fetch",
+          });
+          recovered.push(order.id);
+        } else {
+          this.logger.debug(
+            `Order ${order.orderNumber} awaits customer installation; keeping QR_READY`,
           );
-          const qrPayload =
-            (details as { qrPayload?: string }).qrPayload ?? order.qrPayload;
-          const provider = this.connectivity.descriptor().provider;
-          const subscriptionActive =
-            provider === "TRANSATEL"
-              ? (
-                  await this.connectivity.getUsage(
-                    await this.providerRefFor(order),
-                  )
-                ).subscriptions?.some(
-                  (subscription) =>
-                    (!order.providerSubscriptionId ||
-                      subscription.providerSubscriptionId ===
-                        order.providerSubscriptionId) &&
-                    subscription.status.toUpperCase() === "ACTIVE",
-                ) === true
-              : ["ACTIVE", "ACTIVATED"].includes(details.status.toUpperCase());
-          if (qrPayload && subscriptionActive) {
-            await this.completeProviderActivation(order, {
-              qrPayload,
-              ...(order.providerSubscriptionId
-                ? { subscriptionId: order.providerSubscriptionId }
-                : {}),
-              label: "activation re-fetch",
-            });
-            await this.clearActivationRefetchAttempts(order);
-            recovered.push(order.id);
-            this.logger.log(
-              `Order ${order.orderNumber} (${order.id}) recovered after activation re-fetch attempt ${attempt}`,
-            );
-          } else {
-            this.logger.debug(
-              `Order ${order.orderNumber} (${order.id}) data subscription is not active at provider yet (re-fetch attempt ${attempt}/${this.maxActivationRefetches})`,
-            );
-          }
-          continue;
-        } catch (error) {
-          this.metrics?.recordFailure("reconciliation", "activation-refetch");
-          this.logger.warn(
-            `Activation re-fetch failed for order ${order.id} (attempt ${attempt}/${this.maxActivationRefetches}): ${error instanceof Error ? error.message : "unknown"}`,
-          );
-          continue;
         }
+      } catch (error) {
+        this.metrics?.recordFailure("reconciliation", "activation-refetch");
+        failed.push(order.id);
+        this.logger.warn(
+          `Activation observation failed for order ${order.id}; local state was preserved: ${error instanceof Error ? error.message : "unknown"}`,
+        );
       }
-      this.transition(
-        order,
-        OrderStatus.ACTIVATION_ATTENTION,
-        "Activation confirmation is delayed; QR remains valid while operations reconcile the provider",
-      );
-      order.operationalDisposition = "RECONCILE_PROVIDER";
-      await this.persistence.save(order);
-      await this.alertProvisioningFailure(order);
-      const operation = this.prisma.enabled
-        ? await this.prisma.provisioningOperation.findUnique({
-            where: { orderId: order.id },
-            select: { id: true },
-          })
-        : null;
-      await this.resilience?.attention({
-        dedupeKey: `activation-attention:${order.id}`,
-        category: "ACTIVATION_DELAYED",
-        entityType: "ProvisioningOperation",
-        entityId: operation?.id ?? order.id,
-        orderId: order.id,
-        summary: `Activation confirmation is delayed for ${order.orderNumber}`,
-        localState: OrderStatus.ACTIVATION_ATTENTION,
-        ...(order.providerStatus
-          ? { externalState: order.providerStatus }
-          : {}),
-        lastSuccessfulStep: "QR_DELIVERED",
-        failureCategory: "ACTIVATION_CONFIRMATION_TIMEOUT",
-        availableActions: operation ? ["RECONCILE_PROVISIONING"] : [],
-      });
-      failed.push(order.id);
-      await this.clearActivationRefetchAttempts(order);
-      this.logger.warn(
-        `Order ${order.orderNumber} (${order.id}) activation confirmation requires attention after ${attempt - 1} re-fetch attempt(s)`,
-      );
     }
     return { recovered, failed };
   }
@@ -3198,11 +3267,28 @@ export class OrdersService implements OnModuleInit {
     actorId: string | null = null,
   ) {
     try {
-      await this.resilience?.resolve(dedupeKey, actorId, resolution);
+      const internalActor = actorId
+        ? await this.prisma.user.findUnique({
+            where: { clerkId: actorId },
+            select: { id: true },
+          })
+        : null;
+      await this.resilience?.resolve(
+        dedupeKey,
+        internalActor?.id ?? null,
+        resolution,
+      );
     } catch (error) {
       this.logger.warn(
-        `Attention resolution ${dedupeKey} was deferred: ${error instanceof Error ? error.message : "unknown"}`,
+        `Attention resolution ${dedupeKey} failed with actor attribution; retrying without attribution: ${error instanceof Error ? error.message : "unknown"}`,
       );
+      try {
+        await this.resilience?.resolve(dedupeKey, null, resolution);
+      } catch (retryError) {
+        this.logger.error(
+          `Attention resolution ${dedupeKey} remains deferred after retry: ${retryError instanceof Error ? retryError.message : "unknown"}`,
+        );
+      }
     }
   }
   private async emitPartnerDocumentEvent(
@@ -3240,7 +3326,10 @@ export class OrdersService implements OnModuleInit {
           orderId: order.id,
           externalOrderId: order.externalOrderId ?? null,
           verificationId: verification.id,
-          status: failureCode === "DOCUMENTS_REJECTED" ? "INVALID" : "REUPLOAD_REQUIRED",
+          status:
+            failureCode === "DOCUMENTS_REJECTED"
+              ? "INVALID"
+              : "REUPLOAD_REQUIRED",
           failureCode,
           ...(documentType ? { documentType } : {}),
         },

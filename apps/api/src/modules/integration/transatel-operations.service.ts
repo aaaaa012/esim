@@ -36,12 +36,10 @@ export class TransatelOperationsService {
     scope?: "subscribers" | "inventory" | "failures" | "actions";
     q?: string;
   }) {
-    const health = await this.connectivity
-      .transatelHealth()
-      .catch((error) => ({
-        ok: false,
-        error: error instanceof Error ? error.message : "Health check failed",
-      }));
+    const health = await this.connectivity.transatelHealth().catch((error) => ({
+      ok: false,
+      error: error instanceof Error ? error.message : "Health check failed",
+    }));
     if (!this.prisma.enabled)
       return {
         health,
@@ -541,6 +539,7 @@ export class TransatelOperationsService {
           orderBy: { createdAt: "desc" },
           take: 1,
         },
+        provisioningOperation: { select: { state: true } },
       },
     });
     if (!order?.inventory)
@@ -549,9 +548,13 @@ export class TransatelOperationsService {
       order.inventory.iccid,
     );
     const observedProfileStatus = details.status.toUpperCase();
+    let usageUnavailable = false;
     const usage = await this.connectivity
       .getUsage(order.inventory.iccid)
-      .catch(() => null);
+      .catch(() => {
+        usageUnavailable = true;
+        return null;
+      });
     const providerSubscription = usage?.subscriptions?.find(
       (subscription) =>
         !order.providerSubscriptionId ||
@@ -560,6 +563,21 @@ export class TransatelOperationsService {
     const observedSubscriptionStatus =
       providerSubscription?.status.toUpperCase() ?? null;
     const activationConfirmed = observedSubscriptionStatus === "ACTIVE";
+    const observedState = observedSubscriptionStatus ?? observedProfileStatus;
+    const terminal = ["REJECTED", "TERMINATED", "DELETED"].includes(
+      observedState,
+    );
+    const awaitingInstallation = [
+      "PENDINGFORFIRSTUSE",
+      "PENDING",
+      "PRELOADED",
+    ].includes(observedSubscriptionStatus ?? "");
+    const identityMismatch = Boolean(
+      order.providerSubscriptionId &&
+      usage?.subscriptions?.length &&
+      !providerSubscription,
+    );
+    const critical = terminal || identityMismatch;
     const checkedAt = new Date();
     if (
       activationConfirmed &&
@@ -615,15 +633,33 @@ export class TransatelOperationsService {
           : []),
       ]);
       return {
+        classification: "ACTIVE" as const,
         orderId,
+        orderStatus: "COMPLETED",
         providerStatus: observedSubscriptionStatus ?? observedProfileStatus,
-        esimProfileStatus: observedProfileStatus,
+        profileStatus: observedProfileStatus,
         subscriptionStatus: observedSubscriptionStatus,
         usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
-        operationState: null,
+        provisioningState: "ACTIVATED",
+        changed: true,
         checkedAt: checkedAt.toISOString(),
+        recommendedAction: "No action is required; activation is confirmed.",
       };
     }
+    if (activationConfirmed)
+      return {
+        classification: "ACTIVE" as const,
+        orderId,
+        orderStatus: order.status,
+        providerStatus: observedState,
+        profileStatus: observedProfileStatus,
+        subscriptionStatus: observedSubscriptionStatus,
+        usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
+        provisioningState: order.provisioningOperation?.state ?? null,
+        changed: false,
+        checkedAt: checkedAt.toISOString(),
+        recommendedAction: "No action is required; activation is confirmed.",
+      };
     const latest = order.transatelLifecycleOperations[0];
     const confirmed =
       latest &&
@@ -637,6 +673,15 @@ export class TransatelOperationsService {
         data: {
           ...(observedSubscriptionStatus
             ? { providerStatus: observedSubscriptionStatus }
+            : {}),
+          ...(critical &&
+          ["PROVISIONING", "QR_READY", "ACTIVATION_ATTENTION"].includes(
+            order.status,
+          )
+            ? {
+                status: "ACTIVATION_ATTENTION",
+                operationalDisposition: "MANUAL_ACTION",
+              }
             : {}),
           version: { increment: 1 },
         },
@@ -694,6 +739,54 @@ export class TransatelOperationsService {
             },
           },
         });
+      if (
+        critical &&
+        ["PROVISIONING", "QR_READY", "ACTIVATION_ATTENTION"].includes(
+          order.status,
+        )
+      ) {
+        if (order.status !== "ACTIVATION_ATTENTION")
+          await tx.orderEvent.create({
+            data: {
+              orderId: order.id,
+              fromStatus: order.status,
+              toStatus: "ACTIVATION_ATTENTION",
+              reason: identityMismatch
+                ? "Transatel subscription did not match the assigned order"
+                : `Transatel reported terminal state ${observedState}`,
+            },
+          });
+        await tx.attentionCase.upsert({
+          where: { dedupeKey: `provider-status-critical:${order.id}` },
+          create: {
+            dedupeKey: `provider-status-critical:${order.id}`,
+            category: identityMismatch
+              ? "PROVISIONING_IDENTITY_CONFLICT"
+              : "PROVIDER_TERMINAL_STATE",
+            entityType: "Order",
+            entityId: order.id,
+            orderId: order.id,
+            severity: "CRITICAL",
+            summary: identityMismatch
+              ? `Transatel subscription does not match ${order.orderNumber}`
+              : `Transatel reported ${observedState} for ${order.orderNumber}`,
+            localState: "ACTIVATION_ATTENTION",
+            externalState: observedState,
+            lastSuccessfulStep: "PROVIDER_STATUS_CHECK",
+            failureCategory: identityMismatch
+              ? "PROVIDER_SUBSCRIPTION_MISMATCH"
+              : "PROVIDER_TERMINAL_STATE",
+            availableActions: [],
+          },
+          update: {
+            status: "OPEN",
+            externalState: observedState,
+            retryCount: { increment: 1 },
+            resolvedAt: null,
+            resolution: null,
+          },
+        });
+      }
       await tx.auditLog.create({
         data: {
           module: "TRANSATEL",
@@ -715,15 +808,33 @@ export class TransatelOperationsService {
       });
     });
     return {
+      classification: identityMismatch
+        ? ("IDENTITY_MISMATCH" as const)
+        : terminal
+          ? ("PROVIDER_TERMINAL" as const)
+          : usageUnavailable
+            ? ("PROVIDER_UNAVAILABLE" as const)
+            : awaitingInstallation
+              ? ("AWAITING_INSTALLATION" as const)
+              : ("PROVISIONING_PENDING" as const),
       orderId,
+      orderStatus: critical ? "ACTIVATION_ATTENTION" : order.status,
       providerStatus: observedSubscriptionStatus ?? observedProfileStatus,
-      esimProfileStatus: observedProfileStatus,
+      profileStatus: observedProfileStatus,
       subscriptionStatus: observedSubscriptionStatus,
       usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
-      operationState: confirmed
-        ? TransatelLifecycleState.CONFIRMED
-        : (latest?.state ?? null),
+      provisioningState: order.provisioningOperation?.state ?? null,
+      changed: critical && order.status !== "ACTIVATION_ATTENTION",
       checkedAt: checkedAt.toISOString(),
+      recommendedAction: identityMismatch
+        ? "Do not retry; verify the ICCID and subscription assignment with Transatel."
+        : terminal
+          ? "Review the provider rejection before creating a replacement or refund."
+          : usageUnavailable
+            ? "Provider usage status is temporarily unavailable; local state was preserved."
+            : awaitingInstallation
+              ? "Ask the customer to install the eSIM and connect to a supported network."
+              : "The provider setup is still pending; check again later.",
     };
   }
 

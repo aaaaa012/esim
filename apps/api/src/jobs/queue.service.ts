@@ -101,7 +101,10 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     work: (signal: AbortSignal) => Promise<T>,
   ): Promise<{ acquired: boolean; value?: T }> {
     if (!this.enabled)
-      return { acquired: true, value: await work(new AbortController().signal) };
+      return {
+        acquired: true,
+        value: await work(new AbortController().signal),
+      };
     const redis = this.coordinationConnection();
     const key = `visa-compass:lease:${name}`;
     const token = randomUUID();
@@ -133,7 +136,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     try {
       const value = await work(ownership.signal);
       if (ownership.signal.aborted)
-        throw new Error(`Distributed lease ${name} was lost while work was running`);
+        throw new Error(
+          `Distributed lease ${name} was lost while work was running`,
+        );
       return { acquired: true, value };
     } finally {
       clearInterval(renewal);
@@ -257,6 +262,15 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       });
     }
     return { enabled: true, queues };
+  }
+
+  async hasJob(name: QueueName, jobId: string) {
+    if (!this.enabled) return false;
+    const job = await this.getQueue(name).getJob(jobId);
+    if (!job) return false;
+    return ["waiting", "active", "delayed", "prioritized", "waiting-children"].includes(
+      await job.getState(),
+    );
   }
 
   private coordinationConnection() {

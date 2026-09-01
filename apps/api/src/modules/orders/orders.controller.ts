@@ -38,6 +38,7 @@ import { OrdersService } from "./orders.service.js";
 import { InventoryService } from "../inventory/inventory.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { GuestOrderAccessService } from "./guest-order-access.service.js";
+import { TransatelOperationsService } from "../integration/transatel-operations.service.js";
 
 @Controller("customer/orders")
 @UseGuards(AuthGuard, AccountGuard)
@@ -183,6 +184,7 @@ export class OperationsController {
     private readonly orders: OrdersService,
     private readonly inventory: InventoryService,
     private readonly prisma: PrismaService,
+    private readonly transatelOperations: TransatelOperationsService,
   ) {}
   @Get("dashboard") dashboard(@Req() req: AuthenticatedRequest) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
@@ -469,12 +471,46 @@ export class OperationsController {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     return this.orders.customerProfile(ownerId);
   }
+  @Get("users/:id/identity") async userIdentity(
+    @Param("id") id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    if (!this.prisma.enabled) return null;
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        email: true,
+        status: true,
+        accountType: true,
+        mustChangePassword: true,
+        createdAt: true,
+        updatedAt: true,
+        customer: {
+          select: { id: true, customerCode: true, email: true, status: true },
+        },
+      },
+    });
+    if (!user) throw new BadRequestException("Login account not found");
+    return user;
+  }
   @Post("orders/:id/usage/refresh") refreshUsage(
     @Param("id") id: string,
     @Req() req: AuthenticatedRequest,
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     return this.inventory.refreshUsage(id);
+  }
+  @Post("orders/:id/provider-status-check") checkProviderStatus(
+    @Param("id") id: string,
+    @Headers("x-idempotency-key") idempotencyKey: string | undefined,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    if (!idempotencyKey || !/^[a-zA-Z0-9:_-]{12,128}$/.test(idempotencyKey))
+      throw new BadRequestException("A valid idempotency key is required");
+    return this.transatelOperations.reconcile(id, req.user!.localUserId);
   }
   @Get("audit") audit(@Req() req: AuthenticatedRequest) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
@@ -601,6 +637,46 @@ export class OperationsController {
                   },
                 },
               },
+              {
+                customer: {
+                  is: {
+                    OR: [
+                      {
+                        customerCode: {
+                          contains: search,
+                          mode: "insensitive" as const,
+                        },
+                      },
+                      {
+                        email: {
+                          contains: search,
+                          mode: "insensitive" as const,
+                        },
+                      },
+                      {
+                        user: {
+                          is: {
+                            email: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                        },
+                      },
+                      {
+                        partnerIdentity: {
+                          is: {
+                            externalCustomerId: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
             ],
           }
         : {}),
@@ -612,6 +688,15 @@ export class OperationsController {
           plan: { include: { country: true } },
           traveler: true,
           partner: { select: { id: true, code: true, name: true } },
+          customer: {
+            select: {
+              id: true,
+              customerCode: true,
+              email: true,
+              source: true,
+              user: { select: { id: true } },
+            },
+          },
         },
         orderBy: { createdAt: "desc" },
         take,
@@ -624,6 +709,13 @@ export class OperationsController {
         id: order.id,
         orderNumber: order.orderNumber,
         ownerId: order.customerId,
+        customer: {
+          id: order.customer.id,
+          customerCode: order.customer.customerCode,
+          email: order.customer.email,
+          source: order.customer.source,
+          hasLogin: Boolean(order.customer.user),
+        },
         status: order.status,
         createdAt: order.createdAt.toISOString(),
         totalAmountNpr: Number(order.totalAmount),
@@ -655,7 +747,7 @@ export class OperationsController {
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     await this.orders.refreshOne(id, true);
-    return this.orders.view(id);
+    return this.orders.operationsView(id);
   }
   @Get("orders/:id/documents/:documentId/preview") preview(
     @Param("id") id: string,
@@ -735,7 +827,7 @@ export class OperationsController {
     @Param("id") id: string,
     @Req() req: AuthenticatedRequest,
   ) {
-    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    requireRole(req, [UserRole.SUPER_ADMIN]);
     return this.orders.retry(id);
   }
   @Post("orders/:id/resend-qr") resendQr(

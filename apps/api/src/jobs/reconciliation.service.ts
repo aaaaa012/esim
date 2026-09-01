@@ -344,7 +344,8 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
             entityType: "Order",
             entityId: result.order.id,
             orderId: result.order.id,
-            summary: "Partner OCR remained unavailable; documents need manual review",
+            summary:
+              "Partner OCR remained unavailable; documents need manual review",
             localState: result.order.status,
             failureCategory: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
             lastSuccessfulStep: "DOCUMENTS_UPLOADED",
@@ -424,7 +425,13 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       ["outbox", () => this.resilience.dispatchOutbox()],
       ["webhooks", () => this.requeueUnprocessedWebhooks()],
       ["documents", () => this.reconcileStaleDocumentReviews()],
-      ["notifications", () => this.retryFailedNotifications()],
+      [
+        "notifications",
+        async () => {
+          await this.failAbandonedNotifications();
+          await this.retryFailedNotifications();
+        },
+      ],
       ["provisioning-operations", () => this.reconcileProvisioningOperations()],
       ["lifecycle-operations", () => this.reconcileLifecycleOperations()],
       ["activation", () => this.orders.reconcileStaleActivationOrders()],
@@ -668,6 +675,33 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
           `Notification recovery failed for ${row.id}: ${error instanceof Error ? error.message : "unknown"}`,
         );
       }
+    }
+  }
+
+  private async failAbandonedNotifications() {
+    if (!this.prisma.enabled || !this.queues.enabled) return;
+    const rows = await this.prisma.notification.findMany({
+      where: {
+        status: "QUEUED",
+        createdAt: { lt: new Date(Date.now() - 10 * 60_000) },
+      },
+      select: { id: true },
+      take: 100,
+    });
+    for (const row of rows) {
+      if (
+        await this.queues.hasJob(QUEUES.notifications, `notification-${row.id}`)
+      )
+        continue;
+      await this.prisma.notification.updateMany({
+        where: { id: row.id, status: "QUEUED" },
+        data: {
+          status: "FAILED",
+          errorMessage: "Notification queue job was not found during recovery",
+          nextAttemptAt: new Date(),
+          attemptCount: { increment: 1 },
+        },
+      });
     }
   }
 

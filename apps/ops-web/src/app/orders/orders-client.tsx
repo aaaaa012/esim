@@ -45,6 +45,13 @@ export type OpsOrder = {
   topUpMobile?: string;
   externalOrderId?: string | null;
   partner?: { id: string; code: string; name: string } | null;
+  customer?: {
+    id: string;
+    customerCode: string;
+    email: string;
+    source: string;
+    hasLogin: boolean;
+  };
 };
 export const opsHeaders = {};
 const QUEUE_STATUSES = [
@@ -380,9 +387,17 @@ export default function OrdersClient({
                     </span>
                   </TableCell>
                   <TableCell>
-                    {order.traveler
-                      ? `${order.traveler.firstName} ${order.traveler.surname}`
-                      : order.ownerId}
+                    <Link
+                      href={`/customers/${order.customer?.id ?? order.ownerId}`}
+                      className="font-medium text-primary hover:underline"
+                    >
+                      {order.traveler
+                        ? `${order.traveler.firstName} ${order.traveler.surname}`
+                        : (order.customer?.customerCode ?? order.ownerId)}
+                    </Link>
+                    <p className="text-xs text-muted-foreground">
+                      {order.customer?.email ?? "Customer profile"}
+                    </p>
                   </TableCell>
                   <TableCell>
                     {order.plan.countryCode} · {order.plan.name}
@@ -395,7 +410,12 @@ export default function OrdersClient({
                   <TableCell>
                     {order.partner ? (
                       <div>
-                        <p className="font-medium">{order.partner.name}</p>
+                        <Link
+                          href={`/admin/partners/${order.partner.id}`}
+                          className="font-medium text-primary hover:underline"
+                        >
+                          {order.partner.name}
+                        </Link>
                         <p className="text-xs text-muted-foreground">
                           {order.partner.code}
                         </p>

@@ -11,24 +11,20 @@ function setup(
     status: "Pending",
   },
 ) {
-  const lifecycleCreate = vi
-    .fn()
-    .mockResolvedValue({
+  const lifecycleCreate = vi.fn().mockResolvedValue({
+    id: "operation-1",
+    orderId: "order-1",
+    action: "SUSPEND",
+    state: "CREATED",
+  });
+  const lifecycleUpdate = vi.fn().mockImplementation(({ data }) =>
+    Promise.resolve({
       id: "operation-1",
       orderId: "order-1",
       action: "SUSPEND",
-      state: "CREATED",
-    });
-  const lifecycleUpdate = vi
-    .fn()
-    .mockImplementation(({ data }) =>
-      Promise.resolve({
-        id: "operation-1",
-        orderId: "order-1",
-        action: "SUSPEND",
-        ...data,
-      }),
-    );
+      ...data,
+    }),
+  );
   const auditCreate = vi.fn().mockResolvedValue({});
   const tx = {
     transatelLifecycleOperation: { update: lifecycleUpdate },
@@ -40,21 +36,19 @@ function setup(
   const prisma = {
     enabled: true,
     order: {
-      findUnique: vi
-        .fn()
-        .mockResolvedValue({
-          id: "order-1",
-          providerStatus: "ACTIVE",
-          inventory: {
-            id: "inventory-1",
-            iccid: "8988247076000000319",
-            providerSubscriptionId: null,
-            status: "ACTIVATED",
-          },
-          customerEsim: {
-            subscriptions: [{ providerSubscriptionId: "sub-1" }],
-          },
-        }),
+      findUnique: vi.fn().mockResolvedValue({
+        id: "order-1",
+        providerStatus: "ACTIVE",
+        inventory: {
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          providerSubscriptionId: null,
+          status: "ACTIVATED",
+        },
+        customerEsim: {
+          subscriptions: [{ providerSubscriptionId: "sub-1" }],
+        },
+      }),
       update: vi.fn().mockResolvedValue({}),
     },
     esimInventory: { update: vi.fn().mockResolvedValue({}) },
@@ -213,7 +207,7 @@ describe("TransatelOperationsService reconciliation", () => {
 
     await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
       providerStatus: "ACTIVE",
-      esimProfileStatus: "ENABLED",
+      profileStatus: "ENABLED",
       subscriptionStatus: "ACTIVE",
       usageAvailable: true,
     });
@@ -259,10 +253,101 @@ describe("TransatelOperationsService reconciliation", () => {
 
     await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
       providerStatus: "READYFORUSE",
-      esimProfileStatus: "ENABLED",
+      profileStatus: "ENABLED",
       subscriptionStatus: "READYFORUSE",
     });
     expect(context.orders.applyProviderEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps pending-first-use orders QR-ready as awaiting customer installation", async () => {
+    const context = setup();
+    (
+      context.prisma.order.findUnique as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      id: "order-1",
+      status: "QR_READY",
+      providerStatus: "RELEASED",
+      providerSubscriptionId: "sub-1",
+      inventory: {
+        id: "inventory-1",
+        iccid: "8988247076000000319",
+        status: "ASSIGNED",
+      },
+      customerEsim: { id: "customer-esim-1", subscriptions: [] },
+      transatelLifecycleOperations: [],
+      provisioningOperation: { state: "QR_READY" },
+    });
+    context.connectivity.getEsimDetails = vi.fn().mockResolvedValue({
+      subscriptionId: "8988247076000000319",
+      status: "released",
+    });
+    context.connectivity.getUsage = vi.fn().mockResolvedValue({
+      usageAvailable: true,
+      subscriptions: [
+        {
+          providerSubscriptionId: "sub-1",
+          status: "pendingForFirstUse",
+          usedMb: 0,
+          totalMb: 500,
+        },
+      ],
+    });
+
+    await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      classification: "AWAITING_INSTALLATION",
+      orderStatus: "QR_READY",
+      provisioningState: "QR_READY",
+      profileStatus: "RELEASED",
+      subscriptionStatus: "PENDINGFORFIRSTUSE",
+      changed: false,
+    });
+    expect(context.orders.applyProviderEvent).not.toHaveBeenCalled();
+    expect(context.tx.order.update).toHaveBeenCalledWith({
+      where: { id: "order-1" },
+      data: {
+        providerStatus: "PENDINGFORFIRSTUSE",
+        version: { increment: 1 },
+      },
+    });
+  });
+
+  it("preserves order state when the subscription status check is unavailable", async () => {
+    const context = setup();
+    (
+      context.prisma.order.findUnique as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      id: "order-1",
+      status: "QR_READY",
+      providerStatus: "PENDINGFORFIRSTUSE",
+      providerSubscriptionId: "sub-1",
+      inventory: {
+        id: "inventory-1",
+        iccid: "8988247076000000319",
+        status: "ASSIGNED",
+      },
+      customerEsim: { id: "customer-esim-1", subscriptions: [] },
+      transatelLifecycleOperations: [],
+      provisioningOperation: { state: "QR_READY" },
+    });
+    context.connectivity.getEsimDetails = vi.fn().mockResolvedValue({
+      subscriptionId: "8988247076000000319",
+      status: "released",
+    });
+    context.connectivity.getUsage = vi
+      .fn()
+      .mockRejectedValue(new Error("provider timeout"));
+
+    await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      classification: "PROVIDER_UNAVAILABLE",
+      orderStatus: "QR_READY",
+      provisioningState: "QR_READY",
+      changed: false,
+    });
+    expect(context.orders.applyProviderEvent).not.toHaveBeenCalled();
+    expect(context.tx.order.update).toHaveBeenCalledWith({
+      where: { id: "order-1" },
+      data: { version: { increment: 1 } },
+    });
   });
 });
 

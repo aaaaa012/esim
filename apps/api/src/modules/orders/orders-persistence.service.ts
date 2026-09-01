@@ -43,7 +43,9 @@ export class OrdersPersistenceService {
               ],
             }
           : {},
-      ...(startup ? { orderBy: { updatedAt: "desc" as const }, take: 2_000 } : {}),
+      ...(startup
+        ? { orderBy: { updatedAt: "desc" as const }, take: 2_000 }
+        : {}),
       include: {
         customer: { include: { user: true } },
         partner: { select: { id: true, code: true, name: true } },
@@ -489,10 +491,12 @@ export class OrdersPersistenceService {
                   : null,
                 returnUrl: order.payment.returnUrl ?? null,
                 redirectUrl: order.payment.redirectUrl ?? null,
-                paidAt:
-                  order.payment.status === PaymentStatus.COMPLETED
-                    ? new Date()
-                    : null,
+                // Payment completion time is immutable. confirmPaymentPersisted
+                // owns the transition that sets it; unrelated order saves must
+                // never move the financial timestamp forward.
+                ...(order.payment.status === PaymentStatus.COMPLETED
+                  ? {}
+                  : { paidAt: null }),
               },
               create: {
                 orderId: order.id,
@@ -512,7 +516,12 @@ export class OrdersPersistenceService {
             });
           const persistedEvents = await tx.orderEvent.findMany({
             where: { orderId: order.id },
-            select: { fromStatus: true, toStatus: true, createdAt: true, reason: true },
+            select: {
+              fromStatus: true,
+              toStatus: true,
+              createdAt: true,
+              reason: true,
+            },
           });
           const persistedEventKeys = new Set(
             persistedEvents.map((event) =>

@@ -19,7 +19,11 @@ import {
   requireRole,
 } from "../../common/auth.guard.js";
 import { AccountGuard, AccountTypes } from "../../common/auth.guard.js";
-import { UserRoleName, Prisma } from "@prisma/client";
+import {
+  UserRoleName,
+  Prisma,
+  ProvisioningOperationState,
+} from "@prisma/client";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request } from "express";
 import { Webhook } from "svix";
@@ -455,10 +459,20 @@ export class OperationsLogsController {
     @Query("pageSize") pageSizeInput = "25",
   ) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    const allowedGroups = new Set(["all", "provider", "incoming", "orders", "staff"]);
-    if (!allowedGroups.has(group)) throw new BadRequestException("Invalid log group");
+    const allowedGroups = new Set([
+      "all",
+      "provider",
+      "incoming",
+      "orders",
+      "staff",
+    ]);
+    if (!allowedGroups.has(group))
+      throw new BadRequestException("Invalid log group");
     const page = Math.max(1, Number.parseInt(pageInput, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number.parseInt(pageSizeInput, 10) || 25));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Number.parseInt(pageSizeInput, 10) || 25),
+    );
     if (!this.prisma.enabled) return { items: [], total: 0, page, pageSize };
 
     // Pull only enough records to serve the requested page from each source,
@@ -466,11 +480,15 @@ export class OperationsLogsController {
     const take = page * pageSize;
     const normalizedQuery = query.trim().toLowerCase();
     const matches = (...values: Array<string | null | undefined>) =>
-      !normalizedQuery || values.some((value) => value?.toLowerCase().includes(normalizedQuery));
+      !normalizedQuery ||
+      values.some((value) => value?.toLowerCase().includes(normalizedQuery));
     const isOrderModule = (module: string) =>
       /ORDER|PAYMENT|VERIFICATION|TRANSATEL|INVENTORY|REFUND/i.test(module);
 
-    const safeQuery = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+    const safeQuery = async <T>(
+      fn: () => Promise<T>,
+      fallback: T,
+    ): Promise<T> => {
       try {
         return await fn();
       } catch {
@@ -552,7 +570,11 @@ export class OperationsLogsController {
 
     if (group === "all" || group === "provider") {
       integrationRows = await safeQuery(
-        () => this.prisma.integrationLog.findMany({ orderBy: { createdAt: "desc" }, take }),
+        () =>
+          this.prisma.integrationLog.findMany({
+            orderBy: { createdAt: "desc" },
+            take,
+          }),
         [],
       );
       integrationTotal = await safeQuery(
@@ -656,9 +678,12 @@ export class OperationsLogsController {
         id: row.id,
         identifier: row.operation,
         title: `${row.method} ${sanitizeLogEndpoint(row.endpoint)}`,
-        detail: sanitizeLogText(row.errorMessage ?? row.errorCode) ?? "Provider request completed",
+        detail:
+          sanitizeLogText(row.errorMessage ?? row.errorCode) ??
+          "Provider request completed",
         status: row.status,
-        statusLabel: row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
+        statusLabel:
+          row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
         createdAt: row.createdAt,
         durationMs: row.durationMs,
         error: sanitizeLogText(row.errorMessage),
@@ -670,7 +695,9 @@ export class OperationsLogsController {
         id: row.id,
         identifier: row.source,
         title: row.eventId,
-        detail: sanitizeLogText(row.errorMessage) ?? (row.processedAt ? "Callback processed" : "Callback queued"),
+        detail:
+          sanitizeLogText(row.errorMessage) ??
+          (row.processedAt ? "Callback processed" : "Callback queued"),
         status: row.signatureValid
           ? row.deadLetteredAt || row.errorMessage
             ? 500
@@ -690,8 +717,18 @@ export class OperationsLogsController {
       ...orderRows.map((row) => ({
         group: "orders" as const,
         id: `order-${row.id}`,
-        identifier: row.channel === "PARTNER_HOSTED" ? "Hosted checkout" : row.channel === "PARTNER_API" ? "API partner" : "Visa Compass checkout",
-        title: row.channel === "PARTNER_HOSTED" ? "Hosted checkout order created" : row.channel === "PARTNER_API" ? "API partner order created" : "Visa Compass checkout order created",
+        identifier:
+          row.channel === "PARTNER_HOSTED"
+            ? "Hosted checkout"
+            : row.channel === "PARTNER_API"
+              ? "API partner"
+              : "Visa Compass checkout",
+        title:
+          row.channel === "PARTNER_HOSTED"
+            ? "Hosted checkout order created"
+            : row.channel === "PARTNER_API"
+              ? "API partner order created"
+              : "Visa Compass checkout order created",
         detail: `${row.orderNumber} is ${row.status.toLowerCase().replaceAll("_", " ")}${row.partner ? ` · ${row.partner.name}` : ""}`,
         statusLabel: "RECORDED",
         createdAt: row.createdAt,
@@ -725,7 +762,13 @@ export class OperationsLogsController {
         responseBody: sanitizeOperationsLog(row.responseSnapshot),
       })),
       ...auditRows
-        .filter((row) => group === "all" || (group === "orders" ? isOrderModule(row.module) : !isOrderModule(row.module)))
+        .filter(
+          (row) =>
+            group === "all" ||
+            (group === "orders"
+              ? isOrderModule(row.module)
+              : !isOrderModule(row.module)),
+        )
         .map((row) => ({
           group: isOrderModule(row.module) ? "orders" : "staff",
           id: row.id,
@@ -785,8 +828,17 @@ export class OperationsProvisioningOperationsController {
     ];
     const selected =
       state && allowed.includes(state) ? (state as never) : undefined;
+    const pendingStates: ProvisioningOperationState[] = [
+      ProvisioningOperationState.CREATED,
+      ProvisioningOperationState.SUBMITTING,
+      ProvisioningOperationState.ACCEPTED,
+      ProvisioningOperationState.WAITING_FOR_QR,
+      ProvisioningOperationState.RECONCILE_REQUIRED,
+      ProvisioningOperationState.MANUAL_REVIEW,
+      ProvisioningOperationState.REJECTED,
+    ];
     return this.prisma.provisioningOperation.findMany({
-      where: selected ? { state: selected } : {},
+      where: selected ? { state: selected } : { state: { in: pendingStates } },
       select: {
         id: true,
         orderId: true,

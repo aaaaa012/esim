@@ -669,7 +669,7 @@ describe("OrdersService.reconcileStaleActivationOrders", () => {
     expect(inventory.applyLifecycle).toHaveBeenCalled();
   });
 
-  it("routes the order to activation attention once the re-fetch budget is exhausted", async () => {
+  it("keeps an uninstalled order QR_READY after the observation budget", async () => {
     vi.stubEnv("ACTIVATION_REFETCH_ATTEMPTS", "1");
     const connectivity = {
       descriptor: () => ({
@@ -690,8 +690,8 @@ describe("OrdersService.reconcileStaleActivationOrders", () => {
     expect(orders.get("q-2").status).toBe(OrderStatus.QR_READY);
 
     const result = await orders.reconcileStaleActivationOrders();
-    expect(result.failed).toEqual(["q-2"]);
-    expect(orders.get("q-2").status).toBe(OrderStatus.ACTIVATION_ATTENTION);
+    expect(result.failed).toEqual([]);
+    expect(orders.get("q-2").status).toBe(OrderStatus.QR_READY);
   });
 
   it("ignores non-stale QR_READY orders", async () => {
@@ -706,7 +706,12 @@ describe("OrdersService.reconcileStaleActivationOrders", () => {
         .mockResolvedValue({ subscriptionId: "sub-1", qrPayload: "LPA:1$x" }),
     } as unknown as ConnectivityService;
     const orders = ordersService(
-      [readyOrder({ qrDeliveredAt: new Date().toISOString() })],
+      [
+        readyOrder({
+          qrDeliveredAt: new Date().toISOString(),
+          lastProvisioningRecoveryAt: new Date().toISOString(),
+        }),
+      ],
       connectivity,
     );
     await orders.refreshFromPersistence();
