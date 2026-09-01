@@ -495,7 +495,11 @@ export default function InventoryClient() {
       const r = await authFetch(`${API}/admin/plans/import-csv`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content, fileName: packageFile.name }),
+        body: JSON.stringify({
+          content,
+          fileName: packageFile.name,
+          mode: "UPDATE_LISTED",
+        }),
       });
       const v = await r.json();
       if (!r.ok) throw new Error(v.error?.message);

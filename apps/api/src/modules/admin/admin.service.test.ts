@@ -109,6 +109,26 @@ describe("AdminService.importPlansFromTabular validity parsing", () => {
 });
 
 describe("AdminService.importPlansFromTabular role-based default status", () => {
+  it("reports UPDATE_LISTED mode and never performs a missing-plan bulk update", async () => {
+    const prisma = prismaStub();
+    const admin = new AdminService(prisma, connectivityStub());
+    const result = await admin.importPlansFromTabular(csv("7"));
+    expect(result.mode).toBe("UPDATE_LISTED");
+    expect(prisma.plan.updateMany).toBeUndefined();
+  });
+
+  it("rejects unsupported import modes", async () => {
+    const admin = new AdminService(prismaStub(), connectivityStub());
+    await expect(
+      admin.importPlansFromTabular(
+        csv("7"),
+        "catalog.csv",
+        undefined,
+        "REPLACE_ACTIVE" as "UPDATE_LISTED",
+      ),
+    ).rejects.toThrow("Unsupported plan import mode");
+  });
+
   it("imports as DRAFT when no actor is resolved", async () => {
     const prisma = prismaStub();
     const admin = new AdminService(prisma, connectivityStub());

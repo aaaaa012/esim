@@ -64,7 +64,13 @@ export class AdminController {
   @Post("plans/import-csv")
   @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
   importPlansCsv(
-    @Body() body: { csv?: string; content?: string; fileName?: string },
+    @Body()
+    body: {
+      csv?: string;
+      content?: string;
+      fileName?: string;
+      mode?: "UPDATE_LISTED";
+    },
     @Req() req: AuthenticatedRequest,
   ) {
     const content =
@@ -78,6 +84,7 @@ export class AdminController {
       content,
       body.fileName,
       req.user!.id,
+      body.mode,
     );
   }
   @Post("plans/:id/approve")

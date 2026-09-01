@@ -313,7 +313,10 @@ export class AdminService {
     content: string,
     fileName?: string,
     actorClerkId?: string,
+    mode: "UPDATE_LISTED" = "UPDATE_LISTED",
   ) {
+    if (mode !== "UPDATE_LISTED")
+      throw new BadRequestException("Unsupported plan import mode");
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
     const actor = actorClerkId ? await this.actor(actorClerkId) : null;
@@ -507,6 +510,7 @@ export class AdminService {
       }
     }
     const summary = {
+      mode,
       imported,
       updated,
       skipped: rowErrors.length,
@@ -525,6 +529,7 @@ export class AdminService {
             updated,
             skipped: rowErrors.length,
             fileName: fileName ?? null,
+            mode,
           },
         },
       });

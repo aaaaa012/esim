@@ -409,7 +409,11 @@ export default function AdminWorkspace() {
         errors: string[];
       }>("/admin/plans/import-csv", {
         method: "POST",
-        body: JSON.stringify({ content, fileName: planCsvFile.name }),
+        body: JSON.stringify({
+          content,
+          fileName: planCsvFile.name,
+          mode: "UPDATE_LISTED",
+        }),
       });
       toast.success(
         `Imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} row(s)`,
@@ -916,7 +920,7 @@ export default function AdminWorkspace() {
           <TabsContent value={planTabVisible ? tab : ""} className="mt-0">
             <Panel
               title="Plan catalogue"
-              description="Download the current catalogue, edit sellingprice, status, or popular, then upload the same file. Changes affect new immutable order quotes only."
+              description="Update-listed mode: only plans present in the uploaded file change; omitted plans remain untouched. Download the current catalogue, edit sellingprice, status, or popular, then upload it."
               actions={
                 <div className="flex items-center gap-3">
                   <Button
