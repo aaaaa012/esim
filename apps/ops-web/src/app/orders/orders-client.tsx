@@ -41,6 +41,7 @@ export type OpsOrder = {
   traveler?: { firstName: string; surname: string; email: string };
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   channel?: "CUSTOMER_WEB" | "PARTNER_API" | "PARTNER_HOSTED";
+  documentReviewStatus?: string;
   topUpMobile?: string;
   externalOrderId?: string | null;
   partner?: { id: string; code: string; name: string } | null;

@@ -36,6 +36,7 @@ type OpsOrder = {
   plan: { name: string; countryCode: string };
   traveler?: { firstName: string; surname: string; email: string };
   partner?: { code: string; name: string } | null;
+  documentReviewStatus?: string;
 };
 
 type SectionDef = {
@@ -44,16 +45,36 @@ type SectionDef = {
   icon: typeof ClipboardList;
   tone: string;
   statuses: string[];
+  description?: string;
+  matches?: (order: OpsOrder) => boolean;
   todayOnly?: boolean;
 };
 
 const SECTIONS: SectionDef[] = [
+  {
+    key: "partner_finalization",
+    label: "Partner finalization",
+    icon: Clock,
+    tone: "sky",
+    statuses: ["REVIEW_PENDING"],
+    description: "verified orders waiting for the partner to finalize",
+    matches: (order) =>
+      Boolean(order.partner) &&
+      ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        order.documentReviewStatus ?? "",
+      ),
+  },
   {
     key: "review",
     label: "Pending review",
     icon: ClipboardList,
     tone: "amber",
     statuses: ["REVIEW_PENDING"],
+    matches: (order) =>
+      !Boolean(order.partner) ||
+      !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        order.documentReviewStatus ?? "",
+      ),
   },
   {
     key: "awaiting",
@@ -108,7 +129,10 @@ export default function QueueClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<Record<string, boolean>>({ review: true });
+  const [open, setOpen] = useState<Record<string, boolean>>({
+    review: true,
+    partner_finalization: true,
+  });
 
   const statusParam = useSearchParams().get("status");
   const initialOpen = statusParam
@@ -121,10 +145,13 @@ export default function QueueClient() {
     authFetch(`${API}/operations/orders?limit=${PAGE_SIZE}`, { headers: {} })
       .then(async (r) => {
         const v = await r.json();
-        if (!r.ok) throw new Error(v?.error?.message ?? "Could not load the queue");
+        if (!r.ok)
+          throw new Error(v?.error?.message ?? "Could not load the queue");
         setOrders(v.data?.items ?? []);
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load the queue"))
+      .catch((e: unknown) =>
+        setError(e instanceof Error ? e.message : "Could not load the queue"),
+      )
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
@@ -142,6 +169,7 @@ export default function QueueClient() {
       const matched = SECTIONS.find(
         (s) =>
           s.statuses.includes(o.status) &&
+          (!s.matches || s.matches(o)) &&
           (!s.todayOnly || o.createdAt.startsWith(today)),
       );
       if (matched) (seed[matched.key] ??= []).push(o);
@@ -241,9 +269,10 @@ export default function QueueClient() {
                     <div>
                       <div className="font-semibold">{section.label}</div>
                       <div className="text-xs text-muted-foreground">
-                        {section.todayOnly
-                          ? "orders completed today"
-                          : "orders that need your action"}
+                        {section.description ??
+                          (section.todayOnly
+                            ? "orders completed today"
+                            : "orders that need your action")}
                       </div>
                     </div>
                     <Badge variant="secondary" className="ml-1">
@@ -293,7 +322,13 @@ export default function QueueClient() {
                                   {o.partner.name}
                                 </span>
                               )}
-                              <StatusBadge label={o.status} />
+                              <StatusBadge
+                                label={
+                                  section.key === "partner_finalization"
+                                    ? "AWAITING_PARTNER_FINALIZATION"
+                                    : o.status
+                                }
+                              />
                               <span className="text-sm font-medium tabular-nums">
                                 NPR {o.totalAmountNpr.toLocaleString()}
                               </span>

@@ -640,6 +640,7 @@ export class OperationsController {
           : undefined,
         purchaseType: order.orderType,
         channel: order.channel,
+        documentReviewStatus: order.documentReviewStatus,
         externalOrderId: order.externalOrderId,
         partner: order.partner,
       })),

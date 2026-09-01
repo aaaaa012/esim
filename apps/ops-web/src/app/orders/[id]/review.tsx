@@ -181,9 +181,19 @@ export default function OrderReview({ id }: { id: string }) {
     );
 
   const partnerPendingOrder = Boolean(order.partner && order.externalOrderId);
+  const awaitingPartnerFinalization =
+    partnerPendingOrder &&
+    order.status === "REVIEW_PENDING" &&
+    ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+      order.documentReviewStatus ?? "",
+    );
+  const displayedOrderStatus = awaitingPartnerFinalization
+    ? "AWAITING_PARTNER_FINALIZATION"
+    : order.status;
   const canAdvanceOrder =
     order.status === "REVIEW_PENDING" && !partnerPendingOrder;
   const canReviewDocuments =
+    !awaitingPartnerFinalization &&
     order.documentReviewPolicy !== "NO_REVIEW" &&
     !["CANCELLED", "REFUNDED"].includes(order.status) &&
     order.documents.length > 0;
@@ -320,7 +330,10 @@ export default function OrderReview({ id }: { id: string }) {
         <h1 className="text-2xl font-semibold tracking-tight">
           {order.orderNumber}
         </h1>
-        <StatusBadge label={order.status} tone={decisionTone(order.status)} />
+        <StatusBadge
+          label={displayedOrderStatus}
+          tone={decisionTone(order.status)}
+        />
         <Badge variant={order.purchaseType === "TOPUP" ? "info" : "secondary"}>
           {order.purchaseType === "TOPUP" ? humane("TOP-UP") : "First purchase"}
         </Badge>
@@ -615,7 +628,14 @@ export default function OrderReview({ id }: { id: string }) {
                     <span className="absolute size-2.5 rounded-full bg-border" />
                     <span className="relative size-1.5 rounded-full bg-primary" />
                   </span>
-                  <p className="text-sm font-medium">{humane(event.to)}</p>
+                  <p className="text-sm font-medium">
+                    {humane(
+                      awaitingPartnerFinalization &&
+                        event.to === "REVIEW_PENDING"
+                        ? "AWAITING_PARTNER_FINALIZATION"
+                        : event.to,
+                    )}
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     {new Date(event.at).toLocaleString()}
                     {event.reason ? ` · ${event.reason}` : ""}

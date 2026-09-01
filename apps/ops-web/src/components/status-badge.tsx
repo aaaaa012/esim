@@ -64,6 +64,7 @@ const labelMap: Record<string, string> = {
   PAYMENT_FAILED: "Payment failed",
   PAYMENT_REVIEW_REQUIRED: "Payment needs confirmation",
   REVIEW_PENDING: "Awaiting review",
+  AWAITING_PARTNER_FINALIZATION: "Awaiting partner finalization",
   AWAITING_CUSTOMER: "Awaiting customer",
   APPROVED: "Approved",
   PROVISIONING: "Setting up",
