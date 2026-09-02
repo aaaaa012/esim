@@ -388,12 +388,10 @@ describe("TransatelProvider", () => {
 
   it("normalizes KB balances into used and total MB", async () => {
     const prisma = prismaStub();
-    prisma.esimInventory.findFirst = vi
-      .fn()
-      .mockResolvedValue({
-        iccid: "8988247076000000319",
-        msisdn: "33612345678",
-      });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+    });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -488,12 +486,10 @@ describe("TransatelProvider", () => {
 
   it("returns the QR payload and SM-DP+ address from eSIM details", async () => {
     const prisma = prismaStub();
-    prisma.esimInventory.findFirst = vi
-      .fn()
-      .mockResolvedValue({
-        iccid: "8988247076000000319",
-        msisdn: "33612345678",
-      });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+    });
     const provider = new TransatelProvider(prisma);
     route({
       "/authentication/api/token": () =>
@@ -543,12 +539,10 @@ describe("TransatelProvider", () => {
 
   it("retries once with a fresh token after a 401", async () => {
     const prisma = prismaStub();
-    prisma.esimInventory.findFirst = vi
-      .fn()
-      .mockResolvedValue({
-        iccid: "8988247076000000319",
-        msisdn: "33612345678",
-      });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+    });
     let tokenCalls = 0;
     let productCalls = 0;
     const provider = new TransatelProvider(prisma);
@@ -751,6 +745,48 @@ describe("TransatelProvider", () => {
       status: "EXPIRED",
       expiresAt: "2026-08-19T00:00:00Z",
     });
+  });
+
+  it("maps product cancellation without treating it as an unknown event", async () => {
+    const prisma = prismaStub();
+    prisma.order.findUnique = vi.fn().mockResolvedValue({ id: "order-2" });
+    const provider = new TransatelProvider(prisma);
+    const result = await provider.handleWebhook({
+      header: { eventId: "evt-canceled", eventType: "OCS/PRODUCT/CANCELED" },
+      body: {
+        iccid: "8988247076000000319",
+        externalReference: "order-2",
+        productSubscription: {
+          subscriptionId: "sub-2",
+          expirationDate: "2026-09-19T00:00:00Z",
+        },
+      },
+    });
+
+    expect(result.event).toMatchObject({
+      status: "CANCELED",
+      expiresAt: "2026-09-19T00:00:00Z",
+    });
+  });
+
+  it("retains unsupported webhook types for audit without mapping a lifecycle event", async () => {
+    const prisma = prismaStub();
+    const provider = new TransatelProvider(prisma);
+    const result = await provider.handleWebhook({
+      header: {
+        eventId: "evt-unknown",
+        eventType: "OCS/PRODUCT/RESOURCE/EXHAUSTED",
+      },
+      body: { iccid: "8988247076000000319" },
+    });
+
+    expect(result).toEqual({
+      handled: false,
+      reason:
+        "Webhook event OCS/PRODUCT/RESOURCE/EXHAUSTED is not supported by the lifecycle mapper",
+    });
+    expect(prisma.order.findUnique).not.toHaveBeenCalled();
+    expect(prisma.esimInventory.findUnique).not.toHaveBeenCalled();
   });
 
   it("resolves the ICCID and dates from a real OCS webhook envelope", async () => {
@@ -1149,6 +1185,7 @@ describe("TransatelProvider", () => {
       events: [
         "OCS/PRODUCT/PRELOADED",
         "OCS/PRODUCT/ACTIVATED",
+        "OCS/PRODUCT/CANCELED",
         "OCS/PRODUCT/EXPIRED",
         "OCS/PRODUCT/TERMINATED",
         "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED",

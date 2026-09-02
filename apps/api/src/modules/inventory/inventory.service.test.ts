@@ -103,6 +103,71 @@ describe("InventoryService.assign", () => {
   });
 });
 
+describe("InventoryService.applyLifecycle", () => {
+  it("preserves an active subscription when a recurring product is canceled", async () => {
+    const subscriptionUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const subscriptionUpsert = vi.fn();
+    const tx = {
+      esimInventory: { update: vi.fn().mockResolvedValue(undefined) },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: {
+        updateMany: subscriptionUpdateMany,
+        upsert: subscriptionUpsert,
+      },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockImplementation(({ where }) =>
+          Promise.resolve(
+            where.assignedOrderId
+              ? {
+                  id: "inventory-1",
+                  iccid: "8988247076000000319",
+                  msisdn: "33612345678",
+                }
+              : {
+                  id: "inventory-1",
+                  iccid: "8988247076000000319",
+                  providerSubscriptionId: "sub-1",
+                  status: "ACTIVATED",
+                },
+          ),
+        ),
+      },
+      customerEsim: { findUnique: vi.fn() },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("order-1", {
+      provider: "TRANSATEL",
+      status: "CANCELED",
+      subscriptionId: "sub-1",
+      iccid: "8988247076000000319",
+      expiresAt: "2026-09-19T00:00:00Z",
+    });
+
+    expect(subscriptionUpdateMany).toHaveBeenCalledWith({
+      where: { providerSubscriptionId: "sub-1" },
+      data: {
+        providerLastSeenAt: expect.any(Date),
+        expiresAt: new Date("2026-09-19T00:00:00Z"),
+      },
+    });
+    expect(subscriptionUpsert).not.toHaveBeenCalled();
+  });
+});
+
 describe("InventoryService.importBatchCsv", () => {
   it("rejects an invalid MSISDN and does not import that row", async () => {
     const prisma = prismaStub();
@@ -435,10 +500,7 @@ describe("InventoryService.assertAvailableForNewOrder", () => {
   });
 
   it("refreshes stale safe stock on demand before rejecting checkout", async () => {
-    const count = vi
-      .fn()
-      .mockResolvedValueOnce(0)
-      .mockResolvedValueOnce(1);
+    const count = vi.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(1);
     const findFirst = vi.fn().mockResolvedValueOnce({ id: "stale-inv-1" });
     const prisma = {
       enabled: true,

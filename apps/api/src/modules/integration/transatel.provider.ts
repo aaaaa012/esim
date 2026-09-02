@@ -1510,7 +1510,7 @@ export class TransatelProvider implements ConnectivityProvider {
     const secret = process.env.TRANSATEL_WEBHOOK_SECRET ?? "";
     const events = (
       process.env.TRANSATEL_WEBHOOK_EVENTS ??
-      "OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/EXPIRED,OCS/PRODUCT/TERMINATED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED"
+      "OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/CANCELED,OCS/PRODUCT/EXPIRED,OCS/PRODUCT/TERMINATED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED"
     )
       .split(",")
       .map((item) => item.trim())
@@ -1592,6 +1592,12 @@ export class TransatelProvider implements ConnectivityProvider {
         handled: false,
         reason: "Webhook payload is missing header.eventType",
       };
+    const eventStatus = this.mapEventType(eventType);
+    if (eventStatus === "OTHER")
+      return {
+        handled: false,
+        reason: `Webhook event ${eventType} is not supported by the lifecycle mapper`,
+      };
 
     const iccid = envelope.iccid;
     if (!iccid)
@@ -1626,7 +1632,6 @@ export class TransatelProvider implements ConnectivityProvider {
         reason: `No order found for event ${eventType} (externalReference ${envelope.externalReference ?? "n/a"}, ICCID ${iccid})`,
       };
 
-    const eventStatus = this.mapEventType(eventType);
     const event: ProviderWebhookEvent = {
       eventType,
       orderId,

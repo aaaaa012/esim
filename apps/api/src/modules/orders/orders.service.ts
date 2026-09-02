@@ -2480,12 +2480,9 @@ export class OrdersService implements OnModuleInit {
 
     const currentProviderState = order.providerStatus?.toUpperCase();
     const incomingProviderState = event.status?.toUpperCase();
-    const currentIsTerminal = [
-      "TERMINATED",
-      "CANCELED",
-      "CANCELLED",
-      "EXPIRED",
-    ].includes(currentProviderState ?? "");
+    const currentIsTerminal = ["TERMINATED", "EXPIRED"].includes(
+      currentProviderState ?? "",
+    );
     const incomingWouldRegress =
       (currentProviderState === "ACTIVATED" &&
         incomingProviderState === "PRELOADED") ||
@@ -2529,7 +2526,12 @@ export class OrdersService implements OnModuleInit {
             : undefined;
       if (state)
         await this.prisma.provisioningOperation.updateMany({
-          where: { orderId: event.orderId },
+          where: {
+            orderId: event.orderId,
+            ...(event.status === "PRELOADED"
+              ? { state: { notIn: ["QR_READY", "ACTIVATED"] } }
+              : {}),
+          },
           data: {
             state,
             ...(event.subscriptionId
@@ -2603,7 +2605,7 @@ export class OrdersService implements OnModuleInit {
           where: {
             orderId: order.id,
             action: event.status === "SUSPENDED" ? "SUSPEND" : "TERMINATE",
-            state: "ACCEPTED",
+            state: { in: ["ACCEPTED", "CONFIRMED"] },
           },
           data: { state: "CONFIRMED" },
         },

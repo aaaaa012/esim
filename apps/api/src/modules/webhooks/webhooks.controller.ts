@@ -163,7 +163,7 @@ export class WebhooksController {
   }
 
   @Post("connectivity/:provider")
-  @HttpCode(202)
+  @HttpCode(204)
   async connectivity(
     @Param("provider") provider: string,
     @Body() body: { eventId?: string; header?: { eventId?: string } },

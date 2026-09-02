@@ -1097,6 +1097,21 @@ export class InventoryService implements OnModuleInit {
       const providerSubscriptionId =
         event.subscriptionId ?? inventory.providerSubscriptionId;
       if (!customerEsim || !providerSubscriptionId) return;
+      if (event.status === "CANCELED") {
+        // Product cancellation stops future renewal but remains usable until
+        // the provider-supplied expiration date. Preserve the current local
+        // subscription state and wait for the later EXPIRED event.
+        await tx.subscription.updateMany({
+          where: { providerSubscriptionId },
+          data: {
+            providerLastSeenAt: new Date(),
+            ...(event.expiresAt
+              ? { expiresAt: new Date(event.expiresAt) }
+              : {}),
+          },
+        });
+        return;
+      }
       await tx.subscription.upsert({
         where: { providerSubscriptionId },
         update: {
@@ -1162,7 +1177,7 @@ export class InventoryService implements OnModuleInit {
   ) {
     if (status === "ACTIVATED") return "ACTIVE";
     if (status === "EXPIRED") return "EXPIRED";
-    if (status === "TERMINATED" || status === "CANCELED") return "TERMINATED";
+    if (status === "TERMINATED") return "TERMINATED";
     if (status === "SUSPENDED") return "SUSPENDED";
     return "PENDING";
   }

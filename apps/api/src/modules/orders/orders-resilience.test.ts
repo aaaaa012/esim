@@ -198,6 +198,96 @@ describe("OrdersService provider callback conflict safety", () => {
     );
     expect(orders.get(order.id).status).toBe(OrderStatus.QR_READY);
   });
+
+  it("does not regress a QR-ready provisioning operation on a late preload event", async () => {
+    const order = readyOrder();
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const inventory = {
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+        providerSubscriptionId: "sub-1",
+      }),
+      applyLifecycle: vi.fn().mockResolvedValue(undefined),
+    };
+    const prisma = {
+      enabled: true,
+      provisioningOperation: { updateMany },
+    };
+    const orders = ordersService(
+      [order],
+      { descriptor: () => ({ provider: "TRANSATEL" }) },
+      inventory,
+      prisma,
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.applyProviderEvent({
+      eventType: "OCS/PRODUCT/PRELOADED",
+      orderId: order.id,
+      status: "PRELOADED",
+      iccid: "8988247076000000319",
+      subscriptionId: "sub-1",
+    });
+
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          orderId: order.id,
+          state: { notIn: ["QR_READY", "ACTIVATED"] },
+        },
+      }),
+    );
+    expect(orders.get(order.id).status).toBe(OrderStatus.QR_READY);
+  });
+
+  it("accepts duplicate termination confirmation without false attention", async () => {
+    const order = readyOrder();
+    const lifecycleUpdate = vi.fn().mockResolvedValue({ count: 1 });
+    const attention = vi.fn().mockResolvedValue(undefined);
+    const inventory = {
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+        providerSubscriptionId: "sub-1",
+      }),
+      applyLifecycle: vi.fn().mockResolvedValue(undefined),
+    };
+    const prisma = {
+      enabled: true,
+      provisioningOperation: { updateMany: vi.fn() },
+      transatelLifecycleOperation: { updateMany: lifecycleUpdate },
+    };
+    const orders = ordersService(
+      [order],
+      { descriptor: () => ({ provider: "TRANSATEL" }) },
+      inventory,
+      prisma,
+      {},
+      { attention },
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.applyProviderEvent({
+      eventType: "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED",
+      orderId: order.id,
+      status: "TERMINATED",
+      iccid: "8988247076000000319",
+      subscriptionId: "sub-1",
+    });
+
+    expect(lifecycleUpdate).toHaveBeenCalledWith({
+      where: {
+        orderId: order.id,
+        action: "TERMINATE",
+        state: { in: ["ACCEPTED", "CONFIRMED"] },
+      },
+      data: { state: "CONFIRMED" },
+    });
+    expect(attention).not.toHaveBeenCalledWith(
+      expect.objectContaining({ category: "UNEXPECTED_PROVIDER_LIFECYCLE" }),
+    );
+  });
 });
 
 describe("OrdersService provisioning retry safety", () => {
