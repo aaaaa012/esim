@@ -1,7 +1,7 @@
 const SHELL_FREE_PATHS = [
   "/sign-in",
-  "/sign-up",
   "/staff-onboarding",
+  "/staff-activate",
   "/super-admin",
   "/access-error",
   "/unauthorized",

@@ -57,7 +57,9 @@ export class RateLimitGuard implements CanActivate {
       return true;
 
     const sensitive =
-      path.startsWith("/api/v1/auth") || path.startsWith("/api/v1/public");
+      path.startsWith("/api/v1/auth") ||
+      path.startsWith("/api/v1/public") ||
+      path.startsWith("/api/v1/staff-activation");
     const configuredCapacity = sensitive ? this.authLimit : this.limit;
     // UUIDs and numeric ids must not form attacker-controlled fresh buckets.
     const route = path

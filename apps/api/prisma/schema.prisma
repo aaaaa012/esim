@@ -351,6 +351,7 @@ model StaffInvitation {
   accountType       UserRoleName
   status            StaffInvitationStatus @default(PENDING)
   clerkInvitationId String?               @unique
+  activationTokenHash String?             @unique
   invitedById       String                @db.Uuid
   invitedBy         User                  @relation("StaffInvitationInviter", fields: [invitedById], references: [id])
   acceptedById      String?               @db.Uuid

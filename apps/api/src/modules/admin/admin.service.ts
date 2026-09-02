@@ -1,7 +1,9 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import {
   DocumentReviewPolicy,
@@ -12,7 +14,7 @@ import {
   UserStatus,
   Prisma,
 } from "@prisma/client";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   isRestrictedPlanCountry,
   RESTRICTED_PLAN_COUNTRY_CODES,
@@ -22,6 +24,10 @@ import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
 import { tabularToRecords } from "../../common/tabular.util.js";
 import { KhaltiGateway } from "../payments/gateways/khalti.gateway.js";
+import {
+  EMAIL_CHANNEL,
+  type EmailChannel,
+} from "../notification/email.channel.js";
 
 @Injectable()
 export class AdminService {
@@ -29,6 +35,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
     private readonly khalti: KhaltiGateway = new KhaltiGateway(),
+    @Optional() @Inject(EMAIL_CHANNEL) private readonly email?: EmailChannel,
   ) {}
 
   async documentReviewPolicy() {
@@ -924,29 +931,25 @@ export class AdminService {
     if (!inviter) throw new NotFoundException("Inviter account not found");
     if (!process.env.CLERK_SECRET_KEY)
       throw new BadRequestException("Clerk is not configured");
-    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60_000);
-    const temporaryPassword = randomBytes(9).toString("base64url");
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60_000);
+    const activationToken = randomBytes(32).toString("base64url");
     const invitation = await this.prisma.staffInvitation.create({
       data: {
         email,
         accountType,
         invitedById: inviter.id,
         expiresAt,
+        activationTokenHash: this.activationTokenHash(activationToken),
       },
     });
     try {
-      const clerk = createClerkClient({
-        secretKey: process.env.CLERK_SECRET_KEY,
-      });
-      const created = await clerk.users.createUser({
-        emailAddress: [email],
-        password: temporaryPassword,
-        skipPasswordChecks: true,
-        publicMetadata: { accountType },
-      });
-      await this.prisma.staffInvitation.update({
-        where: { id: invitation.id },
-        data: { clerkInvitationId: created.id },
+      await this.sendActivationEmail({
+        invitationId: invitation.id,
+        email,
+        accountType,
+        expiresAt,
+        activationToken,
+        inviterEmail: inviter.email,
       });
     } catch (error) {
       await this.prisma.staffInvitation.update({
@@ -962,7 +965,7 @@ export class AdminService {
       email,
       accountType,
     });
-    return { ...invitation, temporaryPassword };
+    return { ...invitation, delivery: "SENT" as const };
   }
   async revokeInvitation(id: string, actorClerkId: string) {
     const invitation = await this.prisma.staffInvitation.findUnique({
@@ -989,25 +992,159 @@ export class AdminService {
     return updated;
   }
   async resendInvitation(id: string, actorClerkId: string) {
-    const old = await this.prisma.staffInvitation.findUnique({ where: { id } });
+    const old = await this.prisma.staffInvitation.findUnique({
+      where: { id },
+      include: { invitedBy: { select: { email: true } } },
+    });
     if (!old) throw new NotFoundException("Invitation not found");
-    if (old.status === StaffInvitationStatus.ACCEPTED)
-      throw new BadRequestException("Invitation was already accepted");
-    if (!process.env.CLERK_SECRET_KEY || !old.clerkInvitationId)
-      throw new BadRequestException("Clerk is not configured");
-    const temporaryPassword = randomBytes(9).toString("base64url");
-    const clerk = createClerkClient({
-      secretKey: process.env.CLERK_SECRET_KEY,
+    if (old.status !== StaffInvitationStatus.PENDING)
+      throw new BadRequestException("Only a pending invitation can be resent");
+    const activationToken = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60_000);
+    const invitation = await this.prisma.staffInvitation.update({
+      where: { id },
+      data: {
+        activationTokenHash: this.activationTokenHash(activationToken),
+        expiresAt,
+      },
     });
-    await clerk.users.updateUser(old.clerkInvitationId, {
-      password: temporaryPassword,
-      skipPasswordChecks: true,
+    await this.sendActivationEmail({
+      invitationId: invitation.id,
+      email: invitation.email,
+      accountType: invitation.accountType,
+      expiresAt,
+      activationToken,
+      inviterEmail: old.invitedBy.email,
     });
-    await this.prisma.user.updateMany({
-      where: { clerkId: old.clerkInvitationId },
-      data: { mustChangePassword: true },
+    const actor = await this.prisma.user.findUnique({
+      where: { clerkId: actorClerkId },
     });
-    return { ...old, temporaryPassword };
+    await this.audit(actor?.id, "StaffInvitation", id, "RESENT", null);
+    return { ...invitation, delivery: "SENT" as const };
+  }
+  async activateInvitation(tokenInput: string, password: string) {
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    if (typeof tokenInput !== "string" || tokenInput.length < 32)
+      throw new BadRequestException("This activation link is invalid or expired");
+    if (typeof password !== "string" || password.length < 12)
+      throw new BadRequestException("Choose a password of at least 12 characters");
+    if (!process.env.CLERK_SECRET_KEY)
+      throw new BadRequestException("Staff identity service is not configured");
+    const invitation = await this.prisma.staffInvitation.findFirst({
+      where: {
+        activationTokenHash: this.activationTokenHash(tokenInput),
+        status: StaffInvitationStatus.PENDING,
+        expiresAt: { gt: new Date() },
+      },
+    });
+    if (!invitation)
+      throw new BadRequestException("This activation link is invalid or expired");
+    if (await this.prisma.user.findUnique({ where: { email: invitation.email } }))
+      throw new BadRequestException("This email already belongs to an account");
+    let clerkUserId: string;
+    try {
+      const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+      const clerkUser = await clerk.users.createUser({
+        emailAddress: [invitation.email],
+        password,
+        publicMetadata: { accountType: invitation.accountType },
+      });
+      clerkUserId = clerkUser.id;
+    } catch {
+      throw new BadRequestException(
+        "Unable to activate this staff account. Contact support if the problem continues",
+      );
+    }
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            clerkId: clerkUserId,
+            email: invitation.email,
+            accountType: invitation.accountType,
+          },
+        });
+        const role = await tx.role.upsert({
+          where: { name: invitation.accountType },
+          update: {},
+          create: { name: invitation.accountType },
+        });
+        await tx.userRole.create({ data: { userId: user.id, roleId: role.id } });
+        await tx.staffInvitation.update({
+          where: { id: invitation.id },
+          data: {
+            status: StaffInvitationStatus.ACCEPTED,
+            acceptedById: user.id,
+            acceptedAt: new Date(),
+            activationTokenHash: null,
+            clerkInvitationId: clerkUserId,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            module: "IDENTITY",
+            entity: "StaffInvitation",
+            entityId: invitation.id,
+            action: "ACCEPTED",
+            performedById: user.id,
+            newValue: { accountType: invitation.accountType, email: invitation.email },
+          },
+        });
+      });
+    } catch (error) {
+      await createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY })
+        .users.deleteUser(clerkUserId)
+        .catch(() => undefined);
+      throw error;
+    }
+    return { email: invitation.email, accountType: invitation.accountType };
+  }
+  private activationTokenHash(token: string) {
+    return createHash("sha256").update(token).digest("hex");
+  }
+  private async sendActivationEmail(input: {
+    invitationId: string;
+    email: string;
+    accountType: UserRoleName;
+    expiresAt: Date;
+    activationToken: string;
+    inviterEmail: string;
+  }) {
+    if (!this.email)
+      throw new BadRequestException("Staff email delivery is not configured");
+    const base = (process.env.OPS_WEB_URL ?? "http://localhost:3001").replace(
+      /\/+$/,
+      "",
+    );
+    const url = new URL("/staff-activate", `${base}/`);
+    url.searchParams.set("token", input.activationToken);
+    const role =
+      input.accountType === UserRoleName.SUPER_ADMIN
+        ? "Super Admin"
+        : "Operations";
+    const expiry = input.expiresAt.toLocaleString("en-GB", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "Asia/Kathmandu",
+    });
+    await this.email.send({
+      to: input.email,
+      subject: "Activate your Visa Compass staff account",
+      text: `You have been invited by ${input.inviterEmail} as ${role}. Activate your account and choose a password: ${url.toString()}\n\nThis single-use link expires ${expiry} Nepal time. If you were not expecting this invitation, ignore this email.`,
+      html: `<main style="font-family:Arial,sans-serif;color:#18212f;max-width:560px;margin:auto"><h1 style="font-size:24px">Visa Compass staff account</h1><p>You have been invited by <strong>${this.escapeHtml(input.inviterEmail)}</strong> as <strong>${role}</strong>.</p><p><a href="${url.toString()}" style="display:inline-block;padding:12px 18px;background:#0f766e;color:#fff;text-decoration:none;border-radius:6px">Activate staff account</a></p><p style="color:#52606d">This single-use link expires ${this.escapeHtml(expiry)} Nepal time. You will choose your own password; Visa Compass will never email one to you.</p></main>`,
+      idempotencyKey: `staff-activation-${input.invitationId}-${this.activationTokenHash(input.activationToken)}`,
+    });
+  }
+  private escapeHtml(value: string) {
+    const entities: Record<string, string> = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "'": "&#39;",
+      '"': "&quot;",
+    };
+    return value.replace(/[&<>'"]/g, (character) => entities[character]!);
   }
   async changeAccountType(
     userId: string,

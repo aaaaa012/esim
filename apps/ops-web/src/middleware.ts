@@ -2,8 +2,8 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 const isPublic = createRouteMatcher([
   "/sign-in(.*)",
-  "/sign-up(.*)",
   "/staff-onboarding(.*)",
+  "/staff-activate(.*)",
   "/unauthorized",
   "/super-admin(.*)",
 ]);

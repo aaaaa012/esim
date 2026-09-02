@@ -40,6 +40,7 @@ import { OrdersPersistenceService } from "./modules/orders/orders-persistence.se
 import { InventoryController } from "./modules/inventory/inventory.controller.js";
 import { InventoryService } from "./modules/inventory/inventory.service.js";
 import { AdminController } from "./modules/admin/admin.controller.js";
+import { StaffActivationController } from "./modules/admin/staff-activation.controller.js";
 import { AdminService } from "./modules/admin/admin.service.js";
 import { ProvisioningProcessor } from "./jobs/provisioning.processor.js";
 import { PartnersController } from "./modules/partners/partners.controller.js";
@@ -106,6 +107,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     GuestOrdersController,
     InventoryController,
     AdminController,
+    StaffActivationController,
     PaymentsController,
     PaymentProvidersController,
     WebhooksController,

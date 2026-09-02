@@ -508,7 +508,6 @@ export default function AdminWorkspace() {
       const result = await request<{
         email: string;
         accountType: string;
-        temporaryPassword: string;
       }>("/admin/staff-invitations", {
         method: "POST",
         body: JSON.stringify({ email: inviteEmail, accountType: inviteType }),
@@ -516,7 +515,7 @@ export default function AdminWorkspace() {
       setInviteEmail("");
       await load();
       toast.success(
-        `Account created for ${result.email}. One-time password: ${result.temporaryPassword} — share it securely; the staff member should change it after signing in.`,
+        `Activation email sent to ${result.email}. The link is single-use and expires in 48 hours.`,
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Invitation failed");
