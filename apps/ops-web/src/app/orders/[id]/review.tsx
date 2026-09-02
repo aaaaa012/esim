@@ -94,6 +94,30 @@ type Detail = OpsOrder & {
     verifiedAt?: string;
     providerLastSeenAt?: string;
   };
+  packageUsage?: UsagePackage | null;
+  esimUsage?: EsimUsage | null;
+};
+type UsagePackage = {
+  usedMb: number;
+  totalMb: number;
+  remainingMb: number;
+  balanceStatus: string;
+  status: string;
+  lastConfirmedAt: string | null;
+};
+type EsimUsage = {
+  usageStatus: string;
+  completeness: string;
+  freshness: string;
+  lastConfirmedAt: string | null;
+  summary: {
+    usedMb: number;
+    totalMb: number;
+    remainingMb: number;
+    confirmedPackageCount: number;
+    unconfirmedPackageCount: number;
+    packageCount: number;
+  };
 };
 type ProviderCheck = {
   classification: string;
@@ -215,6 +239,27 @@ export default function OrderReview({ id }: { id: string }) {
       setError(
         cause instanceof Error ? cause.message : "Provider check failed",
       );
+    } finally {
+      setBusy("");
+    }
+  };
+  const refreshUsage = async () => {
+    setBusy("usage-refresh");
+    setError("");
+    try {
+      const response = await authFetch(
+        `${API}/operations/orders/${id}/usage/refresh`,
+        {
+          method: "POST",
+          headers: { "x-idempotency-key": crypto.randomUUID() },
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Usage refresh failed");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Usage refresh failed");
     } finally {
       setBusy("");
     }
@@ -746,6 +791,50 @@ export default function OrderReview({ id }: { id: string }) {
                     </p>
                   ) : null}
                 </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border p-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Package usage · this order
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold tabular-nums">
+                      {order.packageUsage
+                        ? `${order.packageUsage.remainingMb.toLocaleString()} MB`
+                        : "Not confirmed"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {order.packageUsage
+                        ? `${order.packageUsage.usedMb.toLocaleString()} MB used of ${order.packageUsage.totalMb.toLocaleString()} MB · ${humane(order.packageUsage.balanceStatus)}`
+                        : "Usage will appear after provider reconciliation."}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Physical eSIM overview
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold tabular-nums">
+                      {order.esimUsage?.summary.remainingMb.toLocaleString() ??
+                        "—"}{" "}
+                      MB
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {order.esimUsage
+                        ? `${order.esimUsage.summary.confirmedPackageCount} of ${order.esimUsage.summary.packageCount} packages confirmed · ${humane(order.esimUsage.freshness)}`
+                        : "Aggregate usage is not available."}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  disabled={busy === "usage-refresh"}
+                  onClick={() => void refreshUsage()}
+                >
+                  {busy === "usage-refresh" ? (
+                    <Spinner />
+                  ) : (
+                    <RefreshCcw className="size-4" />
+                  )}
+                  Refresh usage
+                </Button>
                 <Button
                   variant="outline"
                   disabled={busy === "provider-status-check"}

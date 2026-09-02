@@ -4,12 +4,14 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { OrderStatus } from "@prisma/client";
 import QRCode from "qrcode";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
+import { UsageService } from "./usage.service.js";
 
 @Injectable()
 export class CustomerEsimsService {
@@ -18,6 +20,7 @@ export class CustomerEsimsService {
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
     private readonly crypto: CryptoService,
+    @Optional() private readonly usageService?: UsageService,
   ) {}
 
   async list(ownerId: string) {
@@ -38,7 +41,9 @@ export class CustomerEsimsService {
       },
       orderBy: { updatedAt: "desc" },
     });
-    return rows.map((row) => this.toView(row));
+    return rows.map((row) =>
+      this.toView(row, this.usageService?.viewFromInventory(row)),
+    );
   }
 
   async get(ownerId: string, id: string) {
@@ -71,6 +76,11 @@ export class CustomerEsimsService {
       throw new BadRequestException(
         "Usage is unavailable until the eSIM is provisioned",
       );
+    if (this.usageService) {
+      const refreshed = await this.usageService.refresh(row.id);
+      this.refreshedAt.set(`${customer.id}:${id}`, Date.now());
+      return refreshed;
+    }
     const usage = await this.connectivity.getUsage(row.iccid);
     if (usage.usageAvailable === false)
       throw new BadRequestException(
@@ -165,7 +175,10 @@ export class CustomerEsimsService {
     });
   }
 
-  private toView(row: any) {
+  private toView(
+    row: any,
+    canonical?: ReturnType<UsageService["viewFromInventory"]>,
+  ) {
     const subscriptions = row.customerEsims.flatMap((link: any) =>
       link.subscriptions.map((subscription: any) => ({
         id: subscription.id,
@@ -228,9 +241,26 @@ export class CustomerEsimsService {
       msisdnMasked: mask(row.msisdn),
       activatedAt: row.activatedAt?.toISOString(),
       expiresAt: row.expiresAt?.toISOString(),
-      usage: usage ? { ...usage, lastCheckedAt } : null,
-      subscriptions: subscriptions.sort((a: any, b: any) =>
-        (b.activatedAt ?? "").localeCompare(a.activatedAt ?? ""),
+      usage: canonical
+        ? canonical.usageStatus === "AVAILABLE"
+          ? {
+              ...canonical.summary,
+              lastCheckedAt: canonical.lastConfirmedAt,
+              oldestConfirmedAt: canonical.oldestConfirmedAt,
+              completeness: canonical.completeness,
+              freshness: canonical.freshness,
+            }
+          : null
+        : usage
+          ? { ...usage, lastCheckedAt }
+          : null,
+      usageStatus: canonical?.usageStatus,
+      completeness: canonical?.completeness,
+      freshness: canonical?.freshness,
+      summary: canonical?.summary,
+      subscriptions: (canonical?.packages ?? subscriptions).sort(
+        (a: any, b: any) =>
+          (b.activatedAt ?? "").localeCompare(a.activatedAt ?? ""),
       ),
       qrOrderId: qrOrder?.order.id,
       activity: row.customerEsims

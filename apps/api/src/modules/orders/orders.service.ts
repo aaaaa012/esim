@@ -391,6 +391,7 @@ export class OrdersService implements OnModuleInit {
         ...(order.customerEsim
           ? {
               esim: {
+                id: order.customerEsim.inventory.id,
                 iccid: order.customerEsim.inventory.iccid,
                 status: order.customerEsim.inventory.status,
                 providerStatus:
@@ -423,6 +424,10 @@ export class OrdersService implements OnModuleInit {
                     lastCheckedAt: latest.usageLastCheckedAt.toISOString(),
                   };
                 })(),
+                purchaseType: order.orderType,
+                providerSubscriptionId:
+                  order.customerEsim.subscriptions[0]?.providerSubscriptionId ??
+                  null,
               },
             }
           : {}),
@@ -744,10 +749,7 @@ export class OrdersService implements OnModuleInit {
   async usageFor(orderId: string) {
     const order = this.get(orderId);
     if (this.prisma.enabled) {
-      const inventory = await this.inventory.inventoryForOrder(orderId);
-      if (!inventory?.iccid)
-        throw new NotFoundException("eSIM is not yet provisioned");
-      return this.connectivity.getUsage(inventory.iccid);
+      return this.inventory.refreshUsage(orderId);
     }
     if (order.usage) return order.usage;
     throw new NotFoundException("Usage is available after provisioning");

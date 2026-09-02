@@ -20,6 +20,7 @@ import {
 import { ApiErrorCode } from "@visa-compass/shared";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
+import { UsageService } from "../esims/usage.service.js";
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
@@ -29,6 +30,7 @@ export class InventoryService implements OnModuleInit {
     private readonly connectivity: ConnectivityService,
     private readonly resilience?: ProductionResilienceService,
     private readonly queues?: QueueService,
+    private readonly usageService?: UsageService,
   ) {}
 
   async startProviderReconciliation(input: {
@@ -413,7 +415,8 @@ export class InventoryService implements OnModuleInit {
         status: InventoryStatus.PENDING_PROVIDER_CHECK,
         assignedOrderId: null,
         lastProviderCheckedAt: null,
-        providerCheckError: "Provider recheck required after reservation release",
+        providerCheckError:
+          "Provider recheck required after reservation release",
         version: { increment: 1 },
       },
     });
@@ -438,7 +441,9 @@ export class InventoryService implements OnModuleInit {
         where: { assignedOrderId: orderId },
       });
       if (!rejected)
-        throw new ConflictException("The order has no reserved eSIM to replace");
+        throw new ConflictException(
+          "The order has no reserved eSIM to replace",
+        );
       if (rejected.providerSubscriptionId)
         throw new ConflictException(
           "The rejected eSIM is provider-bound and cannot be replaced automatically",
@@ -1334,6 +1339,24 @@ export class InventoryService implements OnModuleInit {
       throw new NotFoundException(
         "No customer eSIM record exists for this order",
       );
+    if (this.usageService) {
+      const esimUsage = await this.usageService.refresh(inventory.id);
+      const packageUsage = this.usageService.packageForOrder(
+        esimUsage,
+        orderId,
+      );
+      if (!packageUsage)
+        throw new NotFoundException("No usage package exists for this order");
+      return {
+        orderId,
+        usedMb: packageUsage.usedMb,
+        totalMb: packageUsage.totalMb,
+        remainingMb: packageUsage.remainingMb,
+        lastCheckedAt: packageUsage.lastConfirmedAt,
+        balanceStatus: packageUsage.balanceStatus,
+        esimUsage,
+      };
+    }
     const usage = await this.connectivity.getUsage(inventory.iccid);
     if (usage.usageAvailable === false)
       throw new BadRequestException(

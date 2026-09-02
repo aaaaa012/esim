@@ -41,6 +41,7 @@ type Customer = {
   spendNpr: number;
   remainingMb?: number | null;
   usageLastCheckedAt?: string | null;
+  usagePartial?: boolean;
   lastOrderAt?: string | null;
 };
 
@@ -178,7 +179,7 @@ export default function CustomersClient() {
                 <TableHead>Contact</TableHead>
                 <TableHead>Orders</TableHead>
                 <TableHead>Active eSIMs</TableHead>
-                <TableHead>Remaining data</TableHead>
+                <TableHead>Confirmed available data</TableHead>
                 <TableHead>Total spent</TableHead>
                 <TableHead>Last order</TableHead>
                 <TableHead className="sticky right-0 bg-card text-right">
@@ -188,7 +189,9 @@ export default function CustomersClient() {
             </TableHeader>
             <TableBody>
               {items.map((c, index) => (
-                <TableRow key={`${c.ownerId}-${c.customerCode ?? c.email}-${index}`}>
+                <TableRow
+                  key={`${c.ownerId}-${c.customerCode ?? c.email}-${index}`}
+                >
                   <TableCell>
                     <p className="font-medium">{c.name}</p>
                     <p className="text-xs text-muted-foreground">
@@ -213,6 +216,7 @@ export default function CustomersClient() {
                       ? "Not checked yet"
                       : `${c.remainingMb.toLocaleString()} MB`}
                     <p className="text-xs text-muted-foreground">
+                      {c.usagePartial ? "Partial provider data · " : ""}
                       {c.usageLastCheckedAt
                         ? new Date(c.usageLastCheckedAt).toLocaleString()
                         : "—"}

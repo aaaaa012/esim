@@ -594,6 +594,35 @@ export class PartnersController {
     return this.partners.usage(request.partner!.id, id);
   }
 
+  @Get("esims/:id/usage")
+  @PartnerScopes("usage:read")
+  esimUsage(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.usageByEsim(request.partner!.id, id);
+  }
+
+  @Get("customers/:externalCustomerId/usage")
+  @PartnerScopes("usage:read")
+  customerUsage(
+    @Param("externalCustomerId") externalCustomerId: string,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.customerUsage(request.partner!.id, externalCustomerId);
+  }
+
+  @Post("orders/:id/usage/refresh")
+  @PartnerScopes("usage:read")
+  @PartnerMutation()
+  refreshOrderUsage(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.refreshOrderUsage(request.partner!.id, id);
+  }
+
+  @Post("esims/:id/usage/refresh")
+  @PartnerScopes("usage:read")
+  @PartnerMutation()
+  refreshEsimUsage(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.refreshEsimUsage(request.partner!.id, id);
+  }
+
   @Get("orders/:id/events")
   @PartnerScopes("orders:read")
   events(@Param("id") id: string, @Req() request: PartnerRequest) {

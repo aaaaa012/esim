@@ -63,6 +63,29 @@ type Profile = {
   email?: string;
   name?: string;
   orders: Order[];
+  esimGroups?: Array<{
+    esim: { id: string; iccid: string; msisdn: string | null; status: string };
+    completeness: string;
+    freshness: string;
+    summary: {
+      remainingMb: number;
+      confirmedPackageCount: number;
+      unconfirmedPackageCount: number;
+      packageCount: number;
+    };
+    packages: Array<{
+      id: string;
+      orderId: string;
+      orderNumber: string;
+      purchaseType: string;
+      channel: string;
+      status: string;
+      balanceStatus: string;
+      remainingMb: number;
+      providerSubscriptionId: string;
+      plan: { name: string; dataAllowance: string; countryCode: string };
+    }>;
+  }>;
   identity?: {
     customer: {
       id: string;
@@ -126,23 +149,15 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
     try {
       const response = await authFetch(
         `${API}/operations/orders/${orderId}/usage/refresh`,
-        { method: "POST", headers },
+        {
+          method: "POST",
+          headers: { ...headers, "x-idempotency-key": crypto.randomUUID() },
+        },
       );
       const value = await response.json();
       if (!response.ok)
         throw new Error(value.error?.message ?? "Usage could not be refreshed");
-      setProfile((previous) =>
-        previous
-          ? {
-              ...previous,
-              orders: previous.orders.map((order) =>
-                order.id === orderId && order.esim
-                  ? { ...order, esim: { ...order.esim, usage: value.data } }
-                  : order,
-              ),
-            }
-          : previous,
-      );
+      await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     } finally {
@@ -184,6 +199,70 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         <div className="flex h-40 items-center justify-center">
           <Spinner />
         </div>
+      ) : null}
+      {profile ? (
+        <Panel
+          title="Physical eSIM usage"
+          description="Confirmed aggregate balances with every initial package and top-up"
+        >
+          {profile.esimGroups?.length ? (
+            <div className="space-y-3">
+              {profile.esimGroups.map((group) => (
+                <details
+                  key={group.esim.id}
+                  className="rounded-lg border bg-card"
+                  open={profile.esimGroups?.length === 1}
+                >
+                  <summary className="flex cursor-pointer items-center justify-between gap-4 p-4">
+                    <span>
+                      <span className="block font-medium">
+                        eSIM {group.esim.iccid}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {group.summary.confirmedPackageCount} of{" "}
+                        {group.summary.packageCount} packages confirmed ·{" "}
+                        {humane(group.freshness)}
+                      </span>
+                    </span>
+                    <span className="font-semibold tabular-nums">
+                      {group.summary.remainingMb.toLocaleString()} MB available
+                    </span>
+                  </summary>
+                  <div className="border-t px-4 py-2">
+                    {group.packages.map((item) => (
+                      <div
+                        key={item.id}
+                        className="grid gap-2 border-b py-3 last:border-0 sm:grid-cols-[1fr_auto_auto]"
+                      >
+                        <div>
+                          <Link
+                            href={`/orders/${item.orderId}`}
+                            className="font-medium text-primary hover:underline"
+                          >
+                            {item.orderNumber} · {item.plan.name}
+                          </Link>
+                          <p className="text-xs text-muted-foreground">
+                            {humane(item.purchaseType)} · {humane(item.channel)}{" "}
+                            · {item.providerSubscriptionId}
+                          </p>
+                        </div>
+                        <StatusBadge label={item.balanceStatus} />
+                        <span className="text-sm font-medium tabular-nums">
+                          {item.remainingMb.toLocaleString()} MB remaining
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No provisioned eSIM"
+              description="Usage appears after an eSIM package is provisioned."
+            />
+          )}
+        </Panel>
       ) : null}
       {profile ? (
         <Panel

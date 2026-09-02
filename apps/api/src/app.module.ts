@@ -69,6 +69,7 @@ import { RateLimitGuard } from "./common/rate-limit.guard.js";
 import { RedisRateLimitIncidentService } from "./common/redis-rate-limit-incident.service.js";
 import { CustomerEsimsController } from "./modules/esims/customer-esims.controller.js";
 import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
+import { UsageService } from "./modules/esims/usage.service.js";
 import { TransatelOperationsController } from "./modules/integration/transatel-operations.controller.js";
 import { TransatelOperationsService } from "./modules/integration/transatel-operations.service.js";
 import {
@@ -169,6 +170,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     WhatsappChannel,
     QrPdfService,
     CustomerEsimsService,
+    UsageService,
     TransatelOperationsService,
     PartnerShowcaseService,
     HomepageCampaignService,

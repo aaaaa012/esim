@@ -39,6 +39,7 @@ import { InventoryService } from "../inventory/inventory.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { GuestOrderAccessService } from "./guest-order-access.service.js";
 import { TransatelOperationsService } from "../integration/transatel-operations.service.js";
+import { UsageService } from "../esims/usage.service.js";
 
 @Controller("customer/orders")
 @UseGuards(AuthGuard, AccountGuard)
@@ -185,6 +186,7 @@ export class OperationsController {
     private readonly inventory: InventoryService,
     private readonly prisma: PrismaService,
     private readonly transatelOperations: TransatelOperationsService,
+    private readonly usageService: UsageService,
   ) {}
   @Get("dashboard") dashboard(@Req() req: AuthenticatedRequest) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
@@ -422,13 +424,16 @@ export class OperationsController {
       const subscriptions = customer.orders.flatMap(
         (order) => order.customerEsim?.subscriptions ?? [],
       );
-      const latestUsage = subscriptions
-        .filter((item) => item.usageLastCheckedAt)
-        .sort(
-          (a, b) =>
-            (b.usageLastCheckedAt?.getTime() ?? 0) -
-            (a.usageLastCheckedAt?.getTime() ?? 0),
-        )[0];
+      const confirmedUsage = subscriptions.filter(
+        (item) =>
+          (item.status === SubscriptionStatus.ACTIVE ||
+            item.status === SubscriptionStatus.PENDING) &&
+          item.assignmentVerificationStatus === "VERIFIED" &&
+          item.usageLastCheckedAt,
+      );
+      const usageCheckedAt = confirmedUsage
+        .map((item) => item.usageLastCheckedAt!)
+        .sort((a, b) => a.getTime() - b.getTime())[0];
       const paidOrders = customer.orders.filter((order) =>
         order.payments.some(
           (payment) => payment.status === PaymentStatus.COMPLETED,
@@ -453,23 +458,41 @@ export class OperationsController {
           (sum, order) => sum + Number(order.totalAmount),
           0,
         ),
-        remainingMb: latestUsage
-          ? Math.max(0, latestUsage.totalMb - latestUsage.usedMb)
+        remainingMb: confirmedUsage.length
+          ? confirmedUsage.reduce(
+              (sum, item) => sum + Math.max(0, item.totalMb - item.usedMb),
+              0,
+            )
           : null,
-        usageLastCheckedAt:
-          latestUsage?.usageLastCheckedAt?.toISOString() ?? null,
+        usageLastCheckedAt: usageCheckedAt?.toISOString() ?? null,
+        usagePartial: confirmedUsage.length < subscriptions.length,
         firstOrderAt: customer.orders.at(-1)?.createdAt.toISOString() ?? null,
         lastOrderAt: customer.orders[0]?.createdAt.toISOString() ?? null,
       };
     });
     return { items, total, limit: take, offset: skip };
   }
-  @Get("customers/:ownerId") customer(
+  @Get("customers/:ownerId") async customer(
     @Param("ownerId") ownerId: string,
     @Req() req: AuthenticatedRequest,
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    return this.orders.customerProfile(ownerId);
+    const profile = await this.orders.customerProfile(ownerId);
+    const inventoryIds = [
+      ...new Set(
+        profile.orders
+          .map((order: any) => order.esim?.id)
+          .filter((id: unknown): id is string => typeof id === "string"),
+      ),
+    ];
+    const esimGroups = this.prisma.enabled
+      ? await Promise.all(
+          inventoryIds.map((inventoryId) =>
+            this.usageService.cached(inventoryId),
+          ),
+        )
+      : [];
+    return { ...profile, esimGroups };
   }
   @Get("users/:id/identity") async userIdentity(
     @Param("id") id: string,
@@ -747,7 +770,19 @@ export class OperationsController {
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     await this.orders.refreshOne(id, true);
-    return this.orders.operationsView(id);
+    const order = await this.orders.operationsView(id);
+    const esimUsage = this.prisma.enabled
+      ? await this.usageService.forOrder(id)
+      : null;
+    return {
+      ...order,
+      ...(esimUsage
+        ? {
+            packageUsage: this.usageService.packageForOrder(esimUsage, id),
+            esimUsage,
+          }
+        : {}),
+    };
   }
   @Get("orders/:id/documents/:documentId/preview") preview(
     @Param("id") id: string,

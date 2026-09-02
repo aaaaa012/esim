@@ -32,6 +32,7 @@ import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import { ApiException } from "../../common/api-error.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
+import { EsimUsageView, UsageService } from "../esims/usage.service.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
 import { QueueService } from "../../jobs/queue.service.js";
@@ -126,6 +127,7 @@ const PARTNER_ORDER_INCLUDE = {
   events: { orderBy: { createdAt: "asc" as const } },
   partnerQuote: true,
   partnerRefundRequests: { orderBy: { createdAt: "desc" as const }, take: 1 },
+  customerEsim: { select: { inventoryId: true } },
 } satisfies Prisma.OrderInclude;
 
 type PartnerOrderRow = Prisma.OrderGetPayload<{
@@ -135,6 +137,7 @@ type PartnerOrderRow = Prisma.OrderGetPayload<{
 @Injectable()
 export class PartnerService {
   private readonly logger = new Logger(PartnerService.name);
+  private readonly usageRefreshAt = new Map<string, number>();
 
   // Legacy reservation reconciliation remains readable for historical
   // PARTNER_ACCOUNT orders. New partner-hosted sessions use HOSTED_PAYMENT and
@@ -159,6 +162,7 @@ export class PartnerService {
     private readonly queues: QueueService,
     private readonly applicationOrders: OrdersService,
     private readonly payments?: PaymentsService,
+    private readonly usageService?: UsageService,
   ) {}
 
   private async verifyUploadedDocument(assetId: string) {
@@ -1935,6 +1939,7 @@ export class PartnerService {
       fulfillmentStatus: this.fulfillmentStatus(order.status),
       documentStatus: order.documentReviewStatus,
       recoverability: order.operationalDisposition ?? null,
+      esimId: order.customerEsim.inventory.id,
       iccid: order.customerEsim.inventory.iccid,
       msisdn: order.customerEsim.inventory.msisdn,
       smDpAddress: order.customerEsim.inventory.smDpAddress,
@@ -3251,6 +3256,7 @@ export class PartnerService {
   async usage(partnerId: string, orderId: string) {
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, partnerId },
+      include: { customerEsim: true },
     });
     if (!order)
       throw new ApiException({
@@ -3258,13 +3264,216 @@ export class PartnerService {
         message: "Order not found",
         status: 404,
       });
-    if (order.status !== OrderStatus.COMPLETED)
+    if (!order.customerEsim)
       throw new ApiException({
         code: "PARTNER_USAGE_UNAVAILABLE",
-        message: "Usage details are available once the eSIM is active",
-        status: 400,
+        message: "Usage details are available once the eSIM is provisioned",
+        status: 409,
       });
-    return this.connectivity.getUsage(orderId);
+    if (!this.usageService) return this.connectivity.getUsage(orderId);
+    return this.partnerUsageView(
+      partnerId,
+      await this.usageService.cached(order.customerEsim.inventoryId),
+      orderId,
+    );
+  }
+
+  async usageByEsim(partnerId: string, esimId: string) {
+    await this.authorizePartnerEsim(partnerId, esimId);
+    if (!this.usageService)
+      throw new ApiException({
+        code: "PARTNER_USAGE_UNAVAILABLE",
+        message: "Usage service is unavailable",
+        status: 503,
+      });
+    return this.partnerUsageView(
+      partnerId,
+      await this.usageService.cached(esimId),
+    );
+  }
+
+  async customerUsage(partnerId: string, externalCustomerId: string) {
+    const partnerCustomer = await this.prisma.partnerCustomer.findUnique({
+      where: {
+        partnerId_externalCustomerId: { partnerId, externalCustomerId },
+      },
+      select: { id: true, customerId: true },
+    });
+    if (!partnerCustomer)
+      throw new ApiException({
+        code: "PARTNER_CUSTOMER_NOT_FOUND",
+        message: "Customer not found",
+        status: 404,
+      });
+    const links = await this.prisma.customerEsim.findMany({
+      where: { customerId: partnerCustomer.customerId },
+      select: { inventoryId: true },
+      distinct: ["inventoryId"],
+    });
+    const esims = await Promise.all(
+      links.map(async (link) =>
+        this.partnerUsageView(
+          partnerId,
+          await this.usageService!.cached(link.inventoryId),
+        ),
+      ),
+    );
+    return { externalCustomerId, esims };
+  }
+
+  async refreshOrderUsage(partnerId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, partnerId },
+      include: { customerEsim: true },
+    });
+    if (!order?.customerEsim)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order or provisioned eSIM was not found",
+        status: 404,
+      });
+    return this.refreshPartnerEsim(
+      partnerId,
+      order.customerEsim.inventoryId,
+      orderId,
+    );
+  }
+
+  async refreshEsimUsage(partnerId: string, esimId: string) {
+    await this.authorizePartnerEsim(partnerId, esimId);
+    return this.refreshPartnerEsim(partnerId, esimId);
+  }
+
+  private async refreshPartnerEsim(
+    partnerId: string,
+    esimId: string,
+    anchorOrderId?: string,
+  ) {
+    if (!this.usageService)
+      throw new ApiException({
+        code: "PARTNER_USAGE_UNAVAILABLE",
+        message: "Usage service is unavailable",
+        status: 503,
+      });
+    const cooldownKey = `${partnerId}:${esimId}`;
+    const previous = this.usageRefreshAt.get(cooldownKey) ?? 0;
+    const remainingMs = 30_000 - (Date.now() - previous);
+    if (!this.queues.enabled && remainingMs > 0)
+      throw new ApiException({
+        code: "PARTNER_USAGE_REFRESHED_RECENTLY",
+        message: `Usage was refreshed recently. Retry in ${Math.ceil(remainingMs / 1000)} seconds.`,
+        status: 429,
+      });
+    const rate = await this.queues.consumeRateLimit(
+      `partner-usage-refresh:${cooldownKey}`,
+      30_000,
+    );
+    if (rate.count > 1)
+      throw new ApiException({
+        code: "PARTNER_USAGE_REFRESHED_RECENTLY",
+        message: `Usage was refreshed recently. Retry in ${rate.retryAfterSeconds} seconds.`,
+        status: 429,
+      });
+    this.usageRefreshAt.set(cooldownKey, Date.now());
+    try {
+      const result = await this.usageService.refresh(esimId);
+      return {
+        ...this.partnerUsageView(partnerId, result, anchorOrderId),
+        refreshResult: "SUCCESS",
+      };
+    } catch {
+      const cached = await this.usageService.cached(esimId);
+      if (!cached.summary.confirmedPackageCount)
+        throw new ApiException({
+          code: "PARTNER_USAGE_UNAVAILABLE",
+          message: "Live usage and a confirmed cached balance are unavailable",
+          status: 503,
+        });
+      return {
+        ...this.partnerUsageView(
+          partnerId,
+          { ...cached, freshness: "STALE" },
+          anchorOrderId,
+        ),
+        refreshResult: "PROVIDER_UNAVAILABLE",
+        message:
+          "Transatel could not confirm the latest balance. Last-known usage is shown.",
+      };
+    }
+  }
+
+  private async authorizePartnerEsim(partnerId: string, esimId: string) {
+    const link = await this.prisma.customerEsim.findFirst({
+      where: { inventoryId: esimId, order: { partnerId } },
+      select: { id: true },
+    });
+    if (!link)
+      throw new ApiException({
+        code: "PARTNER_ESIM_NOT_FOUND",
+        message: "eSIM not found",
+        status: 404,
+      });
+  }
+
+  private partnerUsageView(
+    partnerId: string,
+    view: EsimUsageView,
+    anchorOrderId?: string,
+  ) {
+    const packages = view.packages.map((item) => {
+      const owned = item.partnerId === partnerId;
+      const common = {
+        packageReference: item.packageReference,
+        ownedByRequester: owned,
+        plan: item.plan,
+        status: item.status,
+        balanceStatus: item.balanceStatus,
+        usedMb: item.usedMb,
+        totalMb: item.totalMb,
+        remainingMb: item.remainingMb,
+        activatedAt: item.activatedAt,
+        expiresAt: item.expiresAt,
+        lastConfirmedAt: item.lastConfirmedAt,
+      };
+      return owned
+        ? {
+            ...common,
+            orderId: item.orderId,
+            orderNumber: item.orderNumber,
+            externalOrderId: item.externalOrderId,
+            purchaseType: item.purchaseType,
+            providerSubscriptionId: item.providerSubscriptionId,
+          }
+        : common;
+    });
+    const anchor = anchorOrderId
+      ? packages.find(
+          (item) => "orderId" in item && item.orderId === anchorOrderId,
+        )
+      : undefined;
+    return {
+      scope: "PHYSICAL_ESIM",
+      anchorOrderId: anchorOrderId ?? null,
+      esim: {
+        id: view.esim.id,
+        iccid: view.esim.iccid,
+        msisdn: view.esim.msisdn,
+        status: view.esim.status,
+      },
+      usageStatus: view.usageStatus,
+      completeness: view.completeness,
+      freshness: view.freshness,
+      lastConfirmedAt: view.lastConfirmedAt,
+      oldestConfirmedAt: view.oldestConfirmedAt,
+      summary: view.summary,
+      packages,
+      // Additive V1 compatibility aliases.
+      usedMb: view.summary.usedMb,
+      totalMb: view.summary.totalMb,
+      usageAvailable: view.usageStatus === "AVAILABLE",
+      subscriptions: packages,
+      ...(anchor ? { anchorPackage: anchor } : {}),
+    };
   }
 
   async notify(
@@ -3311,6 +3520,7 @@ export class PartnerService {
       id: order.id,
       orderNumber: order.orderNumber,
       externalOrderId: order.externalOrderId,
+      esimId: order.customerEsim?.inventoryId ?? null,
       status: order.status,
       settlementMethod: order.partnerSettlementMethod,
       metadata: order.partnerMetadata,
@@ -3355,6 +3565,7 @@ export class PartnerService {
         order: `/api/v1/partners/orders/${order.id}`,
         events: `/api/v1/partners/orders/${order.id}/events`,
         esim: `/api/v1/partners/orders/${order.id}/esim`,
+        usage: `/api/v1/partners/orders/${order.id}/usage`,
       },
       esimDetailsAvailable:
         order.status === OrderStatus.QR_READY ||

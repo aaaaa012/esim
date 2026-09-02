@@ -8,6 +8,7 @@ import { PrismaService } from "../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../modules/integration/connectivity.service.js";
 import { NotificationService } from "../modules/notification/notification.service.js";
 import { MetricsService } from "../observability/metrics.service.js";
+import { UsageService } from "../modules/esims/usage.service.js";
 import { S3StorageService } from "../infrastructure/s3-storage.service.js";
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
@@ -51,6 +52,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly refunds: ManualRefundsService,
     private readonly storage: S3StorageService,
     private readonly metrics?: MetricsService,
+    private readonly usageService?: UsageService,
   ) {}
 
   onModuleInit() {
@@ -59,6 +61,8 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       QUEUES.reconciliation,
       async (job) => {
         const data = job.data as { id: string; kind?: string; runId?: string };
+        if (data.kind === "esim-usage" && this.usageService)
+          return this.usageService.refresh(String(data.id));
         if (data.kind !== "inventory-profile")
           return this.reconcile(String(data.id));
         try {
@@ -495,7 +499,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const staleBefore = new Date(Date.now() - stalenessMs);
     const subscriptions = await this.prisma.subscription.findMany({
       where: {
-        status: "ACTIVE",
+        status: { in: ["ACTIVE", "PENDING"] },
         OR: [
           { usageLastCheckedAt: null },
           { usageLastCheckedAt: { lte: staleBefore } },
@@ -504,7 +508,9 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       select: {
         id: true,
         usageLastCheckedAt: true,
-        customerEsim: { select: { inventory: { select: { iccid: true } } } },
+        customerEsim: {
+          select: { inventory: { select: { id: true, iccid: true } } },
+        },
       },
       orderBy: [{ usageLastCheckedAt: "asc" }, { id: "asc" }],
       take: 500,
@@ -515,18 +521,25 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     }
     const now = Date.now();
     let queued = 0;
+    const queuedInventories = new Set<string>();
     for (const subscription of subscriptions) {
-      if (!subscription.customerEsim?.inventory?.iccid) continue;
+      const profile = subscription.customerEsim?.inventory;
+      if (!profile?.iccid || queuedInventories.has(profile.id)) continue;
       const lastChecked = subscription.usageLastCheckedAt?.getTime();
       if (lastChecked && now - lastChecked < stalenessMs) continue;
+      queuedInventories.add(profile.id);
       await this.queues.add(
         QUEUES.reconciliation,
         "reconcile-usage",
-        { id: subscription.id },
-        `reconcile-${subscription.id}-${subscription.usageLastCheckedAt?.getTime() ?? 0}`,
+        this.usageService
+          ? { id: profile.id, kind: "esim-usage" }
+          : { id: subscription.id },
+        `reconcile-usage-${profile.id}-${subscription.usageLastCheckedAt?.getTime() ?? 0}`,
       );
       queued += 1;
-      if (!this.queues.enabled) await this.reconcile(subscription.id);
+      if (!this.queues.enabled)
+        if (this.usageService) await this.usageService.refresh(profile.id);
+        else await this.reconcile(subscription.id);
     }
     if (queued)
       this.logger.log(
