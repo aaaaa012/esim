@@ -76,6 +76,61 @@ describe("partner prepaid settlement", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it("offers replacement only for the affected mandatory document", async () => {
+    const instance = service({
+      partnerDocumentVerification: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "verification-1",
+          partnerId: "partner-1",
+          externalOrderId: "external-1",
+          status: "REUPLOAD_REQUIRED",
+          reviewPolicy: "AUTO_OCR",
+          failureCode: "PASSPORT_REUPLOAD_REQUIRED",
+          expiresAt: new Date(Date.now() + 60_000),
+          consumedAt: new Date(),
+          consumedOrderId: "order-1",
+          documents: [
+            {
+              id: "passport-1",
+              type: "PASSPORT",
+              uploadVerified: true,
+              verificationStatus: "REUPLOAD_REQUIRED",
+            },
+            {
+              id: "ticket-1",
+              type: "TICKET",
+              uploadVerified: true,
+              verificationStatus: "VERIFIED",
+            },
+          ],
+        }),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          status: "AWAITING_CUSTOMER",
+          documentReviewPolicy: "AUTO_OCR",
+          documentReviewStatus: "REUPLOAD_REQUIRED",
+        }),
+      },
+    });
+
+    const result = await instance.documentVerification(
+      "partner-1",
+      "verification-1",
+    );
+
+    expect(result.documents).toEqual([
+      expect.objectContaining({
+        type: "PASSPORT",
+        replacementEligible: true,
+      }),
+      expect.objectContaining({
+        type: "TICKET",
+        replacementEligible: false,
+      }),
+    ]);
+  });
+
   it("rejects malformed opaque pagination cursors", async () => {
     const instance = service({ order: { findMany: vi.fn() } });
     await expect(
@@ -464,7 +519,18 @@ describe("partner prepaid settlement", () => {
         update: verificationUpdate,
       },
       partnerDocumentUploadIntent: { update: intentUpdate },
-      $transaction: vi.fn().mockResolvedValue([]),
+      orderEvent: { create: vi.fn().mockResolvedValue({}) },
+      partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
+      partnerEvent: { create: vi.fn().mockResolvedValue({}) },
+      $transaction: vi.fn((callback) =>
+        callback({
+          partnerDocumentUploadIntent: { update: intentUpdate },
+          partnerDocumentVerification: { update: verificationUpdate },
+          orderEvent: { create: vi.fn().mockResolvedValue({}) },
+          partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
+          partnerEvent: { create: vi.fn().mockResolvedValue({}) },
+        }),
+      ),
     };
     const instance = service(
       prisma,
@@ -507,6 +573,7 @@ describe("partner prepaid settlement", () => {
       where: { id: "verification-1" },
       data: { status: "AWAITING_UPLOAD", failureCode: null },
     });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it("returns a confirmed passport replacement to OCR processing", async () => {
@@ -514,6 +581,8 @@ describe("partner prepaid settlement", () => {
     const documentUpdate = vi.fn().mockResolvedValue({});
     const verificationUpdate = vi.fn().mockResolvedValue({ count: 1 });
     const queueAdd = vi.fn().mockResolvedValue(undefined);
+    const orderEventCreate = vi.fn().mockResolvedValue({});
+    const partnerEventCreate = vi.fn().mockResolvedValue({});
     const prisma = {
       partnerDocumentVerification: {
         findFirst: vi.fn().mockResolvedValue({
@@ -531,6 +600,7 @@ describe("partner prepaid settlement", () => {
               contentType: "image/png",
               declaredSizeBytes: 500,
               uploadVerified: false,
+              verificationResult: { replacement: true },
             },
             {
               id: "ticket-1",
@@ -551,7 +621,19 @@ describe("partner prepaid settlement", () => {
         findFirst: vi.fn().mockResolvedValue(null),
       },
       order: { update: orderUpdate },
-      $transaction: vi.fn().mockResolvedValue([]),
+      orderEvent: { create: orderEventCreate },
+      partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
+      partnerEvent: { create: partnerEventCreate },
+      $transaction: vi.fn((operation) =>
+        typeof operation === "function"
+          ? operation({
+              partnerWebhookEndpoint: {
+                findMany: vi.fn().mockResolvedValue([]),
+              },
+              partnerEvent: { create: partnerEventCreate },
+            })
+          : Promise.resolve(operation),
+      ),
     };
     const instance = service(
       prisma,
@@ -591,6 +673,32 @@ describe("partner prepaid settlement", () => {
       data: { status: "PROCESSING" },
     });
     expect(queueAdd).toHaveBeenCalled();
+    expect(queueAdd).toHaveBeenCalledWith(
+      "documents",
+      "verify-partner-documents",
+      { verificationId: "verification-1" },
+      expect.stringMatching(
+        /^document-verification-verification-1-[a-f0-9]{16}$/,
+      ),
+      expect.any(Object),
+    );
+    expect(orderEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          orderId: "order-1",
+          reason: "Passport replacement uploaded and confirmed",
+        }),
+      }),
+    );
+    expect(partnerEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          orderId: "order-1",
+          type: "document.replacement_confirmed",
+          resourceId: "passport-1",
+        }),
+      }),
+    );
   });
 
   it("rejects a confirmed upload whose bytes differ from its declaration", async () => {

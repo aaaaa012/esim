@@ -27,12 +27,17 @@ describe("ReconciliationService provisioning-operation recovery", () => {
           .mockResolvedValueOnce([
             {
               id: "verification-1",
+              partnerId: "partner-1",
+              externalOrderId: "external-1",
               consumedOrderId: "order-1",
               updatedAt: new Date("2020-01-01T00:00:00.000Z"),
+              documents: [{ privateAssetId: "replacement-asset" }],
             },
           ])
           .mockResolvedValueOnce([]),
       },
+      partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
+      partnerEvent: { create: vi.fn().mockResolvedValue({}) },
       $transaction: vi.fn((callback) => callback(tx)),
     };
     const attention = vi.fn().mockResolvedValue(undefined);

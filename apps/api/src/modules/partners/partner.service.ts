@@ -467,9 +467,7 @@ export class PartnerService {
         replacementEligible:
           Boolean(verification.consumedOrderId) &&
           verification.failureCode !== "DOCUMENTS_REJECTED" &&
-          ["INVALID", "MANUAL_REVIEW", "REUPLOAD_REQUIRED"].includes(
-            verification.status,
-          ) &&
+          document.verificationStatus === "REUPLOAD_REQUIRED" &&
           (
             [DocumentType.PASSPORT, DocumentType.TICKET] as DocumentType[]
           ).includes(document.type),
@@ -500,6 +498,12 @@ export class PartnerService {
         code: "PARTNER_DOCUMENT_NOT_FOUND",
         message: "Document not found",
       });
+    const verificationResult = document.verificationResult;
+    const isReplacement =
+      verificationResult !== null &&
+      typeof verificationResult === "object" &&
+      !Array.isArray(verificationResult) &&
+      verificationResult.replacement === true;
     if (!document.uploadVerified) {
       const asset = await this.verifyUploadedDocument(document.privateAssetId);
       if (
@@ -552,7 +556,44 @@ export class PartnerService {
               version: { increment: 1 },
             },
           }),
+          ...(isReplacement
+            ? [
+                this.prisma.orderEvent.create({
+                  data: {
+                    orderId: verification.consumedOrderId,
+                    fromStatus: OrderStatus.AWAITING_CUSTOMER,
+                    toStatus: OrderStatus.REVIEW_PENDING,
+                    reason: `${documentTypeLabel(document.type)} replacement uploaded and confirmed`,
+                    metadata: {
+                      documentType: document.type,
+                      documentReviewStatus:
+                        verification.reviewPolicy === "AUTO_OCR"
+                          ? "OCR_PENDING"
+                          : verification.reviewPolicy === "MANUAL_REVIEW"
+                            ? "MANUAL_REVIEW"
+                            : "SKIPPED",
+                    },
+                  },
+                }),
+              ]
+            : []),
         ]);
+      if (verification.consumedOrderId && isReplacement)
+        await this.prisma.$transaction((tx) =>
+          this.createEvent(
+            tx,
+            partnerId,
+            verification.consumedOrderId!,
+            "document.replacement_confirmed",
+            document.id,
+            {
+              orderId: verification.consumedOrderId,
+              verificationId,
+              documentId: document.id,
+              documentType: document.type,
+            },
+          ),
+        );
     }
     const remaining = await this.prisma.partnerDocumentUploadIntent.count({
       where: { verificationId, uploadVerified: false },
@@ -646,11 +687,18 @@ export class PartnerService {
       data: { status: "PROCESSING" },
     });
     try {
+      const passportAttempt = verification.documents.find(
+        (item) => item.type === DocumentType.PASSPORT,
+      );
+      const attemptKey = createHash("sha256")
+        .update(passportAttempt?.privateAssetId ?? document.privateAssetId)
+        .digest("hex")
+        .slice(0, 16);
       await this.queues.add(
         QUEUES.documents,
         "verify-partner-documents",
         { verificationId },
-        `document-verification-${verificationId}`,
+        `document-verification-${verificationId}-${attemptKey}`,
         ocrJobOptions(),
       );
     } catch (error) {
@@ -749,8 +797,8 @@ export class PartnerService {
       input.type as unknown as SharedDocumentType,
       input.contentType,
     );
-    await this.prisma.$transaction([
-      this.prisma.partnerDocumentUploadIntent.update({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.partnerDocumentUploadIntent.update({
         where: { id: intent.id },
         data: {
           fileName: input.fileName,
@@ -770,12 +818,37 @@ export class PartnerService {
           },
           verifiedAt: null,
         },
-      }),
-      this.prisma.partnerDocumentVerification.update({
+      });
+      await tx.partnerDocumentVerification.update({
         where: { id: verification.id },
         data: { status: "AWAITING_UPLOAD", failureCode: null },
-      }),
-    ]);
+      });
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          fromStatus: order.status,
+          toStatus: order.status,
+          reason: `${documentTypeLabel(input.type)} replacement requested`,
+          metadata: {
+            documentType: input.type,
+            documentReviewStatus: "REUPLOAD_REQUIRED",
+          },
+        },
+      });
+      await this.createEvent(
+        tx,
+        partnerId,
+        orderId,
+        "document.replacement_declared",
+        intent.id,
+        {
+          orderId,
+          verificationId: verification.id,
+          documentId: intent.id,
+          documentType: input.type,
+        },
+      );
+    });
     return {
       verificationId: verification.id,
       orderId,

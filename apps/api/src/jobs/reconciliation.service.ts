@@ -20,6 +20,7 @@ import { ManualRefundsService } from "../modules/payments/manual-refunds.service
 import { ApiException } from "../common/api-error.js";
 import { ApiErrorCode } from "@visa-compass/shared";
 import { ocrJobOptions, ocrRecoveryConfig } from "./ocr-recovery.config.js";
+import { createHash, randomUUID } from "node:crypto";
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -279,7 +280,18 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     const partnerVerifications =
       await this.prisma.partnerDocumentVerification.findMany({
         where: { status: "PROCESSING" },
-        select: { id: true, updatedAt: true, consumedOrderId: true },
+        select: {
+          id: true,
+          partnerId: true,
+          externalOrderId: true,
+          updatedAt: true,
+          consumedOrderId: true,
+          documents: {
+            where: { type: "PASSPORT" },
+            select: { privateAssetId: true },
+            take: 1,
+          },
+        },
         take: 100,
         orderBy: { updatedAt: "asc" },
       });
@@ -351,14 +363,26 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
             lastSuccessfulStep: "DOCUMENTS_UPLOADED",
             availableActions: [],
           });
+        if (result.order)
+          await this.emitPartnerVerificationEvent(
+            verification.partnerId,
+            verification.id,
+            verification.externalOrderId,
+            "document.verification.manual_review",
+            result.order.id,
+          );
         continue;
       }
       try {
+        const attemptKey = createHash("sha256")
+          .update(verification.documents[0]?.privateAssetId ?? verification.id)
+          .digest("hex")
+          .slice(0, 16);
         await this.queues.add(
           QUEUES.documents,
           "verify-partner-documents",
           { verificationId: verification.id },
-          `document-verification-${verification.id}`,
+          `document-verification-${verification.id}-${attemptKey}`,
           ocrJobOptions(),
         );
         retried += 1;
@@ -1201,6 +1225,39 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         customerEsims: { some: {} },
       },
       data: { status: "ASSIGNED" },
+    });
+  }
+
+  private async emitPartnerVerificationEvent(
+    partnerId: string,
+    verificationId: string,
+    externalOrderId: string,
+    type: string,
+    orderId: string,
+  ) {
+    const endpoints = await this.prisma.partnerWebhookEndpoint.findMany({
+      where: { partnerId, active: true },
+    });
+    const eligible = endpoints.filter((endpoint) => {
+      const eventTypes = Array.isArray(endpoint.eventTypes)
+        ? endpoint.eventTypes.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : [];
+      return eventTypes.includes("*") || eventTypes.includes(type);
+    });
+    await this.prisma.partnerEvent.create({
+      data: {
+        partnerId,
+        orderId,
+        type,
+        resourceId: verificationId,
+        correlationId: randomUUID(),
+        payload: { verificationId, externalOrderId, orderId },
+        deliveries: {
+          create: eligible.map((endpoint) => ({ endpointId: endpoint.id })),
+        },
+      },
     });
   }
 }

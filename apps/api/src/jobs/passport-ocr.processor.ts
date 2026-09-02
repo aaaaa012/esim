@@ -447,6 +447,7 @@ export class PassportOcrProcessor implements OnModuleInit {
           verification.id,
           verification.externalOrderId,
           "document.verification.manual_review",
+          verification.consumedOrderId,
         );
       if (exhausted && verification.consumedOrderId)
         await this.prisma.order.update({
