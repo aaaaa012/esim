@@ -85,7 +85,11 @@ export default function Home() {
                     </span>
                   </div>
                   <div className="plan-chip">
-                    <span className="flag" role="img" aria-label="United Arab Emirates">
+                    <span
+                      className="flag"
+                      role="img"
+                      aria-label="United Arab Emirates"
+                    >
                       🇦🇪
                     </span>
                     <span className="pc-txt">
@@ -130,6 +134,8 @@ export default function Home() {
         <FeaturedCampaign />
         <OfferGallery />
 
+        <TopupLookup />
+
         <section className="section" id="plans">
           <div className="shell">
             <div className="plans-intro">
@@ -144,7 +150,6 @@ export default function Home() {
                   delivery experience from checkout to activation.
                 </p>
               </div>
-              <TopupLookup />
             </div>
             <Suspense fallback={null}>
               <CatalogPlans />
@@ -166,40 +171,49 @@ export default function Home() {
               <div className="steps-panel">
                 <div className="steps-intro">
                   <span>From compatible phone to active eSIM</span>
-                  <p>Complete these steps before departure, then connect as soon as you land.</p>
+                  <p>
+                    Complete these steps before departure, then connect as soon
+                    as you land.
+                  </p>
                 </div>
                 <ol className="steps">
-                <li className="step">
-                  <span className="step-number">1</span>
-                  <div>
-                    <h3>Check your phone</h3>
-                    <p>
-                      Dial <strong>*#06#</strong> and confirm that your device shows an EID before buying.
-                    </p>
-                  </div>
-                </li>
-                <li className="step">
-                  <span className="step-number">2</span>
-                  <div>
-                    <h3>Choose and purchase your plan</h3>
-                    <p>
-                      Select your destination and data allowance, then pay securely in NPR.
-                    </p>
-                  </div>
-                </li>
-                <li className="step">
-                  <span className="step-number">3</span>
-                  <div>
-                    <h3>Install and activate</h3>
-                    <p>
-                      Scan the private QR code from your email and install the eSIM before departure.
-                    </p>
-                  </div>
-                </li>
+                  <li className="step">
+                    <span className="step-number">1</span>
+                    <div>
+                      <h3>Check your phone</h3>
+                      <p>
+                        Dial <strong>*#06#</strong> and confirm that your device
+                        shows an EID before buying.
+                      </p>
+                    </div>
+                  </li>
+                  <li className="step">
+                    <span className="step-number">2</span>
+                    <div>
+                      <h3>Choose and purchase your plan</h3>
+                      <p>
+                        Select your destination and data allowance, then pay
+                        securely in NPR.
+                      </p>
+                    </div>
+                  </li>
+                  <li className="step">
+                    <span className="step-number">3</span>
+                    <div>
+                      <h3>Install and activate</h3>
+                      <p>
+                        Scan the private QR code from your email and install the
+                        eSIM before departure.
+                      </p>
+                    </div>
+                  </li>
                 </ol>
                 <div className="activation-tip">
                   <CheckCircle2 size={18} aria-hidden="true" />
-                  <p><strong>Before landing:</strong> turn on your Ubigi line. Your selected plan starts automatically when you arrive.</p>
+                  <p>
+                    <strong>Before landing:</strong> turn on your Ubigi line.
+                    Your selected plan starts automatically when you arrive.
+                  </p>
                 </div>
               </div>
             </div>
