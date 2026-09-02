@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bell, Menu, X } from "lucide-react";
-import { SignInButton, SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
+import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import ThemeToggle from "./theme-toggle";
 
 export default function CustomerHeader() {
@@ -79,9 +79,7 @@ export default function CustomerHeader() {
           <span className="nav-user">
             <ThemeToggle />
             <SignedOut>
-              <SignInButton mode="modal">
-                <button className="button secondary">Sign in</button>
-              </SignInButton>
+              <Link className="button secondary" href="/sign-in">Sign in</Link>
             </SignedOut>
             <SignedIn>
               <Link
@@ -132,9 +130,7 @@ export default function CustomerHeader() {
             <div className="nav-menu-divider" />
             <ThemeToggle />
             <SignedOut>
-              <SignInButton mode="modal">
-                <button className="nav-menu-item">Sign in</button>
-              </SignInButton>
+              <Link className="nav-menu-item" href="/sign-in" onClick={() => setOpen(false)}>Sign in</Link>
             </SignedOut>
             <SignedIn>
               {navLink("/account/esims", "My eSIMs")}
