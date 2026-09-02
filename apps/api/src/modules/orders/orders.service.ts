@@ -2090,7 +2090,7 @@ export class OrdersService implements OnModuleInit {
         return this.redact(order);
       }
       order.qrPayload = result.qrPayload;
-      order.qrDeliveredAt = new Date().toISOString();
+      if (!reuseExisting) order.qrDeliveredAt = new Date().toISOString();
       const expiresAt = new Date(
         Date.now() + order.plan.validityDays * 86_400_000,
       ).toISOString();
@@ -2126,7 +2126,9 @@ export class OrdersService implements OnModuleInit {
       this.transition(
         order,
         OrderStatus.QR_READY,
-        `Provisioned on attempt ${attempt}; activation QR delivered`,
+        reuseExisting
+          ? `Provisioned top-up on attempt ${attempt}; package added to existing eSIM`
+          : `Provisioned on attempt ${attempt}; activation QR delivered`,
       );
       try {
         await this.persistence.save(order);
@@ -2146,7 +2148,7 @@ export class OrdersService implements OnModuleInit {
         `provisioning-failure:${order.id}`,
         "Provider accepted the provisioning request",
       );
-      await this.safeNotify(order, "QR_READY");
+      if (!reuseExisting) await this.safeNotify(order, "QR_READY");
       return this.redact(order);
     } catch (error) {
       const errorCode =
@@ -2372,7 +2374,7 @@ export class OrdersService implements OnModuleInit {
       }
 
       order.qrPayload = input.qrPayload;
-      order.qrDeliveredAt = new Date().toISOString();
+      if (!target) order.qrDeliveredAt = new Date().toISOString();
       order.providerSubscriptionId = input.providerSubscriptionId;
       order.providerStatus = "PRELOADED";
       delete order.provisioningFailure;
@@ -2389,7 +2391,10 @@ export class OrdersService implements OnModuleInit {
       this.transition(
         order,
         OrderStatus.QR_READY,
-        input.reason ?? "Recovered provider QR after local persistence failure",
+        input.reason ??
+          (target
+            ? "Recovered provider result; package added to existing eSIM"
+            : "Recovered provider QR after local persistence failure"),
       );
       try {
         await this.persistence.save(order);
@@ -2406,7 +2411,7 @@ export class OrdersService implements OnModuleInit {
         `provisioning-failure:${order.id}`,
         "Provider QR was recovered successfully",
       );
-      await this.safeNotify(order, "QR_READY");
+      if (!target) await this.safeNotify(order, "QR_READY");
       return this.redact(order);
     }
     throw new ConflictException(
@@ -2673,6 +2678,10 @@ export class OrdersService implements OnModuleInit {
   async resendQr(id: string, ownerId?: string) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
+    if (order.purchaseType === "TOPUP")
+      throw new BadRequestException(
+        "This top-up uses the eSIM already installed on the customer's phone; there is no new installation QR to resend",
+      );
     if (
       ![
         OrderStatus.QR_READY,
@@ -3067,7 +3076,8 @@ export class OrdersService implements OnModuleInit {
       `activation-attention:${order.id}`,
       "Provider activation was confirmed",
     );
-    if (!wasReady) await this.safeNotify(order, "QR_READY");
+    if (!wasReady && order.purchaseType !== "TOPUP")
+      await this.safeNotify(order, "QR_READY");
   }
   private async activateOrder(
     order: DemoOrder,

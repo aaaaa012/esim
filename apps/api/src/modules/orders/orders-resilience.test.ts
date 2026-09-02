@@ -430,6 +430,79 @@ describe("OrdersService asynchronous provisioning", () => {
     expect(notifications.enqueue).toHaveBeenCalledOnce();
   });
 
+  it("adds a top-up to the existing eSIM without sending an installation QR", async () => {
+    const order = readyOrder({
+      id: "topup-1",
+      status: OrderStatus.PROVISIONING,
+      purchaseType: "TOPUP",
+      pricingSnapshot: { targetEsimId: "customer-esim-1" },
+      traveler: customerTraveler(),
+    });
+    delete order.qrPayload;
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    const connectivity = {
+      provision: vi.fn().mockResolvedValue({
+        providerSubscriptionId: "topup-sub-1",
+        status: "READY",
+        qrPayload: "LPA:1$existing-profile",
+      }),
+      descriptor: vi.fn().mockReturnValue({ provider: "TRANSATEL" }),
+    };
+    const inventory = {
+      customerIdForOrder: vi.fn().mockResolvedValue("customer-1"),
+      assignTopup: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inventory-1",
+        iccid: "8988247076000000319",
+        msisdn: "33612345678",
+      }),
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          eid: "eid-existing",
+          iccid: "8988247076000000319",
+          msisdn: "33612345678",
+          customerEsims: [{ order: { traveler: customerTraveler() } }],
+        }),
+      },
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const orders = ordersService(
+      [order],
+      connectivity,
+      inventory,
+      prisma,
+      notifications,
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.processProvisioning(order.id, 1, false);
+
+    expect(connectivity.provision).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: order.id, eid: "eid-existing" }),
+    );
+    expect(inventory.assignTopup).toHaveBeenCalledWith(
+      order.id,
+      "customer-1",
+      "8988247076000000319",
+      "LPA:1$existing-profile",
+      expect.objectContaining({ providerSubscriptionId: "topup-sub-1" }),
+    );
+    expect(orders.get(order.id)).toMatchObject({
+      status: OrderStatus.QR_READY,
+      providerSubscriptionId: "topup-sub-1",
+    });
+    expect(orders.get(order.id).qrDeliveredAt).toBeUndefined();
+    expect(orders.get(order.id).timeline.at(-1)?.reason).toContain(
+      "package added to existing eSIM",
+    );
+    expect(notifications.enqueue).not.toHaveBeenCalled();
+  });
+
   it("retries QR-ready recovery from fresh state after bounded version conflicts", async () => {
     const persisted = readyOrder({
       id: "p-recovery-race",

@@ -187,7 +187,10 @@ export default function OrderList() {
                 </div>
                 <div className="esim-state">
                   <span className={`status-chip ${order.status.toLowerCase()}`}>
-                    {orderStatusLabel(order.status)}
+                    {order.purchaseType === "TOPUP" &&
+                    order.status === "QR_READY"
+                      ? "Package added"
+                      : orderStatusLabel(order.status)}
                   </span>
                   <small>
                     <Clock3 size={13} />

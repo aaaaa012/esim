@@ -39,6 +39,7 @@ type Order = {
   status: string;
   totalAmountNpr: number;
   createdAt: string;
+  purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   plan: {
     name: string;
     countryCode: string;
@@ -410,6 +411,18 @@ export default function EsimDetails({ id }: { id: string }) {
                   {resumeLabel}
                 </Link>
               </>
+            ) : order.status === "QR_READY" &&
+              order.purchaseType === "TOPUP" ? (
+              <>
+                <p>
+                  This package has been added to your existing eSIM. You do not
+                  need to install or scan another QR code.
+                </p>
+                <div className="processing">
+                  <CheckCircle2 size={18} />
+                  Package added — waiting for first data use
+                </div>
+              </>
             ) : order.status === "QR_READY" ? (
               <>
                 <p>
@@ -453,6 +466,17 @@ export default function EsimDetails({ id }: { id: string }) {
                       Download QR PDF
                     </button>
                   </div>
+                </div>
+              </>
+            ) : order.status === "COMPLETED" &&
+              order.purchaseType === "TOPUP" ? (
+              <>
+                <p>
+                  Your top-up is active on the existing eSIM. No new QR code or
+                  installation is required.
+                </p>
+                <div className="processing">
+                  <CheckCircle2 size={18} /> Top-up activated
                 </div>
               </>
             ) : order.status === "COMPLETED" ? (

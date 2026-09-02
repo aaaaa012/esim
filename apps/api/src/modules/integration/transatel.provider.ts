@@ -1610,7 +1610,9 @@ export class TransatelProvider implements ConnectivityProvider {
     if (this.prisma.enabled) {
       // Bind the event to an order by our own transaction/order reference first
       // (Transatel echoes it back as body.externalReference), falling back to the
-      // SIM serial (body.iccid) -> reserved inventory mapping.
+      // provider subscription id, and finally an unambiguous SIM serial.
+      // A SIM can have many top-up orders, so blindly using its original
+      // assignedOrderId would apply a top-up event to the wrong order.
       if (envelope.externalReference) {
         const order = await this.prisma.order.findUnique({
           where: { id: envelope.externalReference },
@@ -1618,12 +1620,40 @@ export class TransatelProvider implements ConnectivityProvider {
         });
         if (order) orderId = order.id;
       }
+      if (!orderId && envelope.subscriptionId) {
+        const order = await this.prisma.order.findFirst({
+          where: { providerSubscriptionId: envelope.subscriptionId },
+          select: { id: true },
+        });
+        if (order) orderId = order.id;
+      }
+      if (!orderId && envelope.subscriptionId) {
+        const subscription = await this.prisma.subscription.findUnique({
+          where: { providerSubscriptionId: envelope.subscriptionId },
+          select: { customerEsim: { select: { orderId: true } } },
+        });
+        if (subscription) orderId = subscription.customerEsim.orderId;
+      }
       if (!orderId) {
         const inventory = await this.prisma.esimInventory.findUnique({
           where: { iccid },
-          select: { assignedOrderId: true },
+          select: {
+            assignedOrderId: true,
+            customerEsims: { select: { orderId: true }, take: 2 },
+          },
         });
-        orderId = inventory?.assignedOrderId ?? undefined;
+        const candidates = new Set(
+          [
+            inventory?.assignedOrderId,
+            ...(inventory?.customerEsims ?? []).map((item) => item.orderId),
+          ].filter((candidate): candidate is string => Boolean(candidate)),
+        );
+        if (candidates.size === 1) orderId = [...candidates][0];
+        else if (candidates.size > 1)
+          return {
+            handled: false,
+            reason: `Webhook ${eventType} for ICCID ${iccid} is ambiguous across ${candidates.size} orders and did not carry a usable externalReference or subscriptionId`,
+          };
       }
     }
     if (!orderId)

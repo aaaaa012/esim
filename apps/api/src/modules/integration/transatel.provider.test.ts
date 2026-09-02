@@ -32,6 +32,7 @@ function prismaStub(overrides: Record<string, unknown> = {}) {
     customerEsim: { findUnique: vi.fn() },
     order: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       update: vi.fn().mockResolvedValue({}),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
@@ -686,8 +687,52 @@ describe("TransatelProvider", () => {
     expect(result.event?.orderId).toBe("order-3");
     expect(prisma.esimInventory.findUnique).toHaveBeenCalledWith({
       where: { iccid: "8988247076000000319" },
-      select: { assignedOrderId: true },
+      select: {
+        assignedOrderId: true,
+        customerEsims: { select: { orderId: true }, take: 2 },
+      },
     });
+  });
+
+  it("routes a top-up webhook by provider subscription when externalReference is absent", async () => {
+    const prisma = prismaStub();
+    prisma.order.findFirst = vi.fn().mockResolvedValue({ id: "topup-order" });
+    prisma.esimInventory.findUnique = vi.fn();
+    const provider = new TransatelProvider(prisma);
+    const result = await provider.handleWebhook({
+      header: { eventId: "evt-topup", eventType: "OCS/PRODUCT/ACTIVATED" },
+      body: {
+        iccid: "8988247076000000319",
+        productSubscription: { subscriptionId: "topup-subscription" },
+      },
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.event).toMatchObject({
+      orderId: "topup-order",
+      subscriptionId: "topup-subscription",
+    });
+    expect(prisma.order.findFirst).toHaveBeenCalledWith({
+      where: { providerSubscriptionId: "topup-subscription" },
+      select: { id: true },
+    });
+    expect(prisma.esimInventory.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("does not guess an order from ICCID when an eSIM has multiple purchases", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({
+      assignedOrderId: "initial-order",
+      customerEsims: [{ orderId: "initial-order" }, { orderId: "topup-order" }],
+    });
+    const provider = new TransatelProvider(prisma);
+    const result = await provider.handleWebhook({
+      header: { eventId: "evt-ambiguous", eventType: "OCS/PRODUCT/ACTIVATED" },
+      body: { iccid: "8988247076000000319" },
+    });
+
+    expect(result.handled).toBe(false);
+    expect(result.reason).toContain("ambiguous across 2 orders");
   });
 
   it("acknowledges webhooks that reference an unknown ICCID as unhandled", async () => {

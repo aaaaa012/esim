@@ -1603,15 +1603,23 @@ export default function CheckoutClient({
                 {order &&
                 ["QR_READY", "ACTIVATION_ATTENTION"].includes(order.status) ? (
                   <div className="success-panel">
-                    <QrCode size={42} />
-                    <b>Your activation QR has been sent</b>
+                    {isTopUp ? (
+                      <CheckCircle2 size={42} />
+                    ) : (
+                      <QrCode size={42} />
+                    )}
+                    <b>
+                      {isTopUp
+                        ? "Package added to your existing eSIM"
+                        : "Your activation QR has been sent"}
+                    </b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Install your eSIM using the QR image emailed to you, then
-                      connect to the network once to activate it. Your order
-                      will complete automatically.
+                      {isTopUp
+                        ? "No new QR code or installation is required. The package will become active on your existing eSIM when the provider confirms first use."
+                        : "Install your eSIM using the QR image emailed to you, then connect to the network once to activate it. Your order will complete automatically."}
                     </p>
-                    {isSignedIn === true && (
+                    {isSignedIn === true && !isTopUp && (
                       <>
                         <Link className="button" href="/account/esims">
                           View my eSIMs
@@ -1635,14 +1643,16 @@ export default function CheckoutClient({
                 ) : order?.status === "COMPLETED" ? (
                   <div className="success-panel">
                     <CheckCircle2 size={42} />
-                    <b>Your eSIM is ready</b>
+                    <b>
+                      {isTopUp ? "Your top-up is active" : "Your eSIM is ready"}
+                    </b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Your activation QR was emailed to you as an image. Open it
-                      on another screen and scan it from your phone&apos;s eSIM
-                      settings.
+                      {isTopUp
+                        ? "The package is active on your existing eSIM. No new QR code or installation is required."
+                        : "Your activation QR was emailed to you as an image. Open it on another screen and scan it from your phone's eSIM settings."}
                     </p>
-                    {isSignedIn === true && (
+                    {isSignedIn === true && !isTopUp && (
                       <>
                         <Link className="button" href="/account/esims">
                           View my eSIMs

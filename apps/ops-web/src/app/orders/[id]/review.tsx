@@ -263,7 +263,9 @@ export default function OrderReview({ id }: { id: string }) {
     );
   const displayedOrderStatus = awaitingPartnerFinalization
     ? "AWAITING_PARTNER_FINALIZATION"
-    : order.status;
+    : order.purchaseType === "TOPUP" && order.status === "QR_READY"
+      ? "PACKAGE_ADDED"
+      : order.status;
   const canAdvanceOrder =
     order.status === "REVIEW_PENDING" && !partnerPendingOrder;
   const canReviewDocuments =
@@ -272,6 +274,7 @@ export default function OrderReview({ id }: { id: string }) {
     !["CANCELLED", "REFUNDED"].includes(order.status) &&
     order.documents.length > 0;
   const canResendQr =
+    order.purchaseType !== "TOPUP" &&
     ["QR_READY", "ACTIVATION_ATTENTION", "COMPLETED"].includes(order.status) &&
     Boolean(order.assignment?.inventoryId && order.assignment?.iccid);
   const requiredApproved = ["PASSPORT", "TICKET"].every((type) =>
@@ -690,14 +693,23 @@ export default function OrderReview({ id }: { id: string }) {
                 </dl>
                 <div className="rounded-lg border bg-muted/20 p-3">
                   <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-                    <InfoRow label="Fulfillment" value="QR delivered" />
+                    <InfoRow
+                      label="Fulfillment"
+                      value={
+                        order.purchaseType === "TOPUP"
+                          ? "Package added to existing eSIM"
+                          : "QR delivered"
+                      }
+                    />
                     <InfoRow
                       label="Customer installation"
                       value={
-                        providerCheck?.classification === "ACTIVE" ||
-                        order.status === "COMPLETED"
-                          ? "Activated"
-                          : "Awaiting first use"
+                        order.purchaseType === "TOPUP"
+                          ? "Not required — existing eSIM"
+                          : providerCheck?.classification === "ACTIVE" ||
+                              order.status === "COMPLETED"
+                            ? "Activated"
+                            : "Awaiting first use"
                       }
                     />
                     <InfoRow
@@ -712,18 +724,20 @@ export default function OrderReview({ id }: { id: string }) {
                         "Pending first use"
                       }
                     />
-                    <InfoRow
-                      label="Last successful QR delivery"
-                      value={
-                        order.qrDelivery?.lastSuccessfulAt
-                          ? new Date(
-                              order.qrDelivery.lastSuccessfulAt,
-                            ).toLocaleString()
-                          : order.qrDelivery?.pending
-                            ? "Delivery queued"
-                            : "No successful delivery recorded"
-                      }
-                    />
+                    {order.purchaseType !== "TOPUP" ? (
+                      <InfoRow
+                        label="Last successful QR delivery"
+                        value={
+                          order.qrDelivery?.lastSuccessfulAt
+                            ? new Date(
+                                order.qrDelivery.lastSuccessfulAt,
+                              ).toLocaleString()
+                            : order.qrDelivery?.pending
+                              ? "Delivery queued"
+                              : "No successful delivery recorded"
+                        }
+                      />
+                    ) : null}
                   </dl>
                   {providerCheck ? (
                     <p className="mt-3 text-xs text-muted-foreground">
