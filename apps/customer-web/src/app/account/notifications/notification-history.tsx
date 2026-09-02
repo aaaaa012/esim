@@ -71,7 +71,7 @@ export default function NotificationHistory() {
           </span>
           <em>{notificationStatusLabel(item.status)}</em>
           {item.orderId && (
-            <Link href={`/account/esims/${item.orderId}`}>View order</Link>
+            <Link href={`/account/orders/${item.orderId}`}>View order</Link>
           )}
         </article>
       ))}

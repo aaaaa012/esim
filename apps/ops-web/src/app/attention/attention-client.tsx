@@ -6,6 +6,7 @@ import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { Button } from "@/components/ui/button";
+import ErrorDialog from "@/components/error-dialog";
 import {
   Table,
   TableBody,
@@ -36,19 +37,25 @@ type Case = {
 export default function AttentionClient() {
   const authFetch = useAuthenticatedFetch();
   const [items, setItems] = useState<Case[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const load = useCallback(async () => {
     setError("");
-    const response = await authFetch(
-      `${API}/operations/attention?status=OPEN&limit=100`,
-    );
-    const value = await response.json();
-    if (!response.ok)
-      throw new Error(
-        value.error?.message ?? "Attention queue could not be loaded",
+    setLoading(true);
+    try {
+      const response = await authFetch(
+        `${API}/operations/attention?status=OPEN&limit=100`,
       );
-    setItems(value.data.items);
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Attention queue could not be loaded",
+        );
+      setItems(value.data.items);
+    } finally {
+      setLoading(false);
+    }
   }, [authFetch]);
   useEffect(() => {
     void load().catch((cause) =>
@@ -92,16 +99,12 @@ export default function AttentionClient() {
           </Button>
         }
       />
-      {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <ErrorDialog error={error} onClose={() => setError("")} />
       <Panel
         title="Open cases"
         description={`${items.length} case(s) need attention`}
       >
-        <Table>
+        {loading ? <div className="py-10 text-center text-sm text-muted-foreground">Loading open cases...</div> : !items.length ? <div className="py-10 text-center text-sm text-muted-foreground">No open attention cases.</div> : <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Case</TableHead>
@@ -144,7 +147,7 @@ export default function AttentionClient() {
                   )}
                 </TableCell>
                 <TableCell>
-                  <StatusBadge label={item.order?.status ?? item.status} />
+                  <StatusBadge label={item.status} />
                 </TableCell>
                 <TableCell>
                   {item.failureCategory ?? "—"}
@@ -170,7 +173,7 @@ export default function AttentionClient() {
               </TableRow>
             ))}
           </TableBody>
-        </Table>
+        </Table>}
       </Panel>
     </div>
   );

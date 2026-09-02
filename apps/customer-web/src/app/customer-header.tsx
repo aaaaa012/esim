@@ -10,6 +10,14 @@ import ThemeToggle from "./theme-toggle";
 export default function CustomerHeader() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
+  const [activeHash, setActiveHash] = useState("");
+
+  useEffect(() => {
+    const syncHash = () => setActiveHash(window.location.hash);
+    syncHash();
+    window.addEventListener("hashchange", syncHash);
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, []);
 
   useEffect(() => {
     setOpen(false);
@@ -31,7 +39,7 @@ export default function CustomerHeader() {
   const navLink = (href: string, label: string) => (
     <Link
       href={href}
-      className={path === href || path.startsWith(href) ? "nav-active" : ""}
+      className={path === href || path.startsWith(href) || (href.startsWith("/#") && path === "/" && activeHash === href.slice(1)) ? "nav-active" : ""}
       onClick={() => setOpen(false)}
     >
       {label}

@@ -239,6 +239,7 @@ function Artwork({ campaign }: { campaign: Campaign }) {
 export default function HomepageCampaignsClient() {
   const authFetch = useAuthenticatedFetch();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [loadError, setLoadError] = useState("");
   const [countries, setCountries] = useState<Country[]>([]);
   const [form, setForm] = useState<FormState>(initialForm);
   const [file, setFile] = useState<File | null>(null);
@@ -284,6 +285,7 @@ export default function HomepageCampaignsClient() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     try {
       const [campaignItems, countryItems] = await Promise.all([
         request<Campaign[]>("/admin/homepage-campaigns"),
@@ -292,11 +294,9 @@ export default function HomepageCampaignsClient() {
       setCampaigns(campaignItems);
       setCountries(countryItems);
     } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Campaigns could not be loaded",
-      );
+      const message = error instanceof Error ? error.message : "Campaigns could not be loaded";
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -706,6 +706,16 @@ export default function HomepageCampaignsClient() {
           {loading ? (
             <div className="flex min-h-64 items-center justify-center">
               <Spinner />
+            </div>
+          ) : loadError ? (
+            <div className="space-y-4">
+              <EmptyState
+                title="Campaigns could not be loaded"
+                description="Check the connection and refresh to try again."
+              />
+              <div className="flex justify-center">
+                <Button variant="outline" onClick={() => void load()}>Retry</Button>
+              </div>
             </div>
           ) : !campaigns.length ? (
             <EmptyState

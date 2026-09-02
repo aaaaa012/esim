@@ -95,7 +95,7 @@ const SECTIONS: SectionDef[] = [
     label: "Payment verification",
     icon: CircleDollarSign,
     tone: "violet",
-    statuses: ["PAYMENT_PENDING", "PAYMENT_FAILED", "PAYMENT_CONFIRMED"],
+    statuses: ["PAYMENT_PENDING", "PAYMENT_FAILED", "PAYMENT_REVIEW_REQUIRED"],
   },
   {
     key: "refund",
@@ -156,7 +156,12 @@ export default function QueueClient() {
   };
   useEffect(load, []);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kathmandu",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
   const q = query.trim().toLowerCase();
 
   const grouped = useMemo(() => {

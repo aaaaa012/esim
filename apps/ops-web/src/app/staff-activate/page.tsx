@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/spinner";
+import ErrorDialog from "@/components/error-dialog";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -50,12 +51,12 @@ export default function StaffActivatePage() {
         <input id="password" className="mt-2 w-full rounded-md border bg-background px-3 py-2" type="password" autoComplete="new-password" minLength={12} required value={password} onChange={(event) => setPassword(event.target.value)} />
         <label className="mt-4 block text-sm font-medium" htmlFor="confirm-password">Confirm password</label>
         <input id="confirm-password" className="mt-2 w-full rounded-md border bg-background px-3 py-2" type="password" autoComplete="new-password" minLength={12} required value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
-        {error ? <p className="mt-4 text-sm text-destructive" role="alert">{error}</p> : null}
         <Button className="mt-6 w-full" type="submit" disabled={busy}>
           {busy ? <Spinner className="text-primary-foreground" /> : null}
           {busy ? "Activating…" : "Activate account"}
         </Button>
       </form>
+      <ErrorDialog error={error} onClose={() => setError("")} />
     </main>
   );
 }

@@ -63,7 +63,6 @@ export default function CatalogPlans() {
       )
       .then((countriesData: Envelope<Country[]>) => {
         if (cancelled) return;
-        setPlans([]);
         setCountries(countriesData.data);
         setError(null);
       })

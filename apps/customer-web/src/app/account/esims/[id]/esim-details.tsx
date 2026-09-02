@@ -227,6 +227,14 @@ export default function EsimDetails({ id }: { id: string }) {
     return (
       <main className="section">
         <ErrorModal error={error} onClose={() => setError("")} />
+        <div className="account-empty">
+          <h1>We could not load this order</h1>
+          <p>Please try again, or return to your orders.</p>
+          <div className="form-actions">
+            <button className="button" onClick={() => void load()}>Try again</button>
+            <Link className="button secondary" href="/account/orders">View orders</Link>
+          </div>
+        </div>
       </main>
     );
   if (!order)

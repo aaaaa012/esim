@@ -137,7 +137,7 @@ export default function DashboardClient() {
       icon: <Clock3 className="size-4" />,
       tone: "warning" as const,
       hint: "Completed plans past their validity window",
-      href: "/orders",
+      href: "/orders?status=EXPIRED",
     },
   ];
 

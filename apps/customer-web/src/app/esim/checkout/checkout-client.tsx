@@ -290,6 +290,7 @@ export default function CheckoutClient({
     [traveler, setTraveler] = useState(initial);
   const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
+  const [compatibilityError, setCompatibilityError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof Traveler, string>>
   >({});
@@ -476,6 +477,16 @@ export default function CheckoutClient({
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+  useEffect(() => {
+    const hasUnsavedCheckoutProgress = step > 1 && step < 4 && !resumingOrder;
+    if (!hasUnsavedCheckoutProgress) return;
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [resumingOrder, step]);
   const summaryPlan = order?.plan ?? previewPlan;
   const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
   const [provider, setProvider] = useState<PaymentProvider>(
@@ -871,7 +882,7 @@ export default function CheckoutClient({
       return;
     }
     if (!compatible && !isTopUpIntent) {
-      setError("Confirm device compatibility");
+      setCompatibilityError("Confirm that your device is eSIM-compatible before continuing.");
       return;
     }
     if (!isLoaded) {
@@ -1372,7 +1383,10 @@ export default function CheckoutClient({
                   <input
                     type="checkbox"
                     checked={compatible}
-                    onChange={(e) => setCompatible(e.target.checked)}
+                    onChange={(e) => {
+                      setCompatible(e.target.checked);
+                      if (e.target.checked) setCompatibilityError("");
+                    }}
                   />
                   <span>
                     <b>I confirm my device is compatible</b>
@@ -1382,6 +1396,7 @@ export default function CheckoutClient({
                     </small>
                   </span>
                 </label>
+                {compatibilityError ? <p className="field-error" role="alert">{compatibilityError}</p> : null}
                 <Action busy={busy} onClick={begin}>
                   Continue
                 </Action>
@@ -1600,6 +1615,9 @@ export default function CheckoutClient({
                       ? "Payment issue"
                       : "Choose payment method"}
                 </h2>
+                <button className="button secondary" type="button" onClick={goBack} disabled={busy || verifying}>
+                  Back to documents
+                </button>
                 {order &&
                 ["QR_READY", "ACTIVATION_ATTENTION"].includes(order.status) ? (
                   <div className="success-panel">
@@ -1626,7 +1644,7 @@ export default function CheckoutClient({
                         </Link>
                         <Link
                           className="button"
-                          href={`/account/esims/${order.id}`}
+                          href={`/account/orders/${order.id}`}
                         >
                           Didn&apos;t get the QR? Recover it
                         </Link>
@@ -1659,7 +1677,7 @@ export default function CheckoutClient({
                         </Link>
                         <Link
                           className="button"
-                          href={`/account/esims/${order.id}`}
+                          href={`/account/orders/${order.id}`}
                         >
                           Didn&apos;t get the QR? Recover it
                         </Link>
@@ -1686,7 +1704,7 @@ export default function CheckoutClient({
                     {isSignedIn === true && (
                       <Link
                         className="button secondary"
-                        href={`/account/esims/${order.id}`}
+                        href={`/account/orders/${order.id}`}
                       >
                         Check status
                       </Link>
@@ -1707,7 +1725,7 @@ export default function CheckoutClient({
                     {isSignedIn === true && (
                       <Link
                         className="button"
-                        href={`/account/esims/${order.id}`}
+                        href={`/account/orders/${order.id}`}
                       >
                         Check status
                       </Link>

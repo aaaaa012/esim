@@ -53,7 +53,7 @@ const toneMap: Record<
   draft: "info",
   reserved: "info",
   assigned: "info",
-  quarantined: "destructive",
+  quarantined: "warning",
 };
 
 // Human-readable labels for internal status/reason codes shown on every page.

@@ -1729,6 +1729,8 @@ export default function AdminWorkspace() {
                     <TableHead>Status</TableHead>
                     <TableHead>Activity</TableHead>
                     <TableHead className="text-right">Workspace</TableHead>
+                    <TableHead>Access</TableHead>
+                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1788,7 +1790,7 @@ export default function AdminWorkspace() {
                             )
                           }
                         >
-                          <SelectTrigger className="w-32">
+                          <SelectTrigger className="w-32" aria-label={`Change ${partner.name} status`}>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>

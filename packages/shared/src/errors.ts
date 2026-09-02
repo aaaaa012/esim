@@ -22,6 +22,7 @@ export const ApiErrorCode = {
   ACCOUNT_DISABLED: "ACCOUNT_DISABLED",
   ACCOUNT_TYPE_FORBIDDEN: "ACCOUNT_TYPE_FORBIDDEN",
   MFA_REQUIRED: "MFA_REQUIRED",
+  PASSWORD_CHANGE_REQUIRED: "PASSWORD_CHANGE_REQUIRED",
   INTEGRATION_TYPE_FORBIDDEN: "INTEGRATION_TYPE_FORBIDDEN",
 
   // Catalog & plans
@@ -87,6 +88,8 @@ export const apiErrorMessage = (
       return "This partner is not approved for hosted checkout links.";
     case ApiErrorCode.MFA_REQUIRED:
       return "Additional verification is required to continue.";
+    case ApiErrorCode.PASSWORD_CHANGE_REQUIRED:
+      return "Set a new password before continuing.";
     case ApiErrorCode.PLAN_NOT_AVAILABLE:
       return "This plan is no longer available. Please choose another plan.";
     case ApiErrorCode.PLAN_UNAVAILABLE:
