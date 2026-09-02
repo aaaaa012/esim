@@ -1,31 +1,19 @@
 import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import OperationsSignInPage from "./[[...sign-in]]/page";
 
-const signIn = vi.fn((_props: Record<string, unknown>) => (
-  <div data-testid="clerk-sign-in" />
-));
-
 vi.mock("@clerk/nextjs", () => ({
-  SignIn: (props: Record<string, unknown>) => signIn(props),
+  useSignIn: () => ({ isLoaded: true, signIn: {}, setActive: vi.fn() }),
 }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 
-describe("staff sign-in pages", () => {
-  beforeEach(() => signIn.mockClear());
-
-  it("keeps Operations authentication in a non-transferable sign-in flow", () => {
+describe("staff sign-in page", () => {
+  it("offers only staff sign-in and recovery, never signup", () => {
     render(<OperationsSignInPage />);
 
-    expect(signIn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/sign-in",
-        routing: "path",
-        fallbackRedirectUrl: "/",
-        transferable: false,
-        withSignUp: false,
-      }),
-    );
-    expect(signIn.mock.calls[0]?.[0]).not.toHaveProperty("forceRedirectUrl");
-    expect(screen.queryByText(/sign in as super admin/i)).toBeNull();
+    expect(screen.getByRole("heading", { name: /operations sign in/i })).toBeTruthy();
+    expect(screen.getByLabelText(/work email/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /forgot password/i })).toBeTruthy();
+    expect(screen.queryByText(/sign up/i)).toBeNull();
   });
 });
