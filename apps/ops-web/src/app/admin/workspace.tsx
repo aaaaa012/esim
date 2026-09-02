@@ -17,7 +17,6 @@ import {
   Settings2,
   ShieldCheck,
   Upload,
-  UsersRound,
   XCircle,
   Wallet,
 } from "lucide-react";
@@ -523,6 +522,31 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
+  const resendInvitation = async (invitation: Invitation) => {
+    setBusy(`invite:${invitation.id}`);
+    try {
+      await request(`/admin/staff-invitations/${invitation.id}/resend`, { method: "POST" });
+      await load();
+      toast.success(`A new activation link was sent to ${invitation.email}.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to resend invitation");
+    } finally {
+      setBusy("");
+    }
+  };
+  const revokeInvitation = async (invitation: Invitation) => {
+    if (!window.confirm(`Revoke the pending invitation for ${invitation.email}? The activation link will stop working immediately.`)) return;
+    setBusy(`invite:${invitation.id}`);
+    try {
+      await request(`/admin/staff-invitations/${invitation.id}`, { method: "DELETE" });
+      await load();
+      toast.success(`Invitation for ${invitation.email} was revoked.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to revoke invitation");
+    } finally {
+      setBusy("");
+    }
+  };
   const saveUser = async (user: User) => {
     setBusy(user.id);
     try {
@@ -899,6 +923,7 @@ export default function AdminWorkspace() {
             "Document Rules",
             "Inventory Settings",
             "Users",
+            "Staff Invitations",
             "Partners",
             "System Config",
           ].map((item) => (
@@ -1351,9 +1376,13 @@ export default function AdminWorkspace() {
               title="Users and account types"
               description="Assign least-privilege access. Role changes are persisted transactionally."
               actions={
-                <span className="flex size-9 items-center justify-center rounded-lg bg-accent text-accent-foreground">
-                  <UsersRound className="size-4" />
-                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTab("Staff Invitations")}
+                >
+                  Staff invitations
+                </Button>
               }
               noPadding
             >
@@ -1438,7 +1467,7 @@ export default function AdminWorkspace() {
                   </Button>
                 </div>
               </div>
-              {invitations.filter((item) => item.status === "PENDING").length >
+              {false && invitations.filter((item) => item.status === "PENDING").length >
                 0 && (
                 <div className="space-y-2 p-6">
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -1555,6 +1584,54 @@ export default function AdminWorkspace() {
                   ))}
                 </TableBody>
               </Table>
+            </Panel>
+          </TabsContent>
+        )}
+
+        {tab === "Staff Invitations" && (
+          <TabsContent value="Staff Invitations" className="mt-0">
+            <Panel
+              title="Staff invitations"
+              description="Review invitation delivery, resend an expired link, or revoke a pending invitation immediately."
+              actions={
+                <Button variant="outline" size="sm" onClick={() => setTab("Users")}>
+                  Invite staff
+                </Button>
+              }
+              noPadding
+            >
+              {!invitations.length ? (
+                <EmptyState title="No staff invitations yet" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Expiry</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {invitations.map((invitation) => {
+                      const pending = invitation.status === "PENDING";
+                      const working = busy === `invite:${invitation.id}`;
+                      return (
+                        <TableRow key={invitation.id}>
+                          <TableCell className="font-medium">{invitation.email}</TableCell>
+                          <TableCell>{invitation.accountType.replace("_", " ")}</TableCell>
+                          <TableCell><StatusBadge label={invitation.status} tone={pending ? "warning" : invitation.status === "ACCEPTED" ? "success" : "default"} /></TableCell>
+                          <TableCell className="text-muted-foreground">{new Date(invitation.expiresAt).toLocaleString()}</TableCell>
+                          <TableCell className="text-right">
+                            {pending ? <div className="flex justify-end gap-2"><Button size="sm" variant="outline" disabled={working} onClick={() => void resendInvitation(invitation)}>{working ? <Spinner /> : "Resend"}</Button><Button size="sm" variant="destructive" disabled={working} onClick={() => void revokeInvitation(invitation)}>{working ? <Spinner /> : "Revoke"}</Button></div> : "—"}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
             </Panel>
           </TabsContent>
         )}

@@ -1,10 +1,11 @@
 "use client";
 
 import { useSignIn } from "@clerk/nextjs";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/spinner";
+import { toast } from "sonner";
 
 type Step = "sign-in" | "second-factor" | "reset-code" | "new-password";
 
@@ -25,6 +26,12 @@ export default function StaffSignIn() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!error) return;
+    toast.error(error, { id: "staff-auth-error" });
+    setError("");
+  }, [error]);
 
   const finish = async (sessionId: string | null | undefined) => {
     if (!sessionId || !setActive) throw new Error("Unable to complete sign in");
@@ -123,7 +130,6 @@ export default function StaffSignIn() {
     <p className="mt-3 text-sm text-muted-foreground">{step === "sign-in" ? "This portal is for invited staff accounts only." : step === "second-factor" ? "Use the code from your configured authenticator app." : "Use the secure recovery code sent to your work email."}</p>
     {notice ? <p className="mt-4 text-sm text-muted-foreground" role="status">{notice}</p> : null}
     {step === "sign-in" ? <form className="mt-6 space-y-4" onSubmit={submitSignIn}><Field label="Work email" id="email" type="email" value={email} onChange={setEmail} autoComplete="email" /><Field label="Password" id="password" type="password" value={password} onChange={setPassword} autoComplete="current-password" /><Button className="w-full" type="submit" disabled={busy}>{busy ? <Spinner className="text-primary-foreground" /> : null}{busy ? "Signing in…" : "Sign in"}</Button><button className="w-full text-sm text-muted-foreground underline" type="button" onClick={() => void beginReset()} disabled={busy}>Forgot password?</button></form> : step === "second-factor" ? <form className="mt-6 space-y-4" onSubmit={verifySecondFactor}><Field label="Authenticator code" id="authenticator-code" type="text" value={code} onChange={setCode} autoComplete="one-time-code" /><Button className="w-full" type="submit" disabled={busy}>{busy ? <Spinner className="text-primary-foreground" /> : null}{busy ? "Verifying…" : "Verify identity"}</Button></form> : step === "reset-code" ? <form className="mt-6 space-y-4" onSubmit={verifyResetCode}><Field label="Email verification code" id="verification-code" type="text" value={code} onChange={setCode} autoComplete="one-time-code" /><Button className="w-full" type="submit" disabled={busy}>{busy ? <Spinner className="text-primary-foreground" /> : null}{busy ? "Verifying…" : "Verify code"}</Button><button className="w-full text-sm text-muted-foreground underline" type="button" onClick={() => void beginReset()} disabled={busy}>Send a new code</button></form> : <form className="mt-6 space-y-4" onSubmit={savePassword}><Field label="New password" id="new-password" type="password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" /><Field label="Confirm new password" id="confirm-password" type="password" value={confirmPassword} onChange={setConfirmPassword} autoComplete="new-password" /><Button className="w-full" type="submit" disabled={busy}>{busy ? <Spinner className="text-primary-foreground" /> : null}{busy ? "Updating…" : "Update password"}</Button></form>}
-    {error ? <p className="mt-4 text-sm text-destructive" role="alert">{error}</p> : null}
     {step !== "sign-in" ? <button className="mt-5 text-sm text-muted-foreground underline" type="button" onClick={restart} disabled={busy}>Back to sign in</button> : null}
     <p className="mt-6 text-xs text-muted-foreground">Need a staff account? Ask a Super Admin to send an activation email.</p>
   </section></main>;
