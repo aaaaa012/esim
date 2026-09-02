@@ -41,7 +41,11 @@ export default function CustomerHeader() {
   return (
     <header className="site-header">
       <div className="shell header-inner">
-        <Link className="brand" href="/" aria-label="Visa Compass Services home">
+        <Link
+          className="brand"
+          href="/"
+          aria-label="Visa Compass Services home"
+        >
           <Image
             className="brand-mark-logo"
             src="/brand/visa-compass-mark.png"
@@ -69,6 +73,7 @@ export default function CustomerHeader() {
         </Link>
         <nav className="navlinks">
           {navLink("/#plans", "Destinations")}
+          {navLink("/#recharge", "Recharge")}
           {navLink("/#how", "How it works")}
           {navLink("/compatibility", "Compatibility")}
           <span className="nav-user">
@@ -121,6 +126,7 @@ export default function CustomerHeader() {
         <div className="nav-menu" id="customer-navigation-menu">
           <div className="shell nav-menu-inner">
             {navLink("/#plans", "Destinations")}
+            {navLink("/#recharge", "Recharge")}
             {navLink("/#how", "How it works")}
             {navLink("/compatibility", "Compatibility")}
             <div className="nav-menu-divider" />

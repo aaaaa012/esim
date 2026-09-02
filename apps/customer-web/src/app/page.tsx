@@ -134,8 +134,6 @@ export default function Home() {
         <FeaturedCampaign />
         <OfferGallery />
 
-        <TopupLookup />
-
         <section className="section" id="plans">
           <div className="shell">
             <div className="plans-intro">
@@ -156,6 +154,8 @@ export default function Home() {
             </Suspense>
           </div>
         </section>
+
+        <TopupLookup />
 
         <section className="section" id="how">
           <div className="shell">

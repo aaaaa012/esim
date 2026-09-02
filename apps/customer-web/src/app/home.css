@@ -1096,6 +1096,7 @@
 
 .recharge-section {
   position: relative;
+  scroll-margin-top: 88px;
   padding: 34px 0 92px;
   background: color-mix(in srgb, var(--surface-2) 42%, var(--bg));
   overflow: hidden;
