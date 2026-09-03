@@ -31,8 +31,13 @@ export default function StaffActivatePage() {
         body: JSON.stringify({ token, password }),
       });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok)
-        throw new Error(body?.error?.message ?? "Unable to activate account");
+      if (!response.ok) {
+        const message = body?.error?.message ?? "Unable to activate account";
+        const code = body?.error?.code;
+        const correlationId = body?.meta?.correlationId;
+        const reference = [code, correlationId].filter(Boolean).join(" / ");
+        throw new Error(reference ? `${message} Reference: ${reference}` : message);
+      }
       await signOut({ redirectUrl: "/sign-in?activated=1" });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to activate account");

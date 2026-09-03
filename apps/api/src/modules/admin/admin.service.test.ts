@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { AdminService } from "./admin.service.js";
+import {
+  AdminService,
+  mapClerkActivationFailure,
+} from "./admin.service.js";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { ConnectivityService } from "../integration/connectivity.service.js";
 
@@ -33,6 +36,40 @@ function connectivityStub() {
 const headers = [
   "countryiso2,name,providerplanid,dataallowance,validitydays,costprice,sellingprice",
 ];
+
+describe("mapClerkActivationFailure", () => {
+  it("identifies an existing Clerk identity", () => {
+    expect(
+      mapClerkActivationFailure({
+        status: 422,
+        errors: [{ code: "form_identifier_exists" }],
+      }),
+    ).toMatchObject({ code: "CLERK_IDENTITY_EXISTS", status: 422 });
+  });
+
+  it("identifies a password-policy rejection", () => {
+    expect(
+      mapClerkActivationFailure({
+        errors: [{ code: "form_password_pwned" }],
+      }).code,
+    ).toBe("CLERK_PASSWORD_REJECTED");
+  });
+
+  it("identifies rate limiting", () => {
+    expect(mapClerkActivationFailure({ status: 429 }).code).toBe(
+      "CLERK_RATE_LIMITED",
+    );
+  });
+
+  it("does not expose unknown provider messages", () => {
+    const result = mapClerkActivationFailure({
+      status: 500,
+      errors: [{ code: "unexpected", longMessage: "provider secret" }],
+    });
+    expect(result.code).toBe("CLERK_ACTIVATION_FAILED");
+    expect(result.message).not.toContain("provider secret");
+  });
+});
 
 function csv(validityDays: string, country = "IN") {
   return [

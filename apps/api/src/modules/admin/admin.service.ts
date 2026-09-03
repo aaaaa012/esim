@@ -1,7 +1,9 @@
 import {
   BadRequestException,
+  HttpStatus,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from "@nestjs/common";
@@ -20,6 +22,7 @@ import {
   RESTRICTED_PLAN_COUNTRY_CODES,
 } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { ApiException } from "../../common/api-error.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
 import { tabularToRecords } from "../../common/tabular.util.js";
@@ -29,8 +32,86 @@ import {
   type EmailChannel,
 } from "../notification/email.channel.js";
 
+type ClerkActivationFailure = {
+  code: string;
+  message: string;
+  providerCodes: string[];
+  status: number | undefined;
+};
+
+export function mapClerkActivationFailure(
+  error: unknown,
+): ClerkActivationFailure {
+  const value =
+    error && typeof error === "object"
+      ? (error as {
+          status?: unknown;
+          statusCode?: unknown;
+          errors?: Array<{ code?: unknown }>;
+        })
+      : undefined;
+  const rawStatus = value?.status ?? value?.statusCode;
+  const status = typeof rawStatus === "number" ? rawStatus : undefined;
+  const providerCodes = Array.isArray(value?.errors)
+    ? value.errors
+        .map((item) =>
+          typeof item?.code === "string" ? item.code.toLowerCase() : "",
+        )
+        .filter(Boolean)
+    : [];
+  const joinedCodes = providerCodes.join(" ");
+
+  if (
+    /identifier.*(exists|taken)|email.*(exists|taken)|already.*(exists|registered)/.test(
+      joinedCodes,
+    )
+  ) {
+    return {
+      code: "CLERK_IDENTITY_EXISTS",
+      message:
+        "A Clerk account already exists for this email in the configured Clerk instance. Delete that Clerk user or use a different email, then try again.",
+      providerCodes,
+      status,
+    };
+  }
+  if (/password|pwned|breach/.test(joinedCodes)) {
+    return {
+      code: "CLERK_PASSWORD_REJECTED",
+      message:
+        "Clerk rejected this password. Choose a different strong password that meets the configured password policy.",
+      providerCodes,
+      status,
+    };
+  }
+  if (status === HttpStatus.TOO_MANY_REQUESTS || /rate.*limit/.test(joinedCodes)) {
+    return {
+      code: "CLERK_RATE_LIMITED",
+      message: "Too many activation attempts. Wait a few minutes and try again.",
+      providerCodes,
+      status,
+    };
+  }
+  if (status === HttpStatus.UNAUTHORIZED || status === HttpStatus.FORBIDDEN) {
+    return {
+      code: "CLERK_CONFIGURATION_ERROR",
+      message:
+        "The staff identity service rejected the server credentials. Contact support to verify the Clerk environment configuration.",
+      providerCodes,
+      status,
+    };
+  }
+  return {
+    code: "CLERK_ACTIVATION_FAILED",
+    message:
+      "Unable to activate this staff account. Contact support with the request correlation ID.",
+    providerCodes,
+    status,
+  };
+}
+
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
@@ -1051,10 +1132,22 @@ export class AdminService {
         publicMetadata: { accountType: invitation.accountType },
       });
       clerkUserId = clerkUser.id;
-    } catch {
-      throw new BadRequestException(
-        "Unable to activate this staff account. Contact support if the problem continues",
-      );
+    } catch (error) {
+      const failure = mapClerkActivationFailure(error);
+      this.logger.warn({
+        event: "staff_activation_clerk_failed",
+        invitationId: invitation.id,
+        status: failure.status ?? "unknown",
+        providerCodes:
+          failure.providerCodes.length > 0
+            ? failure.providerCodes
+            : ["unknown"],
+      });
+      throw new ApiException({
+        code: failure.code,
+        message: failure.message,
+        status: HttpStatus.BAD_REQUEST,
+      });
     }
     try {
       await this.prisma.$transaction(async (tx) => {
