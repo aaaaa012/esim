@@ -10,7 +10,6 @@ import {
 import { UserRoleName } from "@prisma/client";
 import {
   AuthGuard,
-  isSuperAdminMfaRequired,
   type AuthenticatedRequest,
 } from "../../common/auth.guard.js";
 import { BootstrapRateLimitGuard } from "../../common/bootstrap-rate-limit.guard.js";
@@ -40,9 +39,7 @@ export class AuthController {
       effectiveCapabilities: user.capabilities,
       status: user.status,
       mustChangePassword: user.mustChangePassword,
-      mfaRequired:
-        user.accountType === UserRoleName.SUPER_ADMIN &&
-        isSuperAdminMfaRequired(),
+      mfaRequired: false,
       mfaVerified: user.mfaVerified,
       landingPortal:
         user.accountType === UserRoleName.CUSTOMER

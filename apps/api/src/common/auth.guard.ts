@@ -30,8 +30,6 @@ export const capabilitiesFor = (type: UserRoleName) =>
         ];
 export const isMfaVerified = (fva: unknown) =>
   Array.isArray(fva) && typeof fva[1] === "number" && fva[1] >= 0;
-export const isSuperAdminMfaRequired = () =>
-  process.env.ENFORCE_SUPER_ADMIN_MFA !== "false";
 
 export type AuthenticatedUser = {
   id: string;
@@ -152,16 +150,6 @@ export class AccountGuard implements CanActivate {
         "ACCOUNT_TYPE_FORBIDDEN",
         "Account type is not permitted",
       );
-    if (
-      user.accountType === UserRoleName.SUPER_ADMIN &&
-      isSuperAdminMfaRequired() &&
-      !user.mfaVerified
-    )
-      throw authError(
-        403,
-        "MFA_REQUIRED",
-        "Multi-factor authentication is required",
-      );
     if (user.mustChangePassword)
       throw authError(
         403,
@@ -178,16 +166,6 @@ export function requireRole(request: AuthenticatedRequest, roles: UserRole[]) {
       403,
       "ACCOUNT_TYPE_FORBIDDEN",
       "Account type is not permitted",
-    );
-  if (
-    request.user.accountType === UserRoleName.SUPER_ADMIN &&
-    isSuperAdminMfaRequired() &&
-    !request.user.mfaVerified
-  )
-    throw authError(
-      403,
-      "MFA_REQUIRED",
-      "Multi-factor authentication is required",
     );
   if (request.user.mustChangePassword)
     throw authError(
