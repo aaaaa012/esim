@@ -33,6 +33,20 @@ type Envelope<T> = {
   meta: { correlationId: string; timestamp: string };
 };
 
+export function initialCatalogDestination(
+  countries: Country[],
+  requested?: string,
+) {
+  const normalized = requested?.trim().toUpperCase();
+  if (normalized && countries.some((country) => country.code === normalized))
+    return normalized;
+  return (
+    countries.find((country) => country.popular)?.code ??
+    countries[0]?.code ??
+    ""
+  );
+}
+
 function npr(amount: number) {
   return `NPR ${amount.toLocaleString("en-NP")}`;
 }
@@ -64,6 +78,12 @@ export default function CatalogPlans() {
       .then((countriesData: Envelope<Country[]>) => {
         if (cancelled) return;
         setCountries(countriesData.data);
+        setSelected((current) =>
+          current &&
+          countriesData.data.some((country) => country.code === current)
+            ? current
+            : initialCatalogDestination(countriesData.data, targetCountry),
+        );
         setError(null);
       })
       .catch(() => {
@@ -76,7 +96,7 @@ export default function CatalogPlans() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [targetCountry]);
 
   useEffect(() => {
     if (!selected) return;
@@ -272,7 +292,9 @@ export default function CatalogPlans() {
           </p>
         ) : null}
       </section>
-      {error ? <ErrorModal error={error} onClose={() => setError(null)} /> : null}
+      {error ? (
+        <ErrorModal error={error} onClose={() => setError(null)} />
+      ) : null}
       {coverageMessage ? (
         <div
           className={`coverage-note ${coverageMessage === "Coverage available" ? "ok" : "warn"}`}
@@ -309,7 +331,7 @@ export default function CatalogPlans() {
                   className="button"
                   href={`/esim/checkout?plan=${plan.id}${targetEsimId ? `&esim=${encodeURIComponent(targetEsimId)}&country=${encodeURIComponent(targetCountry)}` : ""}`}
                 >
-                  {(targetEsimId && plan.countryCode === targetCountry)
+                  {targetEsimId && plan.countryCode === targetCountry
                     ? "Recharge"
                     : "Choose"}
                 </Link>
