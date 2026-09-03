@@ -168,6 +168,9 @@ export default function AdminWorkspace() {
   const [planTotal, setPlanTotal] = useState(0);
   const [planPage, setPlanPage] = useState(1);
   const [planQuery, setPlanQuery] = useState("");
+  const [planStatusFilter, setPlanStatusFilter] = useState<
+    "ALL" | Plan["status"]
+  >("ACTIVE");
   const [planLoading, setPlanLoading] = useState(true);
   const planPageSize = 50;
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -256,7 +259,11 @@ export default function AdminWorkspace() {
   useEffect(() => {
     void load();
   }, []);
-  const loadPlans = async (page = planPage, query = planQuery) => {
+  const loadPlans = async (
+    page = planPage,
+    query = planQuery,
+    status = planStatusFilter,
+  ) => {
     setPlanLoading(true);
     try {
       const params = new URLSearchParams({
@@ -264,6 +271,7 @@ export default function AdminWorkspace() {
         offset: String((page - 1) * planPageSize),
       });
       if (query.trim()) params.set("q", query.trim());
+      if (status !== "ALL") params.set("status", status);
       const value = await request<{ items: Plan[]; total: number }>(
         `/admin/plans/page?${params}`,
       );
@@ -330,9 +338,12 @@ export default function AdminWorkspace() {
     }
   };
   useEffect(() => {
-    const timer = setTimeout(() => void loadPlans(planPage, planQuery), 250);
+    const timer = setTimeout(
+      () => void loadPlans(planPage, planQuery, planStatusFilter),
+      250,
+    );
     return () => clearTimeout(timer);
-  }, [planPage, planQuery]);
+  }, [planPage, planQuery, planStatusFilter]);
   useEffect(() => {
     const timer = setTimeout(() => {
       const params = new URLSearchParams({ limit: "200" });
@@ -358,8 +369,12 @@ export default function AdminWorkspace() {
         }),
       });
       setPlans((v) =>
-        v.map((item) => (item.id === updated.id ? updated : item)),
+        planStatusFilter !== "ALL" && updated.status !== planStatusFilter
+          ? v.filter((item) => item.id !== updated.id)
+          : v.map((item) => (item.id === updated.id ? updated : item)),
       );
+      if (planStatusFilter !== "ALL" && updated.status !== planStatusFilter)
+        setPlanTotal((total) => Math.max(0, total - 1));
       toast.success(`${updated.name} saved`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
@@ -420,7 +435,7 @@ export default function AdminWorkspace() {
       if (result.errors?.length)
         toast.error(result.errors.slice(0, 5).join(" · "));
       setPlanCsvFile(null);
-      await loadPlans(1, "");
+      await loadPlans(1, "", planStatusFilter);
       setPlanPage(1);
       setPlanQuery("");
     } catch (e) {
@@ -525,24 +540,37 @@ export default function AdminWorkspace() {
   const resendInvitation = async (invitation: Invitation) => {
     setBusy(`invite:${invitation.id}`);
     try {
-      await request(`/admin/staff-invitations/${invitation.id}/resend`, { method: "POST" });
+      await request(`/admin/staff-invitations/${invitation.id}/resend`, {
+        method: "POST",
+      });
       await load();
       toast.success(`A new activation link was sent to ${invitation.email}.`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to resend invitation");
+      toast.error(
+        error instanceof Error ? error.message : "Unable to resend invitation",
+      );
     } finally {
       setBusy("");
     }
   };
   const revokeInvitation = async (invitation: Invitation) => {
-    if (!window.confirm(`Revoke the pending invitation for ${invitation.email}? The activation link will stop working immediately.`)) return;
+    if (
+      !window.confirm(
+        `Revoke the pending invitation for ${invitation.email}? The activation link will stop working immediately.`,
+      )
+    )
+      return;
     setBusy(`invite:${invitation.id}`);
     try {
-      await request(`/admin/staff-invitations/${invitation.id}`, { method: "DELETE" });
+      await request(`/admin/staff-invitations/${invitation.id}`, {
+        method: "DELETE",
+      });
       await load();
       toast.success(`Invitation for ${invitation.email} was revoked.`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to revoke invitation");
+      toast.error(
+        error instanceof Error ? error.message : "Unable to revoke invitation",
+      );
     } finally {
       setBusy("");
     }
@@ -982,21 +1010,49 @@ export default function AdminWorkspace() {
               }
               noPadding
             >
-              <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <SearchInput
-                  value={planQuery}
-                  onChange={(value) => {
-                    setPlanQuery(value);
-                    setPlanPage(1);
-                  }}
-                  placeholder="Search country, plan, or provider ID"
-                  className="w-full sm:max-w-sm"
-                />
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  {planLoading
-                    ? "Loading plans..."
-                    : `${planTotal.toLocaleString()} plans`}
-                </p>
+              <div className="flex flex-col gap-3 border-b px-4 py-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <SearchInput
+                    value={planQuery}
+                    onChange={(value) => {
+                      setPlanQuery(value);
+                      setPlanPage(1);
+                    }}
+                    placeholder="Search country, plan, or provider ID"
+                    className="w-full sm:max-w-sm"
+                  />
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    {planLoading
+                      ? "Loading plans..."
+                      : `${planTotal.toLocaleString()} ${planStatusFilter === "ALL" ? "total" : planStatusFilter.toLowerCase()} plan${planTotal === 1 ? "" : "s"}`}
+                  </p>
+                </div>
+                <div
+                  className="flex flex-wrap gap-2"
+                  aria-label="Filter plans by status"
+                >
+                  {(
+                    ["ACTIVE", "ALL", "DRAFT", "DISABLED", "ARCHIVED"] as const
+                  ).map((status) => (
+                    <Button
+                      key={status}
+                      type="button"
+                      size="sm"
+                      variant={
+                        planStatusFilter === status ? "default" : "outline"
+                      }
+                      aria-pressed={planStatusFilter === status}
+                      onClick={() => {
+                        setPlanStatusFilter(status);
+                        setPlanPage(1);
+                      }}
+                    >
+                      {status === "ALL"
+                        ? "All"
+                        : status.charAt(0) + status.slice(1).toLowerCase()}
+                    </Button>
+                  ))}
+                </div>
               </div>
               <Table>
                 <TableHeader>
@@ -1018,6 +1074,42 @@ export default function AdminWorkspace() {
                           <span className="text-sm text-muted-foreground">
                             Loading plan prices...
                           </span>
+                        </EmptyState>
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                  {!planLoading && plans.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7}>
+                        <EmptyState>
+                          <div className="py-4 text-center">
+                            <p className="text-sm font-medium">
+                              {planQuery
+                                ? "No plans match this search"
+                                : planStatusFilter === "ACTIVE"
+                                  ? "No active plans are available to customers"
+                                  : `No ${planStatusFilter.toLowerCase()} plans found`}
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {planQuery
+                                ? "Clear the search or choose another status."
+                                : "Choose another status or import catalogue updates."}
+                            </p>
+                            {planQuery ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="mt-3"
+                                onClick={() => {
+                                  setPlanQuery("");
+                                  setPlanPage(1);
+                                }}
+                              >
+                                Clear search
+                              </Button>
+                            ) : null}
+                          </div>
                         </EmptyState>
                       </TableCell>
                     </TableRow>
@@ -1467,31 +1559,32 @@ export default function AdminWorkspace() {
                   </Button>
                 </div>
               </div>
-              {false && invitations.filter((item) => item.status === "PENDING").length >
-                0 && (
-                <div className="space-y-2 p-6">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Pending invitations
-                  </p>
-                  {invitations
-                    .filter((item) => item.status === "PENDING")
-                    .map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between rounded-lg border px-4 py-3"
-                      >
-                        <div>
-                          <p className="font-medium">{item.email}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {item.accountType.replace("_", " ")} · expires{" "}
-                            {new Date(item.expiresAt).toLocaleDateString()}
-                          </p>
+              {false &&
+                invitations.filter((item) => item.status === "PENDING").length >
+                  0 && (
+                  <div className="space-y-2 p-6">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Pending invitations
+                    </p>
+                    {invitations
+                      .filter((item) => item.status === "PENDING")
+                      .map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between rounded-lg border px-4 py-3"
+                        >
+                          <div>
+                            <p className="font-medium">{item.email}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {item.accountType.replace("_", " ")} · expires{" "}
+                              {new Date(item.expiresAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <StatusBadge label="PENDING" tone="warning" />
                         </div>
-                        <StatusBadge label="PENDING" tone="warning" />
-                      </div>
-                    ))}
-                </div>
-              )}
+                      ))}
+                  </div>
+                )}
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1594,7 +1687,11 @@ export default function AdminWorkspace() {
               title="Staff invitations"
               description="Review invitation delivery, resend an expired link, or revoke a pending invitation immediately."
               actions={
-                <Button variant="outline" size="sm" onClick={() => setTab("Users")}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTab("Users")}
+                >
                   Invite staff
                 </Button>
               }
@@ -1619,12 +1716,54 @@ export default function AdminWorkspace() {
                       const working = busy === `invite:${invitation.id}`;
                       return (
                         <TableRow key={invitation.id}>
-                          <TableCell className="font-medium">{invitation.email}</TableCell>
-                          <TableCell>{invitation.accountType.replace("_", " ")}</TableCell>
-                          <TableCell><StatusBadge label={invitation.status} tone={pending ? "warning" : invitation.status === "ACCEPTED" ? "success" : "default"} /></TableCell>
-                          <TableCell className="text-muted-foreground">{new Date(invitation.expiresAt).toLocaleString()}</TableCell>
+                          <TableCell className="font-medium">
+                            {invitation.email}
+                          </TableCell>
+                          <TableCell>
+                            {invitation.accountType.replace("_", " ")}
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge
+                              label={invitation.status}
+                              tone={
+                                pending
+                                  ? "warning"
+                                  : invitation.status === "ACCEPTED"
+                                    ? "success"
+                                    : "default"
+                              }
+                            />
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {new Date(invitation.expiresAt).toLocaleString()}
+                          </TableCell>
                           <TableCell className="text-right">
-                            {pending ? <div className="flex justify-end gap-2"><Button size="sm" variant="outline" disabled={working} onClick={() => void resendInvitation(invitation)}>{working ? <Spinner /> : "Resend"}</Button><Button size="sm" variant="destructive" disabled={working} onClick={() => void revokeInvitation(invitation)}>{working ? <Spinner /> : "Revoke"}</Button></div> : "—"}
+                            {pending ? (
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={working}
+                                  onClick={() =>
+                                    void resendInvitation(invitation)
+                                  }
+                                >
+                                  {working ? <Spinner /> : "Resend"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  disabled={working}
+                                  onClick={() =>
+                                    void revokeInvitation(invitation)
+                                  }
+                                >
+                                  {working ? <Spinner /> : "Revoke"}
+                                </Button>
+                              </div>
+                            ) : (
+                              "—"
+                            )}
                           </TableCell>
                         </TableRow>
                       );

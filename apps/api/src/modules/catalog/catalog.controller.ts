@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Injectable,
@@ -14,11 +15,29 @@ export type CatalogPlan = {
   countryName: string;
   name: string;
   dataAllowance: string;
+  allowanceMb?: number | null;
   validityDays: number;
   sellingPriceNpr: number;
   coverage: string[];
   popular: boolean;
 };
+
+export function parseDataAllowanceMb(value: string): number | null {
+  const normalized = value.trim().replace(/,/g, "");
+  const match = normalized.match(/(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)\b/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  const multiplier =
+    match[2]?.toUpperCase() === "TB"
+      ? 1024 * 1024
+      : match[2]?.toUpperCase() === "GB"
+        ? 1024
+        : match[2]?.toUpperCase() === "KB"
+          ? 1 / 1024
+          : 1;
+  return Math.round(amount * multiplier);
+}
 const isoCodeFilter = (country?: string) => {
   const filter: Record<string, string | string[]> = {};
   if (RESTRICTED_PLAN_COUNTRY_CODES.length)
@@ -45,21 +64,27 @@ export class CatalogService {
       countryName: plan.country.name,
       name: plan.name,
       dataAllowance: plan.dataAllowance,
+      allowanceMb: parseDataAllowanceMb(plan.dataAllowance),
       validityDays: plan.validityDays,
       sellingPriceNpr: Number(plan.sellingPrice),
       coverage: Array.isArray(plan.coverage) ? (plan.coverage as string[]) : [],
       popular: plan.popular,
     };
   }
-  async plans(country?: string) {
+  async plans(
+    country?: string,
+    options: { popularOnly?: boolean; limit?: number } = {},
+  ) {
     if (!this.prisma.enabled) return [];
     const rows = await this.prisma.plan.findMany({
       where: {
         status: "ACTIVE",
+        ...(options.popularOnly ? { popular: true } : {}),
         country: { active: true, ...isoCodeFilter(country) },
       },
       include: { country: true },
       orderBy: [{ popular: "desc" }, { sellingPrice: "asc" }],
+      ...(options.limit ? { take: options.limit } : {}),
     });
     return rows.map((plan) => this.summary(plan));
   }
@@ -107,8 +132,25 @@ export class CatalogController {
   @Get("countries") countries() {
     return this.catalog.countries();
   }
-  @Get("plans") plans(@Query("country") country?: string) {
-    return this.catalog.plans(country);
+  @Get("plans") plans(
+    @Query("country") country?: string,
+    @Query("popular") popular?: string,
+    @Query("limit") requestedLimit?: string,
+  ) {
+    if (popular && popular !== "true" && popular !== "false")
+      throw new BadRequestException("popular must be true or false");
+    const parsedLimit = requestedLimit ? Number(requestedLimit) : undefined;
+    if (
+      parsedLimit !== undefined &&
+      (!Number.isInteger(parsedLimit) || parsedLimit < 1)
+    )
+      throw new BadRequestException("limit must be a positive integer");
+    return this.catalog.plans(country, {
+      popularOnly: popular === "true",
+      ...(parsedLimit !== undefined
+        ? { limit: Math.min(parsedLimit, 24) }
+        : {}),
+    });
   }
   @Get("plans/:id") async plan(@Param("id") id: string) {
     const plan = await this.catalog.findActive(id);
