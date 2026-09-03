@@ -42,6 +42,7 @@ type Session = {
     id: string;
     orderNumber: string;
     orderType?: string;
+    topUpMsisdnMasked?: string;
     status: string;
     amountNpr: number;
     currency: string;
@@ -1264,8 +1265,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       ))}
                     {isTopUp && (
                       <p className="form-note">
-                        This is a data top-up for your existing eSIM. No
-                        traveller details or new documents are required.
+                        This is a data top-up for your existing eSIM
+                        {session!.order.topUpMsisdnMasked
+                          ? ` with MSISDN ${session!.order.topUpMsisdnMasked}`
+                          : ""}
+                        . No traveller details or new documents are required.
                       </p>
                     )}
                     <label className="confirm-box">

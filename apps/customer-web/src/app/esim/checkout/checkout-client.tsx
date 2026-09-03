@@ -294,7 +294,7 @@ export default function CheckoutClient({
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof Traveler, string>>
   >({});
-  // A top-up lookup supplies a short-lived token, mobile number, and the
+  // A top-up lookup supplies a short-lived token, eSIM MSISDN, and the
   // eSIM's country. Treat that as a top-up from the first render so the
   // normal purchase form never flashes while the plan preview is loading.
   // The API independently verifies that the selected plan is valid for this

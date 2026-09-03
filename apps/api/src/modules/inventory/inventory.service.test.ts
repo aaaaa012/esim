@@ -169,6 +169,20 @@ describe("InventoryService.applyLifecycle", () => {
 });
 
 describe("InventoryService.importBatchCsv", () => {
+  it("rejects a row without an MSISDN", async () => {
+    const prisma = prismaStub();
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    const content = ["iccid,msisdn", "899770100000000001,"].join("\n");
+    const result = await inventory.importBatchCsv(content);
+    expect(result).toMatchObject({ imported: 0, skipped: 1 });
+    expect(result.errors?.[0]).toContain("MSISDN is required");
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid MSISDN and does not import that row", async () => {
     const prisma = prismaStub();
     const inventory = new InventoryService(

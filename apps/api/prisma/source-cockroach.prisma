@@ -584,7 +584,7 @@ model EsimInventory {
   batch                   InventoryBatch                @relation(fields: [batchId], references: [id])
   iccid                   String                        @unique
   eid                     String                        @unique
-  msisdn                  String?                       @unique
+  msisdn                  String                        @unique
   status                  InventoryStatus               @default(IMPORTED)
   assignedOrderId         String?                       @unique @db.Uuid
   assignedOrder           Order?                        @relation(fields: [assignedOrderId], references: [id])

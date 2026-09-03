@@ -62,7 +62,7 @@ export default function TopupLookup() {
 
   const lookup = async () => {
     if (!mobile.trim()) {
-      setError("Enter the mobile number you used for your last order");
+      setError("Enter the MSISDN assigned to your Visa Compass eSIM");
       return;
     }
     setOpen(true);
@@ -205,8 +205,8 @@ export default function TopupLookup() {
               <p className="recharge-kicker">For returning travellers</p>
               <h2 id="recharge-title">Add data to your existing eSIM</h2>
               <p className="recharge-description">
-                Keep the eSIM already installed on your phone. Enter the mobile
-                number from your previous Visa Compass order to find compatible
+                Keep the eSIM already installed on your phone. Enter the MSISDN
+                from your eSIM delivery email to find compatible
                 recharge plans—no new QR code required.
               </p>
               <form
@@ -216,7 +216,7 @@ export default function TopupLookup() {
                   void lookup();
                 }}
               >
-                <label htmlFor="recharge-mobile">Mobile number</label>
+                <label htmlFor="recharge-mobile">eSIM MSISDN</label>
                 <div className="recharge-control">
                   <span className="recharge-input-icon" aria-hidden="true">
                     <Smartphone size={18} />
@@ -225,7 +225,7 @@ export default function TopupLookup() {
                     id="recharge-mobile"
                     value={mobile}
                     onChange={(event) => setMobile(event.target.value)}
-                    placeholder="e.g. +977 9841 234 567"
+                    placeholder="e.g. +33 6 12 34 56 78"
                     inputMode="tel"
                     autoComplete="tel"
                     aria-describedby="recharge-help"
@@ -245,7 +245,7 @@ export default function TopupLookup() {
                 </button>
               </form>
               <p className="recharge-help" id="recharge-help">
-                Use the same number you entered when purchasing your eSIM.
+                Use the eSIM mobile number shown in your QR-delivery email.
               </p>
             </div>
             <aside className="recharge-note" aria-label="How recharge works">
@@ -287,7 +287,7 @@ export default function TopupLookup() {
               </span>
               <div>
                 <h2 id="topup-dialog-title">Top up your eSIM</h2>
-                <p>Enter the mobile number linked to your Visa Compass eSIM.</p>
+                <p>Enter the MSISDN assigned to your Visa Compass eSIM.</p>
               </div>
             </header>
             <div className="topup-row">
@@ -296,7 +296,7 @@ export default function TopupLookup() {
                 value={mobile}
                 onChange={(event) => setMobile(event.target.value)}
                 onKeyDown={(event) => event.key === "Enter" && void lookup()}
-                placeholder="e.g. +977 9841 234 567"
+                placeholder="e.g. +33 6 12 34 56 78"
                 inputMode="tel"
               />
               <button
@@ -427,7 +427,7 @@ export default function TopupLookup() {
                   </>
                 ) : (
                   <p className="topup-note warn">
-                    No prior Visa Compass eSIM was found for this mobile number.
+                    No prior Visa Compass eSIM was found for this MSISDN.
                     Please choose a destination to buy a new eSIM.
                   </p>
                 )}

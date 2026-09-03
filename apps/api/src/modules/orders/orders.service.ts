@@ -711,14 +711,13 @@ export class OrdersService implements OnModuleInit {
     const variants = [...msisdnVariants(mobile)];
     return {
       status: "COMPLETED" as const,
-      OR: [
-        { traveler: { is: { mobile: { in: variants } } } },
-        {
-          customerEsim: {
-            is: { inventory: { is: { msisdn: { in: variants } } } },
+      customerEsim: {
+        is: {
+          inventory: {
+            is: { msisdn: { in: variants } },
           },
         },
-      ],
+      },
     };
   }
   private matchesTopUpLookup(
@@ -1333,13 +1332,13 @@ export class OrdersService implements OnModuleInit {
   async topUpLookup(mobile: string, options?: { includeIdentity?: boolean }) {
     const target = normalizeMsisdn(mobile);
     if (!target)
-      throw new BadRequestException("A valid mobile number is required");
+      throw new BadRequestException("A valid eSIM MSISDN is required");
     const includeIdentity = Boolean(options?.includeIdentity);
-    const fromOrders = [...this.orders.values()]
-      .filter(
-        (order) => order.status === OrderStatus.COMPLETED && order.traveler,
-      )
-      .find((order) => normalizeMsisdn(order.traveler!.mobile) === target);
+    const fromOrders = [...this.orders.values()].find(
+      (order) =>
+        order.status === OrderStatus.COMPLETED &&
+        normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
+    );
     if (fromOrders)
       return {
         found: true,
@@ -1358,10 +1357,7 @@ export class OrdersService implements OnModuleInit {
       });
       if (
         dbOrder?.traveler &&
-        this.matchesTopUpLookup(target, [
-          dbOrder.traveler.mobile,
-          dbOrder.customerEsim?.inventory?.msisdn,
-        ])
+        this.matchesTopUpLookup(target, [dbOrder.customerEsim?.inventory?.msisdn])
       ) {
         return {
           found: true,
@@ -1405,7 +1401,10 @@ export class OrdersService implements OnModuleInit {
           }
         : {}),
     };
-    return { subscriber, topUpAvailable: Boolean(order.qrPayload) };
+    return {
+      subscriber,
+      topUpAvailable: Boolean(order.qrPayload && order.assignment?.msisdn),
+    };
   }
   private dbTopUpSubscriber(
     dbOrder: {
@@ -1509,11 +1508,11 @@ export class OrdersService implements OnModuleInit {
     };
     return {
       subscriber,
-      topUpAvailable: Boolean(dbOrder.customerEsim?.inventory),
+      topUpAvailable: Boolean(dbOrder.customerEsim?.inventory?.msisdn),
     };
   }
   /**
-   * Resolves the most recent completed order for a subscriber number, with the
+   * Resolves the most recent completed order for an eSIM MSISDN, with the
    * plaintext fields needed to provision a top-up (identity, plan country and
    * the physical eSIM to reuse). Returns null when no completed order matches.
    */
@@ -1525,7 +1524,7 @@ export class OrdersService implements OnModuleInit {
         (order) =>
           order.status === OrderStatus.COMPLETED &&
           order.traveler &&
-          normalizeMsisdn(order.traveler.mobile) === target,
+          normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
       );
       if (!prior?.traveler) return null;
       return {
@@ -1553,10 +1552,7 @@ export class OrdersService implements OnModuleInit {
     });
     if (
       !prior?.traveler ||
-      !this.matchesTopUpLookup(target, [
-        prior.traveler.mobile,
-        prior.customerEsim?.inventory?.msisdn,
-      ])
+      !this.matchesTopUpLookup(target, [prior.customerEsim?.inventory?.msisdn])
     )
       return null;
     return {
@@ -1588,7 +1584,7 @@ export class OrdersService implements OnModuleInit {
         (order) =>
           order.status === OrderStatus.COMPLETED &&
           order.traveler &&
-          normalizeMsisdn(order.traveler.mobile) === target,
+          normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
       );
       if (!prior?.traveler) return null;
       return {
@@ -1610,8 +1606,8 @@ export class OrdersService implements OnModuleInit {
 
   /**
    * Validates a recharge against the provider before money is collected.
-   * The customer's entered number can match either their traveller record or
-   * the eSIM MSISDN, but Transatel must always receive the stored MSISDN.
+   * The supplied identifier must match the eSIM MSISDN. Transatel receives the
+   * same stored MSISDN after the local ownership and lifecycle checks pass.
    */
   async checkTopUpEligibility(mobile: string, planId: string) {
     const target = await this.resolveSubscriber(mobile);
@@ -1621,7 +1617,7 @@ export class OrdersService implements OnModuleInit {
         allowed: false,
         errorKey: "ESIM_NOT_AVAILABLE",
         errorMessage:
-          "We could not find an active eSIM for this mobile number.",
+          "We could not find an active eSIM for this MSISDN.",
       };
     const provider = await this.connectivity.checkEligibility(planId, msisdn);
     return provider;

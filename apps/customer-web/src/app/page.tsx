@@ -272,7 +272,7 @@ export default function Home() {
                 <h3>One eSIM, many plans</h3>
                 <p>
                   Store several country plans on a single eSIM and top up an
-                  existing one using just your mobile number.
+                  existing one using its assigned MSISDN.
                 </p>
               </div>
               <div className="why-card">

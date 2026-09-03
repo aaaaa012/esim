@@ -553,6 +553,9 @@ export class InventoryService implements OnModuleInit {
       eid: eidsInput?.[index]?.trim() ?? null,
       msisdn: msisdnsInput?.[index]?.trim() ?? null,
     }));
+    const missingMsisdn = rows.filter((row) => !row.msisdn);
+    if (missingMsisdn.length)
+      throw new BadRequestException("MSISDN is required for every eSIM profile");
     const invalid = rows.filter((row) => !/^\d{15,25}$/.test(row.iccid));
     if (invalid.length)
       throw new BadRequestException(
@@ -588,7 +591,7 @@ export class InventoryService implements OnModuleInit {
           eid:
             row.eid ??
             `SYNTH-${createHash("sha256").update(row.iccid).digest("hex").slice(0, 28).toUpperCase()}`,
-          ...(row.msisdn ? { msisdn: row.msisdn } : {}),
+          msisdn: row.msisdn!,
           status: InventoryStatus.IMPORTED,
         })),
       });
@@ -611,7 +614,7 @@ export class InventoryService implements OnModuleInit {
       throw new BadRequestException("Database persistence is required");
     const { records, errors } = await tabularToRecords(
       content,
-      ["iccid"],
+      ["iccid", "msisdn"],
       fileName ? { fileName, maxRows: 5000 } : { maxRows: 5000 },
     );
     if (errors.length) throw new BadRequestException(errors.join("; "));
@@ -637,8 +640,10 @@ export class InventoryService implements OnModuleInit {
         rowErrors.push(`Line ${line}: invalid EID '${eid}'`);
         continue;
       }
-      if (msisdn && !/^\+?\d{6,15}$/.test(msisdn)) {
-        rowErrors.push(`Line ${line}: invalid MSISDN '${msisdn}'`);
+      if (!msisdn || !/^\+?\d{6,15}$/.test(msisdn)) {
+        rowErrors.push(
+          `Line ${line}: ${msisdn ? `invalid MSISDN '${msisdn}'` : "MSISDN is required"}`,
+        );
         continue;
       }
       candidates.push({ line, iccid, eid, msisdn });
@@ -710,7 +715,7 @@ export class InventoryService implements OnModuleInit {
           eid:
             row.eid ??
             `SYNTH-${createHash("sha256").update(row.iccid).digest("hex").slice(0, 28).toUpperCase()}`,
-          ...(row.msisdn ? { msisdn: row.msisdn } : {}),
+          msisdn: row.msisdn!,
           status: InventoryStatus.IMPORTED,
         })),
       });

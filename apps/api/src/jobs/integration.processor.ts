@@ -148,10 +148,7 @@ export class IntegrationProcessor implements OnModuleInit {
             ? await this.inventory.inventoryForOrder(job.data.orderId)
             : null;
         msisdn =
-          inventory?.msisdn ??
-          order.traveler?.mobile ??
-          order.topUpMobile ??
-          undefined;
+          inventory?.msisdn ?? order.assignment?.msisdn ?? undefined;
       }
       const message = renderNotification(job.data.template, {
         orderNumber: job.data.orderNumber,

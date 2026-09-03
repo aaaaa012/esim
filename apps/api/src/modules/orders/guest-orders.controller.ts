@@ -303,7 +303,7 @@ export class GuestOrdersController {
       const mobile = this.access.mobileFromLookupToken(body.lookupToken ?? "");
       if (body.mobile && body.mobile !== mobile)
         throw new ForbiddenException(
-          "Top-up lookup does not match this mobile number",
+          "Top-up lookup does not match this eSIM MSISDN",
         );
       const result = await this.orders.checkTopUpEligibility(mobile, body.planId);
       await this.recordTopUpEvent("customer-topup-eligibility", 200, startedAt, {
