@@ -63,9 +63,9 @@ export function mapClerkActivationFailure(
 
   if (providerCodes.includes("form_data_missing")) {
     return {
-      code: "CLERK_REQUIRED_DATA_MISSING",
+      code: "STAFF_PROFILE_INCOMPLETE",
       message:
-        "Clerk requires additional profile information. Verify the required user fields in the configured Clerk instance.",
+        "The required account details could not be accepted. Contact support if the problem continues.",
       providerCodes,
       status,
     };
@@ -76,25 +76,25 @@ export function mapClerkActivationFailure(
     )
   ) {
     return {
-      code: "CLERK_IDENTITY_EXISTS",
+      code: "STAFF_IDENTITY_EXISTS",
       message:
-        "A Clerk account already exists for this email in the configured Clerk instance. Delete that Clerk user or use a different email, then try again.",
+        "An account already exists for this email. Return to sign in or contact support.",
       providerCodes,
       status,
     };
   }
   if (/password|pwned|breach/.test(joinedCodes)) {
     return {
-      code: "CLERK_PASSWORD_REJECTED",
+      code: "STAFF_PASSWORD_REJECTED",
       message:
-        "Clerk rejected this password. Choose a different strong password that meets the configured password policy.",
+        "This password could not be accepted. Choose a different strong password.",
       providerCodes,
       status,
     };
   }
   if (status === HttpStatus.TOO_MANY_REQUESTS || /rate.*limit/.test(joinedCodes)) {
     return {
-      code: "CLERK_RATE_LIMITED",
+      code: "STAFF_ACTIVATION_RATE_LIMITED",
       message: "Too many activation attempts. Wait a few minutes and try again.",
       providerCodes,
       status,
@@ -102,17 +102,17 @@ export function mapClerkActivationFailure(
   }
   if (status === HttpStatus.UNAUTHORIZED || status === HttpStatus.FORBIDDEN) {
     return {
-      code: "CLERK_CONFIGURATION_ERROR",
+      code: "STAFF_IDENTITY_UNAVAILABLE",
       message:
-        "The staff identity service rejected the server credentials. Contact support to verify the Clerk environment configuration.",
+        "Account activation is temporarily unavailable. Contact support if the problem continues.",
       providerCodes,
       status,
     };
   }
   return {
-    code: "CLERK_ACTIVATION_FAILED",
+    code: "STAFF_ACTIVATION_FAILED",
     message:
-      "Unable to activate this staff account. Contact support with the request correlation ID.",
+      "Unable to activate this staff account. Contact support if the problem continues.",
     providerCodes,
     status,
   };

@@ -45,7 +45,7 @@ describe("mapClerkActivationFailure", () => {
         errors: [{ code: "form_data_missing" }],
       }),
     ).toMatchObject({
-      code: "CLERK_REQUIRED_DATA_MISSING",
+      code: "STAFF_PROFILE_INCOMPLETE",
       status: 422,
     });
   });
@@ -56,7 +56,7 @@ describe("mapClerkActivationFailure", () => {
         status: 422,
         errors: [{ code: "form_identifier_exists" }],
       }),
-    ).toMatchObject({ code: "CLERK_IDENTITY_EXISTS", status: 422 });
+    ).toMatchObject({ code: "STAFF_IDENTITY_EXISTS", status: 422 });
   });
 
   it("identifies a password-policy rejection", () => {
@@ -64,12 +64,12 @@ describe("mapClerkActivationFailure", () => {
       mapClerkActivationFailure({
         errors: [{ code: "form_password_pwned" }],
       }).code,
-    ).toBe("CLERK_PASSWORD_REJECTED");
+    ).toBe("STAFF_PASSWORD_REJECTED");
   });
 
   it("identifies rate limiting", () => {
     expect(mapClerkActivationFailure({ status: 429 }).code).toBe(
-      "CLERK_RATE_LIMITED",
+      "STAFF_ACTIVATION_RATE_LIMITED",
     );
   });
 
@@ -78,7 +78,7 @@ describe("mapClerkActivationFailure", () => {
       status: 500,
       errors: [{ code: "unexpected", longMessage: "provider secret" }],
     });
-    expect(result.code).toBe("CLERK_ACTIVATION_FAILED");
+    expect(result.code).toBe("STAFF_ACTIVATION_FAILED");
     expect(result.message).not.toContain("provider secret");
   });
 });

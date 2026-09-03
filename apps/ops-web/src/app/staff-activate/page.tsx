@@ -70,10 +70,7 @@ export default function StaffActivatePage() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
         const message = body?.error?.message ?? "Unable to activate account";
-        const code = body?.error?.code;
-        const correlationId = body?.meta?.correlationId;
-        const reference = [code, correlationId].filter(Boolean).join(" / ");
-        throw new Error(reference ? `${message} Reference: ${reference}` : message);
+        throw new Error(message);
       }
       setActivated(true);
       setBusy(false);
