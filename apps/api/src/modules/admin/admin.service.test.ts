@@ -38,6 +38,18 @@ const headers = [
 ];
 
 describe("mapClerkActivationFailure", () => {
+  it("identifies missing Clerk profile data", () => {
+    expect(
+      mapClerkActivationFailure({
+        status: 422,
+        errors: [{ code: "form_data_missing" }],
+      }),
+    ).toMatchObject({
+      code: "CLERK_REQUIRED_DATA_MISSING",
+      status: 422,
+    });
+  });
+
   it("identifies an existing Clerk identity", () => {
     expect(
       mapClerkActivationFailure({

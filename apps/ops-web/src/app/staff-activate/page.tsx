@@ -12,6 +12,8 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 export default function StaffActivatePage() {
   const params = useSearchParams();
   const { signOut } = useClerk();
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
@@ -22,13 +24,20 @@ export default function StaffActivatePage() {
     event.preventDefault();
     setError("");
     if (!token) return setError("This activation link is invalid or incomplete.");
+    if (!firstName.trim()) return setError("Enter your first name.");
+    if (!lastName.trim()) return setError("Enter your last name.");
     if (password !== confirmPassword) return setError("Passwords do not match.");
     setBusy(true);
     try {
       const response = await fetch(`${API}/staff-activation/complete`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token, password }),
+        body: JSON.stringify({
+          token,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          password,
+        }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -50,9 +59,19 @@ export default function StaffActivatePage() {
       <form onSubmit={activate} className="w-full max-w-md rounded-xl border bg-card p-8 shadow-card">
         <h1 className="text-xl font-semibold tracking-tight">Activate staff account</h1>
         <p className="mt-3 text-sm text-muted-foreground">
-          Choose a password for the Visa Compass Operations portal. This activation link can be used once.
+          Enter your name and choose a password for the Visa Compass Operations portal. This activation link can be used once.
         </p>
-        <label className="mt-6 block text-sm font-medium" htmlFor="password">Password</label>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="block text-sm font-medium" htmlFor="first-name">First name</label>
+            <input id="first-name" name="firstName" className="mt-2 w-full rounded-md border bg-background px-3 py-2" type="text" autoComplete="given-name" maxLength={100} required value={firstName} onChange={(event) => setFirstName(event.target.value)} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium" htmlFor="last-name">Last name</label>
+            <input id="last-name" name="lastName" className="mt-2 w-full rounded-md border bg-background px-3 py-2" type="text" autoComplete="family-name" maxLength={100} required value={lastName} onChange={(event) => setLastName(event.target.value)} />
+          </div>
+        </div>
+        <label className="mt-4 block text-sm font-medium" htmlFor="password">Password</label>
         <input id="password" className="mt-2 w-full rounded-md border bg-background px-3 py-2" type="password" autoComplete="new-password" minLength={12} required value={password} onChange={(event) => setPassword(event.target.value)} />
         <label className="mt-4 block text-sm font-medium" htmlFor="confirm-password">Confirm password</label>
         <input id="confirm-password" className="mt-2 w-full rounded-md border bg-background px-3 py-2" type="password" autoComplete="new-password" minLength={12} required value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />

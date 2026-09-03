@@ -61,6 +61,15 @@ export function mapClerkActivationFailure(
     : [];
   const joinedCodes = providerCodes.join(" ");
 
+  if (providerCodes.includes("form_data_missing")) {
+    return {
+      code: "CLERK_REQUIRED_DATA_MISSING",
+      message:
+        "Clerk requires additional profile information. Verify the required user fields in the configured Clerk instance.",
+      providerCodes,
+      status,
+    };
+  }
   if (
     /identifier.*(exists|taken)|email.*(exists|taken)|already.*(exists|registered)/.test(
       joinedCodes,
@@ -1103,13 +1112,24 @@ export class AdminService {
     await this.audit(actor?.id, "StaffInvitation", id, "RESENT", null);
     return { ...invitation, delivery: "SENT" as const };
   }
-  async activateInvitation(tokenInput: string, password: string) {
+  async activateInvitation(
+    tokenInput: string,
+    firstNameInput: string,
+    lastNameInput: string,
+    password: string,
+  ) {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
     if (typeof tokenInput !== "string" || tokenInput.length < 32)
       throw new BadRequestException("This activation link is invalid or expired");
     if (typeof password !== "string" || password.length < 12)
       throw new BadRequestException("Choose a password of at least 12 characters");
+    const firstName = firstNameInput.trim();
+    const lastName = lastNameInput.trim();
+    if (!firstName || firstName.length > 100)
+      throw new BadRequestException("Enter a valid first name");
+    if (!lastName || lastName.length > 100)
+      throw new BadRequestException("Enter a valid last name");
     if (!process.env.CLERK_SECRET_KEY)
       throw new BadRequestException("Staff identity service is not configured");
     const invitation = await this.prisma.staffInvitation.findFirst({
@@ -1128,6 +1148,8 @@ export class AdminService {
       const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
       const clerkUser = await clerk.users.createUser({
         emailAddress: [invitation.email],
+        firstName,
+        lastName,
         password,
         publicMetadata: { accountType: invitation.accountType },
       });
