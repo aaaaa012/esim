@@ -25,6 +25,7 @@ export default function StaffActivatePage() {
   const [busy, setBusy] = useState(false);
   const [activated, setActivated] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [closeBlocked, setCloseBlocked] = useState(false);
   const token = params.get("token") ?? "";
 
   const clearFieldErrors = (...fields: Array<keyof FieldErrors>) => {
@@ -84,11 +85,22 @@ export default function StaffActivatePage() {
 
   const continueToSignIn = async () => {
     setLeaving(true);
-    try {
-      await signOut({ redirectUrl: "/sign-in?activated=1" });
-    } catch {
-      window.location.assign("/sign-in?activated=1");
-    }
+    const signInUrl = new URL("/sign-in?activated=1", window.location.origin);
+    await Promise.race([
+      Promise.resolve()
+        .then(() => signOut({ redirectUrl: signInUrl.toString() }))
+        .catch(() => undefined),
+      new Promise<void>((resolve) => window.setTimeout(resolve, 2_000)),
+    ]);
+    window.location.replace(signInUrl.toString());
+  };
+
+  const closeWindow = () => {
+    setCloseBlocked(false);
+    window.close();
+    window.setTimeout(() => {
+      if (!window.closed) setCloseBlocked(true);
+    }, 300);
   };
 
   if (activated) {
@@ -112,10 +124,15 @@ export default function StaffActivatePage() {
               {leaving ? <Spinner className="text-primary-foreground" /> : null}
               {leaving ? "Opening sign in..." : "Continue to sign in"}
             </Button>
-            <Button type="button" variant="outline" onClick={() => window.close()}>
+            <Button type="button" variant="outline" onClick={closeWindow}>
               Close window
             </Button>
           </div>
+          {closeBlocked ? (
+            <p role="status" className="mt-4 text-xs leading-5 text-muted-foreground">
+              Your browser prevented this page from closing automatically. You can safely close this tab manually.
+            </p>
+          ) : null}
         </section>
       </main>
     );
