@@ -220,10 +220,10 @@ export default function OrderReview({ id }: { id: string }) {
   const checkProvider = async () => {
     if (
       !(await confirm({
-        title: "Check provider status?",
+        title: "Refresh status from Transatel?",
         description:
-          "This reads the current Transatel state and will not create another activation.",
-        confirmLabel: "Check status",
+          "This only reads the latest eSIM and subscription status. It does not activate, recharge, suspend, or charge anything.",
+        confirmLabel: "Refresh network status",
       }))
     )
       return;
@@ -856,25 +856,27 @@ export default function OrderReview({ id }: { id: string }) {
                   variant="outline"
                   disabled={busy === "usage-refresh"}
                   onClick={() => void refreshUsage()}
+                  title="Fetch the latest remaining data balance for this eSIM and its packages"
                 >
                   {busy === "usage-refresh" ? (
                     <Spinner />
                   ) : (
                     <RefreshCcw className="size-4" />
                   )}
-                  Refresh usage
+                  Refresh data balance
                 </Button>
                 <Button
                   variant="outline"
                   disabled={busy === "provider-status-check"}
                   onClick={() => void checkProvider()}
+                  title="Read the latest eSIM and subscription status from Transatel without changing service"
                 >
                   {busy === "provider-status-check" ? (
                     <Spinner />
                   ) : (
                     <RefreshCcw className="size-4" />
                   )}
-                  Check provider status
+                  Refresh network status
                 </Button>
               </div>
             ) : (

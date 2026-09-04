@@ -353,8 +353,7 @@ export default function InventoryClient() {
   useEffect(() => {
     if (!reconciliationRun || reconciliationRun.status === "COMPLETED") return;
     const timer = window.setInterval(() => {
-      void loadReconciliationRun(reconciliationRun.id)
-        .catch(() => undefined);
+      void loadReconciliationRun(reconciliationRun.id).catch(() => undefined);
     }, 5_000);
     return () => window.clearInterval(timer);
   }, [loadReconciliationRun, reconciliationRun?.id, reconciliationRun?.status]);
@@ -461,9 +460,7 @@ export default function InventoryClient() {
       });
       const v = await r.json();
       if (!r.ok) {
-        throw new Error(
-          v.error?.message ?? "CSV/Excel import failed",
-        );
+        throw new Error(v.error?.message ?? "CSV/Excel import failed");
       }
       const result = v.data as ImportResult;
       const errors = result.errors ?? [];
@@ -608,7 +605,7 @@ export default function InventoryClient() {
             </>
           ) : (
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> Loading inventory…
+              <Spinner /> Loading inventory…
             </div>
           )}
         </div>
@@ -898,27 +895,21 @@ export default function InventoryClient() {
                         ) : profile.status === "AVAILABLE" &&
                           !["available", "allocated", "released"].includes(
                             profile.providerStatus?.toLowerCase() ?? "",
-                          )
-                            ? (
-                                <span className="text-destructive">
-                                  {`Local stock is marked available, but ${humane(profile.providerStatus ?? "not checked")} is not safe for sale`}
-                                </span>
-                              )
-                            : profile.status === "PENDING_PROVIDER_CHECK"
-                              ? (
-                                  <span className="text-muted-foreground">
-                                    Provider verification is required before sale
-                                  </span>
-                                )
-                              : profile.status === "QUARANTINED"
-                            ? (
-                                <span className="text-destructive">
-                                  {`${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`}
-                                </span>
-                              )
-                            : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
+                          ) ? (
+                          <span className="text-destructive">
+                            {`Local stock is marked available, but ${humane(profile.providerStatus ?? "not checked")} is not safe for sale`}
+                          </span>
+                        ) : profile.status === "PENDING_PROVIDER_CHECK" ? (
+                          <span className="text-muted-foreground">
+                            Provider verification is required before sale
+                          </span>
+                        ) : profile.status === "QUARANTINED" ? (
+                          <span className="text-destructive">
+                            {`${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex flex-wrap justify-end gap-2">
@@ -936,7 +927,7 @@ export default function InventoryClient() {
                             ) : (
                               <RefreshCcw className="size-3.5" />
                             )}{" "}
-                            Check network
+                            Refresh network status
                           </Button>
                           {isSuperAdmin &&
                           profile.status === "QUARANTINED" &&
@@ -1117,7 +1108,14 @@ export default function InventoryClient() {
                               variant="success"
                               disabled={decision === batch.id}
                               onClick={async () => {
-                                if (await confirm({ title: "Approve inventory batch?", description: `This makes ${batch.importedCount} profile(s) available for sale.`, confirmLabel: "Approve batch" })) void decide(batch, true);
+                                if (
+                                  await confirm({
+                                    title: "Approve inventory batch?",
+                                    description: `This makes ${batch.importedCount} profile(s) available for sale.`,
+                                    confirmLabel: "Approve batch",
+                                  })
+                                )
+                                  void decide(batch, true);
                               }}
                             >
                               {decision === batch.id ? (
@@ -1133,7 +1131,16 @@ export default function InventoryClient() {
                               className="text-destructive hover:bg-destructive/10"
                               disabled={decision === batch.id}
                               onClick={async () => {
-                                if (await confirm({ title: "Reject inventory batch?", description: "These profiles will not be made available for sale.", confirmLabel: "Reject batch", destructive: true })) void decide(batch, false);
+                                if (
+                                  await confirm({
+                                    title: "Reject inventory batch?",
+                                    description:
+                                      "These profiles will not be made available for sale.",
+                                    confirmLabel: "Reject batch",
+                                    destructive: true,
+                                  })
+                                )
+                                  void decide(batch, false);
                               }}
                             >
                               <XCircle className="size-4" />
@@ -1212,7 +1219,15 @@ export default function InventoryClient() {
                               variant="success"
                               disabled={planDecision === plan.id}
                               onClick={async () => {
-                                if (await confirm({ title: `Publish ${plan.name}?`, description: "This package will become available for customer purchase.", confirmLabel: "Publish package" })) void decidePlan(plan, true);
+                                if (
+                                  await confirm({
+                                    title: `Publish ${plan.name}?`,
+                                    description:
+                                      "This package will become available for customer purchase.",
+                                    confirmLabel: "Publish package",
+                                  })
+                                )
+                                  void decidePlan(plan, true);
                               }}
                             >
                               {planDecision === plan.id ? (
@@ -1228,7 +1243,16 @@ export default function InventoryClient() {
                               className="text-destructive hover:bg-destructive/10"
                               disabled={planDecision === plan.id}
                               onClick={async () => {
-                                if (await confirm({ title: `Reject ${plan.name}?`, description: "This package will remain unavailable for purchase.", confirmLabel: "Reject package", destructive: true })) void decidePlan(plan, false);
+                                if (
+                                  await confirm({
+                                    title: `Reject ${plan.name}?`,
+                                    description:
+                                      "This package will remain unavailable for purchase.",
+                                    confirmLabel: "Reject package",
+                                    destructive: true,
+                                  })
+                                )
+                                  void decidePlan(plan, false);
                               }}
                             >
                               <XCircle className="size-4" />

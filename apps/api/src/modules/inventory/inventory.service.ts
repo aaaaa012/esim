@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { BatchStatus, InventoryStatus, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
@@ -1431,69 +1432,22 @@ export class InventoryService implements OnModuleInit {
       throw new NotFoundException(
         "No customer eSIM record exists for this order",
       );
-    if (this.usageService) {
-      const esimUsage = await this.usageService.refresh(inventory.id);
-      const packageUsage = this.usageService.packageForOrder(
-        esimUsage,
-        orderId,
+    if (!this.usageService)
+      throw new ServiceUnavailableException(
+        "Canonical usage reconciliation is unavailable",
       );
-      if (!packageUsage)
-        throw new NotFoundException("No usage package exists for this order");
-      return {
-        orderId,
-        usedMb: packageUsage.usedMb,
-        totalMb: packageUsage.totalMb,
-        remainingMb: packageUsage.remainingMb,
-        lastCheckedAt: packageUsage.lastConfirmedAt,
-        balanceStatus: packageUsage.balanceStatus,
-        esimUsage,
-      };
-    }
-    const usage = await this.connectivity.getUsage(inventory.iccid);
-    if (usage.usageAvailable === false)
-      throw new BadRequestException(
-        "Transatel found the subscription but has not published a usable data balance yet. Please retry shortly.",
-      );
-    const checkedAt = new Date();
-    if (usage.subscriptions?.length) {
-      const balances = new Map(
-        usage.subscriptions.map((item) => [item.providerSubscriptionId, item]),
-      );
-      const subscriptions = await this.prisma.subscription.findMany({
-        where: { customerEsimId: customerEsim.id },
-        select: { id: true, providerSubscriptionId: true },
-      });
-      await Promise.all(
-        subscriptions.map((subscription) => {
-          const balance = balances.get(subscription.providerSubscriptionId);
-          return balance
-            ? this.prisma.subscription.update({
-                where: { id: subscription.id },
-                data: {
-                  usedMb: balance.usedMb,
-                  totalMb: balance.totalMb,
-                  usageLastCheckedAt: checkedAt,
-                  providerLastSeenAt: checkedAt,
-                },
-              })
-            : Promise.resolve();
-        }),
-      );
-    } else {
-      await this.prisma.subscription.updateMany({
-        where: { customerEsimId: customerEsim.id },
-        data: {
-          usedMb: usage.usedMb,
-          totalMb: usage.totalMb,
-          usageLastCheckedAt: checkedAt,
-        },
-      });
-    }
+    const esimUsage = await this.usageService.refresh(inventory.id);
+    const packageUsage = this.usageService.packageForOrder(esimUsage, orderId);
+    if (!packageUsage)
+      throw new NotFoundException("No usage package exists for this order");
     return {
       orderId,
-      ...usage,
-      remainingMb: Math.max(0, usage.totalMb - usage.usedMb),
-      lastCheckedAt: checkedAt.toISOString(),
+      usedMb: packageUsage.usedMb,
+      totalMb: packageUsage.totalMb,
+      remainingMb: packageUsage.remainingMb,
+      lastCheckedAt: packageUsage.lastConfirmedAt,
+      balanceStatus: packageUsage.balanceStatus,
+      esimUsage,
     };
   }
 

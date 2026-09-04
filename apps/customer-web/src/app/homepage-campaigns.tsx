@@ -86,7 +86,7 @@ const entries: Array<
     imageHeight: 1376,
     countryCode: code!,
     ctaLabel: "View plans",
-    ctaHref: `/?country=${code}#plans`,
+    ctaHref: `/destinations?country=${code}`,
     sortOrder: index,
   })),
   {

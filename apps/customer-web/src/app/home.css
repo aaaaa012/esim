@@ -1352,6 +1352,10 @@
   background: var(--surface);
   box-shadow: 0 0 0 3px var(--primary-ring);
 }
+.recharge-control input[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 12%, transparent);
+}
 .recharge-submit {
   min-height: 52px;
   padding-inline: 22px;
@@ -1360,6 +1364,43 @@
   margin: 9px 0 0;
   color: var(--text-3);
   font-size: 12px;
+}
+.recharge-feedback,
+.topup-dialog-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+.recharge-feedback {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+.recharge-feedback svg,
+.topup-dialog-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.recharge-recovery-link {
+  display: inline-flex;
+  margin-top: 18px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--primary) 35%, transparent);
+  text-underline-offset: 4px;
+}
+.recharge-recovery-link:hover {
+  color: var(--primary-hover);
+  text-decoration-color: currentColor;
 }
 .recharge-note {
   padding: 24px;
@@ -1386,6 +1427,21 @@
   font-size: 13px;
   line-height: 1.55;
 }
+.recharge-trust-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.recharge-trust-line svg {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+}
 
 .topup-modal-backdrop {
   position: fixed;
@@ -1405,6 +1461,22 @@
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-lg);
+  max-height: min(760px, calc(100dvh - 40px));
+  overflow-y: auto;
+}
+.topup-loading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 76px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 650;
 }
 
 .topup-modal-close {
@@ -1490,6 +1562,12 @@
   background: var(--surface);
   color: var(--text);
   font: inherit;
+  outline: none;
+  cursor: pointer;
+}
+.topup-destination select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
 }
 
 .topup-plan-option {
@@ -1586,6 +1664,41 @@
   border-top: 1px dashed var(--border-strong);
   margin-top: 16px;
   padding-top: 14px;
+}
+.topup-email-state {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--success) 28%, var(--border));
+  border-radius: var(--radius);
+  background: var(--success-soft);
+}
+.topup-email-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--success-strong);
+}
+.topup-email-state strong {
+  color: var(--text);
+  font-size: 15px;
+}
+.topup-email-state div p {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.topup-email-state > .recharge-help {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+}
+.topup-dialog-error {
+  margin-top: 16px;
 }
 
 .topup-subscriber {

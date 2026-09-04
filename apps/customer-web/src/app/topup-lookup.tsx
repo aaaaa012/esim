@@ -1,17 +1,18 @@
 "use client";
 
 import {
+  AlertCircle,
   CheckCircle2,
   LoaderCircle,
+  MailCheck,
   RefreshCcw,
-  Search,
+  ShieldCheck,
   Smartphone,
   X,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import ErrorModal from "../components/error-modal";
 import { publicApiErrorMessage } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -115,7 +116,7 @@ export default function TopupLookup() {
 
   const lookup = async () => {
     if (!mobile.trim()) {
-      setError("Enter the MSISDN assigned to your Visa Compass eSIM");
+      setError("Enter the eSIM mobile number from your delivery email.");
       return;
     }
     setOpen(true);
@@ -267,9 +268,9 @@ export default function TopupLookup() {
               <p className="recharge-kicker">For returning travellers</p>
               <h2 id="recharge-title">Add data to your existing eSIM</h2>
               <p className="recharge-description">
-                Keep the eSIM already installed on your phone. Enter the MSISDN
-                from your eSIM delivery email to find compatible recharge
-                plans—no new QR code required.
+                Keep the eSIM already installed on your phone. Enter its mobile
+                number (MSISDN) from your delivery email. We will email a secure
+                link before showing any eSIM or plan details.
               </p>
               <form
                 className="recharge-form"
@@ -291,6 +292,10 @@ export default function TopupLookup() {
                     inputMode="tel"
                     autoComplete="tel"
                     aria-describedby="recharge-help"
+                    aria-invalid={Boolean(error && !open)}
+                    aria-errormessage={
+                      error && !open ? "recharge-error" : undefined
+                    }
                   />
                 </div>
                 <button
@@ -306,10 +311,23 @@ export default function TopupLookup() {
                   Find recharge plans
                 </button>
               </form>
-              <Link href="/recharge/recover">Track an existing recharge</Link>
               <p className="recharge-help" id="recharge-help">
-                Use the eSIM mobile number shown in your QR-delivery email.
+                Usually 12–15 digits. Spaces and a leading + are accepted. This
+                is not the ICCID or SIM serial number.
               </p>
+              {error && !open ? (
+                <div
+                  className="recharge-feedback error"
+                  id="recharge-error"
+                  role="alert"
+                >
+                  <AlertCircle size={18} />
+                  <span>{error}</span>
+                </div>
+              ) : null}
+              <Link className="recharge-recovery-link" href="/recharge/recover">
+                Already paid? Track an existing recharge
+              </Link>
             </div>
             <aside className="recharge-note" aria-label="How recharge works">
               <span>No reinstall</span>
@@ -318,6 +336,10 @@ export default function TopupLookup() {
                 Choose a new data plan, pay securely in NPR, and keep
                 travelling.
               </p>
+              <div className="recharge-trust-line">
+                <ShieldCheck size={16} /> Details are revealed only through the
+                private email link.
+              </div>
             </aside>
           </div>
         </div>
@@ -349,32 +371,24 @@ export default function TopupLookup() {
                 <Smartphone size={19} />
               </span>
               <div>
-                <h2 id="topup-dialog-title">Top up your eSIM</h2>
-                <p>Enter the MSISDN assigned to your Visa Compass eSIM.</p>
+                <h2 id="topup-dialog-title">
+                  {verificationRequested
+                    ? "Check your email"
+                    : "Your recharge options"}
+                </h2>
+                <p>
+                  {verificationRequested
+                    ? "For your privacy, we verify ownership before showing eSIM details."
+                    : "Review the eSIM and choose a compatible plan."}
+                </p>
               </div>
             </header>
-            <div className="topup-row">
-              <input
-                autoFocus
-                value={mobile}
-                onChange={(event) => setMobile(event.target.value)}
-                onKeyDown={(event) => event.key === "Enter" && void lookup()}
-                placeholder="e.g. +33 6 12 34 56 78"
-                inputMode="tel"
-              />
-              <button
-                className="button"
-                disabled={busy}
-                onClick={() => void lookup()}
-              >
-                {busy ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : (
-                  <Search size={16} />
-                )}{" "}
-                Check
-              </button>
-            </div>
+            {busy && !result ? (
+              <div className="topup-loading" role="status" aria-live="polite">
+                <LoaderCircle className="spin" size={22} />
+                <span>Securely checking your request…</span>
+              </div>
+            ) : null}
 
             {result ? (
               <div className="topup-result">
@@ -497,21 +511,35 @@ export default function TopupLookup() {
               </div>
             ) : null}
             {verificationRequested ? (
-              <div className="topup-result" role="status" aria-live="polite">
-                <p className="topup-note ok">
-                  <CheckCircle2 size={15} /> Check your original purchase email
-                  for a secure recharge link. The link expires in 15 minutes.
-                </p>
+              <div
+                className="topup-result topup-email-state"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="topup-email-icon" aria-hidden="true">
+                  <MailCheck size={24} />
+                </span>
+                <div>
+                  <strong>Check your original purchase email</strong>
+                  <p>
+                    It goes to the original purchase email and expires in 15
+                    minutes.
+                  </p>
+                </div>
                 <p className="recharge-help">
-                  For privacy, this message is the same whether or not the
-                  MSISDN is registered.
+                  If you do not see it, check spam or confirm that you entered
+                  the mobile number—not the ICCID/SIM serial.
                 </p>
+              </div>
+            ) : null}
+            {error && open ? (
+              <div className="topup-dialog-error" role="alert">
+                <AlertCircle size={18} /> <span>{error}</span>
               </div>
             ) : null}
           </section>
         </div>
       ) : null}
-      {error ? <ErrorModal error={error} onClose={() => setError("")} /> : null}
     </>
   );
 }

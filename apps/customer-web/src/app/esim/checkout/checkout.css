@@ -619,6 +619,134 @@
   line-height: 1.5;
 }
 
+/* Shared form polish for direct, guest, and partner-hosted checkout. */
+.form-grid input:hover,
+.form-grid select:hover {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border-strong));
+}
+.form-grid input:disabled,
+.form-grid select:disabled,
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+.form-grid input::placeholder {
+  color: color-mix(in srgb, var(--text-3) 74%, transparent);
+}
+
+.recharge-recovery-page {
+  display: grid;
+  place-items: start center;
+}
+.recharge-recovery-card {
+  width: min(100%, 620px);
+  overflow: visible;
+}
+.recovery-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  margin: -10px 0 24px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 750;
+}
+.recovery-back-link:hover {
+  color: var(--primary);
+}
+.recovery-kicker {
+  margin: 18px 0 0 !important;
+  color: var(--accent-strong) !important;
+  font-size: 11px !important;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.recharge-recovery-card form {
+  display: grid;
+  gap: 19px;
+  margin-top: 28px;
+}
+.recharge-recovery-card form > label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+.recharge-recovery-card label small {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 450;
+  line-height: 1.45;
+}
+.recovery-input-shell {
+  position: relative;
+  display: block;
+}
+.recovery-input-shell > svg {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 14px;
+  color: var(--text-3);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.recovery-input-shell input {
+  width: 100%;
+  height: 50px;
+  padding: 0 14px 0 43px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  outline: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.recovery-input-shell input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+.recovery-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+.recovery-feedback svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.recovery-feedback.success {
+  color: var(--success-strong);
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 30%, var(--border));
+}
+.recovery-feedback.error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+.recovery-privacy-note {
+  margin: 18px 0 0 !important;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3) !important;
+  font-size: 12px !important;
+}
+
 .confirm-box.payment-consent {
   gap: 10px;
   padding: 12px 14px;
@@ -1451,6 +1579,24 @@
 .checkout-page .confirm-box {
   border-color: var(--border-strong);
   background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+
+@media (max-width: 540px) {
+  .checkout-page {
+    padding: 32px 14px 68px;
+  }
+  .form-section {
+    padding: 24px 18px;
+  }
+  .checkout-page .form-section h1 {
+    font-size: 27px;
+  }
+  .recharge-recovery-card {
+    border-radius: var(--radius-lg);
+  }
+  .recovery-back-link {
+    margin-bottom: 18px;
+  }
 }
 
 .checkout-page .confirm-box.payment-consent {

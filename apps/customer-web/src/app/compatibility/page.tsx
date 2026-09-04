@@ -78,7 +78,7 @@ export default function Compatibility() {
           </div>
         </div>
         <div className="compatibility-actions">
-          <Link href="/#plans" className="button">
+          <Link href="/destinations" className="button">
             Browse plans <ArrowRight size={17} />
           </Link>
           <Link href="/" className="button secondary">

@@ -1259,7 +1259,7 @@ export default function CheckoutClient({
           <h1>We could not load this checkout</h1>
           <p>The plan link may be incomplete or no longer available.</p>
           <div>
-            <Link className="button" href="/#plans">
+            <Link className="button" href="/destinations">
               Choose a plan
             </Link>
             {isSignedIn === true && (
@@ -1918,11 +1918,17 @@ export default function CheckoutClient({
                 ) : order && order.status === "PROVISIONING_FAILED" ? (
                   <div className="error-panel">
                     <AlertTriangle size={42} />
-                    <b>Your recharge needs attention</b>
+                    <b>
+                      {isTopUp
+                        ? "Your recharge needs attention"
+                        : "Your eSIM activation needs attention"}
+                    </b>
                     <span>{order.orderNumber}</span>
                     <p>
                       {order.provisioningFailure?.message ??
-                        "Your payment was received, but we could not complete the recharge with the network provider. Our team is reviewing it and will contact you."}
+                        (isTopUp
+                          ? "Your payment was received, but we could not complete the recharge with the network provider. Our team is reviewing it and will contact you."
+                          : "Your payment was received, but we could not finish the eSIM activation. Our team is reviewing it and will contact you.")}
                     </p>
                     <Link className="button secondary" href="/">
                       Return home

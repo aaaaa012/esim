@@ -612,7 +612,7 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
               Choose your first destination plan and we’ll add your reusable
               eSIM to this dashboard.
             </p>
-            <Link className="button" href="/#plans">
+            <Link className="button" href="/destinations">
               Browse plans
             </Link>
           </div>
@@ -693,7 +693,7 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
               )}
               <Link
                 className="button secondary"
-                href={`/?esim=${esim.id}&country=${country}#plans`}
+                href={`/destinations?esim=${esim.id}&country=${country}`}
               >
                 <Plus />
                 Add data
