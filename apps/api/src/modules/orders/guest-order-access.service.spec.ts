@@ -6,10 +6,18 @@ import { GuestOrderAccessService } from "./guest-order-access.service.js";
 const createService = () =>
   new GuestOrderAccessService({ enabled: false } as PrismaService);
 
+const rechargeTarget = {
+  inventoryId: "inventory-a",
+  originalOrderId: "initial-order-a",
+  customerId: "beneficiary-a",
+  email: "Owner@Example.com",
+};
+
 const originalEnvironment = process.env.NODE_ENV;
 const originalSecret = process.env.GUEST_ORDER_SECRET;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (originalEnvironment === undefined) delete process.env.NODE_ENV;
   else process.env.NODE_ENV = originalEnvironment;
   if (originalSecret === undefined) delete process.env.GUEST_ORDER_SECRET;
@@ -86,12 +94,19 @@ describe("GuestOrderAccessService", () => {
     );
   });
 
-  it("binds a top-up lookup token to its MSISDN and rejects tampering", () => {
+  it("binds a top-up lookup token to its MSISDN and ownership and rejects tampering", () => {
     process.env.GUEST_ORDER_SECRET = "test-secret-with-enough-entropy";
     const service = createService();
-    const token = service.createLookupToken("+9779800000000");
+    const token = service.createLookupToken("+9779800000000", rechargeTarget);
 
     expect(service.mobileFromLookupToken(token)).toBe("+9779800000000");
+    expect(service.rechargeLookupClaims(token)).toMatchObject({
+      purpose: "RECHARGE",
+      inventoryId: rechargeTarget.inventoryId,
+      originalOrderId: rechargeTarget.originalOrderId,
+      customerId: rechargeTarget.customerId,
+      recipientHash: service.hash("owner@example.com"),
+    });
     expect(() =>
       service.mobileFromLookupToken(`${token.slice(0, -1)}x`),
     ).toThrow(ForbiddenException);
@@ -102,7 +117,7 @@ describe("GuestOrderAccessService", () => {
     const service = createService();
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const token = service.createLookupToken("+9779800000000");
+    const token = service.createLookupToken("+9779800000000", rechargeTarget);
     clock.mockReturnValue(now + 15 * 60_000 + 1);
 
     expect(() => service.mobileFromLookupToken(token)).toThrow(
