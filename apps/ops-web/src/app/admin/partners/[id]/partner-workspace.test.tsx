@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import PartnerWorkspace from "./partner-workspace";
+import { ConfirmationProvider } from "@/components/confirmation-provider";
 
 const authFetchMock = vi.fn<typeof window.fetch>();
 const replaceMock = vi.fn();
@@ -18,6 +19,7 @@ vi.mock("sonner", () => ({
 
 const response = (data: unknown) =>
   ({ ok: true, json: async () => ({ data }) }) as unknown as Response;
+const renderWorkspace = () => render(<ConfirmationProvider><PartnerWorkspace id="partner-1" /></ConfirmationProvider>);
 
 const partner = {
   id: "partner-1",
@@ -62,7 +64,7 @@ describe("PartnerWorkspace", () => {
   });
 
   it("renders the operational header and persists tab selection", async () => {
-    render(<PartnerWorkspace id="partner-1" />);
+    renderWorkspace();
     expect(await screen.findByText("Agency One")).toBeTruthy();
     expect(screen.getAllByText("NPR 5,000").length).toBeGreaterThan(0);
     expect(screen.getByText("120 requests/min")).toBeTruthy();
@@ -79,7 +81,7 @@ describe("PartnerWorkspace", () => {
   });
 
   it("blocks balance changes until the reason and typed confirmation are provided", async () => {
-    render(<PartnerWorkspace id="partner-1" />);
+    renderWorkspace();
     await screen.findByText("Agency One");
 
     const ledgerTab = screen.getByRole("tab", { name: "ledger" });

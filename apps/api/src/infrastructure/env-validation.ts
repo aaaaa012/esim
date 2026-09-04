@@ -44,6 +44,43 @@ const baseSchema = z.object({
   EMAIL_FROM_NAME: z.string().min(1).optional(),
   EMAIL_REPLY_TO: z.string().email().optional(),
   KHALTI_SECRET_KEY: z.string().min(1).optional(),
+  KHALTI_BASE_URL: z.string().url().optional(),
+  KHALTI_REQUEST_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .optional(),
+  FONEPAY_REQUEST_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .optional(),
+  PARTNER_WEBHOOK_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .optional(),
+  TRANSATEL_REQUEST_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .optional(),
+  TRANSATEL_CIRCUIT_FAILURE_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .min(2)
+    .max(20)
+    .optional(),
+  TRANSATEL_CIRCUIT_RESET_MS: z.coerce
+    .number()
+    .int()
+    .min(5_000)
+    .max(300_000)
+    .optional(),
   TRANSATEL_BASE_URL: z.string().url().optional(),
   TRANSATEL_CLIENT_ID: z.string().min(1).optional(),
   TRANSATEL_CLIENT_SECRET: z.string().min(1).optional(),

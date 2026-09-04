@@ -1,10 +1,19 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  AdminService,
-  mapClerkActivationFailure,
-} from "./admin.service.js";
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { AdminService, mapClerkActivationFailure } from "./admin.service.js";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { ConnectivityService } from "../integration/connectivity.service.js";
+
+const clerkClientMock = vi.hoisted(() => vi.fn());
+vi.mock("@clerk/backend", () => ({ createClerkClient: clerkClientMock }));
+afterEach(() => vi.unstubAllEnvs());
 
 function prismaStub() {
   return {
@@ -80,6 +89,147 @@ describe("mapClerkActivationFailure", () => {
     });
     expect(result.code).toBe("STAFF_ACTIVATION_FAILED");
     expect(result.message).not.toContain("provider secret");
+  });
+});
+
+describe("AdminService.correctCustomerEmail", () => {
+  const customer = {
+    id: "customer-1",
+    email: "old@example.com",
+    partnerIdentity: null,
+    user: {
+      id: "user-1",
+      clerkId: "clerk-customer-1",
+      email: "old@example.com",
+      accountType: "CUSTOMER",
+    },
+  };
+  const actor = {
+    id: "admin-1",
+    clerkId: "clerk-admin-1",
+    accountType: "SUPER_ADMIN",
+  };
+
+  function correctionFixture(transactionFails = false) {
+    const tx = {
+      user: { update: vi.fn().mockResolvedValue({}) },
+      customer: { update: vi.fn().mockResolvedValue({}) },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      enabled: true,
+      user: {
+        findUnique: vi
+          .fn()
+          .mockImplementation(({ where }) =>
+            Promise.resolve(
+              where.clerkId === actor.clerkId
+                ? actor
+                : where.email
+                  ? null
+                  : null,
+            ),
+          ),
+      },
+      customer: {
+        findUnique: vi
+          .fn()
+          .mockImplementation(({ where }) =>
+            Promise.resolve(where.id === customer.id ? customer : null),
+          ),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) => {
+          if (transactionFails) throw new Error("database unavailable");
+          return callback(tx);
+        },
+      ),
+    } as unknown as PrismaService;
+    const clerk = {
+      users: {
+        getUser: vi.fn().mockResolvedValue({
+          primaryEmailAddressId: "email-old",
+          emailAddresses: [
+            { id: "email-old", emailAddress: "old@example.com" },
+          ],
+        }),
+        updateUser: vi.fn().mockResolvedValue({}),
+      },
+      emailAddresses: {
+        createEmailAddress: vi
+          .fn()
+          .mockResolvedValue({
+            id: "email-new",
+            emailAddress: "new@example.com",
+          }),
+        deleteEmailAddress: vi.fn().mockResolvedValue({}),
+      },
+      sessions: {
+        getSessionList: vi
+          .fn()
+          .mockResolvedValue({ data: [{ id: "session-1" }] }),
+        revokeSession: vi.fn().mockResolvedValue({}),
+      },
+    };
+    clerkClientMock.mockReturnValue(clerk);
+    return { prisma, tx, clerk };
+  }
+
+  it("updates Clerk and both local identity records with an immutable audit entry", async () => {
+    vi.stubEnv("CLERK_SECRET_KEY", "sk_test");
+    const { prisma, tx, clerk } = correctionFixture();
+    const admin = new AdminService(prisma, connectivityStub());
+
+    await expect(
+      admin.correctCustomerEmail(
+        customer.id,
+        "NEW@example.com",
+        "Customer verified the corrected mailbox.",
+        actor.clerkId,
+      ),
+    ).resolves.toMatchObject({
+      changed: true,
+      email: "new@example.com",
+      sessionsFound: 1,
+      sessionsRevoked: 1,
+    });
+    expect(tx.user.update).toHaveBeenCalledWith({
+      where: { id: customer.user.id },
+      data: { email: "new@example.com" },
+    });
+    expect(tx.customer.update).toHaveBeenCalledWith({
+      where: { id: customer.id },
+      data: { email: "new@example.com" },
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: "EMAIL_CORRECTED" }),
+      }),
+    );
+    expect(clerk.sessions.revokeSession).toHaveBeenCalledWith("session-1");
+  });
+
+  it("restores the previous Clerk primary email when the local transaction fails", async () => {
+    vi.stubEnv("CLERK_SECRET_KEY", "sk_test");
+    const { prisma, clerk } = correctionFixture(true);
+    const admin = new AdminService(prisma, connectivityStub());
+
+    await expect(
+      admin.correctCustomerEmail(
+        customer.id,
+        "new@example.com",
+        "Customer verified the corrected mailbox.",
+        actor.clerkId,
+      ),
+    ).rejects.toThrow("rolled back");
+    expect(clerk.users.updateUser).toHaveBeenLastCalledWith(
+      customer.user.clerkId,
+      expect.objectContaining({ primaryEmailAddressID: "email-old" }),
+    );
+    expect(clerk.emailAddresses.deleteEmailAddress).toHaveBeenCalledWith(
+      "email-new",
+    );
+    expect(clerk.sessions.revokeSession).not.toHaveBeenCalled();
   });
 });
 

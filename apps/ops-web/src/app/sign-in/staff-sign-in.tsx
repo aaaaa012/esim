@@ -18,15 +18,27 @@ type SecondFactor = {
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
-function clerkMessage(error: unknown, fallback: string) {
-  const candidate = error as {
-    errors?: Array<{ longMessage?: string; message?: string }>;
-  };
-  return (
-    candidate?.errors?.[0]?.longMessage ??
-    candidate?.errors?.[0]?.message ??
-    fallback
-  );
+export function clerkAuthMessage(error: unknown, fallback: string) {
+  const code = (error as { errors?: Array<{ code?: string }> })?.errors?.[0]
+    ?.code;
+  if (code === "form_password_incorrect")
+    return "The email or password is incorrect.";
+  if (["form_code_incorrect", "verification_failed"].includes(code ?? ""))
+    return "That verification code is incorrect or has expired.";
+  if (code === "too_many_requests")
+    return "Too many attempts. Wait a moment and try again.";
+  if (
+    [
+      "form_password_pwned",
+      "form_password_length_too_short",
+      "form_password_not_strong_enough",
+    ].includes(code ?? "")
+  )
+    return "Choose a stronger password that you have not used elsewhere.";
+  // Clerk messages can contain provider/configuration detail. Only approved
+  // application copy is rendered; the original exception remains in Clerk's
+  // secured diagnostics.
+  return fallback;
 }
 
 export default function StaffSignIn() {
@@ -167,7 +179,10 @@ export default function StaffSignIn() {
       );
     } catch (cause) {
       setError(
-        clerkMessage(cause, "Sign in failed. Check your email and password."),
+        clerkAuthMessage(
+          cause,
+          "Sign in failed. Check your email and password.",
+        ),
       );
     } finally {
       setBusy(false);
@@ -220,7 +235,7 @@ export default function StaffSignIn() {
         "That code could not be verified. Request a new code and try again.",
       );
     } catch (cause) {
-      setError(clerkMessage(cause, "That code could not be verified."));
+      setError(clerkAuthMessage(cause, "That code could not be verified."));
     } finally {
       setBusy(false);
     }
@@ -241,7 +256,10 @@ export default function StaffSignIn() {
       setError("That verification code could not be accepted.");
     } catch (cause) {
       setError(
-        clerkMessage(cause, "That verification code could not be accepted."),
+        clerkAuthMessage(
+          cause,
+          "That verification code could not be accepted.",
+        ),
       );
     } finally {
       setBusy(false);
@@ -273,7 +291,9 @@ export default function StaffSignIn() {
         `A new verification code was sent to ${secondFactor.safeIdentifier ?? (secondFactor.strategy === "email_code" ? "your email address" : "your phone")}.`,
       );
     } catch (cause) {
-      setError(clerkMessage(cause, "Unable to send a new verification code."));
+      setError(
+        clerkAuthMessage(cause, "Unable to send a new verification code."),
+      );
     } finally {
       setBusy(false);
     }
@@ -299,7 +319,7 @@ export default function StaffSignIn() {
         "Password updated, but the account needs another verification step.",
       );
     } catch (cause) {
-      setError(clerkMessage(cause, "Unable to update password."));
+      setError(clerkAuthMessage(cause, "Unable to update password."));
     } finally {
       setBusy(false);
     }

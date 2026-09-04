@@ -1,16 +1,23 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { authRouteDecision } from "@visa-compass/shared";
 const isPublic = createRouteMatcher([
   "/sign-in(.*)",
   "/staff-onboarding(.*)",
   "/staff-activate(.*)",
   "/unauthorized",
+  "/account-unavailable",
+  "/service-unavailable",
   "/super-admin(.*)",
 ]);
-const isTerminal = createRouteMatcher(["/access-error", "/unauthorized"]);
+const isTerminal = createRouteMatcher(["/access-error", "/unauthorized", "/account-unavailable", "/service-unavailable"]);
 const isSecurity = createRouteMatcher(["/security(.*)"]);
 const isChangePassword = createRouteMatcher(["/change-password(.*)"]);
-const isAdmin = createRouteMatcher(["/admin(.*)"]);
+const isSuperAdminOnly = createRouteMatcher([
+  "/admin",
+  "/admin/integrations(.*)",
+  "/admin/partners/(.*)",
+]);
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 export default clerkMiddleware(async (auth, request) => {
   if (isTerminal(request)) return;
@@ -25,37 +32,39 @@ export default clerkMiddleware(async (auth, request) => {
     return NextResponse.redirect(signInUrl);
   }
   const token = await session.getToken();
-  if (!token)
-    return NextResponse.redirect(new URL("/access-error", request.url));
+  const destination = request.nextUrl.pathname + request.nextUrl.search;
+  const redirect = (path: string) => {
+    const url = new URL(path, request.url);
+    url.searchParams.set(path === "/sign-in" ? "redirect_url" : "returnTo", destination);
+    return NextResponse.redirect(url);
+  };
+  if (!token) return redirect("/service-unavailable");
   try {
     const response = await fetch(`${API}/auth/me`, {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store",
     });
-    if (!response.ok)
-      return NextResponse.redirect(new URL("/access-error", request.url));
-    const envelope = (await response.json()) as {
-      data: {
+    const envelope = await response.json().catch(() => null) as {
+      data?: {
         accountType: string;
         mfaRequired: boolean;
         mfaVerified: boolean;
         mustChangePassword: boolean;
       };
-    };
-    if (!["OPERATIONS", "SUPER_ADMIN"].includes(envelope.data.accountType))
-      return NextResponse.redirect(new URL("/access-error", request.url));
-    if (isAdmin(request) && envelope.data.accountType !== "SUPER_ADMIN")
-      return NextResponse.redirect(new URL("/access-error", request.url));
-    if (envelope.data.mustChangePassword && !isChangePassword(request))
+      error?: { code?: string };
+    } | null;
+    const decision = authRouteDecision({ status: response.status, ...(envelope?.error?.code ? { code: envelope.error.code } : {}), ...(envelope?.data?.accountType ? { accountType: envelope.data.accountType } : {}), allowedAccountTypes: ["OPERATIONS", "SUPER_ADMIN"], requiresSuperAdmin: isSuperAdminOnly(request) });
+    if (decision !== "ALLOW") return redirect(decision === "SIGN_IN" ? "/sign-in" : decision === "ACCOUNT_UNAVAILABLE" ? "/account-unavailable" : decision === "UNAUTHORIZED" ? "/unauthorized" : "/service-unavailable");
+    if (envelope!.data!.mustChangePassword && !isChangePassword(request))
       return NextResponse.redirect(new URL("/change-password", request.url));
     if (
-      envelope.data.mfaRequired &&
-      !envelope.data.mfaVerified &&
+      envelope!.data!.mfaRequired &&
+      !envelope!.data!.mfaVerified &&
       !isSecurity(request)
     )
       return NextResponse.redirect(new URL("/security", request.url));
   } catch {
-    return NextResponse.redirect(new URL("/access-error", request.url));
+    return redirect("/service-unavailable");
   }
 });
 export const config = {

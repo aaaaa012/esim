@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { RefreshCcw } from "lucide-react";
+import { useConfirmation } from "@/components/confirmation-provider";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -32,6 +33,7 @@ type Event = {
 
 export default function IntegrationEventsClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [items, setItems] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -146,13 +148,8 @@ export default function IntegrationEventsClient() {
                         size="sm"
                         variant="outline"
                         disabled={busy === item.id}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              "Send this update through the system again? Only use this if the order did not update automatically.",
-                            )
-                          )
-                            void replay(item.id);
+                        onClick={async () => {
+                          if (await confirm({ title: "Replay provider update?", description: "Send this update through the system again only when the order did not update automatically.", confirmLabel: "Replay update" })) void replay(item.id);
                         }}
                       >
                         <RefreshCcw className="size-3.5" /> Replay

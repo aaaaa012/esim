@@ -83,6 +83,10 @@ describe("NotificationService queue-disabled delivery guard", () => {
       "deliver-notification",
       expect.objectContaining({ notificationId: result.id }),
       `notification-${result.id}`,
+      expect.objectContaining({
+        attempts: 6,
+        backoff: { type: "exponential", delay: 15_000 },
+      }),
     );
   });
 

@@ -33,7 +33,7 @@ export default function NotificationHistory() {
           throw new Error(
             apiErrorMessage(
               value.error?.code ?? "",
-              value.error?.message ?? "Something went wrong",
+              "Notifications could not be loaded.",
             ),
           );
         setItems(value.data);

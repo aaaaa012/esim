@@ -21,6 +21,7 @@ import { ApiErrorCode } from "@visa-compass/shared";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
 import { UsageService } from "../esims/usage.service.js";
+import { withPostgresTransactionRetry } from "../../infrastructure/postgres-transaction-retry.js";
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
@@ -555,7 +556,9 @@ export class InventoryService implements OnModuleInit {
     }));
     const missingMsisdn = rows.filter((row) => !row.msisdn);
     if (missingMsisdn.length)
-      throw new BadRequestException("MSISDN is required for every eSIM profile");
+      throw new BadRequestException(
+        "MSISDN is required for every eSIM profile",
+      );
     const invalid = rows.filter((row) => !/^\d{15,25}$/.test(row.iccid));
     if (invalid.length)
       throw new BadRequestException(
@@ -754,37 +757,46 @@ export class InventoryService implements OnModuleInit {
         `Batch is ${batch.status.toLowerCase()}; only pending batches can be approved`,
       );
     const actor = await this.localUser(actorClerkId);
-    await this.prisma.$transaction(async (tx) => {
-      await tx.inventoryBatch.update({
-        where: { id: batchId },
-        data: {
-          status: BatchStatus.APPROVED,
-          approvedById: actor?.id ?? null,
-          approvedAt: new Date(),
+    await withPostgresTransactionRetry(() =>
+      this.prisma.$transaction(
+        async (tx) => {
+          await tx.inventoryBatch.update({
+            where: { id: batchId },
+            data: {
+              status: BatchStatus.APPROVED,
+              approvedById: actor?.id ?? null,
+              approvedAt: new Date(),
+            },
+          });
+          await tx.esimInventory.updateMany({
+            where: { batchId, status: InventoryStatus.IMPORTED },
+            data: {
+              status: InventoryStatus.PENDING_PROVIDER_CHECK,
+              version: { increment: 1 },
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              module: "INVENTORY",
+              entity: "InventoryBatch",
+              entityId: batchId,
+              action: "BATCH_APPROVED",
+              ...(actor ? { performedById: actor.id } : {}),
+              previousValue: {
+                status: batch.status,
+                reference: batch.batchReference,
+              },
+              newValue: { status: BatchStatus.APPROVED },
+            },
+          });
         },
-      });
-      await tx.esimInventory.updateMany({
-        where: { batchId, status: InventoryStatus.IMPORTED },
-        data: {
-          status: InventoryStatus.PENDING_PROVIDER_CHECK,
-          version: { increment: 1 },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 15_000,
+          timeout: 45_000,
         },
-      });
-      await tx.auditLog.create({
-        data: {
-          module: "INVENTORY",
-          entity: "InventoryBatch",
-          entityId: batchId,
-          action: "BATCH_APPROVED",
-          ...(actor ? { performedById: actor.id } : {}),
-          previousValue: {
-            status: batch.status,
-            reference: batch.batchReference,
-          },
-          newValue: { status: BatchStatus.APPROVED },
-        },
-      });
-    });
+      ),
+    );
     const reconciliation = await this.startProviderReconciliation({
       trigger: "BATCH_APPROVAL",
       selection: "SELECTED",
@@ -816,34 +828,43 @@ export class InventoryService implements OnModuleInit {
         `Batch is ${batch.status.toLowerCase()}; only pending batches can be rejected`,
       );
     const actor = await this.localUser(actorClerkId);
-    await this.prisma.$transaction(async (tx) => {
-      await tx.inventoryBatch.update({
-        where: { id: batchId },
-        data: {
-          status: BatchStatus.REJECTED,
-          rejectedById: actor?.id ?? null,
-          rejectedAt: new Date(),
-          ...(reason?.trim() ? { rejectionReason: reason.trim() } : {}),
+    await withPostgresTransactionRetry(() =>
+      this.prisma.$transaction(
+        async (tx) => {
+          await tx.inventoryBatch.update({
+            where: { id: batchId },
+            data: {
+              status: BatchStatus.REJECTED,
+              rejectedById: actor?.id ?? null,
+              rejectedAt: new Date(),
+              ...(reason?.trim() ? { rejectionReason: reason.trim() } : {}),
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              module: "INVENTORY",
+              entity: "InventoryBatch",
+              entityId: batchId,
+              action: "BATCH_REJECTED",
+              ...(actor ? { performedById: actor.id } : {}),
+              previousValue: {
+                status: batch.status,
+                reference: batch.batchReference,
+              },
+              newValue: {
+                status: BatchStatus.REJECTED,
+                ...(reason?.trim() ? { reason: reason.trim() } : {}),
+              },
+            },
+          });
         },
-      });
-      await tx.auditLog.create({
-        data: {
-          module: "INVENTORY",
-          entity: "InventoryBatch",
-          entityId: batchId,
-          action: "BATCH_REJECTED",
-          ...(actor ? { performedById: actor.id } : {}),
-          previousValue: {
-            status: batch.status,
-            reference: batch.batchReference,
-          },
-          newValue: {
-            status: BatchStatus.REJECTED,
-            ...(reason?.trim() ? { reason: reason.trim() } : {}),
-          },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 15_000,
+          timeout: 45_000,
         },
-      });
-    });
+      ),
+    );
     return {
       id: batchId,
       status: BatchStatus.REJECTED,
@@ -875,50 +896,57 @@ export class InventoryService implements OnModuleInit {
     });
     if (!inventory)
       throw new NotFoundException("Reserved inventory was not found");
-    await this.prisma.$transaction(async (tx) => {
-      await tx.esimInventory.update({
-        where: { id: inventory.id },
-        data: {
-          status: InventoryStatus.ASSIGNED,
-          ...(providerInfo?.providerSubscriptionId
-            ? { providerSubscriptionId: providerInfo.providerSubscriptionId }
-            : {}),
-          version: { increment: 1 },
-        },
-      });
-      const customerEsim = await tx.customerEsim.upsert({
-        where: { orderId },
-        update: { qrPayloadEncrypted: this.crypto.encrypt(qrPayload) },
-        create: {
-          orderId,
-          inventoryId: inventory.id,
-          customerId,
-          qrPayloadEncrypted: this.crypto.encrypt(qrPayload),
-        },
-      });
-      if (providerInfo?.providerSubscriptionId) {
-        await tx.subscription.upsert({
-          where: {
-            providerSubscriptionId: providerInfo.providerSubscriptionId,
-          },
-          update: {
-            provider: providerInfo.provider,
-            ...(providerInfo.expiresAt
-              ? { expiresAt: new Date(providerInfo.expiresAt) }
+    await this.prisma.$transaction(
+      async (tx) => {
+        await tx.esimInventory.update({
+          where: { id: inventory.id },
+          data: {
+            status: InventoryStatus.ASSIGNED,
+            ...(providerInfo?.providerSubscriptionId
+              ? { providerSubscriptionId: providerInfo.providerSubscriptionId }
               : {}),
-          },
-          create: {
-            customerEsimId: customerEsim.id,
-            provider: providerInfo.provider,
-            providerSubscriptionId: providerInfo.providerSubscriptionId,
-            status: "PENDING",
-            ...(providerInfo.expiresAt
-              ? { expiresAt: new Date(providerInfo.expiresAt) }
-              : {}),
+            version: { increment: 1 },
           },
         });
-      }
-    });
+        const customerEsim = await tx.customerEsim.upsert({
+          where: { orderId },
+          update: { qrPayloadEncrypted: this.crypto.encrypt(qrPayload) },
+          create: {
+            orderId,
+            inventoryId: inventory.id,
+            customerId,
+            qrPayloadEncrypted: this.crypto.encrypt(qrPayload),
+          },
+        });
+        if (providerInfo?.providerSubscriptionId) {
+          await tx.subscription.upsert({
+            where: {
+              providerSubscriptionId: providerInfo.providerSubscriptionId,
+            },
+            update: {
+              provider: providerInfo.provider,
+              ...(providerInfo.expiresAt
+                ? { expiresAt: new Date(providerInfo.expiresAt) }
+                : {}),
+            },
+            create: {
+              customerEsimId: customerEsim.id,
+              provider: providerInfo.provider,
+              providerSubscriptionId: providerInfo.providerSubscriptionId,
+              status: "PENDING",
+              ...(providerInfo.expiresAt
+                ? { expiresAt: new Date(providerInfo.expiresAt) }
+                : {}),
+            },
+          });
+        }
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 15_000,
+        timeout: 45_000,
+      },
+    );
   }
 
   /**
@@ -1084,79 +1112,96 @@ export class InventoryService implements OnModuleInit {
     const inventoryStatus = this.mapInventoryStatus(event.status);
     const subscriptionStatus = this.mapSubscriptionStatus(event.status);
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.esimInventory.update({
-        where: { id: inventory.id },
-        data: {
-          ...(inventoryStatus ? { status: inventoryStatus } : {}),
-          ...(event.status ? { providerStatus: event.status } : {}),
-          ...(event.subscriptionId
-            ? { providerSubscriptionId: event.subscriptionId }
-            : {}),
-          ...(event.msisdn ? { msisdn: event.msisdn.replace(/\D/g, "") } : {}),
-          ...(event.activatedAt
-            ? { activatedAt: new Date(event.activatedAt) }
-            : {}),
-          ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
-          version: { increment: 1 },
+    await withPostgresTransactionRetry(() =>
+      this.prisma.$transaction(
+        async (tx) => {
+          await tx.esimInventory.update({
+            where: { id: inventory.id },
+            data: {
+              ...(inventoryStatus ? { status: inventoryStatus } : {}),
+              ...(event.status ? { providerStatus: event.status } : {}),
+              ...(event.subscriptionId
+                ? { providerSubscriptionId: event.subscriptionId }
+                : {}),
+              ...(event.msisdn
+                ? { msisdn: event.msisdn.replace(/\D/g, "") }
+                : {}),
+              ...(event.activatedAt
+                ? { activatedAt: new Date(event.activatedAt) }
+                : {}),
+              ...(event.expiresAt
+                ? { expiresAt: new Date(event.expiresAt) }
+                : {}),
+              version: { increment: 1 },
+            },
+          });
+          const customerEsim = await tx.customerEsim.findUnique({
+            where: { orderId },
+          });
+          const providerSubscriptionId =
+            event.subscriptionId ?? inventory.providerSubscriptionId;
+          if (!customerEsim || !providerSubscriptionId) return;
+          if (event.status === "CANCELED") {
+            // Product cancellation stops future renewal but remains usable until
+            // the provider-supplied expiration date. Preserve the current local
+            // subscription state and wait for the later EXPIRED event.
+            await tx.subscription.updateMany({
+              where: { providerSubscriptionId },
+              data: {
+                providerLastSeenAt: new Date(),
+                ...(event.expiresAt
+                  ? { expiresAt: new Date(event.expiresAt) }
+                  : {}),
+              },
+            });
+            return;
+          }
+          await tx.subscription.upsert({
+            where: { providerSubscriptionId },
+            update: {
+              ...(subscriptionStatus ? { status: subscriptionStatus } : {}),
+              providerLastSeenAt: new Date(),
+              ...(event.status === "ACTIVATED"
+                ? {
+                    assignmentVerificationStatus: "VERIFIED" as const,
+                    assignmentVerifiedAt: new Date(),
+                  }
+                : {}),
+              ...(event.activatedAt
+                ? { activatedAt: new Date(event.activatedAt) }
+                : {}),
+              ...(event.expiresAt
+                ? { expiresAt: new Date(event.expiresAt) }
+                : {}),
+            },
+            create: {
+              customerEsimId: customerEsim.id,
+              provider: event.provider,
+              providerSubscriptionId,
+              status: subscriptionStatus ?? "PENDING",
+              providerLastSeenAt: new Date(),
+              ...(event.status === "ACTIVATED"
+                ? {
+                    assignmentVerificationStatus: "VERIFIED",
+                    assignmentVerifiedAt: new Date(),
+                  }
+                : {}),
+              ...(event.activatedAt
+                ? { activatedAt: new Date(event.activatedAt) }
+                : {}),
+              ...(event.expiresAt
+                ? { expiresAt: new Date(event.expiresAt) }
+                : {}),
+            },
+          });
         },
-      });
-      const customerEsim = await tx.customerEsim.findUnique({
-        where: { orderId },
-      });
-      const providerSubscriptionId =
-        event.subscriptionId ?? inventory.providerSubscriptionId;
-      if (!customerEsim || !providerSubscriptionId) return;
-      if (event.status === "CANCELED") {
-        // Product cancellation stops future renewal but remains usable until
-        // the provider-supplied expiration date. Preserve the current local
-        // subscription state and wait for the later EXPIRED event.
-        await tx.subscription.updateMany({
-          where: { providerSubscriptionId },
-          data: {
-            providerLastSeenAt: new Date(),
-            ...(event.expiresAt
-              ? { expiresAt: new Date(event.expiresAt) }
-              : {}),
-          },
-        });
-        return;
-      }
-      await tx.subscription.upsert({
-        where: { providerSubscriptionId },
-        update: {
-          ...(subscriptionStatus ? { status: subscriptionStatus } : {}),
-          providerLastSeenAt: new Date(),
-          ...(event.status === "ACTIVATED"
-            ? {
-                assignmentVerificationStatus: "VERIFIED" as const,
-                assignmentVerifiedAt: new Date(),
-              }
-            : {}),
-          ...(event.activatedAt
-            ? { activatedAt: new Date(event.activatedAt) }
-            : {}),
-          ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 15_000,
+          timeout: 45_000,
         },
-        create: {
-          customerEsimId: customerEsim.id,
-          provider: event.provider,
-          providerSubscriptionId,
-          status: subscriptionStatus ?? "PENDING",
-          providerLastSeenAt: new Date(),
-          ...(event.status === "ACTIVATED"
-            ? {
-                assignmentVerificationStatus: "VERIFIED",
-                assignmentVerifiedAt: new Date(),
-              }
-            : {}),
-          ...(event.activatedAt
-            ? { activatedAt: new Date(event.activatedAt) }
-            : {}),
-          ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
-        },
-      });
-    });
+      ),
+    );
   }
 
   private mapInventoryStatus(
@@ -1189,7 +1234,11 @@ export class InventoryService implements OnModuleInit {
     if (status === "EXPIRED") return "EXPIRED";
     if (status === "TERMINATED") return "TERMINATED";
     if (status === "SUSPENDED") return "SUSPENDED";
-    return "PENDING";
+    // PRELOADED/OTHER are useful provider observations, but they must not
+    // regress an existing ACTIVE, SUSPENDED, EXPIRED or TERMINATED row. New
+    // subscriptions still use the explicit PENDING fallback in the upsert's
+    // create branch.
+    return null;
   }
 
   async reconcileStaleReservations() {

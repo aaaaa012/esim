@@ -85,4 +85,15 @@ describe("GuestOrderAccessService", () => {
       "GUEST_ORDER_SECRET is required in production",
     );
   });
+
+  it("binds a top-up lookup token to its MSISDN and rejects tampering", () => {
+    process.env.GUEST_ORDER_SECRET = "test-secret-with-enough-entropy";
+    const service = createService();
+    const token = service.createLookupToken("+9779800000000");
+
+    expect(service.mobileFromLookupToken(token)).toBe("+9779800000000");
+    expect(() =>
+      service.mobileFromLookupToken(`${token.slice(0, -1)}x`),
+    ).toThrow(ForbiddenException);
+  });
 });

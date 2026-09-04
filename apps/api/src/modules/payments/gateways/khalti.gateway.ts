@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional } from "@nestjs/common";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
+import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -39,8 +40,7 @@ export class KhaltiGateway implements PaymentGateway {
   }
 
   private timeoutMs(): number {
-    const parsed = Number(process.env.KHALTI_REQUEST_TIMEOUT_MS);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+    return resiliencePolicy.paymentTimeoutMs();
   }
 
   private ensureConfigured(): void {

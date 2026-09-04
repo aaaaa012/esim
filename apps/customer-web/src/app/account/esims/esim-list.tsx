@@ -42,7 +42,7 @@ export default function OrderList() {
           throw new Error(
             apiErrorMessage(
               value.error?.code ?? "",
-              value.error?.message ?? "Something went wrong",
+              "Your eSIMs could not be loaded.",
             ),
           );
         return value.data;

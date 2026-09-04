@@ -328,6 +328,16 @@ export class OrdersService implements OnModuleInit {
       orderBy: { createdAt: "desc" },
     });
     const latestTraveler = orders.find((order) => order.traveler)?.traveler;
+    const profileUpdates = await this.prisma.auditLog.findMany({
+      where: {
+        entity: "Customer",
+        entityId: customer.id,
+        action: { in: ["EMAIL_CORRECTED"] },
+      },
+      include: { performedBy: { select: { email: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
     const displayEmail =
       customer.source === "PARTNER" &&
       customer.email.endsWith("@partner.visacompass.invalid") &&
@@ -366,6 +376,14 @@ export class OrdersService implements OnModuleInit {
       customerCode: customer.customerCode,
       email: displayEmail,
       name: latestTraveler?.firstName,
+      profileUpdates: profileUpdates.map((update) => ({
+        id: update.id,
+        action: update.action,
+        previousValue: update.previousValue,
+        newValue: update.newValue,
+        performedBy: update.performedBy?.email ?? "System",
+        createdAt: update.createdAt.toISOString(),
+      })),
       orders: orders.map((order) => ({
         id: order.id,
         orderNumber: order.orderNumber,
@@ -444,10 +462,14 @@ export class OrdersService implements OnModuleInit {
       mobile?: string;
       email?: string;
       targetEsimId?: string;
+      termsAccepted?: boolean;
+      privacyAccepted?: boolean;
     },
   ) {
     if (!compatibilityAccepted)
       throw new BadRequestException("Compatibility declaration is required");
+    if (!meta?.termsAccepted || !meta?.privacyAccepted)
+      throw new BadRequestException("Terms and privacy consent are required");
     const plan = await this.catalog.findActive(planId);
     if (!plan) throw new BadRequestException("Invalid or inactive plan");
     const id = randomUUID();
@@ -518,22 +540,27 @@ export class OrdersService implements OnModuleInit {
     };
     this.orders.set(id, order);
     await this.persistence.save(order);
-    if (meta?.ipAddress || meta?.userAgent) {
-      await this.persistence
-        .recordConsent(
+    const consentContext = [
+      ["E_SIM_COMPATIBILITY", "1.0"],
+      ["TERMS_OF_SERVICE", "1.0"],
+      ["PRIVACY_POLICY", "1.0"],
+    ] as const;
+    await Promise.all(
+      consentContext.map(([type, version]) =>
+        this.persistence.recordConsent(
           id,
           ownerId ?? "guest",
-          "E_SIM_COMPATIBILITY",
-          "1.0",
+          type,
+          version,
           meta.ipAddress ?? "unknown",
           meta.userAgent ?? "unknown",
-        )
-        .catch((error) =>
-          this.logger.warn(
-            `Consent recording failed for order ${id}: ${error instanceof Error ? error.message : "unknown"}`,
-          ),
-        );
-    }
+        ),
+      ),
+    ).catch((error) =>
+      this.logger.warn(
+        `Consent recording failed for order ${id}: ${error instanceof Error ? error.message : "unknown"}`,
+      ),
+    );
     return this.redact(order);
   }
 
@@ -630,26 +657,7 @@ export class OrdersService implements OnModuleInit {
     ];
   }
   private async priorOrderEmail(mobile: string): Promise<string | undefined> {
-    const target = normalizeMsisdn(mobile);
-    const prior = [...this.orders.values()].find(
-      (order) =>
-        order.status === OrderStatus.COMPLETED &&
-        order.traveler &&
-        normalizeMsisdn(order.traveler.mobile) === target,
-    );
-    if (prior?.traveler?.email) return prior.traveler.email;
-    if (!this.prisma.enabled) return undefined;
-    const variants = [...msisdnVariants(mobile)];
-    const found = await this.prisma.order.findFirst({
-      where: {
-        status: "COMPLETED",
-        traveler: { is: { mobile: { in: variants } } },
-      },
-      select: { traveler: { select: { mobile: true, email: true } } },
-    });
-    if (found?.traveler && normalizeMsisdn(found.traveler.mobile) === target)
-      return found.traveler.email;
-    return undefined;
+    return (await this.resolveSubscriber(mobile))?.traveler.email;
   }
   private async customerEmail(ownerId: string): Promise<string | undefined> {
     if (!this.prisma.enabled)
@@ -1357,7 +1365,9 @@ export class OrdersService implements OnModuleInit {
       });
       if (
         dbOrder?.traveler &&
-        this.matchesTopUpLookup(target, [dbOrder.customerEsim?.inventory?.msisdn])
+        this.matchesTopUpLookup(target, [
+          dbOrder.customerEsim?.inventory?.msisdn,
+        ])
       ) {
         return {
           found: true,
@@ -1528,6 +1538,7 @@ export class OrdersService implements OnModuleInit {
       );
       if (!prior?.traveler) return null;
       return {
+        orderId: prior.id,
         customerId: undefined,
         planCountryCode: prior.plan.countryCode,
         traveler: {
@@ -1556,6 +1567,7 @@ export class OrdersService implements OnModuleInit {
     )
       return null;
     return {
+      orderId: prior.id,
       customerId: prior.customerId,
       planCountryCode: prior.plan.country.isoCode,
       traveler: {
@@ -1588,6 +1600,7 @@ export class OrdersService implements OnModuleInit {
       );
       if (!prior?.traveler) return null;
       return {
+        orderId: prior.id,
         customerId: undefined,
         planCountryCode: prior.plan.countryCode,
         traveler: {
@@ -1616,8 +1629,7 @@ export class OrdersService implements OnModuleInit {
       return {
         allowed: false,
         errorKey: "ESIM_NOT_AVAILABLE",
-        errorMessage:
-          "We could not find an active eSIM for this MSISDN.",
+        errorMessage: "We could not find an active eSIM for this MSISDN.",
       };
     const provider = await this.connectivity.checkEligibility(planId, msisdn);
     return provider;

@@ -4,11 +4,10 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { AttentionCaseStatus, OutboxStatus, Prisma } from "@prisma/client";
+import { isAttentionAction } from "@visa-compass/shared";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../infrastructure/prisma.service.js";
-import {
-  SELLABLE_PROVIDER_STATUSES,
-} from "../common/sellable-provider-statuses.js";
+import { SELLABLE_PROVIDER_STATUSES } from "../common/sellable-provider-statuses.js";
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
 
@@ -41,11 +40,14 @@ export class ProductionResilienceService {
     nextRetryAt?: Date;
   }) {
     if (!this.prisma.enabled) return null;
+    const availableActions = (input.availableActions ?? []).filter(
+      isAttentionAction,
+    );
     return this.prisma.attentionCase.upsert({
       where: { dedupeKey: input.dedupeKey },
       create: {
         ...input,
-        availableActions: input.availableActions ?? [],
+        availableActions,
       },
       update: {
         status: AttentionCaseStatus.OPEN,
@@ -57,7 +59,7 @@ export class ProductionResilienceService {
         lastSuccessfulStep: input.lastSuccessfulStep ?? null,
         failureCategory: input.failureCategory ?? null,
         nextRetryAt: input.nextRetryAt ?? null,
-        availableActions: input.availableActions ?? [],
+        availableActions,
         retryCount: { increment: 1 },
         resolvedAt: null,
         resolution: null,

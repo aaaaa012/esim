@@ -17,6 +17,7 @@ import type {
   LifecycleResult,
 } from "./connectivity-provider.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { resiliencePolicy } from "../../infrastructure/resilience-policy.js";
 import { classifyProviderHttpFailure } from "./provider-failure.js";
 
 /*
@@ -228,7 +229,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   private circuitOpen() {
     if (!this.circuitOpenedAt) return false;
-    const cooldown = Number(process.env.TRANSATEL_CIRCUIT_RESET_MS ?? 30_000);
+    const cooldown = resiliencePolicy.connectivityCircuitResetMs();
     if (Date.now() - this.circuitOpenedAt >= cooldown) {
       this.circuitOpenedAt = 0;
       this.consecutiveFailures = 0;
@@ -244,12 +245,10 @@ export class TransatelProvider implements ConnectivityProvider {
   }
   private providerFailed() {
     this.consecutiveFailures += 1;
-    const threshold = Number(
-      process.env.TRANSATEL_CIRCUIT_FAILURE_THRESHOLD ?? 5,
-    );
+    const threshold = resiliencePolicy.connectivityCircuitFailures();
     if (
       this.consecutiveFailures >=
-      (Number.isFinite(threshold) && threshold > 0 ? threshold : 5)
+      threshold
     )
       this.circuitOpenedAt = Date.now();
   }
@@ -284,8 +283,7 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   private timeoutMs(): number {
-    const parsed = Number(process.env.TRANSATEL_REQUEST_TIMEOUT_MS);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+    return resiliencePolicy.connectivityTimeoutMs();
   }
 
   private async getAccessToken(force = false): Promise<string> {

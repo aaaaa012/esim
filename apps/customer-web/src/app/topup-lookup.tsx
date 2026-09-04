@@ -9,8 +9,9 @@ import {
   X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ErrorModal from "../components/error-modal";
+import { publicApiErrorMessage } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -50,6 +51,51 @@ export default function TopupLookup() {
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
+  const [verificationRequested, setVerificationRequested] = useState(false);
+
+  const verifyLookup = async (lookupToken: string) => {
+    setOpen(true);
+    setBusy(true);
+    setError("");
+    setVerificationRequested(false);
+    try {
+      const response = await fetch(`${API}/guest/orders/topup-lookup/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lookupToken }),
+      });
+      const payload = (await response.json()) as {
+        data?: LookupResult;
+        error?: { code?: string; message?: string };
+      };
+      if (!response.ok || !payload.data)
+        throw new Error(publicApiErrorMessage(payload.error, "This recharge link is invalid or expired."));
+      setMobile(payload.data.mobile);
+      setResult(payload.data);
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${window.location.search}#recharge`,
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "This recharge link is invalid or expired.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    const lookupToken = new URLSearchParams(
+      window.location.hash.slice(1),
+    ).get("topup");
+    if (lookupToken) void verifyLookup(lookupToken);
+    // The signed token is consumed only on the initial page load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const close = () => {
     if (busy) return;
@@ -57,6 +103,7 @@ export default function TopupLookup() {
     setResult(null);
     setAlternatives(null);
     setShowAlternatives(false);
+    setVerificationRequested(false);
     setError("");
   };
 
@@ -78,12 +125,12 @@ export default function TopupLookup() {
         body: JSON.stringify({ mobile: mobile.trim() }),
       });
       const payload = (await response.json()) as {
-        data?: LookupResult;
-        error?: { message: string };
+        data?: { verificationRequested?: boolean; message?: string };
+        error?: { code?: string; message?: string };
       };
       if (!response.ok)
-        throw new Error(payload.error?.message ?? "Lookup failed");
-      setResult(payload.data ?? null);
+        throw new Error(publicApiErrorMessage(payload.error, "We could not send the recharge link. Please try again."));
+      setVerificationRequested(Boolean(payload.data?.verificationRequested));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Lookup failed");
     } finally {
@@ -107,14 +154,15 @@ export default function TopupLookup() {
       });
       const payload = (await response.json()) as {
         data?: { allowed?: boolean; errorMessage?: string };
-        error?: { message?: string };
+        error?: { code?: string; message?: string };
       };
       const eligibility = payload.data;
       if (!response.ok || !eligibility?.allowed)
         throw new Error(
           eligibility?.errorMessage ??
-            payload.error?.message ??
+            publicApiErrorMessage(payload.error,
             "This eSIM cannot subscribe to the selected plan.",
+            )
         );
       const params = new URLSearchParams({
         plan: planId,
@@ -144,10 +192,10 @@ export default function TopupLookup() {
       );
       const payload = (await response.json()) as {
         data?: Plan[];
-        error?: { message: string };
+        error?: { code?: string; message?: string };
       };
       if (!response.ok)
-        throw new Error(payload.error?.message ?? "Plans could not be loaded");
+        throw new Error(publicApiErrorMessage(payload.error, "Plans could not be loaded"));
       setAlternatives(payload.data ?? []);
       setShowAlternatives(true);
     } catch (cause) {
@@ -431,6 +479,18 @@ export default function TopupLookup() {
                     Please choose a destination to buy a new eSIM.
                   </p>
                 )}
+              </div>
+            ) : null}
+            {verificationRequested ? (
+              <div className="topup-result" role="status" aria-live="polite">
+                <p className="topup-note ok">
+                  <CheckCircle2 size={15} /> Check your original purchase email
+                  for a secure recharge link. The link expires in 15 minutes.
+                </p>
+                <p className="recharge-help">
+                  For privacy, this message is the same whether or not the
+                  MSISDN is registered.
+                </p>
               </div>
             ) : null}
           </section>

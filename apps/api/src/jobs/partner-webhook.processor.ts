@@ -13,6 +13,10 @@ import { CryptoService } from "../infrastructure/crypto.service.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
+import {
+  PARTNER_WEBHOOK_JOB_OPTIONS,
+  resiliencePolicy,
+} from "../infrastructure/resilience-policy.js";
 
 type DeliveryJob = { deliveryId: string };
 
@@ -182,6 +186,7 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
           "deliver",
           { deliveryId: id },
           `partner-webhook-${id}`,
+          PARTNER_WEBHOOK_JOB_OPTIONS,
         ),
       ),
     );
@@ -202,6 +207,7 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
       "deliver",
       { deliveryId },
       `partner-webhook-replay-${deliveryId}-${Date.now()}`,
+      PARTNER_WEBHOOK_JOB_OPTIONS,
     );
     return delivery;
   }
@@ -239,7 +245,7 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
         },
         body,
         redirect: "manual",
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(resiliencePolicy.partnerWebhookTimeoutMs()),
       });
       if (response.status >= 300 && response.status < 400)
         throw new Error("Partner endpoint redirects are not allowed");
@@ -259,7 +265,9 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
       });
       return { delivered: true };
     } catch (error) {
-      const terminal = job.attemptsMade + 1 >= 3;
+      const terminal =
+        job.attemptsMade + 1 >=
+        Number(job.opts.attempts ?? PARTNER_WEBHOOK_JOB_OPTIONS.attempts);
       await this.prisma.partnerWebhookDelivery.update({
         where: { id: delivery.id },
         data: {
@@ -270,7 +278,11 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
           latencyMs: Date.now() - started,
           nextRetryAt: terminal
             ? null
-            : new Date(Date.now() + 2_000 * 2 ** job.attemptsMade),
+            : new Date(
+                Date.now() +
+                  PARTNER_WEBHOOK_JOB_OPTIONS.backoff.delay *
+                    2 ** job.attemptsMade,
+              ),
           errorMessage:
             error instanceof Error
               ? error.message.slice(0, 500)

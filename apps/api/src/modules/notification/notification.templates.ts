@@ -3,6 +3,7 @@ export type NotificationTemplate =
   | "QR_READY"
   | "DOCUMENT_REUPLOAD"
   | "GUEST_ORDER_RECOVERY"
+  | "TOPUP_LOOKUP"
   | "PLAN_EXHAUSTED"
   | "PLAN_EXPIRED"
   | "OPS_ALERT";
@@ -86,6 +87,23 @@ export function renderNotification(
   template: NotificationTemplate,
   data: TemplateData,
 ) {
+  if (template === "TOPUP_LOOKUP")
+    return branded({
+      subject: "Confirm your eSIM recharge",
+      paragraphs: [
+        "A request was made to view recharge plans for your Visa Compass eSIM.",
+        "Use the secure link below to continue. The link expires in 15 minutes and should not be shared.",
+        "If you did not make this request, you can ignore this email.",
+      ],
+      ...(data.recoveryUrl
+        ? {
+            cta: {
+              label: "View recharge plans",
+              href: data.recoveryUrl,
+            },
+          }
+        : {}),
+    });
   if (template === "GUEST_ORDER_RECOVERY")
     return branded({
       subject: `Keep access to ${data.orderNumber}`,

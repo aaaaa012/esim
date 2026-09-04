@@ -92,10 +92,14 @@ export function mapClerkActivationFailure(
       status,
     };
   }
-  if (status === HttpStatus.TOO_MANY_REQUESTS || /rate.*limit/.test(joinedCodes)) {
+  if (
+    status === HttpStatus.TOO_MANY_REQUESTS ||
+    /rate.*limit/.test(joinedCodes)
+  ) {
     return {
       code: "STAFF_ACTIVATION_RATE_LIMITED",
-      message: "Too many activation attempts. Wait a few minutes and try again.",
+      message:
+        "Too many activation attempts. Wait a few minutes and try again.",
       providerCodes,
       status,
     };
@@ -981,6 +985,168 @@ export class AdminService {
   private staffDomain(): string {
     return process.env.STAFF_EMAIL_DOMAIN ?? "visacompassnepal.com";
   }
+
+  async correctCustomerEmail(
+    customerId: string,
+    emailInput: string,
+    reasonInput: string,
+    actorClerkId: string,
+  ) {
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    const email = emailInput.trim().toLowerCase();
+    const reason = reasonInput.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email) || email.length > 254)
+      throw new BadRequestException("Enter a valid email address");
+    if (reason.length < 10 || reason.length > 500)
+      throw new BadRequestException(
+        "Provide a reason between 10 and 500 characters",
+      );
+    if (!process.env.CLERK_SECRET_KEY)
+      throw new BadRequestException("Customer identity service is unavailable");
+    const [customer, actor] = await Promise.all([
+      this.prisma.customer.findUnique({
+        where: { id: customerId },
+        include: { user: true, partnerIdentity: true },
+      }),
+      this.prisma.user.findUnique({ where: { clerkId: actorClerkId } }),
+    ]);
+    if (!customer) throw new NotFoundException("Customer not found");
+    if (!actor || actor.accountType !== UserRoleName.SUPER_ADMIN)
+      throw new BadRequestException("Super Admin approval is required");
+    if (!customer.user || customer.user.accountType !== UserRoleName.CUSTOMER)
+      throw new BadRequestException(
+        "Only a customer login account can have its sign-in email corrected",
+      );
+    if (customer.partnerIdentity)
+      throw new BadRequestException(
+        "Partner-managed identities must be corrected by the owning partner",
+      );
+    if (customer.email === email && customer.user.email === email)
+      return { changed: false, email };
+    const conflict = await this.prisma.user.findUnique({ where: { email } });
+    if (conflict && conflict.id !== customer.user.id)
+      throw new BadRequestException("That email already belongs to an account");
+    const customerConflict = await this.prisma.customer.findUnique({
+      where: { email },
+    });
+    if (customerConflict && customerConflict.id !== customer.id)
+      throw new BadRequestException("That email already belongs to a customer");
+
+    const clerk = createClerkClient({
+      secretKey: process.env.CLERK_SECRET_KEY,
+    });
+    let newAddressId: string | undefined;
+    let previousPrimaryAddressId: string | null | undefined;
+    let sessionIds: string[] = [];
+    try {
+      const clerkUser = await clerk.users.getUser(customer.user.clerkId);
+      previousPrimaryAddressId = clerkUser.primaryEmailAddressId;
+      const existingAddress = clerkUser.emailAddresses.find(
+        (item) => item.emailAddress.trim().toLowerCase() === email,
+      );
+      const address =
+        existingAddress ??
+        (await clerk.emailAddresses.createEmailAddress({
+          userId: customer.user.clerkId,
+          emailAddress: email,
+          verified: true,
+        }));
+      newAddressId = existingAddress ? undefined : address.id;
+      await clerk.users.updateUser(customer.user.clerkId, {
+        primaryEmailAddressID: address.id,
+        notifyPrimaryEmailAddressChanged: true,
+      });
+      const sessions = await clerk.sessions.getSessionList({
+        userId: customer.user.clerkId,
+        limit: 100,
+      });
+      sessionIds = sessions.data.map((session) => session.id);
+    } catch (error) {
+      if (newAddressId)
+        await clerk.emailAddresses
+          .deleteEmailAddress(newAddressId)
+          .catch(() => undefined);
+      this.logger.warn({
+        event: "customer_email_correction_identity_failed",
+        customerId,
+        actorId: actor.id,
+      });
+      throw new BadRequestException(
+        "The sign-in email could not be updated. No local change was saved.",
+      );
+    }
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: customer.user!.id },
+          data: { email },
+        });
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: { email },
+        });
+        await tx.auditLog.create({
+          data: {
+            module: "CUSTOMER_IDENTITY",
+            entity: "Customer",
+            entityId: customer.id,
+            action: "EMAIL_CORRECTED",
+            performedById: actor.id,
+            previousValue: { email: customer.email },
+            newValue: { email, reason },
+          },
+        });
+      });
+    } catch {
+      let rolledBack = false;
+      if (previousPrimaryAddressId) {
+        try {
+          await clerk.users.updateUser(customer.user.clerkId, {
+            primaryEmailAddressID: previousPrimaryAddressId,
+            notifyPrimaryEmailAddressChanged: false,
+          });
+          if (newAddressId)
+            await clerk.emailAddresses.deleteEmailAddress(newAddressId);
+          rolledBack = true;
+        } catch {
+          // The structured log below is an explicit reconciliation signal.
+        }
+      }
+      this.logger.error({
+        event: "customer_email_correction_reconciliation_required",
+        customerId,
+        actorId: actor.id,
+        identityRollbackSucceeded: rolledBack,
+      });
+      throw new BadRequestException(
+        rolledBack
+          ? "The email change could not be saved and was rolled back. Please try again."
+          : "The identity update needs administrator reconciliation. Do not retry this change.",
+      );
+    }
+    const revocations = await Promise.allSettled(
+      sessionIds.map((id) => clerk.sessions.revokeSession(id)),
+    );
+    const revoked = revocations.filter(
+      (result) => result.status === "fulfilled",
+    ).length;
+    if (revoked !== sessionIds.length)
+      this.logger.warn({
+        event: "customer_email_correction_session_revocation_incomplete",
+        customerId,
+        actorId: actor.id,
+        expected: sessionIds.length,
+        revoked,
+      });
+    return {
+      changed: true,
+      email,
+      sessionsRevoked: revoked,
+      sessionsFound: sessionIds.length,
+    };
+  }
   async invite(
     emailInput: string,
     accountType: UserRoleName,
@@ -1121,9 +1287,13 @@ export class AdminService {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
     if (typeof tokenInput !== "string" || tokenInput.length < 32)
-      throw new BadRequestException("This activation link is invalid or expired");
+      throw new BadRequestException(
+        "This activation link is invalid or expired",
+      );
     if (typeof password !== "string" || password.length < 12)
-      throw new BadRequestException("Choose a password of at least 12 characters");
+      throw new BadRequestException(
+        "Choose a password of at least 12 characters",
+      );
     const firstName = firstNameInput.trim();
     const lastName = lastNameInput.trim();
     if (!firstName || firstName.length > 100)
@@ -1140,12 +1310,18 @@ export class AdminService {
       },
     });
     if (!invitation)
-      throw new BadRequestException("This activation link is invalid or expired");
-    if (await this.prisma.user.findUnique({ where: { email: invitation.email } }))
+      throw new BadRequestException(
+        "This activation link is invalid or expired",
+      );
+    if (
+      await this.prisma.user.findUnique({ where: { email: invitation.email } })
+    )
       throw new BadRequestException("This email already belongs to an account");
     let clerkUserId: string;
     try {
-      const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+      const clerk = createClerkClient({
+        secretKey: process.env.CLERK_SECRET_KEY,
+      });
       const clerkUser = await clerk.users.createUser({
         emailAddress: [invitation.email],
         firstName,
@@ -1185,7 +1361,9 @@ export class AdminService {
           update: {},
           create: { name: invitation.accountType },
         });
-        await tx.userRole.create({ data: { userId: user.id, roleId: role.id } });
+        await tx.userRole.create({
+          data: { userId: user.id, roleId: role.id },
+        });
         await tx.staffInvitation.update({
           where: { id: invitation.id },
           data: {
@@ -1203,7 +1381,10 @@ export class AdminService {
             entityId: invitation.id,
             action: "ACCEPTED",
             performedById: user.id,
-            newValue: { accountType: invitation.accountType, email: invitation.email },
+            newValue: {
+              accountType: invitation.accountType,
+              email: invitation.email,
+            },
           },
         });
       });

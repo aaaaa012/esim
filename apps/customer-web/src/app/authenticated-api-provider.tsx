@@ -1,6 +1,7 @@
 "use client";
 import { useAuth } from "@clerk/nextjs";
 import { createContext, useCallback, useContext } from "react";
+import { sanitizeApiResponse } from "../lib/sanitize-api-response";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type AuthFetch = typeof window.fetch;
 const Context = createContext<AuthFetch | null>(null);
@@ -32,7 +33,9 @@ export default function AuthenticatedApiProvider({
         const token = await getToken({ skipCache: true });
         if (token) headers.set("authorization", `Bearer ${token}`);
       }
-      return window.fetch(input, { ...init, headers });
+      return sanitizeApiResponse(
+        await window.fetch(input, { ...init, headers }),
+      );
     },
     [getToken],
   );

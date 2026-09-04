@@ -72,7 +72,7 @@ export default function EsimDetails({ id }: { id: string }) {
           throw new Error(
             apiErrorMessage(
               value.error?.code ?? "",
-              value.error?.message ?? "Something went wrong",
+              "This eSIM could not be loaded.",
             ),
           );
         setOrder(value.data);
@@ -110,7 +110,7 @@ export default function EsimDetails({ id }: { id: string }) {
         throw new Error(
           apiErrorMessage(
             authorizationValue.error?.code ?? "",
-            authorizationValue.error?.message ?? "Something went wrong",
+            "This eSIM action could not be authorized.",
           ),
         );
       const authorization = authorizationValue.data as DocumentAuthorization;
@@ -144,7 +144,7 @@ export default function EsimDetails({ id }: { id: string }) {
         throw new Error(
           apiErrorMessage(
             confirmationValue.error?.code ?? "",
-            confirmationValue.error?.message ?? "Something went wrong",
+            "This eSIM action could not be confirmed.",
           ),
         );
       setReplacements({});
@@ -179,7 +179,7 @@ export default function EsimDetails({ id }: { id: string }) {
         throw new Error(
           apiErrorMessage(
             value.error?.code ?? "",
-            value.error?.message ?? "Something went wrong",
+            "This eSIM request could not be completed.",
           ),
         );
       setNotice(

@@ -91,3 +91,22 @@ pnpm --filter @visa-compass/api test && pnpm --filter @visa-compass/api lint
 pnpm --filter @visa-compass/customer-web test && pnpm --filter @visa-compass/customer-web typecheck
 pnpm --filter @visa-compass/ops-web test && pnpm --filter @visa-compass/ops-web typecheck
 ```
+
+## Cross-journey release gate
+
+These scenarios are mandatory before a customer-facing or operations release.
+
+| Journey | Required verification |
+|---|---|
+| Signed-in customer purchase | Compatibility and legal consent are independently required; traveller documents, payment, fulfilment and QR delivery complete. |
+| Guest purchase and recovery | The same consent rules apply; recovery resumes only the bound order and never exposes another customer. |
+| Hosted checkout | Initial purchase requires compatibility plus legal consent; recharge requires current legal consent without recollecting traveller documents. |
+| Existing-eSIM recharge | Public MSISDN submission returns a uniform response; only the original purchase email receives a 15-minute signed link; tampered/expired links fail. |
+| Payment recovery | Success, cancellation, pending, expiry and retry retain one order and one idempotent payment intent. |
+| Staff lifecycle | Invitation, activation, sign-in, required password change, role checks and disabled-account handling use distinct states. |
+| Operations fulfilment | Document review, order approval, provider status checks, provisioning retry and QR resend require explicit accessible confirmation. |
+| Failure presentation | Unknown provider, Clerk and server errors render approved copy only; correlation IDs and provider detail remain in restricted logs. |
+| Navigation failures | Signed-out routes go to sign-in, wrong roles to unauthorized, disabled users to account unavailable, and API outages to service unavailable with return destination preserved. |
+| Application boundaries | Unknown URLs render 404; route errors offer retry; root failures render a safe global recovery page; loading states remain accessible. |
+
+Automated release checks cover the consent contract, signed recharge-token integrity, error sanitization, auth-route classification, payment idempotency, checkout recovery, staff sign-in policy and role-based navigation. Environment-backed staging smoke tests must exercise Clerk, payment, email, object storage and Transatel integrations before production promotion.

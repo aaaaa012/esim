@@ -10,6 +10,7 @@ import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Dialog,
   DialogContent,
@@ -67,6 +68,7 @@ const toLocalInput = (date: Date) => {
 
 export default function ManualRefundsClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [items, setItems] = useState<ManualRefund[]>([]);
   const [status, setStatus] = useState("ACTIVE");
   const [busy, setBusy] = useState("");
@@ -318,13 +320,12 @@ export default function ManualRefundsClient() {
                           size="sm"
                           variant="success"
                           disabled={!!busy}
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                "Approve this manual refund for completion in Khalti?",
-                              )
-                            )
-                              void act(item, "approve");
+                          onClick={async () => {
+                            if (await confirm({
+                              title: "Approve manual refund?",
+                              description: "This authorizes the refund for completion in Khalti. The payment is not marked complete until the provider reference is recorded.",
+                              confirmLabel: "Approve refund",
+                            })) void act(item, "approve");
                           }}
                         >
                           <CheckCircle2 className="size-4" />

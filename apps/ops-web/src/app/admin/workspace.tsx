@@ -51,6 +51,7 @@ import { PaginationBar } from "@/components/pagination-bar";
 import { SearchInput } from "@/components/search-input";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Table,
   TableBody,
@@ -148,6 +149,7 @@ const fileToTabularContent = async (file: File): Promise<string> => {
 
 export default function AdminWorkspace() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const request = async <T,>(path: string, init?: RequestInit) => {
     const r = await authFetch(`${API}${path}`, {
       ...init,
@@ -492,9 +494,7 @@ export default function AdminWorkspace() {
   const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
     if (
       action === "sync-catalog" &&
-      !window.confirm(
-        "Sync provider package data and costs now? Existing selling prices, visibility, and popularity will be preserved. New plans will be created as drafts.",
-      )
+      !(await confirm({ title: "Sync provider catalogue?", description: "Package data and costs will be refreshed. Existing selling prices, visibility, and popularity are preserved; new plans are created as drafts.", confirmLabel: "Sync catalogue" }))
     )
       return;
     setBusy(`transatel:${action}`);
@@ -555,9 +555,12 @@ export default function AdminWorkspace() {
   };
   const revokeInvitation = async (invitation: Invitation) => {
     if (
-      !window.confirm(
-        `Revoke the pending invitation for ${invitation.email}? The activation link will stop working immediately.`,
-      )
+      !(await confirm({
+        title: "Revoke staff invitation?",
+        description: `The activation link for ${invitation.email} will stop working immediately.`,
+        confirmLabel: "Revoke invitation",
+        destructive: true,
+      }))
     )
       return;
     setBusy(`invite:${invitation.id}`);
@@ -631,11 +634,7 @@ export default function AdminWorkspace() {
     status: Partner["status"],
   ) => {
     if (["SUSPENDED", "DISABLED"].includes(status)) {
-      const ok = window.confirm(
-        status === "SUSPENDED"
-          ? `Suspend ${partner.name}? They can still view details but cannot make changes.`
-          : `Disable ${partner.name}? They will no longer be able to connect.`,
-      );
+      const ok = await confirm({ title: `${status === "SUSPENDED" ? "Suspend" : "Disable"} ${partner.name}?`, description: status === "SUSPENDED" ? "The partner can view details but cannot make changes." : "The partner will immediately lose access.", confirmLabel: status === "SUSPENDED" ? "Suspend partner" : "Disable partner", destructive: true });
       if (!ok) return;
     }
     setBusy(partner.id);
@@ -702,9 +701,7 @@ export default function AdminWorkspace() {
     }
   };
   const revokePartnerKey = async (partner: Partner, credentialId: string) => {
-    const ok = window.confirm(
-      `Revoke this access key for ${partner.name}? This cannot be undone and the partner will lose access immediately.`,
-    );
+    const ok = await confirm({ title: "Revoke partner access key?", description: `${partner.name} will lose access through this key immediately. This cannot be undone.`, confirmLabel: "Revoke key", destructive: true });
     if (!ok) return;
     setBusy(`revoke-${credentialId}`);
     try {
@@ -854,9 +851,7 @@ export default function AdminWorkspace() {
     }
     const action = adjustType === "credit" ? "add" : "deduct";
     if (
-      !window.confirm(
-        `${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} to/from ${adjustFor.name}'s balance? This changes their available credit.`,
-      )
+      !(await confirm({ title: `${action === "add" ? "Credit" : "Debit"} partner balance?`, description: `${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} ${action === "add" ? "to" : "from"} ${adjustFor.name}. This changes available credit.`, confirmLabel: action === "add" ? "Credit balance" : "Debit balance", destructive: action !== "add" }))
     )
       return;
     setAdjustBusy(true);
@@ -2445,6 +2440,7 @@ function ConfigPanel({
   tab: string;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
 }) {
+  const confirm = useConfirmation();
   type InventoryOverview = {
     counts: {
       available: number;
@@ -2766,13 +2762,8 @@ function ConfigPanel({
               variant="outline"
               className="mt-3"
               disabled={Boolean(busy)}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "Expire all abandoned payments? Customers with a pending-but-unfinished payment will be able to start again.",
-                  )
-                )
-                  return;
+              onClick={async () => {
+                if (!(await confirm({ title: "Expire abandoned payments?", description: "Every payment past its gateway window will be marked expired, allowing affected customers to start again.", confirmLabel: "Expire payments" }))) return;
                 setBusy("sweep");
                 setError("");
                 request<{ expired: number }>(

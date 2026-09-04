@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AttentionCaseStatus, UserRoleName } from "@prisma/client";
-import { UserRole } from "@visa-compass/shared";
+import { isAttentionAction, UserRole } from "@visa-compass/shared";
 import {
   AccountGuard,
   AccountTypes,
@@ -68,9 +68,9 @@ export class AttentionController {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     const [platform, connectivity] = await Promise.all([
       this.resilience.platformHealth(),
-      this.connectivity.health().catch((error) => ({
+      this.connectivity.health().catch(() => ({
         ok: false,
-        detail: error instanceof Error ? error.message : "unavailable",
+        detail: "Connectivity health check unavailable",
       })),
     ]);
     return {
@@ -162,11 +162,11 @@ export class AttentionController {
             body.action!,
           ),
         });
-      } catch (error) {
+      } catch {
         results.push({
           id,
           ok: false,
-          error: error instanceof Error ? error.message : "unknown",
+          error: "The action could not be completed for this case.",
         });
       }
     }
@@ -178,6 +178,7 @@ export class AttentionController {
     action: string,
   ) {
     if (
+      !isAttentionAction(action) ||
       !Array.isArray(item.availableActions) ||
       !item.availableActions.includes(action)
     )
@@ -273,6 +274,8 @@ export class AttentionController {
       });
       return this.resilience.dispatchOutbox();
     }
-    throw new BadRequestException(`Action ${action} is not implemented`);
+    // Every value accepted above belongs to the shared action contract. Keep
+    // the response neutral if a deployment ever becomes version-skewed.
+    throw new BadRequestException("This action is temporarily unavailable");
   }
 }

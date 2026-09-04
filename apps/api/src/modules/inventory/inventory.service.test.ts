@@ -104,6 +104,51 @@ describe("InventoryService.assign", () => {
 });
 
 describe("InventoryService.applyLifecycle", () => {
+  it("does not regress an existing subscription to PENDING for an old PRELOADED event", async () => {
+    const subscriptionUpsert = vi.fn().mockResolvedValue({ id: "sub-row-1" });
+    const tx = {
+      esimInventory: { update: vi.fn().mockResolvedValue(undefined) },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          providerSubscriptionId: "sub-1",
+          status: "ACTIVATED",
+        }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("order-1", {
+      provider: "TRANSATEL",
+      status: "PRELOADED",
+      subscriptionId: "sub-1",
+      iccid: "8988247076000000319",
+    });
+
+    expect(subscriptionUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.not.objectContaining({ status: expect.anything() }),
+        create: expect.objectContaining({ status: "PENDING" }),
+      }),
+    );
+  });
+
   it("preserves an active subscription when a recurring product is canceled", async () => {
     const subscriptionUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
     const subscriptionUpsert = vi.fn();

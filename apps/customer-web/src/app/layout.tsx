@@ -3,6 +3,7 @@ import Image from "next/image";
 import "./globals.css";
 import CustomerHeader from "./customer-header";
 import { ClerkProvider } from "@clerk/nextjs";
+import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Visa Compass eSIM",
@@ -52,6 +53,7 @@ export default function RootLayout({
                   compatibility required
                 </span>
                 <b>Travel eSIM connectivity powered by Ubigi.</b>
+                <span><Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link> · <Link href="/refund-policy">Refund policy</Link></span>
               </div>
             </div>
           </footer>

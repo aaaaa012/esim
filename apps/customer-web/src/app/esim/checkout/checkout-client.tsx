@@ -273,7 +273,7 @@ export default function CheckoutClient({
       const error = new Error(
         apiErrorMessage(
           payload.error?.code ?? "",
-          payload.error?.message ?? "Something went wrong",
+          "This request could not be completed. Please try again.",
         ),
       ) as Error & { code?: string; status?: number };
       if (payload.error?.code) error.code = payload.error.code;
@@ -287,6 +287,7 @@ export default function CheckoutClient({
   // so the compatibility screen never flashes while that order is loaded.
   const [step, setStep] = useState(() => (orderId ? 4 : 1)),
     [compatible, setCompatible] = useState(false),
+    [legalAccepted, setLegalAccepted] = useState(false),
     [traveler, setTraveler] = useState(initial);
   const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
@@ -383,8 +384,7 @@ export default function CheckoutClient({
           throw new Error(
             apiErrorMessage(
               payload.error?.code ?? "UNEXPECTED",
-              payload.error?.message ??
-                "This recovery link is invalid or expired",
+              "This recovery link is invalid or expired",
             ),
           );
         if (cancelled) return;
@@ -807,6 +807,8 @@ export default function CheckoutClient({
       if (!planId) throw new Error("Choose a plan before checkout");
       if (!compatible && !isTopUpIntent)
         throw new Error("Confirm device compatibility");
+      if (!legalAccepted)
+        throw new Error("Accept the Terms and Privacy Policy to continue");
       guestRef.current = asGuest;
       setGuest(asGuest);
       if (asGuest) {
@@ -819,6 +821,8 @@ export default function CheckoutClient({
           body: JSON.stringify({
             planId,
             compatibilityAccepted: true,
+            termsAccepted: true,
+            privacyAccepted: true,
             mobile: mobile || traveler.mobile || undefined,
             lookupToken: lookupToken || undefined,
           }),
@@ -851,6 +855,8 @@ export default function CheckoutClient({
         body: JSON.stringify({
           planId,
           compatibilityAccepted: true,
+          termsAccepted: true,
+          privacyAccepted: true,
           mobile: mobile || traveler.mobile || undefined,
           lookupToken: lookupToken || undefined,
           ...(targetEsimId ? { targetEsimId } : {}),
@@ -883,6 +889,10 @@ export default function CheckoutClient({
     }
     if (!compatible && !isTopUpIntent) {
       setCompatibilityError("Confirm that your device is eSIM-compatible before continuing.");
+      return;
+    }
+    if (!legalAccepted) {
+      setCompatibilityError("Accept the Terms and Privacy Policy before continuing.");
       return;
     }
     if (!isLoaded) {
@@ -924,8 +934,7 @@ export default function CheckoutClient({
         throw new Error(
           apiErrorMessage(
             payload.error?.code ?? "UNEXPECTED",
-            payload.error?.message ??
-              "We could not save this order to your account",
+            "We could not save this order to your account",
           ),
         );
       try {
@@ -1393,6 +1402,24 @@ export default function CheckoutClient({
                     <small>
                       I understand incompatible devices are not eligible for a
                       refund.
+                    </small>
+                  </span>
+                </label>
+                <label className="confirm-box">
+                  <input
+                    type="checkbox"
+                    checked={legalAccepted}
+                    onChange={(e) => {
+                      setLegalAccepted(e.target.checked);
+                      if (e.target.checked) setCompatibilityError("");
+                    }}
+                  />
+                  <span>
+                    <b>I agree to the purchase terms</b>
+                    <small>
+                      I have read the <a href="/terms" target="_blank">Terms</a>,{" "}
+                      <a href="/privacy" target="_blank">Privacy Policy</a> and{" "}
+                      <a href="/refund-policy" target="_blank">Refund Policy</a>.
                     </small>
                   </span>
                 </label>

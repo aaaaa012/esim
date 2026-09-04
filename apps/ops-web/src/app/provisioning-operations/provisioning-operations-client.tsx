@@ -10,6 +10,7 @@ import { StatusBadge, humane } from "@/components/status-badge";
 import ErrorDialog from "@/components/error-dialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Table,
   TableBody,
@@ -59,6 +60,7 @@ function shortError(item: Operation): string {
 
 export default function ProvisioningOperationsClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [items, setItems] = useState<Operation[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -79,12 +81,11 @@ export default function ProvisioningOperationsClient() {
     );
   }, []);
   const checkProvider = async (item: Operation) => {
-    if (
-      !window.confirm(
-        "Check Transatel now? This reads provider state and will not create another activation.",
-      )
-    )
-      return;
+    if (!(await confirm({
+      title: "Check provider status?",
+      description: "This reads the current Transatel state and will not create another activation.",
+      confirmLabel: "Check status",
+    }))) return;
     setBusy(item.id);
     setError("");
     try {

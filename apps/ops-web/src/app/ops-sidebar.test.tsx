@@ -53,6 +53,7 @@ describe("OpsSidebar role-based navigation", () => {
       "Provider status",
       "Pending activations",
       "Homepage campaigns",
+      "Partners",
       "Refunds",
       "Messages",
       "Logs",
@@ -60,12 +61,8 @@ describe("OpsSidebar role-based navigation", () => {
       expect(screen.getByRole("link", { name: label })).toBeTruthy();
     }
     expect(screen.queryByRole("link", { name: "Settings" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Partners" })).toBeNull();
-    expect(
-      screen
-        .getByRole("link", { name: "Homepage campaigns" })
-        .getAttribute("href"),
-    ).toBe("/admin/homepage-campaigns");
+    expect(screen.getByRole("link", { name: "Partners" }).getAttribute("href")).toBe("/admin/partners-showcase");
+    expect(screen.getByRole("link", { name: "Homepage campaigns" }).getAttribute("href")).toBe("/admin/homepage-campaigns");
     expect(
       screen.getByRole("link", { name: "Orders" }).getAttribute("href"),
     ).toBe("/orders");
@@ -77,9 +74,8 @@ describe("OpsSidebar role-based navigation", () => {
     expect(
       screen.getByRole("link", { name: "Settings" }).getAttribute("href"),
     ).toBe("/admin");
-    expect(
-      screen.getByRole("link", { name: "Partners" }).getAttribute("href"),
-    ).toBe("/admin/partners-showcase");
+    expect(screen.getByRole("link", { name: "Partners" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Homepage campaigns" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Provider status" })).toBeTruthy();
   });
 });

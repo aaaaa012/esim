@@ -56,6 +56,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useConfirmation } from "@/components/confirmation-provider";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const TABS = [
@@ -200,6 +201,7 @@ const dateTime = (value?: string | null) =>
   value ? new Date(value).toLocaleString() : "Never";
 
 export default function PartnerWorkspace({ id }: { id: string }) {
+  const requestConfirmation = useConfirmation();
   const authFetch = useAuthenticatedFetch();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1281,13 +1283,8 @@ export default function PartnerWorkspace({ id }: { id: string }) {
                               variant="outline"
                               size="sm"
                               disabled={busy === `replay-${delivery.id}`}
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    "Send this update to the partner's system again?",
-                                  )
-                                )
-                                  void mutate(
+                              onClick={async () => {
+                                if (await requestConfirmation({ title: "Replay partner update?", description: "This sends the same update to the partner endpoint again.", confirmLabel: "Replay update" })) void mutate(
                                     `replay-${delivery.id}`,
                                     `/admin/partners/${id}/webhook-deliveries/${delivery.id}/replay`,
                                     { method: "POST" },

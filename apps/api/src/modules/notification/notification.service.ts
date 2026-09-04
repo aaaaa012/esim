@@ -9,6 +9,7 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
 import type { NotificationTemplate } from "./notification.templates.js";
+import { NOTIFICATION_JOB_OPTIONS } from "../../infrastructure/resilience-policy.js";
 
 export type NotificationChannel = "EMAIL" | "WHATSAPP";
 
@@ -115,6 +116,7 @@ export class NotificationService {
       "deliver-notification",
       { notificationId: id, ...input },
       `notification-${id}`,
+      NOTIFICATION_JOB_OPTIONS,
     );
     return { id, status: "QUEUED" as const };
   }
@@ -214,6 +216,7 @@ export class NotificationService {
         orderNumber,
       },
       `notification-retry-${id}-${Date.now()}`,
+      { ...NOTIFICATION_JOB_OPTIONS, allowDuplicate: true },
     );
     return { id, status: "QUEUED" as const };
   }

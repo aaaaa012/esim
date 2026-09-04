@@ -34,6 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { publicApiErrorMessage } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const CUSTOMER_WEB = process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL;
@@ -192,24 +193,8 @@ export function resolveCampaignArtwork(imageUrl: string) {
 
 function apiError(value: unknown, fallback: string) {
   if (!value || typeof value !== "object") return fallback;
-  const payload = value as {
-    message?: string;
-    correlationId?: string;
-    error?: string | { message?: string; correlationId?: string };
-  };
-  const message =
-    payload.message ??
-    (typeof payload.error === "string"
-      ? payload.error
-      : payload.error?.message) ??
-    fallback;
-  const correlationId =
-    payload.correlationId ??
-    (typeof payload.error === "object"
-      ? payload.error?.correlationId
-      : undefined) ??
-    (value as { meta?: { correlationId?: string } }).meta?.correlationId;
-  return correlationId ? `${message} (reference ${correlationId})` : message;
+  const payload = value as { error?: { code?: string } };
+  return publicApiErrorMessage(payload.error, fallback);
 }
 
 function Artwork({ campaign }: { campaign: Campaign }) {

@@ -150,6 +150,16 @@ export const apiErrorMessage = (
 };
 
 /**
+ * Converts an API error envelope into copy that is safe to render publicly.
+ * The server's free-form message is deliberately ignored: provider messages,
+ * correlation IDs and implementation details belong in logs, not in the UI.
+ */
+export const publicApiErrorMessage = (
+  error: { code?: string } | null | undefined,
+  fallback = "Something went wrong. Please try again.",
+): string => apiErrorMessage(error?.code ?? "", fallback);
+
+/**
  * Customer-facing reasons an eSIM activation can fail on. Each code maps to a
  * safe message customers can act on. Internal/provider detail is never
  * serialized to clients; it stays in the order's timeline and ops views.

@@ -4,6 +4,8 @@ import { DocumentType, PaymentProvider } from "./contracts.js";
 export const createOrderSchema = z.object({
   planId: z.string().uuid(),
   compatibilityAccepted: z.literal(true),
+  termsAccepted: z.literal(true),
+  privacyAccepted: z.literal(true),
   targetEsimId: z.string().uuid().optional(),
 });
 export const travelerSchema = z.object({
