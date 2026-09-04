@@ -971,6 +971,17 @@ export class InventoryService implements OnModuleInit {
       where: { iccid },
     });
     if (!inventory) throw new NotFoundException("Existing eSIM was not found");
+    const recharge = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    if (
+      recharge.targetInventoryId &&
+      (recharge.targetInventoryId !== inventory.id ||
+        recharge.customerId !== customerId)
+    )
+      throw new ConflictException(
+        "Recharge assignment does not match its beneficiary and target",
+      );
     const encryptedQr = qrPayload
       ? this.crypto.encrypt(qrPayload)
       : (
@@ -985,6 +996,19 @@ export class InventoryService implements OnModuleInit {
         "The existing eSIM activation record is unavailable for this top-up",
       );
     await this.prisma.$transaction(async (tx) => {
+      if (recharge.targetInventoryId) {
+        const existing = await tx.customerEsim.findUnique({
+          where: { orderId },
+        });
+        if (
+          existing &&
+          (existing.customerId !== customerId ||
+            existing.inventoryId !== inventory.id)
+        )
+          throw new ConflictException(
+            "Existing recharge assignment needs operations review",
+          );
+      }
       const customerEsim = await tx.customerEsim.upsert({
         where: { orderId },
         update: { qrPayloadEncrypted: encryptedQr },

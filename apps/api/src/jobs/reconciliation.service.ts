@@ -691,7 +691,10 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     if (!this.prisma.enabled) return;
     const rows = await this.prisma.notification.findMany({
       where: {
-        status: "FAILED",
+        OR: [
+          { status: "FAILED" },
+          { status: "QUEUED", dedupeKey: { startsWith: "recharge-recovery:" } },
+        ],
         nextAttemptAt: { lte: new Date() },
         attemptCount: { lt: 6 },
         recipient: { not: null },

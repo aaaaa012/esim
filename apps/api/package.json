@@ -23,7 +23,8 @@
     "db:transfer:typecheck": "pnpm prisma:generate:source && tsc -p tsconfig.transfer.json",
     "db:smoke": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/postgres-smoke.ts",
     "db:reconcile-hosted-customers": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/reconcile-hosted-customers.ts",
-    "campaigns:backfill-assets": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/backfill-homepage-campaign-assets.ts"
+    "campaigns:backfill-assets": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/backfill-homepage-campaign-assets.ts",
+    "db:reconcile-recharges": "node --env-file-if-exists=../../.env node_modules/tsx/dist/cli.mjs prisma/reconcile-recharge-customers.ts"
   },
   "dependencies": {
     "@clerk/backend": "^2.14.0",

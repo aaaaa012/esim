@@ -2,6 +2,7 @@ export type NotificationTemplate =
   | "ORDER_STATUS"
   | "QR_READY"
   | "DOCUMENT_REUPLOAD"
+  | "RECHARGE_RECOVERY"
   | "GUEST_ORDER_RECOVERY"
   | "TOPUP_LOOKUP"
   | "PLAN_EXHAUSTED"
@@ -31,8 +32,8 @@ const escapeHtml = (value: string) =>
 function webUrl(kind: "customer" | "ops", path: string) {
   const base =
     kind === "customer"
-      ? process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"
-      : process.env.OPS_WEB_URL ?? "http://localhost:3001";
+      ? (process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000")
+      : (process.env.OPS_WEB_URL ?? "http://localhost:3001");
   return `${base.replace(/\/$/, "")}${path}`;
 }
 
@@ -102,6 +103,18 @@ export function renderNotification(
               href: data.recoveryUrl,
             },
           }
+        : {}),
+    });
+  if (template === "RECHARGE_RECOVERY")
+    return branded({
+      subject: `Track your recharge - ${data.orderNumber}`,
+      paragraphs: [
+        `Your recharge order ${data.orderNumber} has been created. Use this private link to resume payment or track payment and recharge progress.`,
+        "This is not a payment confirmation. The link works for 30 days and gives access only to this recharge transaction.",
+        "Keep this link private. Your existing eSIM does not need to be installed again.",
+      ],
+      ...(data.recoveryUrl
+        ? { cta: { label: "Track recharge", href: data.recoveryUrl } }
         : {}),
     });
   if (template === "GUEST_ORDER_RECOVERY")

@@ -85,6 +85,8 @@ type Detail = OpsOrder & {
   };
   timeline: { to: string; at: string; reason?: string }[];
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
+  purchasedBy?: { id: string; email: string } | null;
+  targetInventoryId?: string | null;
   topUpMobile?: string;
   assignment?: {
     inventoryId?: string;
@@ -216,7 +218,15 @@ export default function OrderReview({ id }: { id: string }) {
     });
   };
   const checkProvider = async () => {
-    if (!(await confirm({ title: "Check provider status?", description: "This reads the current Transatel state and will not create another activation.", confirmLabel: "Check status" }))) return;
+    if (
+      !(await confirm({
+        title: "Check provider status?",
+        description:
+          "This reads the current Transatel state and will not create another activation.",
+        confirmLabel: "Check status",
+      }))
+    )
+      return;
     setBusy("provider-status-check");
     setError("");
     try {
@@ -598,6 +608,18 @@ export default function OrderReview({ id }: { id: string }) {
                     label="Customer"
                     value={`${order.customer.customerCode} · ${order.customer.email}`}
                   />
+                  {order.purchaseType === "TOPUP" && (
+                    <>
+                      <InfoRow
+                        label="Placed by"
+                        value={order.purchasedBy?.email ?? "Guest"}
+                      />
+                      <InfoRow
+                        label="Target eSIM reference"
+                        value={order.targetInventoryId ?? "Legacy assignment"}
+                      />
+                    </>
+                  )}
                   <InfoRow
                     label="Source"
                     value={humane(order.customer.source)}
@@ -887,7 +909,15 @@ export default function OrderReview({ id }: { id: string }) {
                       variant="success"
                       disabled={Boolean(busy)}
                       onClick={async () => {
-                        if (await confirm({ title: `Approve ${humane(document.type)} document?`, description: "This audited manual decision overrides the OCR result.", confirmLabel: "Approve document" })) void action(`documents/${document.id}/approve`);
+                        if (
+                          await confirm({
+                            title: `Approve ${humane(document.type)} document?`,
+                            description:
+                              "This audited manual decision overrides the OCR result.",
+                            confirmLabel: "Approve document",
+                          })
+                        )
+                          void action(`documents/${document.id}/approve`);
                       }}
                     >
                       {busy === `documents/${document.id}/approve` ? (
@@ -906,7 +936,15 @@ export default function OrderReview({ id }: { id: string }) {
                         variant="outline"
                         disabled={Boolean(busy)}
                         onClick={async () => {
-                          if (await confirm({ title: "Request a new document?", description: "The reason entered below will be shared with the customer.", confirmLabel: "Request re-upload" })) void action(
+                          if (
+                            await confirm({
+                              title: "Request a new document?",
+                              description:
+                                "The reason entered below will be shared with the customer.",
+                              confirmLabel: "Request re-upload",
+                            })
+                          )
+                            void action(
                               `documents/${document.id}/request-reupload`,
                               {
                                 reason,
@@ -1007,7 +1045,15 @@ export default function OrderReview({ id }: { id: string }) {
                   size="lg"
                   disabled={Boolean(busy) || !requiredApproved}
                   onClick={async () => {
-                    if (await confirm({ title: "Approve and activate this order?", description: "This submits the eSIM set-up to the network and cannot be undone.", confirmLabel: "Approve and start set-up" })) void action("approve");
+                    if (
+                      await confirm({
+                        title: "Approve and activate this order?",
+                        description:
+                          "This submits the eSIM set-up to the network and cannot be undone.",
+                        confirmLabel: "Approve and start set-up",
+                      })
+                    )
+                      void action("approve");
                   }}
                 >
                   {busy === "approve" ? (
@@ -1035,7 +1081,16 @@ export default function OrderReview({ id }: { id: string }) {
                     size="lg"
                     disabled={Boolean(busy)}
                     onClick={async () => {
-                      if (await confirm({ title: "Retry eSIM set-up?", description: "Proceed only after confirming the network did not already accept the order, to avoid a duplicate activation.", confirmLabel: "Retry set-up", destructive: true })) void action("retry");
+                      if (
+                        await confirm({
+                          title: "Retry eSIM set-up?",
+                          description:
+                            "Proceed only after confirming the network did not already accept the order, to avoid a duplicate activation.",
+                          confirmLabel: "Retry set-up",
+                          destructive: true,
+                        })
+                      )
+                        void action("retry");
                     }}
                   >
                     {busy === "retry" ? (
@@ -1062,7 +1117,15 @@ export default function OrderReview({ id }: { id: string }) {
                 size="lg"
                 disabled={Boolean(busy)}
                 onClick={async () => {
-                  if (await confirm({ title: "Resend installation QR?", description: "The customer will receive another installation email for this eSIM.", confirmLabel: "Resend QR" })) void action("resend-qr");
+                  if (
+                    await confirm({
+                      title: "Resend installation QR?",
+                      description:
+                        "The customer will receive another installation email for this eSIM.",
+                      confirmLabel: "Resend QR",
+                    })
+                  )
+                    void action("resend-qr");
                 }}
               >
                 {busy === "resend-qr" ? (

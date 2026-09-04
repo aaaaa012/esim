@@ -1,3 +1,4 @@
+import { RechargesService, rechargeView } from "./recharges.service.js";
 import {
   BadRequestException,
   Body,
@@ -41,6 +42,7 @@ export class GuestOrdersController {
     private readonly prisma: PrismaService,
     private readonly access: GuestOrderAccessService,
     private readonly notifications: NotificationService,
+    private readonly recharges: RechargesService,
   ) {}
 
   @Post() async create(
@@ -49,7 +51,7 @@ export class GuestOrdersController {
     req: {
       ip?: string;
       socket?: { remoteAddress?: string };
-      headers?: { "user-agent"?: string };
+      headers?: { "user-agent"?: string; "x-idempotency-key"?: string };
     },
   ) {
     const parsed = createOrderSchema.safeParse(body);
@@ -78,6 +80,18 @@ export class GuestOrdersController {
         : undefined;
     if (candidate.mobile !== undefined && !verifiedMobile)
       throw new ForbiddenException("A valid top-up lookup is required");
+    if (verifiedMobile)
+      return this.recharges.create({
+        planId: input.planId,
+        termsAccepted: input.termsAccepted,
+        privacyAccepted: input.privacyAccepted,
+        lookupToken: String(candidate.lookupToken),
+        checkoutAttemptKey: String(
+          (body as { checkoutAttemptKey?: string }).checkoutAttemptKey ??
+            req.headers?.["x-idempotency-key"] ??
+            "",
+        ),
+      });
     const order = await this.orders.create(
       null,
       input.planId,
@@ -102,12 +116,14 @@ export class GuestOrdersController {
   }
 
   @Post(":id/recover")
-  async recover(
-    @Param("id") id: string,
-    @Body() body: { token?: unknown },
-  ) {
+  async recover(@Param("id") id: string, @Body() body: { token?: unknown }) {
     await this.orders.refreshOne(id, true);
     if (!this.orders.get(id)) throw new NotFoundException("Order not found");
+    if (this.orders.get(id).purchaseType === "TOPUP")
+      return this.recharges.recover(
+        id,
+        typeof body.token === "string" ? body.token : "",
+      );
     const recovered = await this.access.recover(
       id,
       typeof body.token === "string" ? body.token : "",
@@ -125,10 +141,11 @@ export class GuestOrdersController {
     @Param("id") id: string,
     @Headers("x-guest-order-token") token: string,
   ) {
+    await this.orders.refreshOne(id, true);
+    if (this.orders.get(id).purchaseType === "TOPUP")
+      return rechargeView(await this.recharges.authorize(id, undefined, token));
     const ownerId = await this.assert(id, token);
-    return ownerId
-      ? this.orders.view(id, ownerId)
-      : this.orders.guestView(id);
+    return ownerId ? this.orders.view(id, ownerId) : this.orders.guestView(id);
   }
 
   @Patch(":id/traveler") async traveler(
@@ -256,11 +273,7 @@ export class GuestOrdersController {
     @Headers("x-guest-order-token") token: string,
   ) {
     const ownerId = await this.assert(id, token);
-    return this.orders.cancel(
-      id,
-      ownerId,
-      body.reason ?? "Cancelled by guest",
-    );
+    return this.orders.cancel(id, ownerId, body.reason ?? "Cancelled by guest");
   }
 
   @Post("topup-lookup")
@@ -272,13 +285,23 @@ export class GuestOrdersController {
         throw new BadRequestException("mobile is required");
       const subscriber = await this.orders.resolveSubscriber(body.mobile);
       if (subscriber) {
-        const lookupToken = this.access.createLookupToken(body.mobile.trim());
+        if (!subscriber.inventory)
+          return {
+            verificationRequested: true,
+            message:
+              "If this eSIM is eligible, a recharge link will be sent to its original purchase email.",
+          };
+        const target = await this.recharges.target(subscriber.inventory.id);
+        const lookupToken = this.access.createLookupToken(
+          target.mobile,
+          target,
+        );
         try {
           await this.notifications.enqueue({
             orderId: subscriber.orderId,
             channel: "EMAIL",
             template: "TOPUP_LOOKUP",
-            recipient: subscriber.traveler.email,
+            recipient: target.email,
             orderNumber: "eSIM recharge",
             recoveryUrl: this.topUpLookupUrl(lookupToken),
           });
@@ -288,9 +311,15 @@ export class GuestOrdersController {
           );
         }
       }
-      await this.recordTopUpEvent("customer-topup-lookup", 200, startedAt, {
-        verificationRequested: true,
-      }, { mobile: "[REDACTED]" });
+      await this.recordTopUpEvent(
+        "customer-topup-lookup",
+        200,
+        startedAt,
+        {
+          verificationRequested: true,
+        },
+        { mobile: "[REDACTED]" },
+      );
       return {
         verificationRequested: true,
         message:
@@ -312,7 +341,9 @@ export class GuestOrdersController {
   @Post("topup-lookup/verify")
   @UseGuards(GuestLookupRateLimitGuard)
   async verifyTopUpLookup(@Body() body: { lookupToken?: string }) {
-    const mobile = this.access.mobileFromLookupToken(body.lookupToken ?? "");
+    const { mobile } = await this.recharges.targetFromLookup(
+      body.lookupToken ?? "",
+    );
     const result = await this.orders.topUpLookup(mobile);
     if (!result.found)
       throw new ForbiddenException("This recharge link is invalid or expired");
@@ -328,24 +359,35 @@ export class GuestOrdersController {
     try {
       if (!body.planId?.trim())
         throw new BadRequestException("planId is required");
-      const mobile = this.access.mobileFromLookupToken(body.lookupToken ?? "");
+      const { mobile } = await this.recharges.targetFromLookup(
+        body.lookupToken ?? "",
+      );
       if (body.mobile && body.mobile !== mobile)
         throw new ForbiddenException(
           "Top-up lookup does not match this eSIM MSISDN",
         );
-      const result = await this.orders.checkTopUpEligibility(mobile, body.planId);
-      await this.recordTopUpEvent("customer-topup-eligibility", 200, startedAt, {
-        planId: body.planId,
-        allowed: result.allowed,
-        ...(result.errorKey ? { errorKey: result.errorKey } : {}),
-        ...(result.errorMessage
-          ? { reason: result.errorMessage.slice(0, 300) }
-          : {}),
-      }, {
-        mobile: "[REDACTED]",
-        lookupToken: "[REDACTED]",
-        planId: body.planId,
-      });
+      const result = await this.orders.checkTopUpEligibility(
+        mobile,
+        body.planId,
+      );
+      await this.recordTopUpEvent(
+        "customer-topup-eligibility",
+        200,
+        startedAt,
+        {
+          planId: body.planId,
+          allowed: result.allowed,
+          ...(result.errorKey ? { errorKey: result.errorKey } : {}),
+          ...(result.errorMessage
+            ? { reason: result.errorMessage.slice(0, 300) }
+            : {}),
+        },
+        {
+          mobile: "[REDACTED]",
+          lookupToken: "[REDACTED]",
+          planId: body.planId,
+        },
+      );
       return result;
     } catch (error) {
       await this.recordTopUpEvent(
@@ -367,7 +409,9 @@ export class GuestOrdersController {
   }
 
   private statusFor(error: unknown) {
-    return typeof error === "object" && error && "getStatus" in error &&
+    return typeof error === "object" &&
+      error &&
+      "getStatus" in error &&
       typeof (error as { getStatus?: unknown }).getStatus === "function"
       ? (error as { getStatus(): number }).getStatus()
       : 500;
@@ -415,6 +459,10 @@ export class GuestOrdersController {
     await this.orders.refreshOne(id, true);
     const order = this.orders.get(id);
     if (!order) throw new NotFoundException("Order not found");
+    if (order.purchaseType === "TOPUP")
+      throw new ForbiddenException(
+        "Use the recharge tracking endpoint for this order",
+      );
     if (order.ownerId && !order.ownerId.startsWith("guest-"))
       throw new ForbiddenException("Guest access has been revoked");
     return order.ownerId;

@@ -54,29 +54,73 @@ export class GuestOrderAccessService {
       throw new ForbiddenException("Invalid or expired guest token");
   }
 
-  createLookupToken(mobile: string) {
+  createLookupToken(
+    mobile: string,
+    target?: {
+      inventoryId: string;
+      originalOrderId: string;
+      customerId: string;
+      email: string;
+    },
+  ) {
+    if (!target)
+      throw new ForbiddenException(
+        "Recharge ownership must be resolved before issuing a link",
+      );
     const payload = Buffer.from(
-      JSON.stringify({ mobile, expiresAt: Date.now() + 15 * 60_000 }),
+      JSON.stringify({
+        purpose: "RECHARGE",
+        mobile,
+        inventoryId: target.inventoryId,
+        originalOrderId: target.originalOrderId,
+        customerId: target.customerId,
+        recipientHash: this.hash(target.email.trim().toLowerCase()),
+        expiresAt: Date.now() + 15 * 60_000,
+      }),
     ).toString("base64url");
     return `${payload}.${this.signature(payload)}`;
   }
 
-  mobileFromLookupToken(token: string) {
-    const [payload, signature] = token.split(".");
-    if (!payload || !signature || !this.validSignature(payload, signature))
+  rechargeLookupClaims(token: string): {
+    mobile: string;
+    inventoryId: string;
+    originalOrderId: string;
+    customerId: string;
+    recipientHash: string;
+  } {
+    const [payload, signature, extra] = token.split(".");
+    if (
+      !payload ||
+      !signature ||
+      extra ||
+      !this.validSignature(payload, signature)
+    )
       throw new ForbiddenException("Invalid or expired top-up lookup");
-    let value: { mobile?: string; expiresAt?: number };
     try {
-      value = JSON.parse(Buffer.from(payload, "base64url").toString()) as {
-        mobile?: string;
-        expiresAt?: number;
-      };
+      const value = JSON.parse(Buffer.from(payload, "base64url").toString());
+      if (
+        value.purpose !== "RECHARGE" ||
+        !Number.isFinite(value.expiresAt) ||
+        value.expiresAt <= Date.now() ||
+        ![
+          value.mobile,
+          value.inventoryId,
+          value.originalOrderId,
+          value.customerId,
+          value.recipientHash,
+        ].every((v) => typeof v === "string" && v.length > 0)
+      )
+        throw new Error();
+      return value;
     } catch {
-      throw new ForbiddenException("Invalid or expired top-up lookup");
+      throw new ForbiddenException(
+        "Invalid or expired top-up lookup. Request a new recharge link",
+      );
     }
-    if (!value.mobile || !value.expiresAt || value.expiresAt < Date.now())
-      throw new ForbiddenException("Invalid or expired top-up lookup");
-    return value.mobile;
+  }
+
+  mobileFromLookupToken(token: string) {
+    return this.rechargeLookupClaims(token).mobile;
   }
 
   async issue(
@@ -186,10 +230,7 @@ export class GuestOrderAccessService {
         item.revokedAt = new Date();
   }
 
-  private async revokePurpose(
-    orderId: string,
-    purpose: "DISPLAY" | "EMAIL",
-  ) {
+  private async revokePurpose(orderId: string, purpose: "DISPLAY" | "EMAIL") {
     if (this.prisma.enabled) {
       await this.prisma.guestOrderAccessToken.updateMany({
         where: { orderId, purpose, revokedAt: null },
@@ -215,7 +256,9 @@ export class GuestOrderAccessService {
   private validSignature(payload: string, supplied: string) {
     const expected = Buffer.from(this.signature(payload));
     const actual = Buffer.from(supplied);
-    return expected.length === actual.length && timingSafeEqual(expected, actual);
+    return (
+      expected.length === actual.length && timingSafeEqual(expected, actual)
+    );
   }
 
   private hash(value: string) {

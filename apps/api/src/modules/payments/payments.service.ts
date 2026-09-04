@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger, Optional } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  Optional,
+} from "@nestjs/common";
 import {
   ApiErrorCode,
   OrderStatus,
@@ -91,6 +96,26 @@ export class PaymentsService {
     const order = this.orders.get(orderId, ownerId ?? undefined);
     if (order.purchaseType !== "TOPUP")
       await this.orders.assertInventoryAvailableForNewOrder();
+    if (order.purchaseType === "TOPUP") {
+      if (
+        ![
+          OrderStatus.DRAFT,
+          OrderStatus.PAYMENT_FAILED,
+          OrderStatus.PAYMENT_PENDING,
+        ].includes(order.status)
+      )
+        throw new BadRequestException(
+          "This recharge cannot collect another payment",
+        );
+      if (
+        order.payment?.status === PaymentStatus.PENDING &&
+        (!order.payment.expiresAt ||
+          new Date(order.payment.expiresAt).getTime() <= Date.now())
+      )
+        throw new BadRequestException(
+          "Reconcile the pending payment before another attempt",
+        );
+    }
     const existing = order.payment;
     if (
       existing &&
@@ -155,15 +180,21 @@ export class PaymentsService {
 
     const deadline = Date.now() + 15_000;
     while (!owned && Date.now() < deadline) {
-      const record = await prisma.paymentInitiation.findUnique({ where: { orderId: order.id } });
+      const record = await prisma.paymentInitiation.findUnique({
+        where: { orderId: order.id },
+      });
       if (!record) continue;
       if (record.amountNpr !== order.totalAmountNpr)
-        throw new BadRequestException("Payment initiation conflicts with the current order amount");
+        throw new BadRequestException(
+          "Payment initiation conflicts with the current order amount",
+        );
       const stored = record.result as InitiationResult | null;
       const storedActive =
         record.status === PaymentInitiationStatus.COMPLETED &&
+        order.status !== OrderStatus.PAYMENT_FAILED &&
         stored &&
-        (!stored.expiresAt || new Date(stored.expiresAt).getTime() > Date.now());
+        (!stored.expiresAt ||
+          new Date(stored.expiresAt).getTime() > Date.now());
       if (storedActive) {
         if (record.provider !== provider)
           throw new ApiException({
@@ -181,9 +212,13 @@ export class PaymentsService {
         const reclaimed = await prisma.paymentInitiation.updateMany({
           where: {
             id: record.id,
+            claimToken: record.claimToken,
             OR: [
               { status: PaymentInitiationStatus.FAILED },
-              { status: PaymentInitiationStatus.PROCESSING, leaseExpiresAt: { lte: new Date() } },
+              {
+                status: PaymentInitiationStatus.PROCESSING,
+                leaseExpiresAt: { lte: new Date() },
+              },
               { status: PaymentInitiationStatus.COMPLETED },
             ],
           },
@@ -226,7 +261,11 @@ export class PaymentsService {
         returnUrl,
       });
       const saved = await prisma.paymentInitiation.updateMany({
-        where: { orderId: order.id, claimToken, status: PaymentInitiationStatus.PROCESSING },
+        where: {
+          orderId: order.id,
+          claimToken,
+          status: PaymentInitiationStatus.PROCESSING,
+        },
         data: {
           status: PaymentInitiationStatus.COMPLETED,
           result: result as Prisma.InputJsonValue,
@@ -234,11 +273,17 @@ export class PaymentsService {
         },
       });
       if (saved.count !== 1)
-        throw new Error("Payment initiation ownership was lost before persistence");
+        throw new Error(
+          "Payment initiation ownership was lost before persistence",
+        );
       return result;
     } catch (error) {
       await prisma.paymentInitiation.updateMany({
-        where: { orderId: order.id, claimToken, status: PaymentInitiationStatus.PROCESSING },
+        where: {
+          orderId: order.id,
+          claimToken,
+          status: PaymentInitiationStatus.PROCESSING,
+        },
         data: {
           status: PaymentInitiationStatus.FAILED,
           errorCode: "PROVIDER_INITIATION_FAILED",
@@ -647,7 +692,8 @@ export class PaymentsService {
   private gateway(provider?: PaymentProvider) {
     if (process.env.PAYMENT_MODE === "simulator") return this.simulator;
     if (provider === PaymentProvider.FONEPAY) {
-      if (!this.fonepay) throw new BadRequestException("Fonepay is unavailable");
+      if (!this.fonepay)
+        throw new BadRequestException("Fonepay is unavailable");
       return this.fonepay;
     }
     if (

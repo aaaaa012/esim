@@ -1,4 +1,5 @@
 "use client";
+import { orderStatusLabel } from "@visa-compass/shared";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { SignInButton, useAuth } from "@clerk/nextjs";
 
@@ -64,6 +65,7 @@ type Order = {
     | "REUPLOAD_REQUIRED"
     | "MANUALLY_APPROVED"
     | "SKIPPED";
+  refundStatus?: string;
   provisioningFailure?: { code: string; message: string };
 };
 type Payment = {
@@ -139,6 +141,11 @@ export default function CheckoutClient({
   targetCountry?: string;
 }) {
   const authFetch = useAuthenticatedFetch();
+  const rechargeMode = useRef(
+    Boolean(lookupToken || targetEsimId) ||
+      (typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).get("recharge") === "1"),
+  );
   const { isLoaded, isSignedIn } = useAuth();
   const tokenKey = (id?: string) => `vc_guest_token_${id || orderId || "new"}`;
   const readToken = (id?: string) => {
@@ -219,11 +226,21 @@ export default function CheckoutClient({
   };
 
   const api = async <T,>(path: string, init?: RequestInit) => {
-    let url = `${API}${path}`;
+    const rechargeRequest =
+      rechargeMode.current && path.startsWith("/customer/orders");
+    let url = `${API}${
+      rechargeRequest
+        ? path
+            .replace("/customer/orders", "/recharges")
+            .replace(/\/payment$/, "/payment/initiate")
+            .replace("/simulate-complete", "/simulate")
+        : path
+    }`;
     let body = init?.body as BodyInit | null | undefined;
     const isGet = !init?.method || init.method.toUpperCase() === "GET";
     const currentGuest = guestRef.current;
-    let guestHeaderToken = currentGuest ? currentToken() : "";
+    let guestHeaderToken =
+      currentGuest || rechargeRequest ? currentToken() : "";
     const toGuest = () => {
       const token = currentToken();
       guestHeaderToken = token;
@@ -246,11 +263,17 @@ export default function CheckoutClient({
         ...init?.headers,
       },
     });
-    if (currentGuest) toGuest();
+    if (currentGuest && !rechargeRequest) toGuest();
     let response = await authFetch(url, makeInit());
     let payload = (await response.json()) as Envelope<T>;
-    if (mutation) releaseMutationKey(mutation.storageKey);
     if (
+      (payload.data as { purchaseType?: string } | undefined)?.purchaseType ===
+      "TOPUP"
+    )
+      rechargeMode.current = true;
+    if (mutation && response.ok) releaseMutationKey(mutation.storageKey);
+    if (
+      !rechargeRequest &&
       !response.ok &&
       isLoaded &&
       isSignedIn !== true &&
@@ -304,7 +327,7 @@ export default function CheckoutClient({
   // The API independently verifies that the selected plan is valid for this
   // eSIM before it creates the order.
   const isTopUpIntent =
-    Boolean(mobile && lookupToken && targetCountry) && !orderId;
+    Boolean((mobile && lookupToken) || targetEsimId) && !orderId;
   useEffect(() => {
     if (!planId || orderId) return;
     let cancelled = false;
@@ -395,6 +418,8 @@ export default function CheckoutClient({
         guestRef.current = true;
         storeGuestToken(payload.data.token, orderId);
         storeRecovery(orderId, saved.token, payload.data.recoveryExpiresAt);
+        if (payload.data.order.purchaseType === "TOPUP")
+          rechargeMode.current = true;
         setOrder(payload.data.order);
       } catch (cause) {
         if (!cancelled)
@@ -595,6 +620,8 @@ export default function CheckoutClient({
     "PAYMENT_FAILED",
     "PROVISIONING_FAILED",
     "CANCELLED",
+    "REFUND_PENDING",
+    "REFUNDED",
   ];
   const FULFILLMENT_IN_PROGRESS_STATUSES = [
     "PAYMENT_CONFIRMED",
@@ -689,7 +716,7 @@ export default function CheckoutClient({
       await api<Order>(`/customer/orders/${current.id}`).catch(() => current),
     );
     setError(
-      "Your payment is still being confirmed. Check your eSIMs shortly.",
+      "Your payment is still being confirmed. Return to this tracking page shortly.",
     );
     setVerifying(false);
   };
@@ -805,7 +832,8 @@ export default function CheckoutClient({
     } catch {
       isExternal = true;
     }
-    if (value.redirectUrl && isExternal) window.location.assign(value.redirectUrl);
+    if (value.redirectUrl && isExternal)
+      window.location.assign(value.redirectUrl);
   };
   const createOrder = (asGuest: boolean) =>
     run(async () => {
@@ -826,6 +854,56 @@ export default function CheckoutClient({
         throw new Error("Confirm device compatibility");
       if (!legalAccepted)
         throw new Error("Accept the Terms and Privacy Policy to continue");
+      if (isTopUp) {
+        rechargeMode.current = true;
+        const storageKey = "vc_recharge_checkout_attempt";
+        const fingerprint = JSON.stringify({
+          planId,
+          targetEsimId: targetEsimId ?? null,
+          mobile: mobile ?? null,
+        });
+        let attempt: { key: string; fingerprint: string } | null = null;
+        try {
+          attempt = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+        } catch {
+          /* invalid saved attempt */
+        }
+        if (!attempt || attempt.fingerprint !== fingerprint) {
+          attempt = { key: crypto.randomUUID(), fingerprint };
+          localStorage.setItem(storageKey, JSON.stringify(attempt));
+        }
+        const created = await api<{
+          order: Order;
+          token: string;
+          recovery: { token: string; expiresAt: string };
+        }>("/customer/orders", {
+          method: "POST",
+          body: JSON.stringify({
+            planId,
+            termsAccepted: true,
+            privacyAccepted: true,
+            checkoutAttemptKey: attempt.key,
+            ...(lookupToken ? { lookupToken } : { targetEsimId }),
+          }),
+        });
+        setOrder(created.order);
+        guestRef.current = isSignedIn !== true;
+        setGuest(isSignedIn !== true);
+        storeGuestToken(created.token, created.order.id);
+        storeRecovery(
+          created.order.id,
+          created.recovery.token,
+          created.recovery.expiresAt,
+        );
+        window.history.replaceState(
+          window.history.state,
+          "",
+          `/esim/checkout?order=${encodeURIComponent(created.order.id)}&recharge=1`,
+        );
+        setStep(4);
+        await requestPayment(created.order);
+        return;
+      }
       guestRef.current = asGuest;
       setGuest(asGuest);
       if (asGuest) {
@@ -907,18 +985,22 @@ export default function CheckoutClient({
       return;
     }
     if (!compatible && !isTopUpIntent) {
-      setCompatibilityError("Confirm that your device is eSIM-compatible before continuing.");
+      setCompatibilityError(
+        "Confirm that your device is eSIM-compatible before continuing.",
+      );
       return;
     }
     if (!legalAccepted) {
-      setCompatibilityError("Accept the Terms and Privacy Policy before continuing.");
+      setCompatibilityError(
+        "Accept the Terms and Privacy Policy before continuing.",
+      );
       return;
     }
     if (!isLoaded) {
       setError("Finishing secure sign-in. Please try again in a moment.");
       return;
     }
-    if (isSignedIn === true) {
+    if (isTopUpIntent || isSignedIn === true) {
       void createOrder(false);
       return;
     }
@@ -933,7 +1015,7 @@ export default function CheckoutClient({
 
   const claimGuestOrder = () =>
     run(async () => {
-      if (!order || !currentToken()) return;
+      if (!order || isTopUp || !currentToken()) return;
       const mutation = mutationKey(`claim-guest:${order.id}`);
       const response = await authFetch(
         `${API}/customer/orders/${order.id}/claim-guest`,
@@ -1154,7 +1236,7 @@ export default function CheckoutClient({
 
   const recoveryUrl =
     order && recovery && typeof window !== "undefined"
-      ? `${window.location.origin}/esim/checkout?order=${encodeURIComponent(order.id)}#resume=${encodeURIComponent(recovery.token)}`
+      ? `${window.location.origin}/esim/checkout?order=${encodeURIComponent(order.id)}${isTopUp ? "&recharge=1" : ""}#resume=${encodeURIComponent(recovery.token)}`
       : "";
   const copyRecoveryLink = async () => {
     if (!recoveryUrl) return;
@@ -1200,10 +1282,11 @@ export default function CheckoutClient({
             <LockKeyhole size={13} />
             Secure checkout
           </span>
+          <Link href="/recharge/recover">Lost a recharge tracking link?</Link>
           <h1>{isTopUp ? "Top up your eSIM" : "Your travel eSIM"}</h1>
           <p>
             {isTopUp
-              ? "Recharge your existing eSIM. No verification needed. Pay and activate in seconds."
+              ? "Add a package to the authorized eSIM. Review your plan, pay, and track the recharge here."
               : "Complete verification once. We’ll keep your order safe while our team reviews it."}
           </p>
         </div>
@@ -1220,15 +1303,21 @@ export default function CheckoutClient({
                 <div
                   key={label}
                   className={
-                    step === index + 1
+                    isTopUp || step === index + 1
                       ? "active"
                       : step > index + 1
                         ? "done"
                         : ""
                   }
                 >
-                  <i>{step > index + 1 ? <Check size={13} /> : index + 1}</i>
-                  {step > index + 1 ? (
+                  <i>
+                    {!isTopUp && step > index + 1 ? (
+                      <Check size={13} />
+                    ) : (
+                      index + 1
+                    )}
+                  </i>
+                  {!isTopUp && step > index + 1 ? (
                     <button
                       type="button"
                       onClick={() => jumpTo(index + 1)}
@@ -1266,28 +1355,29 @@ export default function CheckoutClient({
                       Order history, easier status checks, and secure access
                       across devices.
                     </small>
-                    {isSignedIn === true ? (
-                      <button
-                        className="button wide"
-                        disabled={busy}
-                        onClick={() => {
-                          setShowAccountChoice(false);
-                          void createOrder(false);
-                        }}
-                      >
-                        Continue with my account <ChevronRight size={18} />
-                      </button>
-                    ) : (
-                      <SignInButton mode="modal">
+                    {!isTopUp &&
+                      (isSignedIn === true ? (
                         <button
                           className="button wide"
                           disabled={busy}
-                          onClick={() => setPendingSignIn(true)}
+                          onClick={() => {
+                            setShowAccountChoice(false);
+                            void createOrder(false);
+                          }}
                         >
-                          Sign in or create account <ChevronRight size={18} />
+                          Continue with my account <ChevronRight size={18} />
                         </button>
-                      </SignInButton>
-                    )}
+                      ) : (
+                        <SignInButton mode="modal">
+                          <button
+                            className="button wide"
+                            disabled={busy}
+                            onClick={() => setPendingSignIn(true)}
+                          >
+                            Sign in or create account <ChevronRight size={18} />
+                          </button>
+                        </SignInButton>
+                      ))}
                   </div>
                   <div className="account-choice-guest">
                     <b>Continue as guest</b>
@@ -1316,7 +1406,7 @@ export default function CheckoutClient({
                 </button>
               </div>
             )}
-            {!showAccountChoice && guest && order && recovery && (
+            {!showAccountChoice && (guest || isTopUp) && order && recovery && (
               <div className="guest-recovery-card" role="note">
                 <span className="guest-recovery-icon">
                   <Link2 />
@@ -1329,8 +1419,9 @@ export default function CheckoutClient({
                     Anyone with the link can access this order.
                   </p>
                   <small>
-                    After you save traveller details, we’ll also email a
-                    recovery link to the address provided.
+                    {isTopUp
+                      ? "A tracking link is queued for the original purchase email. You can also copy it here."
+                      : "After you save traveller details, we’ll also email a recovery link to the address provided."}
                   </small>
                   <div className="guest-recovery-actions">
                     <button
@@ -1341,31 +1432,63 @@ export default function CheckoutClient({
                       <Copy size={16} />{" "}
                       {copiedRecovery ? "Link copied" : "Copy private link"}
                     </button>
-                    {isSignedIn === true ? (
-                      <button
-                        className="button secondary"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void claimGuestOrder()}
-                      >
-                        Save to My eSIMs
-                      </button>
-                    ) : (
-                      <SignInButton mode="modal">
+                    {!isTopUp &&
+                      (isSignedIn === true ? (
                         <button
                           className="button secondary"
                           type="button"
                           disabled={busy}
-                          onClick={() => setClaimIntent(true)}
+                          onClick={() => void claimGuestOrder()}
                         >
-                          Sign in and save to My eSIMs
+                          Save to My eSIMs
                         </button>
-                      </SignInButton>
-                    )}
+                      ) : (
+                        <SignInButton mode="modal">
+                          <button
+                            className="button secondary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setClaimIntent(true)}
+                          >
+                            Sign in and save to My eSIMs
+                          </button>
+                        </SignInButton>
+                      ))}
                   </div>
                   <span className="sr-only" aria-live="polite">
                     {copiedRecovery ? "Private recovery link copied" : ""}
                   </span>
+                </div>
+              </div>
+            )}
+            {isTopUp && order && (
+              <div className="guest-recovery-card" role="status">
+                <div>
+                  <b>{order.orderNumber}</b>
+                  <p>
+                    Payment: {order.payment?.status ?? "Not started"} ·
+                    Recharge: {orderStatusLabel(order.status)}
+                  </p>
+                  {order.refundStatus && (
+                    <p>
+                      Refund:{" "}
+                      {order.refundStatus.toLowerCase().replaceAll("_", " ")}
+                    </p>
+                  )}
+                  {["COMPLETED", "QR_READY", "CANCELLED", "REFUNDED"].includes(
+                    order.status,
+                  ) && (
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={() => {
+                        localStorage.removeItem("vc_recharge_checkout_attempt");
+                        window.location.assign("/");
+                      }}
+                    >
+                      Start another purchase
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1420,13 +1543,27 @@ export default function CheckoutClient({
                   <span>
                     <b>I agree to the purchase terms</b>
                     <small>
-                      I have read the <a href="/terms" target="_blank">Terms</a>,{" "}
-                      <a href="/privacy" target="_blank">Privacy Policy</a> and{" "}
-                      <a href="/refund-policy" target="_blank">Refund Policy</a>.
+                      I have read the{" "}
+                      <a href="/terms" target="_blank">
+                        Terms
+                      </a>
+                      ,{" "}
+                      <a href="/privacy" target="_blank">
+                        Privacy Policy
+                      </a>{" "}
+                      and{" "}
+                      <a href="/refund-policy" target="_blank">
+                        Refund Policy
+                      </a>
+                      .
                     </small>
                   </span>
                 </label>
-                {compatibilityError ? <p className="field-error" role="alert">{compatibilityError}</p> : null}
+                {compatibilityError ? (
+                  <p className="field-error" role="alert">
+                    {compatibilityError}
+                  </p>
+                ) : null}
                 <Action busy={busy} onClick={begin}>
                   Continue
                 </Action>
@@ -1642,7 +1779,10 @@ export default function CheckoutClient({
                           "PROVISIONING_FAILED",
                           "CANCELLED",
                         ].includes(order.status)
-                      ? "Payment issue"
+                      ? order.purchaseType === "TOPUP" &&
+                        order.status === "PROVISIONING_FAILED"
+                        ? "Recharge needs attention"
+                        : "Payment issue"
                       : "Choose payment method"}
                 </h2>
                 {!isTopUp ? (
@@ -1655,8 +1795,24 @@ export default function CheckoutClient({
                     Back to documents
                   </button>
                 ) : null}
-                {order &&
-                ["QR_READY", "ACTIVATION_ATTENTION"].includes(order.status) ? (
+                {isTopUp &&
+                order &&
+                ["REFUNDED", "REFUND_PENDING", "CANCELLED"].includes(
+                  order.status,
+                ) ? (
+                  <div className="success-panel">
+                    <b>{orderStatusLabel(order.status)}</b>
+                    <span>{order.orderNumber}</span>
+                    <p>
+                      {order.status === "REFUND_PENDING"
+                        ? "Your refund is being processed. Return to this tracking link for updates."
+                        : "This recharge is closed. No further payment is needed for this order."}
+                    </p>
+                  </div>
+                ) : order &&
+                  ["QR_READY", "ACTIVATION_ATTENTION"].includes(
+                    order.status,
+                  ) ? (
                   <div className="success-panel">
                     {isTopUp ? (
                       <CheckCircle2 size={42} />
@@ -1681,7 +1837,11 @@ export default function CheckoutClient({
                         </Link>
                         <Link
                           className="button"
-                          href={`/account/orders/${order.id}`}
+                          href={
+                            isTopUp
+                              ? `/esim/checkout?order=${order.id}&recharge=1`
+                              : `/account/orders/${order.id}`
+                          }
                         >
                           Didn&apos;t get the QR? Recover it
                         </Link>
@@ -1714,7 +1874,11 @@ export default function CheckoutClient({
                         </Link>
                         <Link
                           className="button"
-                          href={`/account/orders/${order.id}`}
+                          href={
+                            isTopUp
+                              ? `/esim/checkout?order=${order.id}&recharge=1`
+                              : `/account/orders/${order.id}`
+                          }
                         >
                           Didn&apos;t get the QR? Recover it
                         </Link>
@@ -1741,7 +1905,11 @@ export default function CheckoutClient({
                     {isSignedIn === true && (
                       <Link
                         className="button secondary"
-                        href={`/account/orders/${order.id}`}
+                        href={
+                          isTopUp
+                            ? `/esim/checkout?order=${order.id}&recharge=1`
+                            : `/account/orders/${order.id}`
+                        }
                       >
                         Check status
                       </Link>
@@ -1762,7 +1930,11 @@ export default function CheckoutClient({
                     {isSignedIn === true && (
                       <Link
                         className="button"
-                        href={`/account/orders/${order.id}`}
+                        href={
+                          isTopUp
+                            ? `/esim/checkout?order=${order.id}&recharge=1`
+                            : `/account/orders/${order.id}`
+                        }
                       >
                         Check status
                       </Link>
@@ -1780,8 +1952,9 @@ export default function CheckoutClient({
                     <b>Payment verified. Activating your eSIM</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Your eSIM is being activated automatically. Your QR image
-                      will be emailed to you shortly.
+                      {isTopUp
+                        ? "Payment received. Your recharge is processing. You can close this page and return using your tracking link."
+                        : "Your eSIM is being activated automatically. Your QR image will be emailed to you shortly."}
                     </p>
                     {isSignedIn === true && (
                       <Link className="button" href="/account/esims">
@@ -1826,8 +1999,8 @@ export default function CheckoutClient({
                         </p>
                       )}
                     <p>
-                      The server checks the exact order, reference and immutable
-                      NPR amount.
+                      Review the total before continuing. Your payment and
+                      recharge status will be shown here.
                     </p>
                     <div className="gateway-grid">
                       <button
@@ -1868,7 +2041,10 @@ export default function CheckoutClient({
                             <b>I agree to the purchase terms</b>
                             <small>
                               I have read the{" "}
-                              <a href="/terms" target="_blank">Terms</a>,{" "}
+                              <a href="/terms" target="_blank">
+                                Terms
+                              </a>
+                              ,{" "}
                               <a href="/privacy" target="_blank">
                                 Privacy Policy
                               </a>{" "}

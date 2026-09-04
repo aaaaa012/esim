@@ -1,3 +1,4 @@
+import type { RechargeRecoveryOutbox } from "./recharge-ownership.js";
 import { ConflictException, Injectable } from "@nestjs/common";
 import {
   Prisma,
@@ -48,6 +49,11 @@ export class OrdersPersistenceService {
         : {}),
       include: {
         customer: { include: { user: true } },
+        manualRefunds: {
+          take: 1,
+          orderBy: { createdAt: "desc" },
+          select: { status: true },
+        },
         partner: { select: { id: true, code: true, name: true } },
         plan: { include: { country: true } },
         traveler: true,
@@ -89,7 +95,13 @@ export class OrdersPersistenceService {
       const payment = row.payments[0];
       return {
         id: row.id,
+        refundStatus: row.manualRefunds?.[0]?.status,
         ownerId: row.customer.user?.clerkId ?? row.customerId,
+        beneficiaryCustomerId: row.customerId,
+        purchasedByUserId: row.purchasedByUserId ?? undefined,
+        targetInventoryId: row.targetInventoryId ?? undefined,
+        checkoutAttemptKey: row.checkoutAttemptKey ?? undefined,
+        checkoutRequestHash: row.checkoutRequestHash ?? undefined,
         orderNumber: row.orderNumber,
         status: row.status as OrderStatus,
         version: row.version,
@@ -273,7 +285,7 @@ export class OrdersPersistenceService {
     });
   }
 
-  async save(order: DemoOrder) {
+  async save(order: DemoOrder, recovery?: RechargeRecoveryOutbox) {
     if (!this.prisma.enabled) return;
     // Interactive transactions default to a 5000 ms timeout, which cloud DB
     // latency routinely exceeds during payment flows; raise it so payment
@@ -404,6 +416,10 @@ export class OrdersPersistenceService {
                 id: order.id,
                 orderNumber: order.orderNumber,
                 customerId: identity.customerId,
+                purchasedByUserId: order.purchasedByUserId ?? null,
+                targetInventoryId: order.targetInventoryId ?? null,
+                checkoutAttemptKey: order.checkoutAttemptKey ?? null,
+                checkoutRequestHash: order.checkoutRequestHash ?? null,
                 planId: order.plan.id,
                 orderType: (order.purchaseType ??
                   "INITIAL_PURCHASE") as DbOrderType,
@@ -426,6 +442,30 @@ export class OrdersPersistenceService {
                 createdAt: new Date(order.createdAt),
               },
             });
+            if (recovery) {
+              await tx.guestOrderAccessToken.create({
+                data: {
+                  orderId: order.id,
+                  purpose: "EMAIL",
+                  tokenHash: recovery.tokenHash,
+                  recipientHash: recovery.recipientHash,
+                  expiresAt: new Date(recovery.expiresAt),
+                },
+              });
+              await tx.notification.create({
+                data: {
+                  orderId: order.id,
+                  channel: "EMAIL",
+                  template: "RECHARGE_RECOVERY",
+                  dedupeKey: `recharge-recovery:${order.id}`,
+                  recipient: recovery.recipient,
+                  orderNumber: order.orderNumber,
+                  recoveryUrlEncrypted: recovery.recoveryUrlEncrypted,
+                  status: "QUEUED",
+                  nextAttemptAt: new Date(),
+                },
+              });
+            }
           }
           if (order.traveler)
             await tx.traveler.upsert({
@@ -844,6 +884,28 @@ export class OrdersPersistenceService {
   }
 
   private async ensureIdentity(tx: Prisma.TransactionClient, order: DemoOrder) {
+    if (order.purchaseType === "TOPUP" && order.targetInventoryId) {
+      const originals = await tx.order.findMany({
+        where: {
+          orderType: "INITIAL_PURCHASE",
+          customerEsim: { is: { inventoryId: order.targetInventoryId } },
+        },
+        select: { customerId: true },
+      });
+      if (
+        originals.length !== 1 ||
+        originals[0]!.customerId !== order.beneficiaryCustomerId
+      )
+        throw new ConflictException(
+          "Recharge beneficiary no longer matches the original eSIM owner",
+        );
+    }
+    if (order.beneficiaryCustomerId) {
+      const customer = await tx.customer.findUniqueOrThrow({
+        where: { id: order.beneficiaryCustomerId },
+      });
+      return { userId: customer.userId, customerId: customer.id };
+    }
     if (!order.ownerId) {
       const suffix = createHash("sha256")
         .update(order.id)

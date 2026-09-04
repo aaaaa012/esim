@@ -75,6 +75,12 @@ export default function EsimDetails({ id }: { id: string }) {
               "This eSIM could not be loaded.",
             ),
           );
+        if (value.data.purchaseType === "TOPUP") {
+          window.location.replace(
+            `/esim/checkout?order=${encodeURIComponent(id)}&recharge=1`,
+          );
+          return;
+        }
         setOrder(value.data);
       },
     );
@@ -231,8 +237,12 @@ export default function EsimDetails({ id }: { id: string }) {
           <h1>We could not load this order</h1>
           <p>Please try again, or return to your orders.</p>
           <div className="form-actions">
-            <button className="button" onClick={() => void load()}>Try again</button>
-            <Link className="button secondary" href="/account/orders">View orders</Link>
+            <button className="button" onClick={() => void load()}>
+              Try again
+            </button>
+            <Link className="button secondary" href="/account/orders">
+              View orders
+            </Link>
           </div>
         </div>
       </main>

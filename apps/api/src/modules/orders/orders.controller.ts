@@ -1,3 +1,4 @@
+import { RechargesService, rechargeView } from "./recharges.service.js";
 import {
   BadRequestException,
   Body,
@@ -49,11 +50,18 @@ export class OrdersController {
   constructor(
     private readonly orders: OrdersService,
     private readonly guestAccess: GuestOrderAccessService,
+    private readonly recharges: RechargesService,
   ) {}
   @Get() list(@Req() req: AuthenticatedRequest) {
     return this.orders.list(req.user!.id);
   }
-  @Get(":id") get(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
+  @Get(":id") async get(
+    @Param("id") id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    await this.orders.refreshOne(id, true);
+    if (this.orders.get(id).purchaseType === "TOPUP")
+      return rechargeView(await this.recharges.authorize(id, req.user));
     return this.orders.view(id, req.user!.id);
   }
   @Post() async create(
@@ -72,6 +80,24 @@ export class OrdersController {
       throw new ForbiddenException("A valid top-up lookup is required");
     const ipAddress = (req as { ip?: string }).ip;
     const userAgent = req.headers["user-agent"];
+    if (verifiedMobile || input.targetEsimId)
+      return this.recharges.create(
+        {
+          planId: input.planId,
+          termsAccepted: input.termsAccepted,
+          privacyAccepted: input.privacyAccepted,
+          ...(verifiedMobile
+            ? { lookupToken: String(candidate.lookupToken) }
+            : { targetEsimId: input.targetEsimId }),
+          checkoutAttemptKey: String(
+            (body as { checkoutAttemptKey?: string }).checkoutAttemptKey ??
+              req.headers["x-idempotency-key"] ??
+              "",
+          ),
+        },
+        req.user,
+        { ipAddress, userAgent },
+      );
     return this.orders.create(
       req.user!.id,
       input.planId,

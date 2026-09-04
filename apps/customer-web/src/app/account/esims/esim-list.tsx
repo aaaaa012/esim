@@ -35,7 +35,7 @@ export default function OrderList() {
     [error, setError] = useState(""),
     [filter, setFilter] = useState("ALL");
   useEffect(() => {
-    void authFetch(`${API}/customer/orders`, { headers: {} })
+    void authFetch(`${API}/recharges/purchases`, { headers: {} })
       .then(async (response) => {
         const value = await response.json();
         if (!response.ok)
@@ -78,7 +78,7 @@ export default function OrderList() {
               <Wifi size={14} />
               Your account
             </span>
-            <h1>Orders</h1>
+            <h1>Purchases</h1>
             <p>
               Purchases, top-ups, document reviews, payments, and activation
               events.
@@ -163,7 +163,11 @@ export default function OrderList() {
           <div className="esim-list">
             {visible.map((order) => (
               <Link
-                href={`/account/orders/${order.id}`}
+                href={
+                  order.purchaseType === "TOPUP"
+                    ? `/esim/checkout?order=${order.id}&recharge=1`
+                    : `/account/orders/${order.id}`
+                }
                 className="esim-row"
                 key={order.id}
               >

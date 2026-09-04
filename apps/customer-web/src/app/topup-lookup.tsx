@@ -8,6 +8,7 @@ import {
   Smartphone,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import ErrorModal from "../components/error-modal";
@@ -69,7 +70,12 @@ export default function TopupLookup() {
         error?: { code?: string; message?: string };
       };
       if (!response.ok || !payload.data)
-        throw new Error(publicApiErrorMessage(payload.error, "This recharge link is invalid or expired."));
+        throw new Error(
+          publicApiErrorMessage(
+            payload.error,
+            "This recharge link is invalid or expired.",
+          ),
+        );
       setMobile(payload.data.mobile);
       setResult(payload.data);
       window.history.replaceState(
@@ -89,9 +95,9 @@ export default function TopupLookup() {
   };
 
   useEffect(() => {
-    const lookupToken = new URLSearchParams(
-      window.location.hash.slice(1),
-    ).get("topup");
+    const lookupToken = new URLSearchParams(window.location.hash.slice(1)).get(
+      "topup",
+    );
     if (lookupToken) void verifyLookup(lookupToken);
     // The signed token is consumed only on the initial page load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,7 +135,12 @@ export default function TopupLookup() {
         error?: { code?: string; message?: string };
       };
       if (!response.ok)
-        throw new Error(publicApiErrorMessage(payload.error, "We could not send the recharge link. Please try again."));
+        throw new Error(
+          publicApiErrorMessage(
+            payload.error,
+            "We could not send the recharge link. Please try again.",
+          ),
+        );
       setVerificationRequested(Boolean(payload.data?.verificationRequested));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Lookup failed");
@@ -160,9 +171,10 @@ export default function TopupLookup() {
       if (!response.ok || !eligibility?.allowed)
         throw new Error(
           eligibility?.errorMessage ??
-            publicApiErrorMessage(payload.error,
-            "This eSIM cannot subscribe to the selected plan.",
-            )
+            publicApiErrorMessage(
+              payload.error,
+              "This eSIM cannot subscribe to the selected plan.",
+            ),
         );
       const params = new URLSearchParams({
         plan: planId,
@@ -195,7 +207,9 @@ export default function TopupLookup() {
         error?: { code?: string; message?: string };
       };
       if (!response.ok)
-        throw new Error(publicApiErrorMessage(payload.error, "Plans could not be loaded"));
+        throw new Error(
+          publicApiErrorMessage(payload.error, "Plans could not be loaded"),
+        );
       setAlternatives(payload.data ?? []);
       setShowAlternatives(true);
     } catch (cause) {
@@ -254,8 +268,8 @@ export default function TopupLookup() {
               <h2 id="recharge-title">Add data to your existing eSIM</h2>
               <p className="recharge-description">
                 Keep the eSIM already installed on your phone. Enter the MSISDN
-                from your eSIM delivery email to find compatible
-                recharge plans—no new QR code required.
+                from your eSIM delivery email to find compatible recharge
+                plans—no new QR code required.
               </p>
               <form
                 className="recharge-form"
@@ -292,6 +306,7 @@ export default function TopupLookup() {
                   Find recharge plans
                 </button>
               </form>
+              <Link href="/recharge/recover">Track an existing recharge</Link>
               <p className="recharge-help" id="recharge-help">
                 Use the eSIM mobile number shown in your QR-delivery email.
               </p>
@@ -475,8 +490,8 @@ export default function TopupLookup() {
                   </>
                 ) : (
                   <p className="topup-note warn">
-                    No prior Visa Compass eSIM was found for this MSISDN.
-                    Please choose a destination to buy a new eSIM.
+                    No prior Visa Compass eSIM was found for this MSISDN. Please
+                    choose a destination to buy a new eSIM.
                   </p>
                 )}
               </div>

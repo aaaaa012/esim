@@ -918,6 +918,7 @@ describe("PaymentsService.reconcilePendingPayments", () => {
 
   it("recovers a payment that completed server-side but whose callback was dropped", async () => {
     vi.stubEnv("PAYMENT_VERIFY_ATTEMPTS", "3");
+    vi.stubEnv("PAYMENT_MODE", "simulator");
     const gateway = new PaymentSimulatorGateway();
     const initiation = await gateway.initiate({
       orderId: "order-1",

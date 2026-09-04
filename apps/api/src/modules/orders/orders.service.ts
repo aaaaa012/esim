@@ -1,3 +1,4 @@
+import type { RechargeRecoveryOutbox } from "./recharge-ownership.js";
 import {
   BadRequestException,
   ConflictException,
@@ -49,6 +50,12 @@ type Timeline = {
 export type DemoOrder = {
   id: string;
   ownerId: string | null;
+  refundStatus?: string | undefined;
+  beneficiaryCustomerId?: string | undefined;
+  purchasedByUserId?: string | undefined;
+  targetInventoryId?: string | undefined;
+  checkoutAttemptKey?: string | undefined;
+  checkoutRequestHash?: string | undefined;
   orderNumber: string;
   status: OrderStatus;
   version: number;
@@ -213,6 +220,8 @@ export class OrdersService implements OnModuleInit {
       where: { id },
       select: {
         channel: true,
+        purchasedBy: { select: { id: true, email: true } },
+        targetInventoryId: true,
         notifications: {
           where: { template: "QR_READY" },
           orderBy: { createdAt: "desc" },
@@ -252,6 +261,8 @@ export class OrdersService implements OnModuleInit {
     return {
       ...order,
       channel: identity.channel,
+      purchasedBy: identity.purchasedBy,
+      targetInventoryId: identity.targetInventoryId,
       customer: {
         id: identity.customer.id,
         customerCode: identity.customer.customerCode,
@@ -393,7 +404,9 @@ export class OrdersService implements OnModuleInit {
         topUpMobile:
           order.orderType === "TOPUP"
             ? ((order.pricingSnapshot as { topUpMobile?: string } | null)
-                ?.topUpMobile ?? order.customerEsim?.inventory.msisdn ?? null)
+                ?.topUpMobile ??
+              order.customerEsim?.inventory.msisdn ??
+              null)
             : null,
         plan: {
           id: order.plan.id,
@@ -469,6 +482,15 @@ export class OrdersService implements OnModuleInit {
       mobile?: string;
       email?: string;
       targetEsimId?: string;
+      recharge?: {
+        orderId?: string;
+        recovery?: RechargeRecoveryOutbox;
+        customerId: string;
+        inventoryId: string;
+        purchasedByUserId?: string | undefined;
+        checkoutAttemptKey?: string | undefined;
+        checkoutRequestHash?: string;
+      };
       termsAccepted?: boolean;
       privacyAccepted?: boolean;
     },
@@ -479,7 +501,7 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException("Terms and privacy consent are required");
     const plan = await this.catalog.findActive(planId);
     if (!plan) throw new BadRequestException("Invalid or inactive plan");
-    const id = randomUUID();
+    const id = meta?.recharge?.orderId ?? randomUUID();
     const now = new Date().toISOString();
     const target =
       meta?.targetEsimId && ownerId
@@ -487,7 +509,9 @@ export class OrdersService implements OnModuleInit {
         : null;
     const mobileTarget =
       !target && meta?.mobile ? await this.targetForMobile(meta.mobile) : null;
-    const selectedTarget = target ?? mobileTarget;
+    const selectedTarget = meta?.recharge
+      ? { inventoryId: meta.recharge.inventoryId }
+      : (target ?? mobileTarget);
     const purchaseType = selectedTarget
       ? ("TOPUP" as const)
       : ("INITIAL_PURCHASE" as const);
@@ -510,11 +534,13 @@ export class OrdersService implements OnModuleInit {
       await this.assertInventoryAvailableForNewOrder();
     const topUpEmail =
       purchaseType === "TOPUP"
-        ? meta?.mobile
-          ? await this.priorOrderEmail(meta.mobile)
-          : ownerId
-            ? await this.customerEmail(ownerId)
-            : undefined
+        ? meta?.recharge
+          ? meta.email
+          : meta?.mobile
+            ? await this.priorOrderEmail(meta.mobile)
+            : ownerId
+              ? await this.customerEmail(ownerId)
+              : undefined
         : undefined;
     const reusableTraveler =
       target && purchaseType === "INITIAL_PURCHASE"
@@ -523,6 +549,15 @@ export class OrdersService implements OnModuleInit {
     const order: DemoOrder = {
       id,
       ownerId,
+      ...(meta?.recharge
+        ? {
+            beneficiaryCustomerId: meta.recharge.customerId,
+            targetInventoryId: meta.recharge.inventoryId,
+            purchasedByUserId: meta.recharge.purchasedByUserId,
+            checkoutAttemptKey: meta.recharge.checkoutAttemptKey,
+            checkoutRequestHash: meta.recharge.checkoutRequestHash,
+          }
+        : {}),
       orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`,
       status: OrderStatus.DRAFT,
       version: 0,
@@ -546,7 +581,12 @@ export class OrdersService implements OnModuleInit {
       ...(meta?.mobile ? { topUpMobile: meta.mobile } : {}),
     };
     this.orders.set(id, order);
-    await this.persistence.save(order);
+    try {
+      await this.persistence.save(order, meta?.recharge?.recovery);
+    } catch (error) {
+      this.orders.delete(id);
+      throw error;
+    }
     const consentContext = [
       ["E_SIM_COMPATIBILITY", "1.0"],
       ["TERMS_OF_SERVICE", "1.0"],
@@ -582,6 +622,10 @@ export class OrdersService implements OnModuleInit {
   ) {
     await this.refreshOne(orderId, this.prisma.enabled);
     const memoryOrder = this.orders.get(orderId);
+    if (memoryOrder?.purchaseType === "TOPUP")
+      throw new BadRequestException(
+        "Recharge ownership cannot be claimed or transferred",
+      );
     if (!memoryOrder) throw new NotFoundException("Order not found");
     if (!this.prisma.enabled) {
       if (memoryOrder.ownerId && memoryOrder.ownerId !== ownerId)
@@ -628,6 +672,36 @@ export class OrdersService implements OnModuleInit {
           where: { orderId, customerId: source.customerId },
           data: { customerId: target.id },
         });
+        const originalAssignment = await tx.customerEsim.findUnique({
+          where: { orderId },
+          select: { inventoryId: true },
+        });
+        if (originalAssignment) {
+          const recharges = await tx.order.findMany({
+            where: {
+              orderType: "TOPUP",
+              customerId: source.customerId,
+              OR: [
+                { targetInventoryId: originalAssignment.inventoryId },
+                {
+                  customerEsim: {
+                    is: { inventoryId: originalAssignment.inventoryId },
+                  },
+                },
+              ],
+            },
+            select: { id: true },
+          });
+          const ids = recharges.map((item) => item.id);
+          await tx.order.updateMany({
+            where: { id: { in: ids } },
+            data: { customerId: target.id, version: { increment: 1 } },
+          });
+          await tx.customerEsim.updateMany({
+            where: { orderId: { in: ids } },
+            data: { customerId: target.id },
+          });
+        }
         await tx.customerConsent.updateMany({
           where: { customerId: source.customerId },
           data: { customerId: target.id },
@@ -726,6 +800,7 @@ export class OrdersService implements OnModuleInit {
     const variants = [...msisdnVariants(mobile)];
     return {
       status: "COMPLETED" as const,
+      orderType: "INITIAL_PURCHASE" as const,
       customerEsim: {
         is: {
           inventory: {
@@ -3139,13 +3214,15 @@ export class OrdersService implements OnModuleInit {
     await this.inventory.assign(order.id, customerId, qrPayload, providerInfo);
   }
   private async provisioningTarget(order: DemoOrder) {
-    const targetEsimId = (order.pricingSnapshot as { targetEsimId?: string })
-      .targetEsimId;
+    const targetEsimId =
+      order.targetInventoryId ??
+      (order.pricingSnapshot as { targetEsimId?: string }).targetEsimId;
     if (!targetEsimId || !this.prisma.enabled) return null;
     const row = await this.prisma.esimInventory.findUnique({
       where: { id: targetEsimId },
       include: {
         customerEsims: {
+          where: { order: { orderType: "INITIAL_PURCHASE" } },
           take: 1,
           orderBy: { assignedAt: "desc" },
           include: { order: { include: { traveler: true } } },
@@ -3393,6 +3470,11 @@ export class OrdersService implements OnModuleInit {
   private redact(order: DemoOrder) {
     const {
       ownerId: _ownerId,
+      beneficiaryCustomerId: _beneficiaryCustomerId,
+      purchasedByUserId: _purchasedByUserId,
+      targetInventoryId: _targetInventoryId,
+      checkoutAttemptKey: _checkoutAttemptKey,
+      checkoutRequestHash: _checkoutRequestHash,
       providerSubscriptionId: _providerSubscriptionId,
       providerStatus: _providerStatus,
       qrPayload: _qrPayload,

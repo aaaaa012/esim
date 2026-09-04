@@ -1,10 +1,12 @@
+import { CryptoService } from "../../infrastructure/crypto.service.js";
 import {
   Injectable,
+  Optional,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
@@ -37,6 +39,7 @@ export class NotificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly queues: QueueService,
+    @Optional() private readonly crypto?: CryptoService,
   ) {}
 
   health() {
@@ -170,11 +173,13 @@ export class NotificationService {
 
   async list(orderIds?: string[]) {
     if (this.prisma.enabled)
-      return this.prisma.notification.findMany({
-        ...(orderIds ? { where: { orderId: { in: orderIds } } } : {}),
-        orderBy: { createdAt: "desc" },
-        take: 200,
-      });
+      return (
+        await this.prisma.notification.findMany({
+          ...(orderIds ? { where: { orderId: { in: orderIds } } } : {}),
+          orderBy: { createdAt: "desc" },
+          take: 200,
+        })
+      ).map(({ recoveryUrlEncrypted: _secret, ...item }) => item);
     return [...this.memory.values()]
       .filter((item) => !orderIds || orderIds.includes(item.orderId))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -214,9 +219,25 @@ export class NotificationService {
         template: item.template,
         recipient,
         orderNumber,
+        ...("recoveryUrlEncrypted" in item &&
+        item.recoveryUrlEncrypted &&
+        this.crypto
+          ? {
+              recoveryUrl: this.crypto.decrypt(
+                item.recoveryUrlEncrypted as string,
+              ),
+            }
+          : {}),
       },
-      `notification-retry-${id}-${Date.now()}`,
-      { ...NOTIFICATION_JOB_OPTIONS, allowDuplicate: true },
+      "recoveryUrlEncrypted" in item && item.recoveryUrlEncrypted
+        ? `notification-retry-${id}-${createHash("sha256").update(String(item.recoveryUrlEncrypted)).digest("hex").slice(0, 16)}-${"attemptCount" in item ? item.attemptCount : 0}`
+        : `notification-retry-${id}-${Date.now()}`,
+      {
+        ...NOTIFICATION_JOB_OPTIONS,
+        allowDuplicate: !(
+          "recoveryUrlEncrypted" in item && item.recoveryUrlEncrypted
+        ),
+      },
     );
     return { id, status: "QUEUED" as const };
   }

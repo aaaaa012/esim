@@ -46,6 +46,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
     if (
       !["POST", "PATCH", "PUT", "DELETE"].includes(request.method) ||
       request.path.includes("/webhooks/") ||
+      request.path.includes("/recharges") ||
+      Boolean(
+        request.body &&
+        typeof request.body === "object" &&
+        "lookupToken" in request.body,
+      ) ||
       !this.prisma.enabled
     )
       return next.handle();

@@ -1,7 +1,5 @@
 export type CheckoutResumeDisposition =
-  | "EDITABLE"
-  | "POST_PAYMENT"
-  | "UNSUPPORTED";
+  "EDITABLE" | "POST_PAYMENT" | "UNSUPPORTED";
 
 const EDITABLE_STATUSES = new Set([
   "DRAFT",
@@ -20,6 +18,8 @@ const POST_PAYMENT_STATUSES = new Set([
   "COMPLETED",
   "PROVISIONING_FAILED",
   "CANCELLED",
+  "REFUND_PENDING",
+  "REFUNDED",
 ]);
 
 export function checkoutResumeDisposition(

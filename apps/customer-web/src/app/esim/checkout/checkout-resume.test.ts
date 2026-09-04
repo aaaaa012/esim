@@ -21,6 +21,8 @@ describe("checkoutResumeDisposition", () => {
     "COMPLETED",
     "PROVISIONING_FAILED",
     "CANCELLED",
+    "REFUND_PENDING",
+    "REFUNDED",
   ])("renders %s in checkout's post-payment status view", (status) => {
     expect(checkoutResumeDisposition(status)).toBe("POST_PAYMENT");
   });

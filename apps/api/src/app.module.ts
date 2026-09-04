@@ -1,3 +1,8 @@
+import { RechargesService } from "./modules/orders/recharges.service.js";
+import {
+  RechargesController,
+  OptionalRechargeAuthGuard,
+} from "./modules/orders/recharges.controller.js";
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { validateEnv } from "./infrastructure/env-validation.js";
@@ -106,6 +111,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     OrdersController,
     OperationsController,
     GuestOrdersController,
+    RechargesController,
     InventoryController,
     AdminController,
     StaffActivationController,
@@ -140,6 +146,8 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     OrdersService,
     OrdersPersistenceService,
     GuestOrderAccessService,
+    RechargesService,
+    OptionalRechargeAuthGuard,
     InventoryService,
     AdminService,
     PaymentsService,
