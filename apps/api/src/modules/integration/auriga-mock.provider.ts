@@ -38,9 +38,9 @@ export class AurigaMockProvider implements ConnectivityProvider {
   > {
     return { usedMb: 0, totalMb: 5120 };
   }
-  async getEsimDetails(subscriptionId: string) {
+  async getEsimDetails(reference: string) {
     return {
-      subscriptionId,
+      providerSubscriptionId: reference,
       status: "ACTIVE",
       smDpAddress: "mock.visacompass.com",
     };

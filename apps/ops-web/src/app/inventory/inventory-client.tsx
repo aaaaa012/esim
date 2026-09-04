@@ -836,7 +836,7 @@ export default function InventoryClient() {
                         }
                       />
                     </TableHead>
-                    <TableHead>eSIM</TableHead>
+                    <TableHead>ICCID / SIM serial</TableHead>
                     <TableHead>Our system</TableHead>
                     <TableHead>Network provider</TableHead>
                     <TableHead>Last checked</TableHead>
@@ -1369,7 +1369,7 @@ export default function InventoryClient() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>eSIM</TableHead>
+                      <TableHead>SIM identifiers</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Device eID</TableHead>
                       <TableHead>Orders</TableHead>
@@ -1381,10 +1381,13 @@ export default function InventoryClient() {
                     {profiles.map((p) => (
                       <TableRow key={p.id}>
                         <TableCell>
+                          <div className="text-[11px] text-muted-foreground">
+                            ICCID / SIM serial
+                          </div>
                           <div className="font-mono text-xs">{p.iccid}</div>
                           {p.msisdn && (
                             <div className="text-xs text-muted-foreground">
-                              {p.msisdn}
+                              MSISDN: {p.msisdn}
                             </div>
                           )}
                           {p.order ? (
@@ -1413,7 +1416,13 @@ export default function InventoryClient() {
                           )}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
-                          {p.eid}
+                          {p.eid.startsWith("SYNTH-") ? (
+                            <span className="font-sans text-muted-foreground">
+                              Not provided (local placeholder)
+                            </span>
+                          ) : (
+                            p.eid
+                          )}
                         </TableCell>
                         <TableCell>
                           {p.order ? (

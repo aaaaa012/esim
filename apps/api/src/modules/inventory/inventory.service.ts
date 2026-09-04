@@ -959,7 +959,7 @@ export class InventoryService implements OnModuleInit {
     orderId: string,
     customerId: string,
     iccid: string,
-    qrPayload: string,
+    qrPayload: string | undefined,
     providerInfo?: {
       provider: string;
       providerSubscriptionId?: string;
@@ -971,15 +971,28 @@ export class InventoryService implements OnModuleInit {
       where: { iccid },
     });
     if (!inventory) throw new NotFoundException("Existing eSIM was not found");
+    const encryptedQr = qrPayload
+      ? this.crypto.encrypt(qrPayload)
+      : (
+          await this.prisma.customerEsim.findFirst({
+            where: { inventoryId: inventory.id, orderId: { not: orderId } },
+            orderBy: { assignedAt: "desc" },
+            select: { qrPayloadEncrypted: true },
+          })
+        )?.qrPayloadEncrypted;
+    if (!encryptedQr)
+      throw new ConflictException(
+        "The existing eSIM activation record is unavailable for this top-up",
+      );
     await this.prisma.$transaction(async (tx) => {
       const customerEsim = await tx.customerEsim.upsert({
         where: { orderId },
-        update: { qrPayloadEncrypted: this.crypto.encrypt(qrPayload) },
+        update: { qrPayloadEncrypted: encryptedQr },
         create: {
           orderId,
           inventoryId: inventory.id,
           customerId,
-          qrPayloadEncrypted: this.crypto.encrypt(qrPayload),
+          qrPayloadEncrypted: encryptedQr,
         },
       });
       if (providerInfo?.providerSubscriptionId) {
@@ -1086,6 +1099,7 @@ export class InventoryService implements OnModuleInit {
     }
     if (
       event.subscriptionId &&
+      inventory.assignedOrderId === orderId &&
       inventory.providerSubscriptionId &&
       event.subscriptionId !== inventory.providerSubscriptionId
     ) {

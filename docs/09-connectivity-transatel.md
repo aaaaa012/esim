@@ -54,14 +54,16 @@ qrPayload?, smDpAddress? }`.
 
 1. Requires `TRANSATEL_MVNO_REF` and a plan with a `providerPlanId`.
 2. Finds an allocated eSIM profile by orderId or eid.
-3. Subscriber identifier defaults to ICCID (`TRANSATEL_SUBSCRIBER_IDENTIFIER`).
+3. OCS calls always use the subscriber MSISDN. ICCID is used only for SIM-management `sim-serial` calls.
 4. `POST {base}/ocs/subscriptions/api/orders/products` with payload:
-   `{ bind: { msisdn }, source: 'VisaCompass', orderType: 'preload',
+   `{ bind: { msisdn }, source: 'api', orderType: 'preload' | 'subscribe',
 mvnoRef, product: { productId: plan.providerPlanId },
-payment?, transactionReference: orderId }`.
-5. After the order, fetches eSIM details; if a QR is available returns
-   `status: 'COMPLETED'` with qrPayload/smDpAddress; otherwise
-   `status: 'DELAYED'` (activation delivered later via webhook).
+payment?, transactionReference: orderId }`. Initial purchases use `preload`;
+top-ups use `subscribe`.
+5. After an initial preload, fetches eSIM details; if a QR is available returns
+   `status: 'COMPLETED'` with qrPayload/smDpAddress; otherwise returns
+   `status: 'DELAYED'`. A successful top-up subscribe is complete immediately
+   and deliberately does not fetch or deliver another QR.
 
 ### Usage (`getUsage`, `transatel.provider.ts:331-358`)
 

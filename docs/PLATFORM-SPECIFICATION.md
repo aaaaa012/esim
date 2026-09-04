@@ -463,16 +463,16 @@ base64(clientId:clientSecret)`, body `grant_type=client_credentials`.
   _"Our connectivity service is temporarily unavailable. Please try again shortly."_
 - Every token call is logged to `IntegrationLog` (operation `token`).
 
-### 6.2 Provisioning (OCS preload)
+### 6.2 Provisioning and top-up (OCS product order)
 
 Request: `POST <root>/ocs/subscriptions/api/orders/products`
 
 ```json
 {
   "bind": {
-    "msisdn": "<iccid (default) or eid if TRANSATEL_SUBSCRIBER_IDENTIFIER=msisdn>"
+    "msisdn": "<subscriber MSISDN, 6-15 digits>"
   },
-  "source": "VisaCompass",
+  "source": "api",
   "orderType": "preload",
   "mvnoRef": "<TRANSATEL_MVNO_REF>",
   "product": { "productId": "<plan.providerPlanId>" },
@@ -480,6 +480,10 @@ Request: `POST <root>/ocs/subscriptions/api/orders/products`
   "transactionReference": "<order.id>"
 }
 ```
+
+Initial purchases use `orderType: "preload"`. Top-ups use
+`orderType: "subscribe"` for the existing MSISDN. A successful top-up does not
+fetch or deliver another activation QR.
 
 Response `OrderProductResponse`:
 `{ id, orderReference, status:'done', bind:{msisdn}, source, mvnoRef, subscriptionId?, transactionReference? }`.
@@ -618,14 +622,10 @@ purchase_order_name: orderNumber }` → `{ pidx, payment_url, expires_at }`.
 - Status map (compared case-insensitively — docs use both "Partially Refunded"
   and "Partially refunded"): `Completed→COMPLETED`, `Pending|Initiated→PENDING`,
   `Refunded|Partially Refunded→REFUNDED`, `Expired→FAILED`,
-  `User canceled→CANCELLED`, anything else `FAILED`.
-- **Refund** → Khalti Refund API
-  `POST {origin}/api/merchant-transaction/{transaction_id}/refund/` where
-  `{origin}/api` = `KHALTI_BASE_URL` minus `/v2` and `{transaction_id}` is the
-  lookup `transaction_id` (not the pidx). Wallet full refund sends an empty
-  body; a partial refund sends `{ amount }` (paisa). Success
-  `{ "detail": "Transaction refund successful." }` → internal
-  `refund-{transaction_id}`.
+  `User canceled→CANCELLED`, anything else remains `PENDING` for review.
+- **Refund** uses the dual-control manual-refund workflow. The current gateway
+  does not call Khalti's Refund API; staff record the externally completed
+  refund reference and exact amount after approval.
 - Missing `KHALTI_SECRET_KEY` → `ApiException` `PAYMENT_PROVIDER_ERROR` (503).
 - **Error handling**: every request uses a 15 s timeout
   (`KHALTI_REQUEST_TIMEOUT_MS`). Provider failures throw `ApiException`
@@ -929,7 +929,7 @@ redirects unverified-MFA Super Admins to `/security`.
 | Queues        | `REDIS_URL` (empty → simulation), `QUEUE_CONCURRENCY` (3), `RECONCILIATION_INTERVAL_MINUTES` (15)                                                                                                                                                                                                                                                                                                                                          |
 | Hardening     | `RATE_LIMIT_PER_MINUTE` (300), `AUTH_RATE_LIMIT_PER_MINUTE` (60)                                                                                                                                                                                                                                                                                                                                                                           |
 | Payments      | `PAYMENT_MODE` (simulator), `PAYMENT_SIMULATOR_SECRET`, `KHALTI_BASE_URL`, `KHALTI_SECRET_KEY`                                                                                                                                                                                                                                                                                                                                             |
-| Transatel     | `TRANSATEL_BASE_URL`, `TRANSATEL_CLIENT_ID`, `TRANSATEL_CLIENT_SECRET`, `TRANSATEL_MVNO_REF`, `TRANSATEL_COS`, `TRANSATEL_PAYMENT_PROVIDER` (none), `TRANSATEL_SUBSCRIBER_IDENTIFIER` (iccid), `TRANSATEL_FX_TO_NPR` (170), `TRANSATEL_CATALOG_SYNC_ON_STARTUP` (false), `TRANSATEL_WEBHOOK_TARGET_URL`, `TRANSATEL_WEBHOOK_CONTACT_EMAIL`, `TRANSATEL_WEBHOOK_SECRET`, `TRANSATEL_WEBHOOK_EVENTS`, `TRANSATEL_REQUEST_TIMEOUT_MS` (15000) |
+| Transatel     | `TRANSATEL_BASE_URL`, `TRANSATEL_CLIENT_ID`, `TRANSATEL_CLIENT_SECRET`, `TRANSATEL_MVNO_REF`, `TRANSATEL_COS`, `TRANSATEL_PAYMENT_PROVIDER` (customer), `TRANSATEL_FX_TO_NPR` (170), `TRANSATEL_CATALOG_SYNC_ON_STARTUP` (false), `TRANSATEL_WEBHOOK_TARGET_URL`, `TRANSATEL_WEBHOOK_CONTACT_EMAIL`, `TRANSATEL_WEBHOOK_SECRET`, `TRANSATEL_WEBHOOK_EVENTS`, `TRANSATEL_REQUEST_TIMEOUT_MS` (15000) |
 | Storage       | `AWS_REGION`, `AWS_S3_BUCKET`; optional `AWS_S3_ENDPOINT`, `AWS_S3_FORCE_PATH_STYLE` for local compatible storage                                                                                                                                                                                                                                                                                                                          |
 | Notifications | `NOTIFICATION_MODE` (simulator), `EMAIL_PROVIDER` (`ses`), `AWS_SES_REGION`, `AWS_SES_CONFIGURATION_SET`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`, `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`                                                                                                                                       |
 | Web apps      | `NEXT_PUBLIC_API_URL`                                                                                                                                                                                                                                                                                                                                                                                                                      |

@@ -528,11 +528,11 @@ export default function OrderReview({ id }: { id: string }) {
                   }
                 />
                 <InfoRow
-                  label="Existing eSIM"
+                  label="ICCID / SIM serial"
                   value={order.assignment?.iccid ?? "Assigned during set-up"}
                 />
                 <InfoRow
-                  label="Network profile"
+                  label="Provider subscription ID"
                   value={
                     order.assignment?.providerSubscriptionId ??
                     "Waiting for network"
@@ -708,15 +708,15 @@ export default function OrderReview({ id }: { id: string }) {
                 </div>
                 <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                   <InfoRow
-                    label="eSIM number"
+                    label="ICCID / SIM serial"
                     value={order.assignment.iccid ?? "—"}
                   />
                   <InfoRow
-                    label="Mobile number"
+                    label="MSISDN"
                     value={order.assignment.msisdn ?? "—"}
                   />
                   <InfoRow
-                    label="Network profile"
+                    label="Provider subscription ID"
                     value={
                       order.assignment.providerSubscriptionId ??
                       "Waiting for network"

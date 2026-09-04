@@ -2096,8 +2096,9 @@ export class OrdersService implements OnModuleInit {
       delete order.provisioningFailure;
       delete order.operationalDisposition;
       order.providerSubscriptionId = result.providerSubscriptionId;
-      order.providerStatus = "PRELOADED";
-      if (result.status === "DELAYED" || !result.qrPayload) {
+      const isTopUp = order.purchaseType === "TOPUP";
+      order.providerStatus = isTopUp ? "SUBSCRIBED" : "PRELOADED";
+      if (result.status === "DELAYED" || (!isTopUp && !result.qrPayload)) {
         await this.persistence.save(order);
         await this.safeResolveAttention(
           `provisioning-failure:${order.id}`,
@@ -2108,7 +2109,7 @@ export class OrdersService implements OnModuleInit {
         );
         return this.redact(order);
       }
-      order.qrPayload = result.qrPayload;
+      if (result.qrPayload) order.qrPayload = result.qrPayload;
       if (!reuseExisting) order.qrDeliveredAt = new Date().toISOString();
       const expiresAt = new Date(
         Date.now() + order.plan.validityDays * 86_400_000,
@@ -2130,7 +2131,7 @@ export class OrdersService implements OnModuleInit {
         await this.inventory.assign(
           order.id,
           await this.inventory.customerIdForOrder(order.id),
-          result.qrPayload,
+          result.qrPayload!,
           providerInfo,
         );
       const assigned = await this.inventory.inventoryForOrder(order.id);
@@ -2144,20 +2145,35 @@ export class OrdersService implements OnModuleInit {
         };
       this.transition(
         order,
-        OrderStatus.QR_READY,
-        reuseExisting
-          ? `Provisioned top-up on attempt ${attempt}; package added to existing eSIM`
+        isTopUp ? OrderStatus.COMPLETED : OrderStatus.QR_READY,
+        isTopUp
+          ? `Top-up subscribed on attempt ${attempt}; package added to existing eSIM`
           : `Provisioned on attempt ${attempt}; activation QR delivered`,
       );
       try {
         await this.persistence.save(order);
       } catch (error) {
         if (!this.isOptimisticOrderConflict(error)) throw error;
+        if (isTopUp) {
+          await this.refreshOne(order.id, true);
+          const fresh = this.get(order.id);
+          if (fresh.status === OrderStatus.PROVISIONING) {
+            fresh.providerSubscriptionId = result.providerSubscriptionId;
+            fresh.providerStatus = "SUBSCRIBED";
+            this.transition(
+              fresh,
+              OrderStatus.COMPLETED,
+              "Recovered subscribed top-up after concurrent order update",
+            );
+            await this.persistence.save(fresh);
+          }
+          return this.redact(fresh);
+        }
         this.logger.warn(
           `Order ${order.id} changed after provider success; reloading and recovering its QR-ready state`,
         );
         return await this.recoverProvisioningQrReady(order.id, {
-          qrPayload: result.qrPayload,
+          qrPayload: result.qrPayload!,
           providerSubscriptionId: result.providerSubscriptionId,
           iccid: profile.iccid,
           reason: "Recovered provider result after concurrent order update",

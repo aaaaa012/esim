@@ -144,7 +144,15 @@ export default function ProvisioningOperationsClient() {
                     <StatusBadge label={item.state} />
                   </TableCell>
                   <TableCell>
+                    <div className="text-[11px] text-muted-foreground">
+                      ICCID / SIM serial
+                    </div>
                     <code className="text-xs">{item.iccid}</code>
+                    {item.providerSubscriptionId ? (
+                      <div className="max-w-56 break-all text-[11px] text-muted-foreground">
+                        Subscription ID: {item.providerSubscriptionId}
+                      </div>
+                    ) : null}
                   </TableCell>
                   <TableCell className="max-w-56">
                     <span

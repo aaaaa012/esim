@@ -264,9 +264,10 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                   <summary className="flex cursor-pointer items-center justify-between gap-4 p-4">
                     <span>
                       <span className="block font-medium">
-                        eSIM {group.esim.iccid}
+                        ICCID / SIM serial: {group.esim.iccid}
                       </span>
                       <span className="text-xs text-muted-foreground">
+                        MSISDN: {group.esim.msisdn ?? "Not assigned"} ·{" "}
                         {group.summary.confirmedPackageCount} of{" "}
                         {group.summary.packageCount} packages confirmed ·{" "}
                         {humane(group.freshness)}
@@ -291,7 +292,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                           </Link>
                           <p className="text-xs text-muted-foreground">
                             {humane(item.purchaseType)} · {humane(item.channel)}{" "}
-                            · {item.providerSubscriptionId}
+                            · Subscription ID: {item.providerSubscriptionId}
                           </p>
                         </div>
                         <StatusBadge label={item.balanceStatus} />
@@ -516,8 +517,13 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                           <StatusBadge label={order.channel} />
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          {new Date(order.createdAt).toLocaleDateString()}
+                          {new Date(order.createdAt).toLocaleString()}
                         </p>
+                        {order.purchaseType === "TOPUP" && order.topUpMobile ? (
+                          <p className="text-xs text-muted-foreground">
+                            Top-up for {order.topUpMobile}
+                          </p>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         <span className="font-medium">

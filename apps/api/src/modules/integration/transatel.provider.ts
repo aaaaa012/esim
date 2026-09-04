@@ -589,12 +589,6 @@ export class TransatelProvider implements ConnectivityProvider {
     }
   }
 
-  private subscriberIdentifier(): "iccid" | "msisdn" {
-    return process.env.TRANSATEL_SUBSCRIBER_IDENTIFIER === "msisdn"
-      ? "msisdn"
-      : "iccid";
-  }
-
   /**
    * Resolves an internal reference (ICCID, order id or OCS subscription id) to
    * the inventory row backing the subscriber. Transatel binds orders via the
@@ -740,7 +734,15 @@ export class TransatelProvider implements ConnectivityProvider {
       profile.msisdn && /^\d{6,15}$/.test(profile.msisdn.replace(/\D/g, ""))
         ? profile.msisdn.replace(/\D/g, "")
         : undefined;
-    const bindMsisdn = validMsisdn ?? profile.iccid;
+    if (!validMsisdn)
+      throw new ApiException({
+        code: ApiErrorCode.PROVISIONING_FAILED,
+        message:
+          "We could not match this eSIM to its network number. Our support team is reviewing it.",
+        status: 409,
+        details: `Transatel OCS requires a 6-15 digit MSISDN; inventory ${profile.id} has no valid MSISDN`,
+      });
+    const bindMsisdn = validMsisdn;
     const existingOperation = this.prisma.enabled
       ? await this.prisma.provisioningOperation.findUnique({
           where: { orderId: request.orderId },
@@ -785,6 +787,11 @@ export class TransatelProvider implements ConnectivityProvider {
       select: { providerSubscriptionId: true, providerStatus: true },
     });
     if (accepted?.providerSubscriptionId) {
+      if (isTopUp)
+        return {
+          providerSubscriptionId: accepted.providerSubscriptionId,
+          status: "COMPLETED",
+        };
       try {
         const details = await this.getEsimDetails(profile.iccid);
         if (details.qrPayload) {
@@ -959,7 +966,7 @@ export class TransatelProvider implements ConnectivityProvider {
     }
 
     const data = (await response.json()) as OrderProductResponse;
-    const providerSubscriptionId = data.subscriptionId ?? data.id;
+    const providerSubscriptionId = data.subscriptionId;
     if (!providerSubscriptionId)
       throw new ApiException({
         code: ApiErrorCode.PROVISIONING_FAILED,
@@ -978,18 +985,22 @@ export class TransatelProvider implements ConnectivityProvider {
           where: { id: request.orderId },
           data: {
             providerSubscriptionId,
-            providerStatus: "PRELOADED",
+            providerStatus: isTopUp ? "SUBSCRIBED" : "PRELOADED",
             version: { increment: 1 },
           },
         }),
-        this.prisma.esimInventory.update({
-          where: { id: profile.id },
-          data: {
-            providerSubscriptionId,
-            providerStatus: "PRELOADED",
-            version: { increment: 1 },
-          },
-        }),
+        ...(!isTopUp
+          ? [
+              this.prisma.esimInventory.update({
+                where: { id: profile.id },
+                data: {
+                  providerSubscriptionId,
+                  providerStatus: "PRELOADED",
+                  version: { increment: 1 },
+                },
+              }),
+            ]
+          : []),
         this.prisma.provisioningOperation.update({
           where: { orderId: request.orderId },
           data: {
@@ -1004,6 +1015,22 @@ export class TransatelProvider implements ConnectivityProvider {
           },
         }),
       ]);
+    }
+
+    // `subscribe` adds a package to an already-issued eSIM. The OCS 201/done
+    // response is the commit point; no new activation QR is created or needed.
+    if (isTopUp) {
+      if (this.prisma.enabled)
+        await this.prisma.provisioningOperation.update({
+          where: { orderId: request.orderId },
+          data: {
+            state: "ACTIVATED",
+            completedAt: new Date(),
+            nextReconcileAt: null,
+            version: { increment: 1 },
+          },
+        });
+      return { providerSubscriptionId, status: "COMPLETED" };
     }
 
     try {
@@ -1049,21 +1076,17 @@ export class TransatelProvider implements ConnectivityProvider {
   async getUsage(subscriptionId: string): Promise<UsageBreakdown> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
     const msisdn = subscriber.msisdn?.replace(/\D/g, "") ?? "";
-    const iccid = subscriber.iccid?.replace(/\D/g, "") ?? "";
-    const identifier = /^\d{6,15}$/.test(msisdn) ? "msisdn" : "iccid";
-    const identifierValue = identifier === "msisdn" ? msisdn : iccid;
-    if (!identifierValue)
+    if (!/^\d{6,15}$/.test(msisdn))
       throw new ApiException({
         code: ApiErrorCode.USAGE_UNAVAILABLE,
         message:
           "Usage details are not available yet. Please check back shortly.",
         status: 404,
-        details: "No valid MSISDN or ICCID is stored for this eSIM",
+        details:
+          "Transatel OCS inventory requires a 6-15 digit MSISDN; none is stored for this eSIM",
       });
-    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?${identifier}=${encodeURIComponent(identifierValue)}&withBalances=true`;
-    this.logger.log(
-      `Fetching inventory usage for ${identifier.toUpperCase()}: ${identifierValue}`,
-    );
+    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?msisdn=${encodeURIComponent(msisdn)}&withBalances=true`;
+    this.logger.log(`Fetching inventory usage for MSISDN: ${msisdn}`);
 
     const response = await this.authorizedFetch(url, {
       method: "GET",
@@ -1168,8 +1191,8 @@ export class TransatelProvider implements ConnectivityProvider {
     return { usedMb: Math.max(0, totalMb - remainingMb), totalMb };
   }
 
-  async getEsimDetails(subscriptionId: string): Promise<EsimDetailsResult> {
-    const subscriber = await this.resolveSubscriber(subscriptionId);
+  async getEsimDetails(reference: string): Promise<EsimDetailsResult> {
+    const subscriber = await this.resolveSubscriber(reference);
     const iccid = subscriber.iccid ?? "";
     if (!iccid)
       throw new ApiException({
@@ -1202,7 +1225,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
     const data = (await response.json()) as ESimDetailsResponse;
     return {
-      subscriptionId: iccid,
+      iccid,
       status: data.status,
       ...(data.smdpAddress ? { smDpAddress: data.smdpAddress } : {}),
       ...(data.qrCode?.value || data.activationCode
@@ -1872,12 +1895,10 @@ export class TransatelProvider implements ConnectivityProvider {
       }));
   }
 
-  /**
-   * Returns the raw provider subscription fee as a base-unit number (no FX
-   * conversion). Minor units ("CENT"/"CENTS") are divided by 100 so the value
-   * reflects the provider's amount in its major currency; currency is kept as
-   * a reference only and never converted to NPR.
-   */
+  /** Converts the provider fee to NPR. Minor currency units are normalized
+   * before applying the configured commercial FX rate. An invalid/missing
+   * foreign-currency rate rejects the product instead of silently underpricing
+   * it as if the provider amount were already NPR. */
   private priceNpr(fee?: Price[][]): number | null {
     if (!Array.isArray(fee) || !fee.length) return null;
     const first = Array.isArray(fee[0]) ? fee[0][0] : undefined;
@@ -1885,8 +1906,12 @@ export class TransatelProvider implements ConnectivityProvider {
     const amount = Number(first.amount);
     if (!Number.isFinite(amount) || amount <= 0) return null;
     const minor = /^(CENT|CENTS)$/i.test(String(first.unit ?? ""));
-    const value = minor ? amount / 100 : amount;
-    return Math.max(1, Math.round(value));
+    const majorValue = minor ? amount / 100 : amount;
+    const currency = String(first.currency ?? "").toUpperCase();
+    if (currency === "NPR") return Math.max(1, Math.round(majorValue));
+    const fx = Number(process.env.TRANSATEL_FX_TO_NPR);
+    if (!Number.isFinite(fx) || fx <= 0) return null;
+    return Math.max(1, Math.round(majorValue * fx));
   }
 
   private iso3ToIso2(iso3: string): string | undefined {

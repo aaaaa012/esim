@@ -150,6 +150,7 @@ describe("TransatelProvider", () => {
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       iccid: "8988247076000000319",
+      msisdn: "882470001850263",
       eid: "890490320000000000000000000001",
     });
     const provider = new TransatelProvider(prisma);
@@ -162,7 +163,7 @@ describe("TransatelProvider", () => {
           orderReference: "VC-REF",
           status: "done",
           submissionDate: "2026-08-04T00:00:00Z",
-          bind: { msisdn: "8988247076000000319" },
+          bind: { msisdn: "882470001850263" },
           source: "api",
           mvnoRef: "visacompass-test",
           subscriptionId: "sub-123",
@@ -196,7 +197,7 @@ describe("TransatelProvider", () => {
     expect(orderCall).toBeDefined();
     const payload = JSON.parse(String(orderCall![1].body));
     expect(payload).toMatchObject({
-      bind: { msisdn: "8988247076000000319" },
+      bind: { msisdn: "882470001850263" },
       source: "api",
       orderType: "preload",
       mvnoRef: "visacompass-test",
@@ -313,8 +314,6 @@ describe("TransatelProvider", () => {
     expect(result).toEqual({
       providerSubscriptionId: "sub-topup",
       status: "COMPLETED",
-      qrPayload: "LPA:1$consumer.rsp.world$TOPUP",
-      smDpAddress: "consumer.rsp.world",
     });
     const orderCall = fetchMock.mock.calls.find((call) =>
       String(call[0]).includes("/api/orders/products"),
@@ -333,6 +332,36 @@ describe("TransatelProvider", () => {
     expect(orderCall![1].headers?.["Idempotency-Key"]).toBe(
       "transatel:subscribe:order-topup-1",
     );
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes("/sim-management/sims/api/esims/"),
+      ),
+    ).toBe(false);
+    expect(prisma.esimInventory.update).not.toHaveBeenCalled();
+  });
+
+  it("never substitutes an ICCID for a missing OCS MSISDN", async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      id: "inv-no-msisdn",
+      iccid: "8988247076000000319",
+      eid: "890490320000000000000000000001",
+      msisdn: null,
+    });
+
+    await expect(
+      new TransatelProvider(prisma).provision({
+        orderId: "order-no-msisdn",
+        planId: "plan-1",
+        eid: "890490320000000000000000000001",
+        purchaseType: "TOPUP",
+        traveler,
+      }),
+    ).rejects.toMatchObject({ code: "PROVISIONING_FAILED" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("maps an ineligible subscriber top-up rejection without exposing provider JSON", async () => {
@@ -342,8 +371,8 @@ describe("TransatelProvider", () => {
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       iccid: "8988247076000000319",
-      eid: "890490320000000000000000000001",
       msisdn: "882470001850263",
+      eid: "890490320000000000000000000001",
     });
     const provider = new TransatelProvider(prisma);
     route({
@@ -449,6 +478,7 @@ describe("TransatelProvider", () => {
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       iccid: "8988247076000000319",
+      msisdn: "882470001850263",
       eid: "890490320000000000000000000001",
     });
     const provider = new TransatelProvider(prisma);
@@ -461,7 +491,7 @@ describe("TransatelProvider", () => {
           orderReference: "VC-REF",
           status: "done",
           submissionDate: "2026-08-04T00:00:00Z",
-          bind: { msisdn: "8988247076000000319" },
+          bind: { msisdn: "882470001850263" },
           source: "api",
           mvnoRef: "visacompass-test",
           subscriptionId: "sub-123",
@@ -506,6 +536,7 @@ describe("TransatelProvider", () => {
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       id: "inv-1",
       iccid: "8988247076000000319",
+      msisdn: "882470001850263",
       eid: "890490320000000000000000000001",
     });
     prisma.order.findUnique = vi
@@ -543,6 +574,7 @@ describe("TransatelProvider", () => {
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       id: "inv-1",
       iccid: "8988247076000000319",
+      msisdn: "882470001850263",
       eid: "890490320000000000000000000001",
     });
     prisma.order.findUnique = vi.fn().mockResolvedValue({
@@ -619,7 +651,7 @@ describe("TransatelProvider", () => {
     expect(url).toContain("withBalances=true");
   });
 
-  it("falls back to ICCID when an inventory profile has no MSISDN", async () => {
+  it("rejects OCS usage lookup when an inventory profile has no MSISDN", async () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       iccid: "8988247076000000319",
@@ -651,15 +683,14 @@ describe("TransatelProvider", () => {
         }),
     });
 
-    await provider.getUsage(ORDER_UUID);
-
-    const url = String(
-      fetchMock.mock.calls.find((call) =>
+    await expect(provider.getUsage(ORDER_UUID)).rejects.toMatchObject({
+      code: "USAGE_UNAVAILABLE",
+    });
+    expect(
+      fetchMock.mock.calls.some((call) =>
         String(call[0]).includes("/api/subscriptions/products"),
-      )![0],
-    );
-    expect(url).toContain("iccid=8988247076000000319");
-    expect(url).not.toContain("msisdn=");
+      ),
+    ).toBe(false);
   });
 
   it("returns the QR payload and SM-DP+ address from eSIM details", async () => {
@@ -685,7 +716,7 @@ describe("TransatelProvider", () => {
     });
     const details = await provider.getEsimDetails("8988247076000000319");
     expect(details).toEqual({
-      subscriptionId: "8988247076000000319",
+      iccid: "8988247076000000319",
       status: "downloaded",
       smDpAddress: "consumer.rsp.world",
       qrPayload: "LPA:1$consumer.rsp.world$XYZ",
@@ -1136,8 +1167,8 @@ describe("TransatelProvider", () => {
       name: "Travel 5GB",
       dataAllowance: "5120 MB",
       validityDays: 15,
-      costPrice: 5,
-      sellingPrice: 5,
+      costPrice: 848,
+      sellingPrice: 848,
       providerPlanId: "TRVL-5GB-15D",
       status: "DRAFT",
     });
@@ -1257,7 +1288,7 @@ describe("TransatelProvider", () => {
     const result = await provider.syncCatalog();
     expect(result).toEqual({ synced: 1, skipped: 0 });
     const create = tx.plan.upsert.mock.calls[0]![0].create;
-    expect(create.costPrice).toBe(5);
+    expect(create.costPrice).toBe(848);
   });
 
   it("maps real catalog allowances using resourceValue/resourceUnit and prefers productShortText", async () => {
@@ -1315,8 +1346,8 @@ describe("TransatelProvider", () => {
       name: "One-off data plan Afghanistan 1GB 7 day(s)",
       dataallowance: "1024 MB",
       validitydays: 7,
-      costprice: 18,
-      sellingprice: 18,
+      costprice: 3060,
+      sellingprice: 3060,
       currency: "NPR",
     });
   });

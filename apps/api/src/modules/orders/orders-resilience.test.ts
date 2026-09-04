@@ -497,7 +497,7 @@ describe("OrdersService asynchronous provisioning", () => {
       expect.objectContaining({ providerSubscriptionId: "topup-sub-1" }),
     );
     expect(orders.get(order.id)).toMatchObject({
-      status: OrderStatus.QR_READY,
+      status: OrderStatus.COMPLETED,
       providerSubscriptionId: "topup-sub-1",
     });
     expect(orders.get(order.id).qrDeliveredAt).toBeUndefined();
