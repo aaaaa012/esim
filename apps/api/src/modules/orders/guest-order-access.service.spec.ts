@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ForbiddenException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
@@ -105,7 +106,7 @@ describe("GuestOrderAccessService", () => {
       inventoryId: rechargeTarget.inventoryId,
       originalOrderId: rechargeTarget.originalOrderId,
       customerId: rechargeTarget.customerId,
-      recipientHash: service.hash("owner@example.com"),
+      recipientHash: createHash("sha256").update("owner@example.com").digest("hex"),
     });
     expect(() =>
       service.mobileFromLookupToken(`${token.slice(0, -1)}x`),
