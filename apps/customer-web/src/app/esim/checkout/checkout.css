@@ -619,6 +619,34 @@
   line-height: 1.5;
 }
 
+.confirm-box.payment-consent {
+  gap: 10px;
+  padding: 12px 14px;
+  border-color: var(--border);
+  background: transparent;
+}
+
+.confirm-box.payment-consent input {
+  width: 18px;
+  height: 18px;
+}
+
+.confirm-box.payment-consent span {
+  display: block;
+}
+
+.confirm-box.payment-consent b {
+  display: inline;
+  margin-right: 5px;
+  font-size: 13px;
+}
+
+.confirm-box.payment-consent small {
+  display: inline;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .form-actions {
   display: flex;
   justify-content: space-between;
@@ -1423,6 +1451,11 @@
 .checkout-page .confirm-box {
   border-color: var(--border-strong);
   background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+
+.checkout-page .confirm-box.payment-consent {
+  border-color: var(--border);
+  background: transparent;
 }
 
 .checkout-page .order-summary {

@@ -589,16 +589,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       return true;
     }
   };
-  const initiatePayment = () =>
-    run(async () => {
-      const value = await api<Payment>(`/partner-checkout/${token}/payment`, {
-        method: "POST",
-        body: JSON.stringify({ provider }),
-      });
-      setPayment(value);
-      if (value.redirectUrl && external(value.redirectUrl))
-        window.location.assign(value.redirectUrl);
+  const requestPayment = async () => {
+    const value = await api<Payment>(`/partner-checkout/${token}/payment`, {
+      method: "POST",
+      body: JSON.stringify({ provider }),
     });
+    setPayment(value);
+    if (value.redirectUrl && external(value.redirectUrl))
+      window.location.assign(value.redirectUrl);
+  };
+  const initiatePayment = () => run(requestPayment);
   const checkPayment = () =>
     run(async () => {
       const result = await api<{ status: string }>(
@@ -687,7 +687,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       });
       setOrderNumber(result.orderNumber);
       setSubmitted(true);
-      await initiatePayment();
+      await requestPayment();
     });
 
   if (
@@ -1018,7 +1018,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               <>
                 <div className="step-tabs">
                   {(isTopUp
-                    ? ["Compatibility", "Review"]
+                    ? ["Recharge", "Review"]
                     : ["Compatibility", "Traveller", "Documents", "Review"]
                   ).map((label, index) => {
                     const value = isTopUp ? (index === 0 ? 1 : 4) : index + 1;
@@ -1056,7 +1056,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       Coverage starts after first connection at your
                       destination.
                     </p>
-                    <label className="confirm-box">
+                    <label
+                      className={`confirm-box${isTopUp ? " payment-consent" : ""}`}
+                    >
                       <input
                         type="checkbox"
                         checked={compatible}

@@ -89,8 +89,8 @@ cases, all green**. Run the root suite to refresh the cross-workspace aggregate.
 3. Open a protected customer URL while signed out; sign in and expect to return to that exact URL. Direct header sign-in falls back to `/account/esims`.
 4. Start guest checkout, copy the private recovery link, close the tab, and reopen the copied link; expect the same order and verification state. Confirm the fragment token disappears from the address bar after exchange.
 5. Save guest traveller details and open the emailed recovery link on another device; expect the same order. Claim it after modal sign-in and confirm old guest access is revoked.
-6. Enter an existing eSIM MSISDN, open the emailed recharge link, select the current plan and another destination plan, and finish payment. Expect the package on the existing eSIM with no replacement QR.
-7. Run step 6 from a signed-in customer dashboard and from a partner-hosted top-up session; verify success, failed payment, retry, and provisioning-attention final actions.
+6. Enter an existing eSIM MSISDN, open the emailed recharge link, select the current plan and another destination plan, select a payment provider, accept the visible purchase terms, and click Continue to payment once. Expect the gateway redirect or Fonepay QR immediately, then the package on the existing eSIM with no replacement QR.
+7. Run step 6 as a guest, from a signed-in customer dashboard, and from a partner-hosted top-up session. Verify the payment action is never blocked by passport verification, and cover success, failed payment, retry, and provisioning-attention final actions.
 
 ## 5. Regression command sheet
 

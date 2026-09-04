@@ -5,6 +5,7 @@ import { SignInButton, useAuth } from "@clerk/nextjs";
 import { useEffect, useRef, useState } from "react";
 import ErrorModal from "../../../components/error-modal";
 import { fonepayBankIntentUrl } from "./payment-intent";
+import { paymentActionDisabled } from "./payment-gates";
 import Link from "next/link";
 import {
   Check,
@@ -792,6 +793,20 @@ export default function CheckoutClient({
       setBusy(false);
     }
   };
+  const requestPayment = async (target: Order) => {
+    const value = await api<Payment>(`/customer/orders/${target.id}/payment`, {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+    });
+    setPayment(value);
+    let isExternal = true;
+    try {
+      isExternal = new URL(value.redirectUrl).origin !== window.location.origin;
+    } catch {
+      isExternal = true;
+    }
+    if (value.redirectUrl && isExternal) window.location.assign(value.redirectUrl);
+  };
   const createOrder = (asGuest: boolean) =>
     run(async () => {
       if (order) {
@@ -845,6 +860,7 @@ export default function CheckoutClient({
         }
         if (created.order.purchaseType === "TOPUP") {
           setStep(4);
+          await requestPayment(created.order);
         } else {
           setStep(2);
         }
@@ -880,6 +896,7 @@ export default function CheckoutClient({
       }
       if (finalOrder.purchaseType === "TOPUP") {
         setStep(4);
+        await requestPayment(finalOrder);
       } else {
         setStep(2);
       }
@@ -1096,23 +1113,7 @@ export default function CheckoutClient({
         if (!isTopUp && !passportGatePassed(target)) {
           throw new Error("Verify your passport before continuing to payment.");
         }
-        const value = await api<Payment>(
-          `/customer/orders/${target.id}/payment`,
-          {
-            method: "POST",
-            body: JSON.stringify({ provider }),
-          },
-        );
-        setPayment(value);
-        const external = (url: string) => {
-          try {
-            return new URL(url).origin !== window.location.origin;
-          } catch {
-            return true;
-          }
-        };
-        if (value.redirectUrl && external(value.redirectUrl))
-          window.location.assign(value.redirectUrl);
+        await requestPayment(target);
       }
     });
   const complete = () =>
@@ -1644,9 +1645,16 @@ export default function CheckoutClient({
                       ? "Payment issue"
                       : "Choose payment method"}
                 </h2>
-                <button className="button secondary" type="button" onClick={goBack} disabled={busy || verifying}>
-                  Back to documents
-                </button>
+                {!isTopUp ? (
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={goBack}
+                    disabled={busy || verifying}
+                  >
+                    Back to documents
+                  </button>
+                ) : null}
                 {order &&
                 ["QR_READY", "ACTIVATION_ATTENTION"].includes(order.status) ? (
                   <div className="success-panel">
@@ -1844,6 +1852,41 @@ export default function CheckoutClient({
                         </button>
                       ) : null}
                     </div>
+                    {isTopUp && !order ? (
+                      <>
+                        <label className="confirm-box payment-consent">
+                          <input
+                            type="checkbox"
+                            checked={legalAccepted}
+                            onChange={(event) => {
+                              setLegalAccepted(event.target.checked);
+                              if (event.target.checked)
+                                setCompatibilityError("");
+                            }}
+                          />
+                          <span>
+                            <b>I agree to the purchase terms</b>
+                            <small>
+                              I have read the{" "}
+                              <a href="/terms" target="_blank">Terms</a>,{" "}
+                              <a href="/privacy" target="_blank">
+                                Privacy Policy
+                              </a>{" "}
+                              and{" "}
+                              <a href="/refund-policy" target="_blank">
+                                Refund Policy
+                              </a>
+                              .
+                            </small>
+                          </span>
+                        </label>
+                        {compatibilityError ? (
+                          <p className="field-error" role="alert">
+                            {compatibilityError}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
                     {payment ? (
                       SIMULATOR ? (
                         <div className="simulator-box">
@@ -1853,9 +1896,11 @@ export default function CheckoutClient({
                           </small>
                           <Action
                             busy={busy}
-                            disabled={
-                              verifyingPassport || !passportGatePassed(order)
-                            }
+                            disabled={paymentActionDisabled({
+                              isTopUp,
+                              verifyingPassport,
+                              passportGatePassed: passportGatePassed(order),
+                            })}
                             onClick={complete}
                           >
                             Simulate verified payment
@@ -1931,9 +1976,11 @@ export default function CheckoutClient({
                           ) : null}
                           <Action
                             busy={busy}
-                            disabled={
-                              verifyingPassport || !passportGatePassed(order)
-                            }
+                            disabled={paymentActionDisabled({
+                              isTopUp,
+                              verifyingPassport,
+                              passportGatePassed: passportGatePassed(order),
+                            })}
                             onClick={complete}
                           >
                             Check payment status
@@ -1946,24 +1993,32 @@ export default function CheckoutClient({
                       ) : (
                         <Action
                           busy={busy}
-                          disabled={
-                            verifyingPassport || !passportGatePassed(order)
-                          }
+                          disabled={paymentActionDisabled({
+                            isTopUp,
+                            verifyingPassport,
+                            passportGatePassed: passportGatePassed(order),
+                          })}
                           onClick={complete}
                         >
                           Check payment status
                         </Action>
                       )
                     ) : isTopUp && !order ? (
-                      <Action busy={busy} onClick={begin}>
+                      <Action
+                        busy={busy}
+                        disabled={!legalAccepted}
+                        onClick={begin}
+                      >
                         Continue to payment
                       </Action>
                     ) : (
                       <Action
                         busy={busy}
-                        disabled={
-                          verifyingPassport || !passportGatePassed(order)
-                        }
+                        disabled={paymentActionDisabled({
+                          isTopUp,
+                          verifyingPassport,
+                          passportGatePassed: passportGatePassed(order),
+                        })}
                         onClick={() => void initiate()}
                       >
                         Continue to{" "}
