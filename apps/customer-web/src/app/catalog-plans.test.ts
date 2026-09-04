@@ -52,37 +52,13 @@ const plan = (
   popular: false,
 });
 
-describe("customer catalog preference ranking", () => {
-  const plans = [
-    plan("small", 1024, 7, 500),
-    plan("exact", 2048, 15, 900),
-    plan("larger", 4096, 30, 1200),
-  ];
-
-  it("puts an exact data and duration match first", () => {
-    expect(rankCatalogPlans(plans, 2048, 15)[0]?.id).toBe("exact");
-  });
-
-  it("prefers the smallest sufficient package over an undersized one", () => {
-    expect(rankCatalogPlans(plans, 1500, 10)[0]?.id).toBe("exact");
-  });
-
-  it("uses price to break equivalent matches", () => {
-    const expensive = plan("expensive", 2048, 15, 1100);
-    expect(rankCatalogPlans([expensive, plans[1]!], 2048, 15)[0]?.id).toBe(
-      "exact",
-    );
-  });
-
-  it("keeps manually curated plans first when no preference is selected", () => {
-    const popular = { ...plans[2]!, popular: true };
-    expect(rankCatalogPlans([plans[0]!, popular])[0]?.id).toBe("larger");
-  });
-
-  it("supports the previous API shape during a rolling deployment", () => {
-    const { allowanceMb: _allowanceMb, ...legacy } = plans[1]!;
-    expect(rankCatalogPlans([plans[0]!, legacy], 2048, 15)[0]?.id).toBe(
-      "exact",
-    );
+describe("customer catalog ordering", () => {
+  it("shows popular plans first, then orders by price without filtering packages", () => {
+    const small = plan("small", 1024, 7, 500);
+    const large = plan("large", 4096, 30, 1200);
+    const popular = { ...plan("popular", 2048, 15, 900), popular: true };
+    expect(
+      rankCatalogPlans([large, small, popular]).map((item) => item.id),
+    ).toEqual(["popular", "small", "large"]);
   });
 });
