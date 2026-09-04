@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from "@nestjs/common";
 import {
@@ -15,6 +16,7 @@ import {
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "./connectivity.service.js";
 import { OrdersService } from "../orders/orders.service.js";
+import { UsageService } from "../esims/usage.service.js";
 
 type LifecycleInput = {
   orderId: string;
@@ -30,6 +32,7 @@ export class TransatelOperationsService {
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
     private readonly orders: OrdersService,
+    @Optional() private readonly usageService?: UsageService,
   ) {}
 
   async dashboard(params?: {
@@ -1061,52 +1064,38 @@ export class TransatelOperationsService {
 
   async syncAllUsage(): Promise<{ synced: number; failed: number }> {
     if (!this.prisma.enabled) return { synced: 0, failed: 0 };
-    const subscriptions = await this.prisma.subscription.findMany({
-      where: { status: SubscriptionStatus.ACTIVE },
-      select: {
-        id: true,
-        providerSubscriptionId: true,
-        customerEsim: { select: { inventory: { select: { iccid: true } } } },
+    if (!this.usageService)
+      throw new ServiceUnavailableException(
+        "Canonical usage reconciliation is unavailable",
+      );
+    const profiles = await this.prisma.esimInventory.findMany({
+      where: {
+        customerEsims: {
+          some: {
+            subscriptions: {
+              some: {
+                status: {
+                  in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PENDING],
+                },
+              },
+            },
+          },
+        },
       },
-      take: 200,
+      select: { id: true },
+      orderBy: { id: "asc" },
     });
     let synced = 0;
     let failed = 0;
-    for (const sub of subscriptions) {
-      const iccid = sub.customerEsim?.inventory?.iccid;
-      if (!iccid) continue;
-      try {
-        const usage = await this.connectivity.getUsage(iccid);
-        if (usage.usageAvailable === false) {
-          failed += 1;
-          continue;
-        }
-        const balance = usage.subscriptions?.find(
-          (item) => item.providerSubscriptionId === sub.providerSubscriptionId,
-        );
-        if (usage.subscriptions?.length && !balance) {
-          failed += 1;
-          continue;
-        }
-        const checkedAt = new Date();
-        await this.prisma.subscription.update({
-          where: { id: sub.id },
-          data: {
-            usedMb: balance?.usedMb ?? usage.usedMb,
-            totalMb: balance?.totalMb ?? usage.totalMb,
-            usageLastCheckedAt: checkedAt,
-            ...(balance
-              ? {
-                  providerLastSeenAt: checkedAt,
-                  assignmentVerificationStatus: "VERIFIED",
-                }
-              : {}),
-          },
-        });
-        synced += 1;
-      } catch {
-        failed += 1;
-      }
+    const concurrency = 5;
+    for (let offset = 0; offset < profiles.length; offset += concurrency) {
+      const results = await Promise.allSettled(
+        profiles
+          .slice(offset, offset + concurrency)
+          .map((profile) => this.usageService!.refresh(profile.id)),
+      );
+      synced += results.filter((result) => result.status === "fulfilled").length;
+      failed += results.filter((result) => result.status === "rejected").length;
     }
     return { synced, failed };
   }

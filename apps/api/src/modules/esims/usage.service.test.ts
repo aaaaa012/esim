@@ -191,6 +191,61 @@ describe("UsageService", () => {
     );
   });
 
+  it("keeps a newly assigned top-up waiting while Transatel publishes its balance", async () => {
+    const { service, prisma, resilience } = context([
+      {
+        providerSubscriptionId: "provider-1",
+        status: "active",
+        usedMb: 250,
+        totalMb: 1000,
+        priority: 1,
+      },
+    ]);
+    const row = await prisma.esimInventory.findUnique();
+    row.customerEsims[1].assignedAt = new Date();
+
+    const result = await service.refresh("inventory-1");
+
+    expect(service.packageForOrder(result, "order-topup")).toMatchObject({
+      balanceStatus: "WAITING_FOR_FIRST_USE",
+      verificationStatus: "PENDING",
+    });
+    expect(resilience.attention).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        dedupeKey: "subscription-assignment:subscription-2",
+      }),
+    );
+  });
+
+  it("does not verify a newly assigned top-up from a provider 0/0 placeholder", async () => {
+    const { service, prisma } = context([
+      {
+        providerSubscriptionId: "provider-1",
+        status: "active",
+        usedMb: 250,
+        totalMb: 1000,
+        priority: 1,
+      },
+      {
+        providerSubscriptionId: "provider-2",
+        status: "pending",
+        usedMb: 0,
+        totalMb: 0,
+        priority: 2,
+      },
+    ]);
+    const row = await prisma.esimInventory.findUnique();
+    row.customerEsims[1].assignedAt = new Date();
+
+    const result = await service.refresh("inventory-1");
+
+    expect(service.packageForOrder(result, "order-topup")).toMatchObject({
+      balanceStatus: "WAITING_FOR_FIRST_USE",
+      totalMb: 0,
+      verificationStatus: "PENDING",
+    });
+  });
+
   it("does not modify cached balances when the provider is unavailable", async () => {
     const { service, prisma, connectivity } = context([]);
     connectivity.getUsage.mockRejectedValueOnce(new Error("provider timeout"));

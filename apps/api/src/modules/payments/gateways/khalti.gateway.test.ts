@@ -111,6 +111,28 @@ describe("KhaltiGateway diagnostics", () => {
     ).resolves.toMatchObject({ status: "PENDING", amountNpr: 125 });
   });
 
+  it("correlates payment lookups with the local order", async () => {
+    process.env.KHALTI_SECRET_KEY = "sandbox-secret";
+    const { prisma, create } = prismaWithLog();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "Pending", total_amount: 12500 }), {
+        status: 200,
+      }),
+    );
+
+    await new KhaltiGateway(prisma).verify("pidx-1", {
+      orderId: "order-1",
+      amountNpr: 125,
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        operation: "khalti-lookup",
+        correlationId: "order-1",
+      }),
+    });
+  });
+
   it("records provider HTTP failures", async () => {
     process.env.KHALTI_SECRET_KEY = "wrong-secret";
     const { prisma, create } = prismaWithLog();

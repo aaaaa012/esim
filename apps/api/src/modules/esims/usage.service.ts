@@ -98,16 +98,24 @@ export class UsageService {
         "Transatel found the eSIM but did not return a usable data balance",
       );
 
+    // A newly subscribed Transatel package may temporarily be present as 0/0.
+    // That is publication-in-progress, not a confirmed zero-byte allowance.
     const balances = new Map(
-      (usage.subscriptions ?? []).map((item) => [
-        item.providerSubscriptionId,
-        item,
-      ]),
+      (usage.subscriptions ?? [])
+        .filter(
+          (item) =>
+            Number.isFinite(item.totalMb) &&
+            item.totalMb > 0 &&
+            Number.isFinite(item.usedMb) &&
+            item.usedMb >= 0,
+        )
+        .map((item) => [item.providerSubscriptionId, item]),
     );
     const local = row.customerEsims.flatMap((link: any) =>
       link.subscriptions.map((subscription: any) => ({
         ...subscription,
         orderId: link.orderId,
+        assignedAt: link.assignedAt,
       })),
     );
     const eligible = local.filter((subscription: any) =>
@@ -127,11 +135,17 @@ export class UsageService {
     await this.prisma.$transaction(
       eligible.map((subscription: any) => {
         const balance = balances.get(subscription.providerSubscriptionId);
-        if (!balance)
+        if (!balance) {
+          if (this.awaitingBalancePublication(subscription, checkedAt))
+            return this.prisma.subscription.update({
+              where: { id: subscription.id },
+              data: { assignmentVerificationStatus: "PENDING" },
+            });
           return this.prisma.subscription.update({
             where: { id: subscription.id },
             data: { assignmentVerificationStatus: "MISMATCH" },
           });
+        }
         matchedProviderIds.add(subscription.providerSubscriptionId);
         return this.prisma.subscription.update({
           where: { id: subscription.id },
@@ -157,6 +171,7 @@ export class UsageService {
             null,
             "Provider usage confirms the assigned subscription",
           );
+        if (this.awaitingBalancePublication(subscription, checkedAt)) return;
         return this.resilience.attention({
           dedupeKey: key,
           category: "SUBSCRIPTION_ASSIGNMENT_CONFLICT",
@@ -277,8 +292,7 @@ export class UsageService {
             ? "CONFIRMED"
             : lastKnown
               ? "LAST_KNOWN"
-              : subscription.status === "PENDING" &&
-                  subscription.assignmentVerificationStatus !== "MISMATCH"
+              : subscription.assignmentVerificationStatus === "PENDING"
                 ? "WAITING_FOR_FIRST_USE"
                 : "UNAVAILABLE",
           usedMb: subscription.usedMb,
@@ -358,5 +372,18 @@ export class UsageService {
       process.env.ENCRYPTION_KEY ??
       "visa-compass-package-reference";
     return `pkg_${createHmac("sha256", secret).update(value).digest("hex").slice(0, 20)}`;
+  }
+
+  private awaitingBalancePublication(subscription: any, now: Date) {
+    if (!subscription.assignedAt) return false;
+    const configured = Number(
+      process.env.PROVIDER_BALANCE_PUBLICATION_GRACE_MINUTES ?? 60,
+    );
+    const graceMinutes =
+      Number.isFinite(configured) && configured >= 1 ? configured : 60;
+    return (
+      now.getTime() - new Date(subscription.assignedAt).getTime() <
+      graceMinutes * 60_000
+    );
   }
 }

@@ -380,6 +380,19 @@ export class TransatelProvider implements ConnectivityProvider {
       if (error instanceof ApiException) throw error;
       this.providerFailed();
       this.logger.error("Transatel token request error", error);
+      await this.record({
+        operation: "token",
+        method: "POST",
+        endpoint: "/authentication/api/token",
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        errorCode: "NETWORK_ERROR",
+        errorMessage:
+          error instanceof Error
+            ? error.message.slice(0, 2000)
+            : "unknown error",
+        requestBody: { grant_type: "client_credentials" },
+      });
       throw new ApiException({
         code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
         message:
@@ -398,6 +411,7 @@ export class TransatelProvider implements ConnectivityProvider {
       body?: string;
       retryOnAuth?: boolean;
       operation?: string;
+      correlationId?: string;
     } = { method: "GET" },
   ): Promise<Response> {
     if (this.circuitOpen())
@@ -408,7 +422,12 @@ export class TransatelProvider implements ConnectivityProvider {
         status: 503,
         details: "Transatel circuit breaker is open",
       });
-    const { retryOnAuth = true, operation = "unknown", ...request } = init;
+    const {
+      retryOnAuth = true,
+      operation = "unknown",
+      correlationId,
+      ...request
+    } = init;
     const startedAt = Date.now();
     const execute = async () => {
       const token = await this.getAccessToken();
@@ -426,12 +445,58 @@ export class TransatelProvider implements ConnectivityProvider {
       response = await execute();
     } catch (error) {
       this.providerFailed();
+      await this.record({
+        operation,
+        method: request.method,
+        endpoint: this.safeEndpoint(url),
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        errorCode: "NETWORK_ERROR",
+        errorMessage:
+          error instanceof Error
+            ? error.message.slice(0, 2000)
+            : String(error).slice(0, 2000),
+        ...(correlationId ? { correlationId } : {}),
+        requestBody: this.requestLogPayload(url, request),
+      });
       throw error;
     }
     if (response.status === 401 && retryOnAuth) {
+      const responseBody = await this.logBody(response);
+      await this.record({
+        operation: `${operation}-auth-retry`,
+        method: request.method,
+        endpoint: this.safeEndpoint(url),
+        status: 401,
+        durationMs: Date.now() - startedAt,
+        errorCode: "HTTP_401",
+        errorMessage: this.bodyText(responseBody).slice(0, 2000),
+        ...(correlationId ? { correlationId } : {}),
+        requestBody: this.requestLogPayload(url, request),
+        responseBody,
+      });
       this.accessToken = null;
       this.tokenExpiry = 0;
-      response = await execute();
+      try {
+        response = await execute();
+      } catch (error) {
+        this.providerFailed();
+        await this.record({
+          operation,
+          method: request.method,
+          endpoint: this.safeEndpoint(url),
+          status: 0,
+          durationMs: Date.now() - startedAt,
+          errorCode: "NETWORK_ERROR",
+          errorMessage:
+            error instanceof Error
+              ? error.message.slice(0, 2000)
+              : String(error).slice(0, 2000),
+          ...(correlationId ? { correlationId } : {}),
+          requestBody: this.requestLogPayload(url, request),
+        });
+        throw error;
+      }
     }
     const durationMs = Date.now() - startedAt;
     let path: string;
@@ -449,6 +514,7 @@ export class TransatelProvider implements ConnectivityProvider {
         endpoint: path,
         status: response.status,
         durationMs,
+        ...(correlationId ? { correlationId } : {}),
         requestBody: this.requestLogPayload(url, request),
         responseBody: await this.logBody(response),
       });
@@ -463,6 +529,7 @@ export class TransatelProvider implements ConnectivityProvider {
         endpoint: path,
         status: response.status,
         durationMs,
+        ...(correlationId ? { correlationId } : {}),
         errorCode: `HTTP_${response.status}`,
         ...(errorMessage ? { errorMessage } : {}),
         requestBody: this.requestLogPayload(url, request),
@@ -480,6 +547,7 @@ export class TransatelProvider implements ConnectivityProvider {
     durationMs: number;
     errorCode?: string;
     errorMessage?: string;
+    correlationId?: string;
     requestBody?: Prisma.InputJsonValue;
     responseBody?: Prisma.InputJsonValue;
   }) {
@@ -492,6 +560,9 @@ export class TransatelProvider implements ConnectivityProvider {
           endpoint: entry.endpoint,
           status: entry.status,
           durationMs: entry.durationMs,
+          ...(entry.correlationId
+            ? { correlationId: entry.correlationId }
+            : {}),
           ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
           ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
           ...(entry.requestBody !== undefined
@@ -901,6 +972,7 @@ export class TransatelProvider implements ConnectivityProvider {
         },
         body: JSON.stringify(payload),
         operation: "provision",
+        correlationId: request.orderId,
       });
     } catch (error) {
       if (this.prisma.enabled)
@@ -1092,6 +1164,7 @@ export class TransatelProvider implements ConnectivityProvider {
       method: "GET",
       headers: { Accept: "application/json" },
       operation: "usage",
+      correlationId: subscriptionId,
     });
     if (!response.ok)
       throw new ApiException({
@@ -1208,6 +1281,7 @@ export class TransatelProvider implements ConnectivityProvider {
       method: "GET",
       headers: { Accept: "application/json" },
       operation: "esim-details",
+      correlationId: reference,
     });
     if (!response.ok) {
       const notFound = response.status === 404;
@@ -1261,6 +1335,7 @@ export class TransatelProvider implements ConnectivityProvider {
         transactionReference,
       }),
       operation: `subscriber-${action}`,
+      correlationId: transactionReference,
     });
     if (!response.ok)
       throw new ApiException({
@@ -1912,6 +1987,14 @@ export class TransatelProvider implements ConnectivityProvider {
     const fx = Number(process.env.TRANSATEL_FX_TO_NPR);
     if (!Number.isFinite(fx) || fx <= 0) return null;
     return Math.max(1, Math.round(majorValue * fx));
+  }
+
+  private safeEndpoint(url: string): string {
+    try {
+      return new URL(url).pathname;
+    } catch {
+      return url.split("?", 1)[0] ?? url;
+    }
   }
 
   private iso3ToIso2(iso3: string): string | undefined {

@@ -423,55 +423,29 @@ describe("TransatelOperationsService dashboard search", () => {
 });
 
 describe("TransatelOperationsService usage sync", () => {
-  it("persists the provider balance for each active subscription", async () => {
-    const subscriptionUpdate = vi.fn().mockResolvedValue({});
+  it("uses canonical usage reconciliation for every active or pending eSIM", async () => {
+    const refresh = vi.fn().mockResolvedValue({});
     const prisma = {
       enabled: true,
-      subscription: {
+      esimInventory: {
         findMany: vi.fn().mockResolvedValue([
-          {
-            id: "subscription-1",
-            providerSubscriptionId: "provider-subscription-1",
-            customerEsim: { inventory: { iccid: "8988247076000000319" } },
-          },
+          { id: "inventory-1" },
+          { id: "inventory-2" },
         ]),
-        update: subscriptionUpdate,
       },
     } as unknown as PrismaService;
-    const connectivity = {
-      getUsage: vi.fn().mockResolvedValue({
-        usedMb: 1024,
-        totalMb: 5120,
-        subscriptions: [
-          {
-            providerSubscriptionId: "provider-subscription-1",
-            status: "active",
-            usedMb: 1024,
-            totalMb: 5120,
-            priority: 1,
-          },
-        ],
-      }),
-    } as unknown as ConnectivityService;
     const service = new TransatelOperationsService(
       prisma,
-      connectivity,
+      {} as ConnectivityService,
       {} as OrdersService,
+      { refresh } as never,
     );
 
     await expect(service.syncAllUsage()).resolves.toEqual({
-      synced: 1,
+      synced: 2,
       failed: 0,
     });
-    expect(subscriptionUpdate).toHaveBeenCalledWith({
-      where: { id: "subscription-1" },
-      data: expect.objectContaining({
-        usedMb: 1024,
-        totalMb: 5120,
-        usageLastCheckedAt: expect.any(Date),
-        providerLastSeenAt: expect.any(Date),
-        assignmentVerificationStatus: "VERIFIED",
-      }),
-    });
+    expect(refresh).toHaveBeenCalledWith("inventory-1");
+    expect(refresh).toHaveBeenCalledWith("inventory-2");
   });
 });

@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { createPrivateKey, createSign } from "node:crypto";
 import QRCode from "qrcode";
 import { z } from "zod";
@@ -83,6 +84,40 @@ export class FonepayGateway implements PaymentGateway {
       details,
     });
   }
+  private redact(value: unknown): Prisma.InputJsonValue {
+    if (Array.isArray(value)) return value.map((item) => this.redact(item));
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+          key,
+          /authorization|password|secret|signature|token|qr|string|websocket/i.test(key)
+            ? "[REDACTED]"
+            : this.redact(item),
+        ]),
+      );
+    if (["string", "number", "boolean"].includes(typeof value))
+      return value as string | number | boolean;
+    return "";
+  }
+  private async record(entry: {
+    operation: string;
+    method: string;
+    endpoint: string;
+    status: number;
+    durationMs: number;
+    correlationId?: string;
+    errorCode?: string;
+    errorMessage?: string;
+    requestBody?: Prisma.InputJsonValue;
+    responseBody?: Prisma.InputJsonValue;
+  }) {
+    if (!this.prisma?.enabled) return;
+    try {
+      await this.prisma.integrationLog.create({ data: entry });
+    } catch (error) {
+      this.logger.error(`Failed to persist integration log for ${entry.operation}`, error);
+    }
+  }
   private sign(payload: unknown) {
     const value = JSON.stringify(payload);
     try {
@@ -102,7 +137,7 @@ export class FonepayGateway implements PaymentGateway {
       return this.fail("FONEPAY_PRIVATE_KEY_BASE64 is invalid");
     }
   }
-  private async auth() {
+  private async auth(correlationId?: string) {
     if (!this.configured())
       return this.fail("Fonepay is not enabled or fully configured");
     if (this.token && this.token.expiresAt > Date.now() + 30_000)
@@ -111,9 +146,11 @@ export class FonepayGateway implements PaymentGateway {
       username: process.env.FONEPAY_USERNAME!,
       password: process.env.FONEPAY_PASSWORD!,
     };
-    const response = await fetch(
-      `${this.base}/api/merchant/merchantDetailsForThirdParty/v2/login`,
-      {
+    const path = "/api/merchant/merchantDetailsForThirdParty/v2/login";
+    const startedAt = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${this.base}${path}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -122,9 +159,35 @@ export class FonepayGateway implements PaymentGateway {
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(resiliencePolicy.fonepayTimeoutMs()),
-      },
-    ).catch(() => this.fail("Fonepay OAuth network request failed"));
+      });
+    } catch (error) {
+      await this.record({
+        operation: "fonepay-authentication",
+        method: "POST",
+        endpoint: path,
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        ...(correlationId ? { correlationId } : {}),
+        errorCode: "NETWORK_ERROR",
+        errorMessage: error instanceof Error ? error.message : String(error),
+        requestBody: { username: "[REDACTED]", password: "[REDACTED]" },
+      });
+      return this.fail("Fonepay OAuth network request failed");
+    }
     const raw = await response.json().catch(() => ({}));
+    await this.record({
+      operation: "fonepay-authentication",
+      method: "POST",
+      endpoint: path,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ...(correlationId ? { correlationId } : {}),
+      ...(!response.ok
+        ? { errorCode: `HTTP_${response.status}`, errorMessage: "Fonepay authentication was rejected" }
+        : {}),
+      requestBody: { username: "[REDACTED]", password: "[REDACTED]" },
+      responseBody: this.redact(raw),
+    });
     if (!response.ok) return this.fail("Fonepay OAuth authentication failed");
     const parsed = authResponseSchema.safeParse(raw);
     if (!parsed.success) return this.fail("Fonepay OAuth response was invalid");
@@ -140,25 +203,56 @@ export class FonepayGateway implements PaymentGateway {
     method: "GET" | "POST",
     body?: Record<string, unknown>,
     extra: Record<string, string> = {},
+    correlationId?: string,
   ) {
-    const token = await this.auth();
+    const token = await this.auth(correlationId);
     const payload = body ?? {};
-    const response = await fetch(`${this.base}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(method === "POST"
-          ? {
-              "Content-Type": "application/json",
-              signature: this.sign(payload),
-            }
-          : {}),
-        ...extra,
-      },
-      ...(method === "POST" ? { body: JSON.stringify(payload) } : {}),
-      signal: AbortSignal.timeout(resiliencePolicy.fonepayTimeoutMs()),
-    }).catch(() => this.fail(`Fonepay ${path} network request failed`));
+    const startedAt = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${this.base}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(method === "POST"
+            ? {
+                "Content-Type": "application/json",
+                signature: this.sign(payload),
+              }
+            : {}),
+          ...extra,
+        },
+        ...(method === "POST" ? { body: JSON.stringify(payload) } : {}),
+        signal: AbortSignal.timeout(resiliencePolicy.fonepayTimeoutMs()),
+      });
+    } catch (error) {
+      await this.record({
+        operation: `fonepay-${path.split("/").filter(Boolean).at(-1) ?? "request"}`,
+        method,
+        endpoint: path,
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        ...(correlationId ? { correlationId } : {}),
+        errorCode: "NETWORK_ERROR",
+        errorMessage: error instanceof Error ? error.message : String(error),
+        requestBody: this.redact(payload),
+      });
+      return this.fail(`Fonepay ${path} network request failed`);
+    }
     const data = await response.json().catch(() => ({}));
+    await this.record({
+      operation: `fonepay-${path.split("/").filter(Boolean).at(-1) ?? "request"}`,
+      method,
+      endpoint: path,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ...(correlationId ? { correlationId } : {}),
+      ...(!response.ok
+        ? { errorCode: `HTTP_${response.status}`, errorMessage: `Fonepay returned HTTP ${response.status}` }
+        : {}),
+      requestBody: this.redact(payload),
+      responseBody: this.redact(data),
+    });
     if (!response.ok)
       return this.fail(`Fonepay ${path} failed (${response.status})`);
     return data as Record<string, unknown>;
@@ -176,6 +270,7 @@ export class FonepayGateway implements PaymentGateway {
       "GET",
       undefined,
       { paymentMode: "INTENT" },
+      input.orderId,
     );
     const banks = bankListSchema.safeParse(banksRaw);
     if (!banks.success)
@@ -191,6 +286,8 @@ export class FonepayGateway implements PaymentGateway {
         referenceLabel: reference,
         qrType: "INTENT_QR",
       },
+      {},
+      input.orderId,
     );
     const parsedQr = qrResponseSchema.safeParse(qrRaw);
     if (!parsedQr.success) return this.fail("Fonepay QR response was invalid");
@@ -220,6 +317,8 @@ export class FonepayGateway implements PaymentGateway {
         terminalId: process.env.FONEPAY_TERMINAL_ID!,
         referenceLabel: reference,
       },
+      {},
+      context.correlationId ?? context.orderId,
     );
     const parsed = statusResponseSchema.safeParse(raw);
     if (!parsed.success)

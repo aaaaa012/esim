@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { PaymentStatus } from "@visa-compass/shared";
 import { FonepayGateway } from "./fonepay.gateway.js";
+import type { PrismaService } from "../../../infrastructure/prisma.service.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -157,5 +158,41 @@ describe("FonepayGateway", () => {
         amountNpr: 2499,
       }),
     ).rejects.toMatchObject({ response: expect.anything() });
+  });
+
+  it("records redacted provider calls with the order correlation", async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const prisma = {
+      enabled: true,
+      integrationLog: { create },
+    } as unknown as PrismaService;
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(json({ accessToken: "private-token" }))
+        .mockResolvedValueOnce(
+          json({
+            prn: "VCREF",
+            merchantCode: "VC-TERMINAL",
+            paymentStatus: "pending",
+            requestedAmount: 2499,
+          }),
+        ),
+    );
+
+    await new FonepayGateway(prisma).verify("VCREF", {
+      orderId: "order-1",
+      amountNpr: 2499,
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        operation: "fonepay-thirdPartyDynamicQrGetStatus",
+        correlationId: "order-1",
+        endpoint: "/api/merchant/third-party/v2/thirdPartyDynamicQrGetStatus",
+      }),
+    });
+    expect(JSON.stringify(create.mock.calls)).not.toContain("private-token");
   });
 });

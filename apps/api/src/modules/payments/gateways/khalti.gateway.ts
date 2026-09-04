@@ -92,6 +92,7 @@ export class KhaltiGateway implements PaymentGateway {
     url: string,
     init: RequestInit,
     operation: string,
+    correlationId?: string,
   ): Promise<Response> {
     const startedAt = Date.now();
     const method = init.method ?? "POST";
@@ -105,6 +106,7 @@ export class KhaltiGateway implements PaymentGateway {
         endpoint,
         status: response.status,
         durationMs: Date.now() - startedAt,
+        ...(correlationId ? { correlationId } : {}),
         requestBody: this.logRequestBody(init.body),
         responseBody,
         ...(response.ok
@@ -123,8 +125,10 @@ export class KhaltiGateway implements PaymentGateway {
         endpoint,
         status: 0,
         durationMs: Date.now() - startedAt,
+        ...(correlationId ? { correlationId } : {}),
         errorCode: "NETWORK_ERROR",
         errorMessage: detail,
+        requestBody: this.logRequestBody(init.body),
       });
       throw new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
@@ -152,6 +156,7 @@ export class KhaltiGateway implements PaymentGateway {
     durationMs: number;
     errorCode?: string;
     errorMessage?: string;
+    correlationId?: string;
     requestBody?: Prisma.InputJsonValue;
     responseBody?: Prisma.InputJsonValue;
   }): Promise<void> {
@@ -209,6 +214,7 @@ export class KhaltiGateway implements PaymentGateway {
     path: string,
     body: Record<string, unknown>,
     operation: string,
+    correlationId?: string,
   ): Promise<Response> {
     this.ensureConfigured();
     return this.request(
@@ -223,6 +229,7 @@ export class KhaltiGateway implements PaymentGateway {
         signal: AbortSignal.timeout(this.timeoutMs()),
       },
       operation,
+      correlationId,
     );
   }
 
@@ -282,6 +289,7 @@ export class KhaltiGateway implements PaymentGateway {
         purchase_order_name: input.orderNumber,
       },
       "initiation",
+      input.orderId,
     );
     if (!response.ok)
       throw this.providerError(
@@ -314,6 +322,7 @@ export class KhaltiGateway implements PaymentGateway {
       redirectUrl: data.payment_url,
       expiresAt:
         data.expires_at ?? new Date(Date.now() + 60 * 60_000).toISOString(),
+      correlationId: input.orderId,
     };
   }
 
@@ -325,6 +334,7 @@ export class KhaltiGateway implements PaymentGateway {
       "/epayment/lookup/",
       { pidx: reference },
       "lookup",
+      context.correlationId ?? context.orderId,
     );
     let data: {
       status?: string;
