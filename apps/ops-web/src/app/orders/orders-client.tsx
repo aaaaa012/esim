@@ -196,7 +196,7 @@ export default function OrdersClient({
       visible.map((order) => [
         order.orderNumber,
         order.externalOrderId ?? "",
-        order.partner ? "PARTNER" : "DIRECT",
+        order.channel ?? (order.partner ? "PARTNER" : "CUSTOMER_WEB"),
         order.partner ? `${order.partner.name} (${order.partner.code})` : "",
         order.status,
         order.traveler

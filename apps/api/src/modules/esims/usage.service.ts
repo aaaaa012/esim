@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { createHmac } from "node:crypto";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
@@ -233,7 +233,7 @@ export class UsageService {
         },
       },
     });
-    if (!row) throw new Error("eSIM not found");
+    if (!row) throw new NotFoundException({ code: "ESIM_NOT_FOUND", message: "eSIM not found" });
     return row;
   }
 

@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext } from "react";
 import { Spinner } from "@/components/spinner";
 import { isShellFreePath } from "@/lib/shell-routes";
+import { sanitizeApiResponse } from "@/lib/sanitize-api-response";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type AuthFetch = typeof window.fetch;
 const Context = createContext<AuthFetch | null>(null);
@@ -34,14 +35,16 @@ export default function AuthenticatedApiProvider({
         const token = await getToken({ skipCache: true });
         if (token) headers.set("authorization", `Bearer ${token}`);
       }
-      return window.fetch(input, { ...init, headers });
+      return sanitizeApiResponse(
+        await window.fetch(input, { ...init, headers }),
+      );
     },
     [getToken],
   );
   if (!isLoaded)
     return (
       <div className="flex min-h-screen items-center justify-center gap-3 text-sm text-muted-foreground">
-        <Spinner /> Securing operator session…
+        <Spinner /> Securing operator session...
       </div>
     );
   if (!isSignedIn && !isShellFreePath(pathname))

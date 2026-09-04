@@ -57,6 +57,8 @@ export class GuestOrdersController {
     const input = parsed.data as {
       planId: string;
       compatibilityAccepted: boolean;
+      termsAccepted: boolean;
+      privacyAccepted: boolean;
       targetEsimId?: string;
     } & Partial<{ mobile: string }>;
     const candidate = body as {
@@ -87,6 +89,8 @@ export class GuestOrdersController {
           : {}),
         ...(ipAddress ? { ipAddress } : {}),
         ...(userAgent ? { userAgent } : {}),
+        termsAccepted: input.termsAccepted,
+        privacyAccepted: input.privacyAccepted,
       },
     );
     const recovery = await this.access.issue(order.id, "DISPLAY");
@@ -266,17 +270,31 @@ export class GuestOrdersController {
     try {
       if (!body.mobile?.trim())
         throw new BadRequestException("mobile is required");
-      const result = await this.orders.topUpLookup(body.mobile);
+      const subscriber = await this.orders.resolveSubscriber(body.mobile);
+      if (subscriber) {
+        const lookupToken = this.access.createLookupToken(body.mobile.trim());
+        try {
+          await this.notifications.enqueue({
+            orderId: subscriber.orderId,
+            channel: "EMAIL",
+            template: "TOPUP_LOOKUP",
+            recipient: subscriber.traveler.email,
+            orderNumber: "eSIM recharge",
+            recoveryUrl: this.topUpLookupUrl(lookupToken),
+          });
+        } catch (error) {
+          this.logger.error(
+            `Recharge verification email could not be queued for order ${subscriber.orderId}: ${error instanceof Error ? error.message : "unknown"}`,
+          );
+        }
+      }
       await this.recordTopUpEvent("customer-topup-lookup", 200, startedAt, {
-        found: result.found,
-        topUpAvailable:
-          "topUpAvailable" in result && Boolean(result.topUpAvailable),
+        verificationRequested: true,
       }, { mobile: "[REDACTED]" });
       return {
-        ...result,
-        ...(result.found
-          ? { lookupToken: this.access.createLookupToken(body.mobile.trim()) }
-          : {}),
+        verificationRequested: true,
+        message:
+          "If this MSISDN belongs to an eligible Visa Compass eSIM, a secure recharge link has been sent to the original purchase email.",
       };
     } catch (error) {
       await this.recordTopUpEvent(
@@ -291,6 +309,16 @@ export class GuestOrdersController {
     }
   }
 
+  @Post("topup-lookup/verify")
+  @UseGuards(GuestLookupRateLimitGuard)
+  async verifyTopUpLookup(@Body() body: { lookupToken?: string }) {
+    const mobile = this.access.mobileFromLookupToken(body.lookupToken ?? "");
+    const result = await this.orders.topUpLookup(mobile);
+    if (!result.found)
+      throw new ForbiddenException("This recharge link is invalid or expired");
+    return { ...result, lookupToken: body.lookupToken };
+  }
+
   @Post("topup-eligibility")
   @UseGuards(GuestLookupRateLimitGuard)
   async topUpEligibility(
@@ -303,7 +331,7 @@ export class GuestOrdersController {
       const mobile = this.access.mobileFromLookupToken(body.lookupToken ?? "");
       if (body.mobile && body.mobile !== mobile)
         throw new ForbiddenException(
-          "Top-up lookup does not match this mobile number",
+          "Top-up lookup does not match this eSIM MSISDN",
         );
       const result = await this.orders.checkTopUpEligibility(mobile, body.planId);
       await this.recordTopUpEvent("customer-topup-eligibility", 200, startedAt, {
@@ -397,5 +425,14 @@ export class GuestOrdersController {
       process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"
     ).replace(/\/$/, "");
     return `${base}/esim/checkout?order=${encodeURIComponent(orderId)}#resume=${encodeURIComponent(token)}`;
+  }
+
+  private topUpLookupUrl(token: string) {
+    const base = (
+      process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"
+    ).replace(/\/$/, "");
+    // Keep the bearer token in the URL fragment. Fragments are not sent in
+    // HTTP requests, access logs, or referrer headers.
+    return `${base}/#topup=${encodeURIComponent(token)}`;
   }
 }

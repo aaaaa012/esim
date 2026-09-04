@@ -83,6 +83,15 @@ cases, all green**. Run the root suite to refresh the cross-workspace aggregate.
 3. Rate-limit an auth endpoint past 60/min → 429.
 4. Confirm Swagger (`/api/docs`) is NOT reachable when `SWAGGER_ENABLED` unset.
 
+### E2E-7 Customer navigation, recovery, and recharge
+1. From the homepage, click Destinations, Recharge, and How it works twice each; every click scrolls to the labelled section without jumping to the top.
+2. Repeat those menu actions from Compatibility, My eSIMs, Orders, and the mobile menu; each returns to the correct homepage section.
+3. Open a protected customer URL while signed out; sign in and expect to return to that exact URL. Direct header sign-in falls back to `/account/esims`.
+4. Start guest checkout, copy the private recovery link, close the tab, and reopen the copied link; expect the same order and verification state. Confirm the fragment token disappears from the address bar after exchange.
+5. Save guest traveller details and open the emailed recovery link on another device; expect the same order. Claim it after modal sign-in and confirm old guest access is revoked.
+6. Enter an existing eSIM MSISDN, open the emailed recharge link, select the current plan and another destination plan, select a payment provider, accept the visible purchase terms, and click Continue to payment once. Expect the gateway redirect or Fonepay QR immediately, then the package on the existing eSIM with no replacement QR.
+7. Run step 6 as a guest, from a signed-in customer dashboard, and from a partner-hosted top-up session. Verify the payment action is never blocked by passport verification, and cover success, failed payment, retry, and provisioning-attention final actions.
+
 ## 5. Regression command sheet
 
 ```bash
@@ -91,3 +100,22 @@ pnpm --filter @visa-compass/api test && pnpm --filter @visa-compass/api lint
 pnpm --filter @visa-compass/customer-web test && pnpm --filter @visa-compass/customer-web typecheck
 pnpm --filter @visa-compass/ops-web test && pnpm --filter @visa-compass/ops-web typecheck
 ```
+
+## Cross-journey release gate
+
+These scenarios are mandatory before a customer-facing or operations release.
+
+| Journey | Required verification |
+|---|---|
+| Signed-in customer purchase | Compatibility and legal consent are independently required; traveller documents, payment, fulfilment and QR delivery complete. |
+| Guest purchase and recovery | The same consent rules apply; recovery resumes only the bound order and never exposes another customer. |
+| Hosted checkout | Initial purchase requires compatibility plus legal consent; recharge requires current legal consent without recollecting traveller documents. |
+| Existing-eSIM recharge | Public MSISDN submission returns a uniform response; only the original purchase email receives a 15-minute signed link; tampered/expired links fail. |
+| Payment recovery | Success, cancellation, pending, expiry and retry retain one order and one idempotent payment intent. |
+| Staff lifecycle | Invitation, activation, sign-in, required password change, role checks and disabled-account handling use distinct states. |
+| Operations fulfilment | Document review, order approval, provider status checks, provisioning retry and QR resend require explicit accessible confirmation. |
+| Failure presentation | Unknown provider, Clerk and server errors render approved copy only; correlation IDs and provider detail remain in restricted logs. |
+| Navigation failures | Signed-out routes go to sign-in, wrong roles to unauthorized, disabled users to account unavailable, and API outages to service unavailable with return destination preserved. |
+| Application boundaries | Unknown URLs render 404; route errors offer retry; root failures render a safe global recovery page; loading states remain accessible. |
+
+Automated release checks cover the consent contract, signed recharge-token integrity, error sanitization, auth-route classification, payment idempotency, checkout recovery, staff sign-in policy and role-based navigation. Environment-backed staging smoke tests must exercise Clerk, payment, email, object storage and Transatel integrations before production promotion.

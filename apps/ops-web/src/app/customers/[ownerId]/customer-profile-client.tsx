@@ -2,7 +2,7 @@
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, RefreshCcw, UserRound } from "lucide-react";
+import { ArrowLeft, Mail, RefreshCcw, UserRound } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge, humane } from "@/components/status-badge";
@@ -41,6 +41,9 @@ type Order = {
   status: string;
   createdAt: string;
   totalAmountNpr: number;
+  purchaseType: "INITIAL_PURCHASE" | "TOPUP";
+  channel: string;
+  topUpMobile?: string | null;
   plan: {
     id: string;
     name: string;
@@ -109,6 +112,14 @@ type Profile = {
       partner: { id: string; code: string; name: string };
     } | null;
   };
+  profileUpdates?: Array<{
+    id: string;
+    action: string;
+    previousValue?: { email?: string } | null;
+    newValue?: { email?: string; reason?: string } | null;
+    performedBy: string;
+    createdAt: string;
+  }>;
 };
 
 const usageTone = (used?: number, total?: number) =>
@@ -120,6 +131,9 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [canTerminate, setCanTerminate] = useState(false);
+  const [email, setEmail] = useState("");
+  const [emailReason, setEmailReason] = useState("");
+  const [emailConfirmation, setEmailConfirmation] = useState("");
   const load = useCallback(() => {
     setError("");
     return authFetch(`${API}/operations/customers/${ownerId}`, { headers })
@@ -130,6 +144,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
             value.error?.message ?? "Profile could not be loaded",
           );
         setProfile(value.data);
+        setEmail(value.data.identity?.customer.email ?? value.data.email ?? "");
       })
       .catch((cause) =>
         setError(cause instanceof Error ? cause.message : "Load failed"),
@@ -164,10 +179,43 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
       setBusy("");
     }
   };
-  const completed = useMemo(
-    () => profile?.orders.filter((order) => order.status === "COMPLETED") ?? [],
-    [profile],
-  );
+  const correctEmail = async () => {
+    setBusy("email");
+    setError("");
+    try {
+      const response = await authFetch(
+        `${API}/operations/customers/${ownerId}/email`,
+        {
+          method: "PATCH",
+          headers: { ...headers, "x-idempotency-key": crypto.randomUUID() },
+          body: JSON.stringify({
+            email,
+            reason: emailReason,
+            confirmation: emailConfirmation,
+          }),
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Email could not be updated");
+      setEmailReason("");
+      setEmailConfirmation("");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Email update failed");
+    } finally {
+      setBusy("");
+    }
+  };
+  const orderSummary = useMemo(() => {
+    const orders = profile?.orders ?? [];
+    return {
+      firstPurchases: orders.filter(
+        (order) => order.purchaseType === "INITIAL_PURCHASE",
+      ).length,
+      topUps: orders.filter((order) => order.purchaseType === "TOPUP").length,
+    };
+  }, [profile]);
 
   return (
     <>
@@ -181,9 +229,9 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         badge={
           <span className="inline-flex items-center gap-2 rounded-full bg-success-soft px-3 py-1 text-xs font-semibold text-success-foreground">
             <UserRound className="size-3.5" />
-            {profile?.orders?.length ?? "—"} orders · {completed.length}{" "}
-            completed eSIM
-            {completed.length === 1 ? "" : "s"}
+            {profile?.orders?.length ?? "—"} orders · {orderSummary.firstPurchases}{" "}
+            eSIM{orderSummary.firstPurchases === 1 ? "" : "s"} · {orderSummary.topUps}{" "}
+            top-up{orderSummary.topUps === 1 ? "" : "s"}
           </span>
         }
         actions={
@@ -216,9 +264,10 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                   <summary className="flex cursor-pointer items-center justify-between gap-4 p-4">
                     <span>
                       <span className="block font-medium">
-                        eSIM {group.esim.iccid}
+                        ICCID / SIM serial: {group.esim.iccid}
                       </span>
                       <span className="text-xs text-muted-foreground">
+                        MSISDN: {group.esim.msisdn ?? "Not assigned"} ·{" "}
                         {group.summary.confirmedPackageCount} of{" "}
                         {group.summary.packageCount} packages confirmed ·{" "}
                         {humane(group.freshness)}
@@ -243,7 +292,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                           </Link>
                           <p className="text-xs text-muted-foreground">
                             {humane(item.purchaseType)} · {humane(item.channel)}{" "}
-                            · {item.providerSubscriptionId}
+                            · Subscription ID: {item.providerSubscriptionId}
                           </p>
                         </div>
                         <StatusBadge label={item.balanceStatus} />
@@ -324,6 +373,102 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
       ) : null}
       {profile ? (
         <Panel
+          title="Personal detail updates"
+          description="Auditable corrections to customer identity data. Order and traveller records remain unchanged."
+        >
+          {canTerminate && profile.identity?.loginAccount ? (
+            <section className="mb-6 rounded-lg border bg-muted/20 p-4">
+              <div className="flex items-start gap-3">
+                <Mail className="mt-0.5 size-4 text-primary" />
+                <div className="w-full max-w-2xl space-y-4">
+                  <div>
+                    <h3 className="font-medium">Correct sign-in email</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Super Admin only. This updates Clerk and the customer
+                      record, notifies the customer, signs out existing
+                      sessions, and records the reason below.
+                    </p>
+                  </div>
+                  <label className="block text-sm font-medium">
+                    New email
+                    <input
+                      className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal"
+                      type="email"
+                      autoComplete="off"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                    />
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Reason for correction
+                    <textarea
+                      className="mt-1 min-h-24 w-full rounded-md border bg-background px-3 py-2 font-normal"
+                      maxLength={500}
+                      value={emailReason}
+                      onChange={(event) => setEmailReason(event.target.value)}
+                      placeholder="Describe how the corrected email was verified."
+                    />
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Type CHANGE EMAIL to confirm
+                    <input
+                      className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal"
+                      value={emailConfirmation}
+                      onChange={(event) =>
+                        setEmailConfirmation(event.target.value.toUpperCase())
+                      }
+                      autoComplete="off"
+                    />
+                  </label>
+                  <Button
+                    type="button"
+                    disabled={
+                      busy === "email" ||
+                      emailConfirmation !== "CHANGE EMAIL" ||
+                      emailReason.trim().length < 10
+                    }
+                    onClick={() => void correctEmail()}
+                  >
+                    {busy === "email" ? <Spinner /> : null}
+                    Update email and end active sessions
+                  </Button>
+                </div>
+              </div>
+            </section>
+          ) : null}
+          {profile.profileUpdates?.length ? (
+            <div className="space-y-3">
+              {profile.profileUpdates.map((update) => (
+                <article key={update.id} className="rounded-lg border p-4">
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <strong className="text-sm">Sign-in email corrected</strong>
+                    <time className="text-xs text-muted-foreground">
+                      {new Date(update.createdAt).toLocaleString()}
+                    </time>
+                  </div>
+                  <p className="mt-2 text-sm">
+                    {update.previousValue?.email ??
+                      "Previous email unavailable"}
+                    {" -> "}
+                    {update.newValue?.email ?? "Updated email unavailable"}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {update.newValue?.reason ?? "No reason recorded"} |
+                    Performed by {update.performedBy}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No personal detail changes"
+              description="Verified changes to customer details will appear here."
+            />
+          )}
+        </Panel>
+      ) : null}
+      {profile ? (
+        <Panel
           title="Order history"
           description={`${profile.orders.length} orders`}
           noPadding
@@ -360,9 +505,25 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                         >
                           {order.orderNumber}
                         </Link>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          <StatusBadge
+                            label={order.purchaseType}
+                            tone={
+                              order.purchaseType === "TOPUP"
+                                ? "info"
+                                : "default"
+                            }
+                          />
+                          <StatusBadge label={order.channel} />
+                        </div>
                         <p className="text-xs text-muted-foreground">
-                          {new Date(order.createdAt).toLocaleDateString()}
+                          {new Date(order.createdAt).toLocaleString()}
                         </p>
+                        {order.purchaseType === "TOPUP" && order.topUpMobile ? (
+                          <p className="text-xs text-muted-foreground">
+                            Top-up for {order.topUpMobile}
+                          </p>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         <span className="font-medium">

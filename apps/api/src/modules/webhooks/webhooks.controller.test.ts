@@ -203,6 +203,7 @@ describe("WebhooksController payment inbox", () => {
       "payment-callback",
       expect.objectContaining({ provider: "khalti", eventId: body.eventId }),
       `khalti-${body.eventId}`,
+      expect.objectContaining({ attempts: 8 }),
     );
   });
 
@@ -223,6 +224,7 @@ describe("WebhooksController payment inbox", () => {
       "payment-callback",
       expect.objectContaining({ provider: "khalti" }),
       `khalti-${body.eventId}`,
+      expect.objectContaining({ attempts: 8 }),
     );
     await expect(
       value.payment("unknown", body, { rawBody }, signature),
@@ -268,6 +270,7 @@ describe("WebhooksController connectivity inbox", () => {
       "connectivity-callback",
       { provider: "transatel", eventId: "event-12345" },
       "transatel:event-12345",
+      expect.objectContaining({ attempts: 8 }),
     );
   });
 

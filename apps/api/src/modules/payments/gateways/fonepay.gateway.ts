@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
+import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -120,7 +121,7 @@ export class FonepayGateway implements PaymentGateway {
           signature: this.sign(body),
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(resiliencePolicy.fonepayTimeoutMs()),
       },
     ).catch(() => this.fail("Fonepay OAuth network request failed"));
     const raw = await response.json().catch(() => ({}));
@@ -155,7 +156,7 @@ export class FonepayGateway implements PaymentGateway {
         ...extra,
       },
       ...(method === "POST" ? { body: JSON.stringify(payload) } : {}),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(resiliencePolicy.fonepayTimeoutMs()),
     }).catch(() => this.fail(`Fonepay ${path} network request failed`));
     const data = await response.json().catch(() => ({}));
     if (!response.ok)

@@ -1369,7 +1369,7 @@ export class PartnerService {
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
         message:
-          "This number cannot be used for a top-up with the selected plan. Create a documented initial purchase only after customer consent.",
+          "This eSIM MSISDN cannot be used for a top-up with the selected plan. Create a documented initial purchase only after customer consent.",
         status: 422,
       });
     const existingPartnerCustomer =
@@ -2137,7 +2137,7 @@ export class PartnerService {
         code: "TOPUP_NOT_ELIGIBLE",
         message:
           eligibility?.errorMessage ??
-          "This number cannot be used for a top-up with the selected plan. Ask the customer whether they want a new eSIM purchase instead.",
+          "This eSIM MSISDN cannot be used for a top-up with the selected plan. Ask the customer whether they want a new eSIM purchase instead.",
         status: 422,
       });
     if (!isTopUp)
@@ -2227,6 +2227,8 @@ export class PartnerService {
       orderType: isTopUp ? "TOPUP" : "INITIAL_PURCHASE",
       topUp: isTopUp
         ? {
+            msisdn: input.topUpMobile,
+            // Retained for Partner API v1 response compatibility.
             mobile: input.topUpMobile,
             ...(topUp?.traveler
               ? {
@@ -2323,6 +2325,13 @@ export class PartnerService {
             },
           })) ?? order;
     }
+    const topUpSnapshot = order.pricingSnapshot as {
+      topUpMobile?: string;
+    } | null;
+    const topUpMsisdn = topUpSnapshot?.topUpMobile;
+    const topUpMsisdnMasked = topUpMsisdn
+      ? `••••${topUpMsisdn.replace(/\D/g, "").slice(-4)}`
+      : undefined;
     return {
       sessionId: session.id,
       expiresAt: session.expiresAt,
@@ -2335,6 +2344,9 @@ export class PartnerService {
         id: order.id,
         orderNumber: order.orderNumber,
         orderType: order.orderType,
+        ...(order.orderType === "TOPUP" && topUpMsisdnMasked
+          ? { topUpMsisdnMasked }
+          : {}),
         status: order.status,
         amountPaisa: Math.round(Number(order.totalAmount) * 100),
         amountNpr: Math.round(Number(order.totalAmount) * 100) / 100,

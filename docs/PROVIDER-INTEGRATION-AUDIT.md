@@ -1,0 +1,91 @@
+# Provider integration release audit
+
+Audited against the public Transatel OpenAPI documents (OCS subscriptions
+1.85, catalog, inventory and SIM management) and Khalti KPG-2 documentation on
+2026-09-04.
+
+## Identifier contract
+
+| Identifier | Meaning | Valid shape | Where it is used |
+| --- | --- | --- | --- |
+| MSISDN | Transatel subscriber/mobile network number | 6-15 digits, international format without `+` | OCS product orders (`bind.msisdn`), catalog eligibility (`?msisdn=`), OCS inventory/usage (`?msisdn=`), webhook `body.msisdn` |
+| ICCID / `simSerial` | Physical SIM/eSIM profile serial | 13-20 digits | SIM-management details (`/api/esims/sim-serial/{simSerial}`), connectivity-management lifecycle URLs, webhook `body.iccid` or lifecycle `body.simSerial` |
+| EID | Device eUICC identifier | exactly 32 digits | eSIM allocation/release only; local target matching where supplied. Never used as an OCS subscriber identifier |
+| Product subscription ID | One subscribed plan/package | provider string/UUID | Stored per order and per `Subscription`; correlates each top-up package and its events |
+| Product ID | Catalog plan reference | provider catalog identifier | `product.productId` in preload/subscribe orders |
+| Transaction reference | Visa Compass order/operation identifier | <=255 characters | Sent to Transatel for reconciliation and webhook correlation |
+
+An ICCID must never be substituted for `bind.msisdn` or an OCS inventory
+`msisdn` query. One ICCID can have multiple product subscription IDs after
+top-ups, so the inventory row is not the authoritative owner of every package.
+
+## Transatel command matrix
+
+| Business action | Provider request | Local behavior | Audit result |
+| --- | --- | --- | --- |
+| Initial purchase | `POST /ocs/subscriptions/api/orders/products`, `orderType=preload`, real MSISDN | Persist provider acceptance before QR lookup; fetch QR using ICCID | Aligned |
+| Top-up | Same endpoint, `orderType=subscribe`, real MSISDN | Treat `201`/`done` as package commit; reuse existing eSIM QR record; do not request or send a new QR | Corrected in this audit |
+| Eligibility | `GET /ocs/catalog/api/cos/{cosRef}/products/{productId}?msisdn=...` | Honor `canSubscribe.allowed`; retain provider code internally and return safe copy | Aligned |
+| Usage | `GET /ocs/inventory/api/subscriptions/products?msisdn=...&withBalances=true` | Aggregate non-terminated KB balances by product subscription | Corrected: ICCID fallback removed |
+| eSIM details | `GET /sim-management/sims/api/esims/sim-serial/{iccid}` | Retrieve profile state and activation material | Aligned |
+| Subscriber suspension | Tenant connectivity-management `.../sim-serial/{iccid}/suspend` | Audited, idempotent command; pending until provider confirmation | Needs tenant-contract/live certification |
+| Subscriber termination | Tenant connectivity-management `.../sim-serial/{iccid}/terminate` | Super-admin-only irreversible action; pending until confirmation | Needs tenant-contract/live certification |
+| Catalog sync | `GET /ocs/catalog/api/cos/{cosRef}/products` | Imports available one-off products and converts provider pricing/allowance units | Aligned; commercial FX/margin approval required |
+| Webhooks | Signed raw-body inbox with durable dedupe/retry/dead-letter | Maps lifecycle events without state regression | Payload/signature must be certified with tenant samples |
+
+Transatel also publishes SIM reserve/release endpoints. Visa Compass currently
+uses approved inventory batch imports instead. This is complete only if the
+contracted operating model is pre-provisioned inventory delivery; if Transatel
+expects just-in-time reservation, reserve/release must be implemented.
+
+## Status handling
+
+| External state/event | Local package/inventory effect | Order effect |
+| --- | --- | --- |
+| OCS `done` for `preload` | Provider reference saved; wait for QR/activation | Remains `PROVISIONING`, then `QR_READY`/`COMPLETED` through activation |
+| OCS `done` for `subscribe` | New `Subscription` linked to the existing physical eSIM | Top-up becomes `COMPLETED`; no new QR |
+| PRELOADED | Package pending; cannot regress active/terminal state | No completed order regression |
+| ACTIVATED | Inventory activated; package active; dates and identity verified | Completes initial provisioning when activation material exists |
+| SUSPENDED | Package/subscriber displayed suspended | Confirms an approved lifecycle operation; unexpected suspension opens critical attention |
+| CANCELED | Stops future renewal but preserves service until expiration | Order history retained |
+| EXPIRED | Package/inventory expired | Purchase history retained |
+| TERMINATED | Package/inventory terminal | Confirms approved termination or opens critical attention |
+| Unknown/out-of-order | Raw event retained; no unsafe mutation | Attention or ignored regression, never guessed |
+
+## Khalti KPG-2 matrix
+
+| Action | Contract | Audit result |
+| --- | --- | --- |
+| Initiate | Server `POST /api/v2/epayment/initiate/`, NPR converted to integer paisa | Aligned |
+| Customer return | Browser GET return is only a signal | Aligned: server performs lookup before service |
+| Lookup | Server `POST /api/v2/epayment/lookup/` using `pidx` | Aligned: only `Completed` confirms payment; exact amount is checked |
+| Pending/Initiated | Hold and recheck | Aligned |
+| Unknown future status | Hold for review | Corrected; no longer falsely failed |
+| Expired/User canceled | Do not provide service | Aligned |
+| Refunded/Partially refunded | Do not provide new service | Parsed; post-completion monitoring needs operational reconciliation |
+| Refund API | `POST /api/merchant-transaction/{transaction_id}/refund/` | **Not implemented**; current workflow records an externally completed refund |
+
+Public KPG-2 documents a browser return plus authoritative lookup; it does not
+document the custom signed Khalti webhook accepted by this application. Do not
+treat that webhook as a production dependency until Khalti confirms its schema,
+signature, retries and dispute events for this merchant account.
+
+## Credential-backed release gates
+
+1. Confirm Transatel OAuth scopes for catalog read, inventory read, product
+   write, SIM read and subscriber lifecycle actions.
+2. Verify a real test eSIM has a correctly paired ICCID + MSISDN locally.
+3. Run initial `preload` -> QR -> ACTIVATED callback.
+4. Run `subscribe` top-up -> new subscription ID -> balance visible; verify no
+   new QR and no overwrite of the original package ID.
+5. Replay/reorder real webhooks, including expiry of an older package after a
+   newer top-up.
+6. Suspend and terminate only a designated test eSIM and reconcile final state.
+7. Run Khalti Completed, Pending, Expired and User-canceled lookups; verify
+   exact paisa, pidx and transaction ID persistence.
+8. Decide whether refunds remain dual-control/manual or implement Khalti's
+   Refund API with idempotency and reconciliation.
+9. Confirm batch inventory delivery versus Transatel reserve/release.
+
+Until these checks pass, the system is contract-audited and automated-test
+ready, but it must not be described as fully provider-certified.

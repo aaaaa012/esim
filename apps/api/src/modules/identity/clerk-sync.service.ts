@@ -68,9 +68,16 @@ export class ClerkSyncService {
         throw new ForbiddenException(
           "Disabled accounts cannot be reactivated by a Clerk webhook",
         );
-      await this.prisma.user.update({
-        where: { id: existing.id },
-        data: { email },
+      await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: existing.id },
+          data: { email },
+        });
+        if (existing.accountType === UserRoleName.CUSTOMER)
+          await tx.customer.updateMany({
+            where: { userId: existing.id },
+            data: { email },
+          });
       });
       return { persisted: true, accountType: existing.accountType };
     }

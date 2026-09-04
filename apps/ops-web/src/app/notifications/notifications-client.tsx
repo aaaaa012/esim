@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
 import ErrorDialog from "@/components/error-dialog";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Table,
   TableBody,
@@ -39,6 +40,7 @@ type Health = {
 
 export default function NotificationsClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [items, setItems] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -187,13 +189,8 @@ export default function NotificationsClient() {
                         variant="outline"
                         size="sm"
                         disabled={busy === item.id}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              "Send this message to the customer again?",
-                            )
-                          )
-                            retry(item.id);
+                        onClick={async () => {
+                          if (await confirm({ title: "Send message again?", description: "The customer will receive another copy of this notification.", confirmLabel: "Send again" })) void retry(item.id);
                         }}
                       >
                         {busy === item.id ? (

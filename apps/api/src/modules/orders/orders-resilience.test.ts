@@ -483,7 +483,11 @@ describe("OrdersService asynchronous provisioning", () => {
     await orders.processProvisioning(order.id, 1, false);
 
     expect(connectivity.provision).toHaveBeenCalledWith(
-      expect.objectContaining({ orderId: order.id, eid: "eid-existing" }),
+      expect.objectContaining({
+        orderId: order.id,
+        eid: "eid-existing",
+        purchaseType: "TOPUP",
+      }),
     );
     expect(inventory.assignTopup).toHaveBeenCalledWith(
       order.id,
@@ -493,7 +497,7 @@ describe("OrdersService asynchronous provisioning", () => {
       expect.objectContaining({ providerSubscriptionId: "topup-sub-1" }),
     );
     expect(orders.get(order.id)).toMatchObject({
-      status: OrderStatus.QR_READY,
+      status: OrderStatus.COMPLETED,
       providerSubscriptionId: "topup-sub-1",
     });
     expect(orders.get(order.id).qrDeliveredAt).toBeUndefined();

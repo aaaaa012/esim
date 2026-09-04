@@ -34,6 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { publicApiErrorMessage } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const CUSTOMER_WEB = process.env.NEXT_PUBLIC_CUSTOMER_WEB_URL;
@@ -192,24 +193,8 @@ export function resolveCampaignArtwork(imageUrl: string) {
 
 function apiError(value: unknown, fallback: string) {
   if (!value || typeof value !== "object") return fallback;
-  const payload = value as {
-    message?: string;
-    correlationId?: string;
-    error?: string | { message?: string; correlationId?: string };
-  };
-  const message =
-    payload.message ??
-    (typeof payload.error === "string"
-      ? payload.error
-      : payload.error?.message) ??
-    fallback;
-  const correlationId =
-    payload.correlationId ??
-    (typeof payload.error === "object"
-      ? payload.error?.correlationId
-      : undefined) ??
-    (value as { meta?: { correlationId?: string } }).meta?.correlationId;
-  return correlationId ? `${message} (reference ${correlationId})` : message;
+  const payload = value as { error?: { code?: string } };
+  return publicApiErrorMessage(payload.error, fallback);
 }
 
 function Artwork({ campaign }: { campaign: Campaign }) {
@@ -239,6 +224,7 @@ function Artwork({ campaign }: { campaign: Campaign }) {
 export default function HomepageCampaignsClient() {
   const authFetch = useAuthenticatedFetch();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [loadError, setLoadError] = useState("");
   const [countries, setCountries] = useState<Country[]>([]);
   const [form, setForm] = useState<FormState>(initialForm);
   const [file, setFile] = useState<File | null>(null);
@@ -284,6 +270,7 @@ export default function HomepageCampaignsClient() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     try {
       const [campaignItems, countryItems] = await Promise.all([
         request<Campaign[]>("/admin/homepage-campaigns"),
@@ -292,11 +279,9 @@ export default function HomepageCampaignsClient() {
       setCampaigns(campaignItems);
       setCountries(countryItems);
     } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Campaigns could not be loaded",
-      );
+      const message = error instanceof Error ? error.message : "Campaigns could not be loaded";
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -706,6 +691,16 @@ export default function HomepageCampaignsClient() {
           {loading ? (
             <div className="flex min-h-64 items-center justify-center">
               <Spinner />
+            </div>
+          ) : loadError ? (
+            <div className="space-y-4">
+              <EmptyState
+                title="Campaigns could not be loaded"
+                description="Check the connection and refresh to try again."
+              />
+              <div className="flex justify-center">
+                <Button variant="outline" onClick={() => void load()}>Retry</Button>
+              </div>
             </div>
           ) : !campaigns.length ? (
             <EmptyState

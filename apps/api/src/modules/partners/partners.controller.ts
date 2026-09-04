@@ -98,7 +98,7 @@ export const completeCreateSchema = z
       .min(1)
       .max(20)
       .optional()
-      .describe("Mobile number of the existing eSIM to top up"),
+      .describe("MSISDN assigned to the existing eSIM to top up"),
     consent: z.object({
       compatibilityAccepted: z.literal(true),
       termsAccepted: z.literal(true),
@@ -146,12 +146,12 @@ export const hostedCheckoutSessionSchema = z.object({
     .min(1)
     .max(20)
     .optional()
-    .describe("Mobile number of an existing subscriber to attach a top-up to"),
+    .describe("MSISDN assigned to the existing eSIM receiving the top-up"),
   allowInitialPurchaseFallback: z
     .literal(true)
     .optional()
     .describe(
-      "Explicit customer-approved fallback when the supplied mobile cannot be used for a top-up",
+      "Explicit customer-approved fallback when the supplied eSIM MSISDN cannot be used for a top-up",
     ),
 });
 export const listSchema = z.object({

@@ -7,7 +7,20 @@ export class StaffActivationController {
   constructor(private readonly admin: AdminService) {}
 
   @Post("complete")
-  complete(@Body() body: { token?: string; password?: string }) {
-    return this.admin.activateInvitation(body?.token ?? "", body?.password ?? "");
+  complete(
+    @Body()
+    body: {
+      token?: string;
+      firstName?: string;
+      lastName?: string;
+      password?: string;
+    },
+  ) {
+    return this.admin.activateInvitation(
+      body?.token ?? "",
+      body?.firstName ?? "",
+      body?.lastName ?? "",
+      body?.password ?? "",
+    );
   }
 }

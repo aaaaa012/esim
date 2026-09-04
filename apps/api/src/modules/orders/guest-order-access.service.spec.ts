@@ -1,5 +1,5 @@
 import { ForbiddenException } from "@nestjs/common";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../../infrastructure/prisma.service.js";
 import { GuestOrderAccessService } from "./guest-order-access.service.js";
 
@@ -84,5 +84,30 @@ describe("GuestOrderAccessService", () => {
     expect(() => service.createSessionToken("order-a")).toThrow(
       "GUEST_ORDER_SECRET is required in production",
     );
+  });
+
+  it("binds a top-up lookup token to its MSISDN and rejects tampering", () => {
+    process.env.GUEST_ORDER_SECRET = "test-secret-with-enough-entropy";
+    const service = createService();
+    const token = service.createLookupToken("+9779800000000");
+
+    expect(service.mobileFromLookupToken(token)).toBe("+9779800000000");
+    expect(() =>
+      service.mobileFromLookupToken(`${token.slice(0, -1)}x`),
+    ).toThrow(ForbiddenException);
+  });
+
+  it("rejects an expired top-up lookup token", () => {
+    process.env.GUEST_ORDER_SECRET = "test-secret-with-enough-entropy";
+    const service = createService();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const token = service.createLookupToken("+9779800000000");
+    clock.mockReturnValue(now + 15 * 60_000 + 1);
+
+    expect(() => service.mobileFromLookupToken(token)).toThrow(
+      ForbiddenException,
+    );
+    clock.mockRestore();
   });
 });

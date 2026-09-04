@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge } from "@/components/status-badge";
 import ErrorDialog from "@/components/error-dialog";
+import { operationalIssue } from "@/lib/operational-issue";
 import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { EmptyState } from "@/components/empty-state";
@@ -475,10 +476,10 @@ export default function TransatelDashboard() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Customer / Order</TableHead>
-                        <TableHead>eSIM</TableHead>
+                        <TableHead>SIM identifiers</TableHead>
                         <TableHead>Plan</TableHead>
                         <TableHead>Balance</TableHead>
-                        <TableHead>eSIM / Subscription</TableHead>
+                        <TableHead>Network status / Subscription</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -492,9 +493,10 @@ export default function TransatelDashboard() {
                             </p>
                           </TableCell>
                           <TableCell>
+                            <p className="text-[11px] text-muted-foreground">ICCID / SIM serial</p>
                             <code className="text-xs">{row.iccid}</code>
                             <p className="text-xs text-muted-foreground">
-                              {row.msisdn ?? "No mobile number"}
+                              MSISDN: {row.msisdn ?? "Not assigned"}
                             </p>
                           </TableCell>
                           <TableCell>
@@ -544,6 +546,9 @@ export default function TransatelDashboard() {
                                 </span>
                                 <StatusBadge label={row.status} />
                               </div>
+                              <p className="break-all text-[11px] text-muted-foreground">
+                                Subscription ID: {row.providerSubscriptionId}
+                              </p>
                             </div>
                           </TableCell>
                           <TableCell className="text-right">
@@ -581,7 +586,7 @@ export default function TransatelDashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>eSIM</TableHead>
+                        <TableHead>SIM identifiers</TableHead>
                         <TableHead>Batch</TableHead>
                         <TableHead>Our system</TableHead>
                         <TableHead>Network</TableHead>
@@ -594,7 +599,13 @@ export default function TransatelDashboard() {
                       {data.inventory.map((row) => (
                         <TableRow key={row.id}>
                           <TableCell>
+                            <p className="text-[11px] text-muted-foreground">
+                              ICCID / SIM serial
+                            </p>
                             <code className="text-xs">{row.iccid}</code>
+                            <p className="text-[11px] text-muted-foreground">
+                              MSISDN: {row.msisdn ?? "Not assigned"}
+                            </p>
                           </TableCell>
                           <TableCell>{row.batchReference}</TableCell>
                           <TableCell>
@@ -615,7 +626,7 @@ export default function TransatelDashboard() {
                               </span>
                             ) : row.providerCheckError ? (
                               <span className="text-destructive">
-                                {row.providerCheckError}
+                                {operationalIssue(row.providerCheckError).title}
                               </span>
                             ) : (
                               <span className="text-muted-foreground">—</span>
@@ -692,7 +703,10 @@ export default function TransatelDashboard() {
                             {row.endpoint}
                           </TableCell>
                           <TableCell className="max-w-80 truncate text-xs text-destructive">
-                            {row.errorCode ?? row.errorMessage ?? "Unknown"}
+                            {
+                              operationalIssue(row.errorMessage, row.errorCode)
+                                .title
+                            }
                           </TableCell>
                         </TableRow>
                       ))}

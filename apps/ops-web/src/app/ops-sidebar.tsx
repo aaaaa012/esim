@@ -49,6 +49,7 @@ const systemItems: NavItem[] = [
     label: "Homepage campaigns",
     icon: Images,
   },
+  { href: "/admin/partners-showcase", label: "Partners", icon: Handshake },
   { href: "/manual-refunds", label: "Refunds", icon: Undo2 },
   { href: "/notifications", label: "Messages", icon: Bell },
   { href: "/logs", label: "Logs", icon: History },
@@ -97,14 +98,9 @@ export default function OpsSidebar({
     label: "Settings",
     icon: Settings,
   };
-  const showcaseItem: NavItem = {
-    href: "/admin/partners-showcase",
-    label: "Partners",
-    icon: Handshake,
-  };
   const path = usePathname();
   const items = isAdmin
-    ? [...overviewItems, ...systemItems, adminItem, showcaseItem]
+    ? [...overviewItems, ...systemItems, adminItem]
     : [...overviewItems, ...systemItems];
   return (
     <>
@@ -118,7 +114,10 @@ export default function OpsSidebar({
         className={cn("ops-sidebar", open && "open")}
         aria-label="Operations navigation"
       >
-        <div className="ops-sidebar-brand" aria-label="Visa Compass Services Operations">
+        <div
+          className="ops-sidebar-brand"
+          aria-label="Visa Compass Services Operations"
+        >
           <Image
             className="ops-brand-mark"
             src="/brand/visa-compass-mark.png"
@@ -161,10 +160,10 @@ export default function OpsSidebar({
         <div className="ops-sidebar-foot">
           <div className="ops-sidebar-user">
             <span className="avatar">
-              {profile?.email.slice(0, 1).toUpperCase() ?? "…"}
+              {profile?.email.slice(0, 1).toUpperCase() ?? "..."}
             </span>
             <div className="meta">
-              <b>{profile?.email ?? "Loading…"}</b>
+              <b>{profile?.email ?? "Loading..."}</b>
               <span>
                 {profile ? humane(profile.accountType) : "Authenticating"}
               </span>

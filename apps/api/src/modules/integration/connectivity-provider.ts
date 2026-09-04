@@ -2,6 +2,7 @@ export type ProvisionRequest = {
   orderId: string;
   planId: string;
   eid: string;
+  purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   traveler: {
     firstName: string;
     surname: string;
@@ -18,7 +19,10 @@ export type ProvisionResult = {
   smDpAddress?: string;
 };
 export type EsimDetailsResult = {
-  subscriptionId: string;
+  /** Physical eSIM profile identifier. Transatel calls this simSerial. */
+  iccid?: string;
+  /** Provider package identifier; only present when the provider returns one. */
+  providerSubscriptionId?: string;
   status: string;
   smDpAddress?: string;
   qrPayload?: string;
@@ -116,8 +120,8 @@ export interface ConnectivityProvider {
   health(): Promise<{ ok: boolean }>;
   capabilities(): ConnectivityCapabilities;
   provision(request: ProvisionRequest): Promise<ProvisionResult>;
-  getUsage(subscriptionId: string): Promise<UsageBreakdown>;
-  getEsimDetails(subscriptionId: string): Promise<EsimDetailsResult>;
+  getUsage(reference: string): Promise<UsageBreakdown>;
+  getEsimDetails(reference: string): Promise<EsimDetailsResult>;
   suspend?(
     subscriptionId: string,
     transactionReference: string,

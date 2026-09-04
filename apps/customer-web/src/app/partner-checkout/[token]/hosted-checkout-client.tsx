@@ -42,6 +42,7 @@ type Session = {
     id: string;
     orderNumber: string;
     orderType?: string;
+    topUpMsisdnMasked?: string;
     status: string;
     amountNpr: number;
     currency: string;
@@ -127,30 +128,26 @@ const api = async <T,>(path: string, init?: RequestInit) => {
       ...init,
       headers: { "content-type": "application/json", ...init?.headers },
     });
-  } catch (e) {
-    throw new Error(
-      e instanceof Error && e.message
-        ? `Network error: ${e.message}`
-        : "Network error — please check your connection and try again",
-    );
+  } catch {
+    throw new Error("Check your connection and try again.");
   }
   let payload: Envelope<T>;
   try {
     payload = (await response.json()) as Envelope<T>;
   } catch {
     throw new Error(
-      `The server returned an invalid response (${response.status}). Please try again.`,
+      "The checkout service returned an unexpected response. Please try again.",
     );
   }
   if (!payload.data && !payload.error) {
     if (response.ok) return undefined as T;
-    throw new Error(`Request failed (${response.status})`);
+    throw new Error("This checkout request could not be completed.");
   }
   if (!response.ok || !payload.data)
     throw new Error(
       apiErrorMessage(
         payload.error?.code ?? "UNEXPECTED",
-        payload.error?.message ?? "Something went wrong",
+        "This checkout request could not be completed.",
       ),
     );
   return payload.data;
@@ -168,7 +165,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   >({});
   const [files, setFiles] = useState<Record<string, File | undefined>>({});
   const [verification, setVerification] = useState<Verification | null>(null);
-  const [consent, setConsent] = useState(false);
+  const [compatibilityConsent, setCompatibilityConsent] = useState(false);
+  const [legalConsent, setLegalConsent] = useState(false);
   const [compatible, setCompatible] = useState(false);
   const [showAccountChoice, setShowAccountChoice] = useState(false);
   const [checkoutAccessMode, setCheckoutAccessMode] = useState<
@@ -192,9 +190,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [provider, setProvider] = useState<PaymentProvider>(
     PaymentProvider.KHALTI,
   );
-  const [availableProviders, setAvailableProviders] = useState<PaymentProvider[]>([
-    PaymentProvider.KHALTI,
-  ]);
+  const [availableProviders, setAvailableProviders] = useState<
+    PaymentProvider[]
+  >([PaymentProvider.KHALTI]);
   const paymentVerificationInFlight = useRef(false);
 
   useEffect(() => {
@@ -202,7 +200,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       .then((value) => {
         if (!value.providers.length) return;
         setAvailableProviders(value.providers);
-        if (!value.providers.includes(provider)) setProvider(value.providers[0]!);
+        if (!value.providers.includes(provider))
+          setProvider(value.providers[0]!);
       })
       .catch(() => undefined);
   }, []);
@@ -210,8 +209,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   useEffect(() => {
     if (!verifyingDoc || verifyingDoc === "in-progress") return;
     const onKey = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") return;
-    if (verifyingDoc === "failed") setStep(3);
+      if (event.key !== "Escape") return;
+      if (verifyingDoc === "failed") setStep(3);
       setVerifyingDoc(null);
     };
     window.addEventListener("keydown", onKey);
@@ -316,7 +315,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         throw new Error(
           apiErrorMessage(
             payload.error?.code ?? "UNEXPECTED",
-            payload.error?.message ?? "This checkout could not be linked to your account",
+            "This checkout could not be linked to your account",
           ),
         );
       setSession(payload.data);
@@ -334,12 +333,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       setCopiedCheckoutLink(true);
       window.setTimeout(() => setCopiedCheckoutLink(false), 2_500);
     } catch {
-      setError("Copy was blocked. Bookmark this private partner checkout link before closing the tab.");
+      setError(
+        "Copy was blocked. Bookmark this private partner checkout link before closing the tab.",
+      );
     }
   };
 
   const stepFromUrl = () => {
-    const value = Number(new URLSearchParams(window.location.search).get("step"));
+    const value = Number(
+      new URLSearchParams(window.location.search).get("step"),
+    );
     return Number.isInteger(value) && value >= 1 && value <= 4 ? value : 1;
   };
   const stepPush = (next: number) => {
@@ -526,10 +529,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             );
             continue;
           }
-          if (
-            upload.mode !== "s3-presigned" ||
-            !upload.endpoint
-          )
+          if (upload.mode !== "s3-presigned" || !upload.endpoint)
             throw new Error("Private document storage is unavailable");
           const uploaded = await fetch(upload.endpoint, {
             method: upload.method ?? "PUT",
@@ -589,16 +589,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       return true;
     }
   };
-  const initiatePayment = () =>
-    run(async () => {
-      const value = await api<Payment>(`/partner-checkout/${token}/payment`, {
-        method: "POST",
-        body: JSON.stringify({ provider }),
-      });
-      setPayment(value);
-      if (value.redirectUrl && external(value.redirectUrl))
-        window.location.assign(value.redirectUrl);
+  const requestPayment = async () => {
+    const value = await api<Payment>(`/partner-checkout/${token}/payment`, {
+      method: "POST",
+      body: JSON.stringify({ provider }),
     });
+    setPayment(value);
+    if (value.redirectUrl && external(value.redirectUrl))
+      window.location.assign(value.redirectUrl);
+  };
+  const initiatePayment = () => run(requestPayment);
   const checkPayment = () =>
     run(async () => {
       const result = await api<{ status: string }>(
@@ -666,14 +666,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         setOutcome({ status: result.status, orderNumber });
         return;
       }
-      throw new Error(
-        `Simulated payment did not complete (${result.status})`,
-      );
+      throw new Error(`Simulated payment did not complete (${result.status})`);
     });
   const complete = () =>
     run(async () => {
-      if (!consent)
-        throw new Error("Please confirm that you accept before completing");
+      if ((!isTopUp && !compatibilityConsent) || !legalConsent)
+        throw new Error(
+          "Complete the required confirmations before continuing",
+        );
       const result = await api<{
         orderId: string;
         orderNumber: string;
@@ -687,7 +687,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       });
       setOrderNumber(result.orderNumber);
       setSubmitted(true);
-      await initiatePayment();
+      await requestPayment();
     });
 
   if (
@@ -751,39 +751,75 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           <section className="checkout-card">
             {checkoutAccessMode === "guest" && !outcome && (
               <div className="guest-recovery-card" role="note">
-                <span className="guest-recovery-icon"><Link2 /></span>
+                <span className="guest-recovery-icon">
+                  <Link2 />
+                </span>
                 <div>
                   <b>Keep this private partner checkout link</b>
                   <p>
-                    Bookmark or copy this link before closing the tab. It lets you return to this order and check its verification status.
+                    Bookmark or copy this link before closing the tab. It lets
+                    you return to this order and check its verification status.
                   </p>
-                  <small>Anyone with this link can access the hosted checkout, so do not share it.</small>
+                  <small>
+                    Anyone with this link can access the hosted checkout, so do
+                    not share it.
+                  </small>
                   <div className="guest-recovery-actions">
-                    <button className="button secondary" type="button" onClick={() => void copyHostedCheckoutLink()}>
-                      <Copy size={16} /> {copiedCheckoutLink ? "Link copied" : "Copy private link"}
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={() => void copyHostedCheckoutLink()}
+                    >
+                      <Copy size={16} />{" "}
+                      {copiedCheckoutLink ? "Link copied" : "Copy private link"}
                     </button>
                   </div>
-                  <span className="sr-only" aria-live="polite">{copiedCheckoutLink ? "Private partner checkout link copied" : ""}</span>
+                  <span className="sr-only" aria-live="polite">
+                    {copiedCheckoutLink
+                      ? "Private partner checkout link copied"
+                      : ""}
+                  </span>
                 </div>
               </div>
             )}
             {showAccountChoice ? (
-              <div className="form-section account-choice" aria-labelledby="hosted-account-title">
-                <span className="form-icon"><UserRound /></span>
-                <h2 id="hosted-account-title">How would you like to continue?</h2>
-                <p>Sign in to keep this partner order in My eSIMs and check its status from any device.</p>
+              <div
+                className="form-section account-choice"
+                aria-labelledby="hosted-account-title"
+              >
+                <span className="form-icon">
+                  <UserRound />
+                </span>
+                <h2 id="hosted-account-title">
+                  How would you like to continue?
+                </h2>
+                <p>
+                  Sign in to keep this partner order in My eSIMs and check its
+                  status from any device.
+                </p>
                 <div className="account-choice-grid">
                   <div className="account-choice-primary">
                     <span className="choice-badge">Recommended</span>
                     <b>Continue with an account</b>
-                    <small>Secure cross-device access and a permanent order history, while keeping the partner attribution.</small>
+                    <small>
+                      Secure cross-device access and a permanent order history,
+                      while keeping the partner attribution.
+                    </small>
                     {isSignedIn === true ? (
-                      <button className="button wide" disabled={busy} onClick={() => void continueWithAccount()}>
+                      <button
+                        className="button wide"
+                        disabled={busy}
+                        onClick={() => void continueWithAccount()}
+                      >
                         Continue with my account <ChevronRight size={18} />
                       </button>
                     ) : (
                       <SignInButton mode="modal">
-                        <button className="button wide" disabled={busy} onClick={() => setPendingSignIn(true)}>
+                        <button
+                          className="button wide"
+                          disabled={busy}
+                          onClick={() => setPendingSignIn(true)}
+                        >
                           Sign in or create account <ChevronRight size={18} />
                         </button>
                       </SignInButton>
@@ -791,13 +827,24 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   </div>
                   <div className="account-choice-guest">
                     <b>Continue as guest</b>
-                    <small>No account required. Keep this private partner link so you can return to the order.</small>
-                    <button className="button secondary wide" disabled={busy} onClick={() => advanceAfterAccountChoice("guest")}>
+                    <small>
+                      No account required. Keep this private partner link so you
+                      can return to the order.
+                    </small>
+                    <button
+                      className="button secondary wide"
+                      disabled={busy}
+                      onClick={() => advanceAfterAccountChoice("guest")}
+                    >
                       Continue as guest
                     </button>
                   </div>
                 </div>
-                <button className="account-choice-back" type="button" onClick={() => setShowAccountChoice(false)}>
+                <button
+                  className="account-choice-back"
+                  type="button"
+                  onClick={() => setShowAccountChoice(false)}
+                >
                   <ChevronLeft size={16} /> Back to compatibility
                 </button>
               </div>
@@ -881,15 +928,17 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     <b>Khalti</b>
                     <small>Digital wallet</small>
                   </button>
-                  {availableProviders.includes(PaymentProvider.FONEPAY) ? <button
-                    className={
-                      provider === PaymentProvider.FONEPAY ? "selected" : ""
-                    }
-                    onClick={() => setProvider(PaymentProvider.FONEPAY)}
-                  >
-                    <b>Fonepay</b>
-                    <small>Mobile banking &amp; QR</small>
-                  </button> : null}
+                  {availableProviders.includes(PaymentProvider.FONEPAY) ? (
+                    <button
+                      className={
+                        provider === PaymentProvider.FONEPAY ? "selected" : ""
+                      }
+                      onClick={() => setProvider(PaymentProvider.FONEPAY)}
+                    >
+                      <b>Fonepay</b>
+                      <small>Mobile banking &amp; QR</small>
+                    </button>
+                  ) : null}
                 </div>
                 {payment ? (
                   SIMULATOR ? (
@@ -947,7 +996,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   <>
                     <Action busy={busy} onClick={initiatePayment}>
                       Continue to{" "}
-                      {provider === PaymentProvider.FONEPAY ? "Fonepay" : "Khalti"}
+                      {provider === PaymentProvider.FONEPAY
+                        ? "Fonepay"
+                        : "Khalti"}
                     </Action>
                     {submitted && (
                       <div className="form-actions">
@@ -967,7 +1018,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               <>
                 <div className="step-tabs">
                   {(isTopUp
-                    ? ["Compatibility", "Review"]
+                    ? ["Recharge", "Review"]
                     : ["Compatibility", "Traveller", "Documents", "Review"]
                   ).map((label, index) => {
                     const value = isTopUp ? (index === 0 ? 1 : 4) : index + 1;
@@ -980,7 +1031,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       >
                         <i>{step > value ? <Check size={13} /> : value}</i>
                         {step > value ? (
-                          <button type="button" onClick={() => stepJump(value)} title={`Go back to ${label}`}>
+                          <button
+                            type="button"
+                            onClick={() => stepJump(value)}
+                            title={`Go back to ${label}`}
+                          >
                             <span>{label}</span>
                           </button>
                         ) : (
@@ -1001,7 +1056,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       Coverage starts after first connection at your
                       destination.
                     </p>
-                    <label className="confirm-box">
+                    <label
+                      className={`confirm-box${isTopUp ? " payment-consent" : ""}`}
+                    >
                       <input
                         type="checkbox"
                         checked={compatible}
@@ -1264,26 +1321,59 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       ))}
                     {isTopUp && (
                       <p className="form-note">
-                        This is a data top-up for your existing eSIM. No
-                        traveller details or new documents are required.
+                        This is a data top-up for your existing eSIM
+                        {session!.order.topUpMsisdnMasked
+                          ? ` with MSISDN ${session!.order.topUpMsisdnMasked}`
+                          : ""}
+                        . No traveller details or new documents are required.
                       </p>
+                    )}
+                    {!isTopUp && (
+                      <label className="confirm-box">
+                        <input
+                          type="checkbox"
+                          checked={compatibilityConsent}
+                          onChange={(e) =>
+                            setCompatibilityConsent(e.target.checked)
+                          }
+                        />
+                        <span>
+                          <b>
+                            I confirm the device is unlocked and eSIM-compatible
+                          </b>
+                          <small>
+                            I understand incompatible devices are not eligible
+                            for a refund.
+                          </small>
+                        </span>
+                      </label>
                     )}
                     <label className="confirm-box">
                       <input
                         type="checkbox"
-                        checked={consent}
-                        onChange={(e) => setConsent(e.target.checked)}
+                        checked={legalConsent}
+                        onChange={(e) => setLegalConsent(e.target.checked)}
                       />
                       <span>
                         <b>
                           {isTopUp
-                            ? "I confirm I want to top up my existing eSIM"
-                            : "I confirm the traveller details and documents are correct"}
+                            ? "I approve this eSIM recharge"
+                            : "I agree to the purchase terms"}
                         </b>
                         <small>
-                          Your order will be submitted to{" "}
-                          {session?.partner?.name ?? "the partner"} for
-                          activation.
+                          I have read the{" "}
+                          <a href="/terms" target="_blank">
+                            Terms
+                          </a>
+                          ,{" "}
+                          <a href="/privacy" target="_blank">
+                            Privacy Policy
+                          </a>{" "}
+                          and{" "}
+                          <a href="/refund-policy" target="_blank">
+                            Refund Policy
+                          </a>
+                          .
                         </small>
                       </span>
                     </label>
@@ -1306,7 +1396,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       )}
                       <Action
                         busy={busy}
-                        disabled={verifying || !gatePassed || !consent}
+                        disabled={
+                          verifying ||
+                          !gatePassed ||
+                          !legalConsent ||
+                          (!isTopUp && !compatibilityConsent)
+                        }
                         onClick={complete}
                       >
                         Complete order
@@ -1386,12 +1481,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             ) : verifyingDoc === "waiting" ? (
               <>
                 <LoaderCircle className="spin verify-modal-icon" size={38} />
-                <b id="verify-modal-title">Your verification is still in progress</b>
+                <b id="verify-modal-title">
+                  Your verification is still in progress
+                </b>
                 <p>
-                  This can take a few minutes. Keep this page open and try
-                  again shortly. If it still has not completed, contact
-                  {" "}{session?.partner?.name ?? "your travel partner"} with
-                  your order number.
+                  This can take a few minutes. Keep this page open and try again
+                  shortly. If it still has not completed, contact{" "}
+                  {session?.partner?.name ?? "your travel partner"} with your
+                  order number.
                 </p>
               </>
             ) : verifyingDoc === "done" ? (
@@ -1402,16 +1499,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     ? "Verification skipped"
                     : verification?.status === "MANUALLY_APPROVED"
                       ? "Documents approved"
-                    : "Passport verified"}
+                      : "Passport verified"}
                 </b>
                 <p>
                   {verification?.status === "SKIPPED"
                     ? "Document verification is disabled in this environment."
                     : verification?.status === "MANUALLY_APPROVED"
                       ? "Your documents were reviewed and approved. You can now review and confirm your order."
-                    : verification?.status === "VERIFIED"
-                      ? "Your passport matches the details you provided. You can now review and confirm your order."
-                      : "Your passport matched your traveller details."}
+                      : verification?.status === "VERIFIED"
+                        ? "Your passport matches the details you provided. You can now review and confirm your order."
+                        : "Your passport matched your traveller details."}
                 </p>
               </>
             ) : (

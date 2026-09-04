@@ -4,12 +4,39 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bell, Menu, X } from "lucide-react";
-import { SignInButton, SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
+import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import ThemeToggle from "./theme-toggle";
+
+export function scrollToHomeSection(href: string, pathname: string) {
+  if (pathname !== "/" || !href.startsWith("/#")) return false;
+
+  const hash = href.slice(1);
+  const target = document.getElementById(href.slice(2));
+  if (!target) return false;
+
+  if (window.location.hash !== hash) {
+    window.history.pushState(null, "", hash);
+  }
+  target.scrollIntoView({
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth",
+    block: "start",
+  });
+  return true;
+}
 
 export default function CustomerHeader() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
+  const [activeHash, setActiveHash] = useState("");
+
+  useEffect(() => {
+    const syncHash = () => setActiveHash(window.location.hash);
+    syncHash();
+    window.addEventListener("hashchange", syncHash);
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, []);
 
   useEffect(() => {
     setOpen(false);
@@ -31,8 +58,12 @@ export default function CustomerHeader() {
   const navLink = (href: string, label: string) => (
     <Link
       href={href}
-      className={path === href || path.startsWith(href) ? "nav-active" : ""}
-      onClick={() => setOpen(false)}
+      className={path === href || path.startsWith(href) || (href.startsWith("/#") && path === "/" && activeHash === href.slice(1)) ? "nav-active" : ""}
+      onClick={(event) => {
+        if (scrollToHomeSection(href, path)) event.preventDefault();
+        setActiveHash(window.location.hash);
+        setOpen(false);
+      }}
     >
       {label}
     </Link>
@@ -79,9 +110,7 @@ export default function CustomerHeader() {
           <span className="nav-user">
             <ThemeToggle />
             <SignedOut>
-              <SignInButton mode="modal">
-                <button className="button secondary">Sign in</button>
-              </SignInButton>
+              <Link className="button secondary" href="/sign-in">Sign in</Link>
             </SignedOut>
             <SignedIn>
               <Link
@@ -132,9 +161,7 @@ export default function CustomerHeader() {
             <div className="nav-menu-divider" />
             <ThemeToggle />
             <SignedOut>
-              <SignInButton mode="modal">
-                <button className="nav-menu-item">Sign in</button>
-              </SignInButton>
+              <Link className="nav-menu-item" href="/sign-in" onClick={() => setOpen(false)}>Sign in</Link>
             </SignedOut>
             <SignedIn>
               {navLink("/account/esims", "My eSIMs")}

@@ -34,6 +34,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -46,6 +53,9 @@ type Log = {
   durationMs?: number;
   errorCode?: string;
   errorMessage?: string;
+  correlationId?: string;
+  requestBody?: unknown;
+  responseBody?: unknown;
   createdAt: string;
 };
 
@@ -58,6 +68,7 @@ export default function IntegrationLogsClient() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [operation, setOperation] = useState("ALL");
+  const [selected, setSelected] = useState<Log | null>(null);
 
   const load = (refreshOnly = false) => {
     if (refreshOnly) setRefreshing(true);
@@ -128,6 +139,33 @@ export default function IntegrationLogsClient() {
   return (
     <>
       <ErrorDialog error={error} onClose={() => setError("")} />
+      <Dialog open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(null)}>
+        <DialogContent className="max-h-[90dvh] w-[min(94vw,760px)] max-w-none overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Technical request details</DialogTitle>
+            <DialogDescription>
+              Redacted request and response data for technical troubleshooting. Customer-facing screens never display this content.
+            </DialogDescription>
+          </DialogHeader>
+          {selected ? (
+            <div className="grid min-w-0 gap-4 text-sm">
+              <div className="grid gap-2 rounded-lg bg-muted/50 p-3 sm:grid-cols-2">
+                <span><b>Request:</b> {selected.method} {selected.endpoint}</span>
+                <span><b>Result:</b> HTTP {selected.status} · {selected.durationMs ?? "—"} ms</span>
+                <span className="min-w-0 break-all sm:col-span-2"><b>Correlation:</b> {selected.correlationId ?? "Not recorded"}</span>
+              </div>
+              <section className="min-w-0">
+                <h3 className="mb-2 font-semibold">Redacted request</h3>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(selected.requestBody ?? null, null, 2)}</pre>
+              </section>
+              <section className="min-w-0">
+                <h3 className="mb-2 font-semibold">Redacted response</h3>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(selected.responseBody ?? null, null, 2)}</pre>
+              </section>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow-card">
           <span className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -226,6 +264,7 @@ export default function IntegrationLogsClient() {
                 <TableHead>Status</TableHead>
                 <TableHead>Duration</TableHead>
                 <TableHead>Error</TableHead>
+                <TableHead className="text-right">Details</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -280,6 +319,11 @@ export default function IntegrationLogsClient() {
                     ) : (
                       <History className="size-4 text-muted-foreground/50" />
                     )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button size="sm" variant="outline" onClick={() => setSelected(log)}>
+                      View details
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}

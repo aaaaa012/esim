@@ -40,6 +40,7 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { GuestOrderAccessService } from "./guest-order-access.service.js";
 import { TransatelOperationsService } from "../integration/transatel-operations.service.js";
 import { UsageService } from "../esims/usage.service.js";
+import { AdminService } from "../admin/admin.service.js";
 
 @Controller("customer/orders")
 @UseGuards(AuthGuard, AccountGuard)
@@ -80,6 +81,8 @@ export class OrdersController {
         ...(verifiedMobile ? { mobile: verifiedMobile } : {}),
         ...(ipAddress ? { ipAddress } : {}),
         ...(userAgent ? { userAgent } : {}),
+        termsAccepted: input.termsAccepted,
+        privacyAccepted: input.privacyAccepted,
       },
     );
   }
@@ -187,6 +190,7 @@ export class OperationsController {
     private readonly prisma: PrismaService,
     private readonly transatelOperations: TransatelOperationsService,
     private readonly usageService: UsageService,
+    private readonly admin: AdminService,
   ) {}
   @Get("dashboard") dashboard(@Req() req: AuthenticatedRequest) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
@@ -493,6 +497,25 @@ export class OperationsController {
         )
       : [];
     return { ...profile, esimGroups };
+  }
+  @Patch("customers/:ownerId/email") async correctCustomerEmail(
+    @Param("ownerId") ownerId: string,
+    @Body() body: { email?: string; reason?: string; confirmation?: string },
+    @Req() req: AuthenticatedRequest,
+  ) {
+    requireRole(req, [UserRole.SUPER_ADMIN]);
+    if (body.confirmation !== "CHANGE EMAIL")
+      throw new BadRequestException('Type "CHANGE EMAIL" to confirm');
+    const profile = await this.orders.customerProfile(ownerId);
+    const customerId = profile.identity?.customer.id;
+    if (!customerId)
+      throw new BadRequestException("Customer identity is unavailable");
+    return this.admin.correctCustomerEmail(
+      customerId,
+      body.email ?? "",
+      body.reason ?? "",
+      req.user!.id,
+    );
   }
   @Get("users/:id/identity") async userIdentity(
     @Param("id") id: string,

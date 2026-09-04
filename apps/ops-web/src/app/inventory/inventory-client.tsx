@@ -39,6 +39,7 @@ import ErrorDialog from "@/components/error-dialog";
 import { PaginationBar } from "@/components/pagination-bar";
 import { SearchInput } from "@/components/search-input";
 import { cn } from "@/lib/utils";
+import { useConfirmation } from "@/components/confirmation-provider";
 import { toast } from "sonner";
 import {
   Table,
@@ -196,6 +197,7 @@ function UploadResult({
 }
 
 export default function InventoryClient() {
+  const confirm = useConfirmation();
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
@@ -459,9 +461,8 @@ export default function InventoryClient() {
       });
       const v = await r.json();
       if (!r.ok) {
-        const correlation = v.meta?.correlationId;
         throw new Error(
-          `${v.error?.message ?? "CSV/Excel import failed"}${correlation ? ` (reference: ${correlation})` : ""}`,
+          v.error?.message ?? "CSV/Excel import failed",
         );
       }
       const result = v.data as ImportResult;
@@ -835,7 +836,7 @@ export default function InventoryClient() {
                         }
                       />
                     </TableHead>
-                    <TableHead>eSIM</TableHead>
+                    <TableHead>ICCID / SIM serial</TableHead>
                     <TableHead>Our system</TableHead>
                     <TableHead>Network provider</TableHead>
                     <TableHead>Last checked</TableHead>
@@ -1115,13 +1116,8 @@ export default function InventoryClient() {
                               size="sm"
                               variant="success"
                               disabled={decision === batch.id}
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    `Approve this batch of ${batch.importedCount} profile(s)? They will become available for sale.`,
-                                  )
-                                )
-                                  void decide(batch, true);
+                              onClick={async () => {
+                                if (await confirm({ title: "Approve inventory batch?", description: `This makes ${batch.importedCount} profile(s) available for sale.`, confirmLabel: "Approve batch" })) void decide(batch, true);
                               }}
                             >
                               {decision === batch.id ? (
@@ -1136,13 +1132,8 @@ export default function InventoryClient() {
                               variant="outline"
                               className="text-destructive hover:bg-destructive/10"
                               disabled={decision === batch.id}
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    "Reject this batch? It will not be made available for sale.",
-                                  )
-                                )
-                                  void decide(batch, false);
+                              onClick={async () => {
+                                if (await confirm({ title: "Reject inventory batch?", description: "These profiles will not be made available for sale.", confirmLabel: "Reject batch", destructive: true })) void decide(batch, false);
                               }}
                             >
                               <XCircle className="size-4" />
@@ -1220,13 +1211,8 @@ export default function InventoryClient() {
                               size="sm"
                               variant="success"
                               disabled={planDecision === plan.id}
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    `Publish "${plan.name}"? It will become available for sale.`,
-                                  )
-                                )
-                                  void decidePlan(plan, true);
+                              onClick={async () => {
+                                if (await confirm({ title: `Publish ${plan.name}?`, description: "This package will become available for customer purchase.", confirmLabel: "Publish package" })) void decidePlan(plan, true);
                               }}
                             >
                               {planDecision === plan.id ? (
@@ -1241,13 +1227,8 @@ export default function InventoryClient() {
                               variant="outline"
                               className="text-destructive hover:bg-destructive/10"
                               disabled={planDecision === plan.id}
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    `Reject "${plan.name}"? It will not be published.`,
-                                  )
-                                )
-                                  void decidePlan(plan, false);
+                              onClick={async () => {
+                                if (await confirm({ title: `Reject ${plan.name}?`, description: "This package will remain unavailable for purchase.", confirmLabel: "Reject package", destructive: true })) void decidePlan(plan, false);
                               }}
                             >
                               <XCircle className="size-4" />
@@ -1388,7 +1369,7 @@ export default function InventoryClient() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>eSIM</TableHead>
+                      <TableHead>SIM identifiers</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Device eID</TableHead>
                       <TableHead>Orders</TableHead>
@@ -1400,10 +1381,13 @@ export default function InventoryClient() {
                     {profiles.map((p) => (
                       <TableRow key={p.id}>
                         <TableCell>
+                          <div className="text-[11px] text-muted-foreground">
+                            ICCID / SIM serial
+                          </div>
                           <div className="font-mono text-xs">{p.iccid}</div>
                           {p.msisdn && (
                             <div className="text-xs text-muted-foreground">
-                              {p.msisdn}
+                              MSISDN: {p.msisdn}
                             </div>
                           )}
                           {p.order ? (
@@ -1432,7 +1416,13 @@ export default function InventoryClient() {
                           )}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
-                          {p.eid}
+                          {p.eid.startsWith("SYNTH-") ? (
+                            <span className="font-sans text-muted-foreground">
+                              Not provided (local placeholder)
+                            </span>
+                          ) : (
+                            p.eid
+                          )}
                         </TableCell>
                         <TableCell>
                           {p.order ? (

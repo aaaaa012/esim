@@ -17,6 +17,7 @@ import type {
   LifecycleResult,
 } from "./connectivity-provider.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { resiliencePolicy } from "../../infrastructure/resilience-policy.js";
 import { classifyProviderHttpFailure } from "./provider-failure.js";
 
 /*
@@ -228,7 +229,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   private circuitOpen() {
     if (!this.circuitOpenedAt) return false;
-    const cooldown = Number(process.env.TRANSATEL_CIRCUIT_RESET_MS ?? 30_000);
+    const cooldown = resiliencePolicy.connectivityCircuitResetMs();
     if (Date.now() - this.circuitOpenedAt >= cooldown) {
       this.circuitOpenedAt = 0;
       this.consecutiveFailures = 0;
@@ -244,12 +245,10 @@ export class TransatelProvider implements ConnectivityProvider {
   }
   private providerFailed() {
     this.consecutiveFailures += 1;
-    const threshold = Number(
-      process.env.TRANSATEL_CIRCUIT_FAILURE_THRESHOLD ?? 5,
-    );
+    const threshold = resiliencePolicy.connectivityCircuitFailures();
     if (
       this.consecutiveFailures >=
-      (Number.isFinite(threshold) && threshold > 0 ? threshold : 5)
+      threshold
     )
       this.circuitOpenedAt = Date.now();
   }
@@ -284,8 +283,7 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   private timeoutMs(): number {
-    const parsed = Number(process.env.TRANSATEL_REQUEST_TIMEOUT_MS);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+    return resiliencePolicy.connectivityTimeoutMs();
   }
 
   private async getAccessToken(force = false): Promise<string> {
@@ -591,12 +589,6 @@ export class TransatelProvider implements ConnectivityProvider {
     }
   }
 
-  private subscriberIdentifier(): "iccid" | "msisdn" {
-    return process.env.TRANSATEL_SUBSCRIBER_IDENTIFIER === "msisdn"
-      ? "msisdn"
-      : "iccid";
-  }
-
   /**
    * Resolves an internal reference (ICCID, order id or OCS subscription id) to
    * the inventory row backing the subscriber. Transatel binds orders via the
@@ -696,6 +688,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   async provision(request: ProvisionRequest): Promise<ProvisionResult> {
     const mvnoRef = process.env.TRANSATEL_MVNO_REF;
+    const isTopUp = request.purchaseType === "TOPUP";
     if (!mvnoRef)
       throw new ApiException({
         code: ApiErrorCode.CONNECTIVITY_CONFIGURATION,
@@ -741,7 +734,15 @@ export class TransatelProvider implements ConnectivityProvider {
       profile.msisdn && /^\d{6,15}$/.test(profile.msisdn.replace(/\D/g, ""))
         ? profile.msisdn.replace(/\D/g, "")
         : undefined;
-    const bindMsisdn = validMsisdn ?? profile.iccid;
+    if (!validMsisdn)
+      throw new ApiException({
+        code: ApiErrorCode.PROVISIONING_FAILED,
+        message:
+          "We could not match this eSIM to its network number. Our support team is reviewing it.",
+        status: 409,
+        details: `Transatel OCS requires a 6-15 digit MSISDN; inventory ${profile.id} has no valid MSISDN`,
+      });
+    const bindMsisdn = validMsisdn;
     const existingOperation = this.prisma.enabled
       ? await this.prisma.provisioningOperation.findUnique({
           where: { orderId: request.orderId },
@@ -751,8 +752,8 @@ export class TransatelProvider implements ConnectivityProvider {
     const idempotencyKey =
       existingOperation?.idempotencyKey ??
       (generation > 0
-        ? `transatel:preload:${request.orderId}:profile-${generation}`
-        : `transatel:preload:${request.orderId}`);
+        ? `transatel:${isTopUp ? "subscribe" : "preload"}:${request.orderId}:profile-${generation}`
+        : `transatel:${isTopUp ? "subscribe" : "preload"}:${request.orderId}`);
     const operationPayload = {
       orderId: request.orderId,
       planId: request.planId,
@@ -786,6 +787,11 @@ export class TransatelProvider implements ConnectivityProvider {
       select: { providerSubscriptionId: true, providerStatus: true },
     });
     if (accepted?.providerSubscriptionId) {
+      if (isTopUp)
+        return {
+          providerSubscriptionId: accepted.providerSubscriptionId,
+          status: "COMPLETED",
+        };
       try {
         const details = await this.getEsimDetails(profile.iccid);
         if (details.qrPayload) {
@@ -875,7 +881,7 @@ export class TransatelProvider implements ConnectivityProvider {
     const payload = {
       bind: { msisdn: bindMsisdn },
       source: "api",
-      orderType: "preload",
+      orderType: isTopUp ? "subscribe" : "preload",
       mvnoRef,
       product: { productId: plan.providerPlanId },
       payment: { provider: "customer" },
@@ -883,7 +889,7 @@ export class TransatelProvider implements ConnectivityProvider {
     };
 
     this.logger.log(
-      `Submitting OCS preload for ICCID ${profile.iccid}, product ${plan.providerPlanId}, order ${request.orderId}`,
+      `Submitting OCS ${isTopUp ? "subscribe" : "preload"} for ICCID ${profile.iccid}, product ${plan.providerPlanId}, order ${request.orderId}`,
     );
     let response: Response;
     try {
@@ -921,7 +927,7 @@ export class TransatelProvider implements ConnectivityProvider {
         response.headers.get("retry-after"),
       );
       this.logger.error(
-        `OCS product preload failed. Status: ${response.status}, Error: ${detail}`,
+        `OCS product ${isTopUp ? "subscribe" : "preload"} failed. Status: ${response.status}, Error: ${detail}`,
       );
       if (this.prisma.enabled)
         await this.prisma.provisioningOperation.update({
@@ -941,6 +947,15 @@ export class TransatelProvider implements ConnectivityProvider {
           where: { id: request.orderId },
           data: { providerStatus: "REJECTED", version: { increment: 1 } },
         });
+      if (/SUBSCRIBER_STATUS_NOT_ELIGIBLE/i.test(detail))
+        throw new ApiException({
+          code: ApiErrorCode.ELIGIBILITY_REJECTED,
+          message: isTopUp
+            ? "This eSIM cannot receive a top-up in its current network state. Our support team can check its status before you try again."
+            : "This eSIM cannot receive the selected plan right now. Please contact support or choose another plan.",
+          status: 409,
+          details: `PERMANENT_SUBSCRIBER_STATUS_NOT_ELIGIBLE: ${detail}`,
+        });
       throw new ApiException({
         code: ApiErrorCode.PROVISIONING_FAILED,
         message:
@@ -951,7 +966,7 @@ export class TransatelProvider implements ConnectivityProvider {
     }
 
     const data = (await response.json()) as OrderProductResponse;
-    const providerSubscriptionId = data.subscriptionId ?? data.id;
+    const providerSubscriptionId = data.subscriptionId;
     if (!providerSubscriptionId)
       throw new ApiException({
         code: ApiErrorCode.PROVISIONING_FAILED,
@@ -970,18 +985,22 @@ export class TransatelProvider implements ConnectivityProvider {
           where: { id: request.orderId },
           data: {
             providerSubscriptionId,
-            providerStatus: "PRELOADED",
+            providerStatus: isTopUp ? "SUBSCRIBED" : "PRELOADED",
             version: { increment: 1 },
           },
         }),
-        this.prisma.esimInventory.update({
-          where: { id: profile.id },
-          data: {
-            providerSubscriptionId,
-            providerStatus: "PRELOADED",
-            version: { increment: 1 },
-          },
-        }),
+        ...(!isTopUp
+          ? [
+              this.prisma.esimInventory.update({
+                where: { id: profile.id },
+                data: {
+                  providerSubscriptionId,
+                  providerStatus: "PRELOADED",
+                  version: { increment: 1 },
+                },
+              }),
+            ]
+          : []),
         this.prisma.provisioningOperation.update({
           where: { orderId: request.orderId },
           data: {
@@ -996,6 +1015,22 @@ export class TransatelProvider implements ConnectivityProvider {
           },
         }),
       ]);
+    }
+
+    // `subscribe` adds a package to an already-issued eSIM. The OCS 201/done
+    // response is the commit point; no new activation QR is created or needed.
+    if (isTopUp) {
+      if (this.prisma.enabled)
+        await this.prisma.provisioningOperation.update({
+          where: { orderId: request.orderId },
+          data: {
+            state: "ACTIVATED",
+            completedAt: new Date(),
+            nextReconcileAt: null,
+            version: { increment: 1 },
+          },
+        });
+      return { providerSubscriptionId, status: "COMPLETED" };
     }
 
     try {
@@ -1041,21 +1076,17 @@ export class TransatelProvider implements ConnectivityProvider {
   async getUsage(subscriptionId: string): Promise<UsageBreakdown> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
     const msisdn = subscriber.msisdn?.replace(/\D/g, "") ?? "";
-    const iccid = subscriber.iccid?.replace(/\D/g, "") ?? "";
-    const identifier = /^\d{6,15}$/.test(msisdn) ? "msisdn" : "iccid";
-    const identifierValue = identifier === "msisdn" ? msisdn : iccid;
-    if (!identifierValue)
+    if (!/^\d{6,15}$/.test(msisdn))
       throw new ApiException({
         code: ApiErrorCode.USAGE_UNAVAILABLE,
         message:
           "Usage details are not available yet. Please check back shortly.",
         status: 404,
-        details: "No valid MSISDN or ICCID is stored for this eSIM",
+        details:
+          "Transatel OCS inventory requires a 6-15 digit MSISDN; none is stored for this eSIM",
       });
-    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?${identifier}=${encodeURIComponent(identifierValue)}&withBalances=true`;
-    this.logger.log(
-      `Fetching inventory usage for ${identifier.toUpperCase()}: ${identifierValue}`,
-    );
+    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?msisdn=${encodeURIComponent(msisdn)}&withBalances=true`;
+    this.logger.log(`Fetching inventory usage for MSISDN: ${msisdn}`);
 
     const response = await this.authorizedFetch(url, {
       method: "GET",
@@ -1160,8 +1191,8 @@ export class TransatelProvider implements ConnectivityProvider {
     return { usedMb: Math.max(0, totalMb - remainingMb), totalMb };
   }
 
-  async getEsimDetails(subscriptionId: string): Promise<EsimDetailsResult> {
-    const subscriber = await this.resolveSubscriber(subscriptionId);
+  async getEsimDetails(reference: string): Promise<EsimDetailsResult> {
+    const subscriber = await this.resolveSubscriber(reference);
     const iccid = subscriber.iccid ?? "";
     if (!iccid)
       throw new ApiException({
@@ -1194,7 +1225,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
     const data = (await response.json()) as ESimDetailsResponse;
     return {
-      subscriptionId: iccid,
+      iccid,
       status: data.status,
       ...(data.smdpAddress ? { smDpAddress: data.smdpAddress } : {}),
       ...(data.qrCode?.value || data.activationCode
@@ -1482,16 +1513,32 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel eligibility check failed: ${detail}`,
       });
     }
-    const data = (await response.json()) as ProductCatalogResponse;
-    const details = Array.isArray(data.products) ? data.products[0] : undefined;
+    const data = (await response.json()) as ProductDetails | ProductCatalogResponse;
+    // Transatel deployments have exposed the product-detail response both as
+    // the product itself and wrapped in a `products` collection. Accept both
+    // documented shapes so eligibility never becomes a false rejection merely
+    // because the tenant is on a different compatible API revision.
+    const details =
+      "canSubscribe" in data
+        ? data
+        : Array.isArray(data.products)
+          ? data.products[0]
+          : undefined;
+    const allowed = Boolean(details?.canSubscribe?.allowed);
+    if (!allowed) {
+      const providerCode = details?.canSubscribe?.errorKey;
+      return {
+        allowed: false,
+        errorKey: providerCode ?? "ELIGIBILITY_REJECTED",
+        errorMessage: /SUBSCRIBER_STATUS_NOT_ELIGIBLE/i.test(
+          providerCode ?? "",
+        )
+          ? "This eSIM cannot receive a top-up in its current network state. Please contact support before trying again."
+          : "This eSIM cannot receive the selected plan right now. Please contact support or choose another plan.",
+      };
+    }
     return {
-      allowed: Boolean(details?.canSubscribe?.allowed),
-      ...(details?.canSubscribe?.errorKey
-        ? { errorKey: details.canSubscribe.errorKey }
-        : {}),
-      ...(details?.canSubscribe?.errorMessage
-        ? { errorMessage: details.canSubscribe.errorMessage }
-        : {}),
+      allowed: true,
     };
   }
 
@@ -1848,12 +1895,10 @@ export class TransatelProvider implements ConnectivityProvider {
       }));
   }
 
-  /**
-   * Returns the raw provider subscription fee as a base-unit number (no FX
-   * conversion). Minor units ("CENT"/"CENTS") are divided by 100 so the value
-   * reflects the provider's amount in its major currency; currency is kept as
-   * a reference only and never converted to NPR.
-   */
+  /** Converts the provider fee to NPR. Minor currency units are normalized
+   * before applying the configured commercial FX rate. An invalid/missing
+   * foreign-currency rate rejects the product instead of silently underpricing
+   * it as if the provider amount were already NPR. */
   private priceNpr(fee?: Price[][]): number | null {
     if (!Array.isArray(fee) || !fee.length) return null;
     const first = Array.isArray(fee[0]) ? fee[0][0] : undefined;
@@ -1861,8 +1906,12 @@ export class TransatelProvider implements ConnectivityProvider {
     const amount = Number(first.amount);
     if (!Number.isFinite(amount) || amount <= 0) return null;
     const minor = /^(CENT|CENTS)$/i.test(String(first.unit ?? ""));
-    const value = minor ? amount / 100 : amount;
-    return Math.max(1, Math.round(value));
+    const majorValue = minor ? amount / 100 : amount;
+    const currency = String(first.currency ?? "").toUpperCase();
+    if (currency === "NPR") return Math.max(1, Math.round(majorValue));
+    const fx = Number(process.env.TRANSATEL_FX_TO_NPR);
+    if (!Number.isFinite(fx) || fx <= 0) return null;
+    return Math.max(1, Math.round(majorValue * fx));
   }
 
   private iso3ToIso2(iso3: string): string | undefined {

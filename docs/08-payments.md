@@ -18,7 +18,6 @@ interface PaymentGateway {
     returnUrl;
   }): Promise<PaymentInitiation>;
   verify(reference, context: PaymentContext): Promise<PaymentVerification>;
-  refund?(reference, context, amountNpr): Promise<{ reference }>;
 }
 type PaymentInitiation = { reference; redirectUrl; expiresAt; correlationId? };
 type PaymentVerification = {
@@ -64,8 +63,9 @@ for `simulate` calls (`payments.service.ts:23`).
 - `verifyCallback(orderId, reference)` (`payments.service.ts:13`): same but
   used by the payment webhook worker (skips ownership check, already completed
   short-circuit).
-- `refund(orderId, actorId, reason)` (`payments.service.ts:14-22`):
-  - `requestRefund` → `gateway.refund` (Khalti supports) → `markRefunded`.
+- Refunds use the dual-control manual-refund workflow. The current adapter does
+  not call Khalti's Refund API; an approved refund is completed only after an
+  operator records the provider transaction reference and exact amount.
 - `simulate(orderId, ownerId, reference, scenario='SUCCESS')`
   (`payments.service.ts:23`):
   - Disabled in production.
@@ -107,12 +107,8 @@ expiresAt }`.
   Refunded/Partially Refunded→REFUNDED, Expired→FAILED, "User canceled"→CANCELLED;
   amount `total_amount / 100`; the response `transaction_id` is persisted as
   the payment's `providerTransactionId` on confirmation.
-- `refund` → Khalti Refund API
-  `POST {origin}/api/merchant-transaction/{transaction_id}/refund/` (base is
-  `KHALTI_BASE_URL` minus the `/v2` suffix; `transaction_id` is the lookup
-  `transaction_id`, not the pidx). Wallet full refund sends an empty body;
-  a partial refund sends `{ amount }` (paisa). Returns
-  `refund-{transaction_id}` as the internal refund reference.
+- Khalti's Refund API is not implemented by `KhaltiGateway`. Refund completion
+  is recorded after an operator performs and verifies it externally.
 
 **Error handling** (`khalti.gateway.ts:32-69`): provider failures are thrown
 as `ApiException` with code `PAYMENT_PROVIDER_ERROR` (502). The provider's
@@ -126,7 +122,6 @@ kept in `details` (logged server-side, never serialized to clients).
   FAILED / CANCELLED rather than surfacing as provider errors; a non-2xx
   without a body `status` (e.g. 401 invalid token, 404 unknown `pidx`) →
   `PAYMENT_PROVIDER_ERROR`; a 2xx body without `status` is likewise rejected.
-- Refund: non-2xx → `PAYMENT_PROVIDER_ERROR` with parsed detail.
 - Transport failures (network down, DNS, request timeout) thrown by `fetch`
   are caught by `request()` and rethrown as `PAYMENT_PROVIDER_ERROR` (502) so
   a provider outage surfaces with the correct payment error code instead of a

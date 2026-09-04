@@ -14,6 +14,7 @@ function jsonResponse(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(),
     text: () => Promise.resolve(JSON.stringify(body)),
     json: () => Promise.resolve(body),
   } as Response;
@@ -149,6 +150,7 @@ describe("TransatelProvider", () => {
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       iccid: "8988247076000000319",
+      msisdn: "882470001850263",
       eid: "890490320000000000000000000001",
     });
     const provider = new TransatelProvider(prisma);
@@ -161,7 +163,7 @@ describe("TransatelProvider", () => {
           orderReference: "VC-REF",
           status: "done",
           submissionDate: "2026-08-04T00:00:00Z",
-          bind: { msisdn: "8988247076000000319" },
+          bind: { msisdn: "882470001850263" },
           source: "api",
           mvnoRef: "visacompass-test",
           subscriptionId: "sub-123",
@@ -195,7 +197,7 @@ describe("TransatelProvider", () => {
     expect(orderCall).toBeDefined();
     const payload = JSON.parse(String(orderCall![1].body));
     expect(payload).toMatchObject({
-      bind: { msisdn: "8988247076000000319" },
+      bind: { msisdn: "882470001850263" },
       source: "api",
       orderType: "preload",
       mvnoRef: "visacompass-test",
@@ -265,6 +267,210 @@ describe("TransatelProvider", () => {
     expect(payload.bind).toEqual({ msisdn: "882470001850263" });
   });
 
+  it("uses orderType subscribe and a subscribe idempotency key for a top-up", async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      id: "inv-topup",
+      iccid: "8988247076000000319",
+      eid: "890490320000000000000000000001",
+      msisdn: "882470001850263",
+    });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/ocs/subscriptions/api/orders/products": () =>
+        jsonResponse({
+          id: "ord-2",
+          orderReference: "VC-REF",
+          status: "done",
+          submissionDate: "2026-08-04T00:00:00Z",
+          bind: { msisdn: "882470001850263" },
+          source: "api",
+          mvnoRef: "visacompass-test",
+          subscriptionId: "sub-topup",
+        }),
+      "/sim-management/sims/api/esims/sim-serial/8988247076000000319": () =>
+        jsonResponse({
+          simSerial: "8988247076000000319",
+          status: "downloaded",
+          smdpAddress: "consumer.rsp.world",
+          qrCode: {
+            value: "LPA:1$consumer.rsp.world$TOPUP",
+            dataUrl: "data:image/png;base64,xxx",
+          },
+        }),
+    });
+    const result = await provider.provision({
+      orderId: "order-topup-1",
+      planId: "plan-1",
+      eid: "890490320000000000000000000001",
+      purchaseType: "TOPUP",
+      traveler,
+    });
+    expect(result).toEqual({
+      providerSubscriptionId: "sub-topup",
+      status: "COMPLETED",
+    });
+    const orderCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes("/api/orders/products"),
+    );
+    expect(orderCall).toBeDefined();
+    const payload = JSON.parse(String(orderCall![1].body));
+    expect(payload).toMatchObject({
+      bind: { msisdn: "882470001850263" },
+      source: "api",
+      orderType: "subscribe",
+      mvnoRef: "visacompass-test",
+      product: { productId: "TRVL-5GB-15D" },
+      payment: { provider: "customer" },
+      transactionReference: "order-topup-1",
+    });
+    expect(orderCall![1].headers?.["Idempotency-Key"]).toBe(
+      "transatel:subscribe:order-topup-1",
+    );
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes("/sim-management/sims/api/esims/"),
+      ),
+    ).toBe(false);
+    expect(prisma.esimInventory.update).not.toHaveBeenCalled();
+  });
+
+  it("never substitutes an ICCID for a missing OCS MSISDN", async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      id: "inv-no-msisdn",
+      iccid: "8988247076000000319",
+      eid: "890490320000000000000000000001",
+      msisdn: null,
+    });
+
+    await expect(
+      new TransatelProvider(prisma).provision({
+        orderId: "order-no-msisdn",
+        planId: "plan-1",
+        eid: "890490320000000000000000000001",
+        purchaseType: "TOPUP",
+        traveler,
+      }),
+    ).rejects.toMatchObject({ code: "PROVISIONING_FAILED" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("maps an ineligible subscriber top-up rejection without exposing provider JSON", async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "882470001850263",
+      eid: "890490320000000000000000000001",
+    });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/ocs/subscriptions/api/orders/products": () =>
+        jsonResponse(
+          {
+            title: "SUBSCRIBER_STATUS_NOT_ELIGIBLE",
+            status: 400,
+            detail:
+              "Order failed - Subscriber status is not compatible with the order",
+          },
+          400,
+        ),
+    });
+
+    const error = (await provider
+      .provision({
+        orderId: "order-1",
+        planId: "plan-1",
+        eid: "890490320000000000000000000001",
+        purchaseType: "TOPUP",
+        traveler,
+      })
+      .catch((cause: unknown) => cause)) as ApiException;
+
+    expect(error.code).toBe(ApiErrorCode.ELIGIBILITY_REJECTED);
+    expect(error.message).toBe(
+      "This eSIM cannot receive a top-up in its current network state. Our support team can check its status before you try again.",
+    );
+    expect(error.message).not.toContain("SUBSCRIBER_STATUS_NOT_ELIGIBLE");
+    expect(String(error.internalDetail)).toContain(
+      "PERMANENT_SUBSCRIBER_STATUS_NOT_ELIGIBLE",
+    );
+  });
+
+  it("does not return provider eligibility wording to the customer", async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/ocs/catalog/api/cos/WW_COS_TEST/products/TRVL-5GB-15D": () =>
+        jsonResponse({
+          products: [
+            {
+              canSubscribe: {
+                allowed: false,
+                errorKey: "SUBSCRIBER_STATUS_NOT_ELIGIBLE",
+                errorMessage: "private provider diagnostic",
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await provider.checkEligibility(
+      "plan-1",
+      "882470001850263",
+    );
+
+    expect(result).toEqual({
+      allowed: false,
+      errorKey: "SUBSCRIBER_STATUS_NOT_ELIGIBLE",
+      errorMessage:
+        "This eSIM cannot receive a top-up in its current network state. Please contact support before trying again.",
+    });
+    expect(JSON.stringify(result)).not.toContain("private provider diagnostic");
+  });
+
+  it("accepts the unwrapped Transatel product-detail eligibility shape", async () => {
+    const prisma = prismaStub();
+    prisma.plan.findUnique = vi
+      .fn()
+      .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/ocs/catalog/api/cos/WW_COS_TEST/products/TRVL-5GB-15D": () =>
+        jsonResponse({
+          canSubscribe: { allowed: true },
+          availability: { available: true },
+          hasSubProducts: false,
+          inventoryActive: true,
+          productDefinition: { productId: "TRVL-5GB-15D" },
+        }),
+    });
+
+    await expect(
+      provider.checkEligibility("plan-1", "882470001850263"),
+    ).resolves.toEqual({ allowed: true });
+  });
+
   it("returns a DELAYED result when the QR payload is not yet available", async () => {
     const prisma = prismaStub();
     prisma.plan.findUnique = vi
@@ -272,6 +478,7 @@ describe("TransatelProvider", () => {
       .mockResolvedValue({ id: "plan-1", providerPlanId: "TRVL-5GB-15D" });
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       iccid: "8988247076000000319",
+      msisdn: "882470001850263",
       eid: "890490320000000000000000000001",
     });
     const provider = new TransatelProvider(prisma);
@@ -284,7 +491,7 @@ describe("TransatelProvider", () => {
           orderReference: "VC-REF",
           status: "done",
           submissionDate: "2026-08-04T00:00:00Z",
-          bind: { msisdn: "8988247076000000319" },
+          bind: { msisdn: "882470001850263" },
           source: "api",
           mvnoRef: "visacompass-test",
           subscriptionId: "sub-123",
@@ -329,6 +536,7 @@ describe("TransatelProvider", () => {
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       id: "inv-1",
       iccid: "8988247076000000319",
+      msisdn: "882470001850263",
       eid: "890490320000000000000000000001",
     });
     prisma.order.findUnique = vi
@@ -366,6 +574,7 @@ describe("TransatelProvider", () => {
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       id: "inv-1",
       iccid: "8988247076000000319",
+      msisdn: "882470001850263",
       eid: "890490320000000000000000000001",
     });
     prisma.order.findUnique = vi.fn().mockResolvedValue({
@@ -442,7 +651,7 @@ describe("TransatelProvider", () => {
     expect(url).toContain("withBalances=true");
   });
 
-  it("falls back to ICCID when an inventory profile has no MSISDN", async () => {
+  it("rejects OCS usage lookup when an inventory profile has no MSISDN", async () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
       iccid: "8988247076000000319",
@@ -474,15 +683,14 @@ describe("TransatelProvider", () => {
         }),
     });
 
-    await provider.getUsage(ORDER_UUID);
-
-    const url = String(
-      fetchMock.mock.calls.find((call) =>
+    await expect(provider.getUsage(ORDER_UUID)).rejects.toMatchObject({
+      code: "USAGE_UNAVAILABLE",
+    });
+    expect(
+      fetchMock.mock.calls.some((call) =>
         String(call[0]).includes("/api/subscriptions/products"),
-      )![0],
-    );
-    expect(url).toContain("iccid=8988247076000000319");
-    expect(url).not.toContain("msisdn=");
+      ),
+    ).toBe(false);
   });
 
   it("returns the QR payload and SM-DP+ address from eSIM details", async () => {
@@ -508,7 +716,7 @@ describe("TransatelProvider", () => {
     });
     const details = await provider.getEsimDetails("8988247076000000319");
     expect(details).toEqual({
-      subscriptionId: "8988247076000000319",
+      iccid: "8988247076000000319",
       status: "downloaded",
       smDpAddress: "consumer.rsp.world",
       qrPayload: "LPA:1$consumer.rsp.world$XYZ",
@@ -959,8 +1167,8 @@ describe("TransatelProvider", () => {
       name: "Travel 5GB",
       dataAllowance: "5120 MB",
       validityDays: 15,
-      costPrice: 5,
-      sellingPrice: 5,
+      costPrice: 848,
+      sellingPrice: 848,
       providerPlanId: "TRVL-5GB-15D",
       status: "DRAFT",
     });
@@ -1080,7 +1288,7 @@ describe("TransatelProvider", () => {
     const result = await provider.syncCatalog();
     expect(result).toEqual({ synced: 1, skipped: 0 });
     const create = tx.plan.upsert.mock.calls[0]![0].create;
-    expect(create.costPrice).toBe(5);
+    expect(create.costPrice).toBe(848);
   });
 
   it("maps real catalog allowances using resourceValue/resourceUnit and prefers productShortText", async () => {
@@ -1138,8 +1346,8 @@ describe("TransatelProvider", () => {
       name: "One-off data plan Afghanistan 1GB 7 day(s)",
       dataallowance: "1024 MB",
       validitydays: 7,
-      costprice: 18,
-      sellingprice: 18,
+      costprice: 3060,
+      sellingprice: 3060,
       currency: "NPR",
     });
   });

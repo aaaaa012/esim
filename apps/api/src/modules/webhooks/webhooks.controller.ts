@@ -31,6 +31,7 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { ReconciliationService } from "../../jobs/reconciliation.service.js";
 import { QUEUES } from "../../jobs/queues.js";
+import { INBOUND_WEBHOOK_JOB_OPTIONS } from "../../infrastructure/resilience-policy.js";
 import { paymentSimulatorSecret } from "../../common/payment-simulator-secret.js";
 import { ClerkSyncService } from "../identity/clerk-sync.service.js";
 
@@ -87,6 +88,7 @@ export class WebhooksController {
         payload: event as unknown as Record<string, unknown>,
       },
       `clerk-${eventId}`,
+      INBOUND_WEBHOOK_JOB_OPTIONS,
     );
     return {
       accepted: true,
@@ -157,6 +159,7 @@ export class WebhooksController {
       "payment-callback",
       { provider: source, eventId, payload },
       `${source}-${eventId}`,
+      INBOUND_WEBHOOK_JOB_OPTIONS,
     );
     this.remember(`${source}:${eventId}`);
     return { accepted: true, queued: true };
@@ -205,6 +208,7 @@ export class WebhooksController {
       "connectivity-callback",
       { provider: source, eventId },
       key,
+      INBOUND_WEBHOOK_JOB_OPTIONS,
     );
     this.remember(key);
     return { accepted: true, queued: true };
@@ -359,6 +363,7 @@ export class OperationsIntegrationEventsController {
         payload: event.payload as Record<string, unknown>,
       },
       `replay-${source}-${event.eventId}-${Date.now()}`,
+      { ...INBOUND_WEBHOOK_JOB_OPTIONS, allowDuplicate: true },
     );
     return { id, eventId: event.eventId, source, status: "QUEUED" };
   }
@@ -375,7 +380,7 @@ export class OperationsIntegrationLogsController {
   ) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     if (!this.prisma.enabled) return [];
-    return this.prisma.integrationLog.findMany({
+    const rows = await this.prisma.integrationLog.findMany({
       where: operation ? { operation } : {},
       select: {
         id: true,
@@ -386,11 +391,20 @@ export class OperationsIntegrationLogsController {
         durationMs: true,
         errorCode: true,
         errorMessage: true,
+        correlationId: true,
+        requestBody: true,
+        responseBody: true,
         createdAt: true,
       },
       orderBy: { createdAt: "desc" },
       take: 200,
     });
+    return rows.map((row) => ({
+      ...row,
+      errorMessage: sanitizeLogText(row.errorMessage),
+      requestBody: sanitizeOperationsLog(row.requestBody),
+      responseBody: sanitizeOperationsLog(row.responseBody),
+    }));
   }
 }
 

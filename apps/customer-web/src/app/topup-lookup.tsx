@@ -9,8 +9,9 @@ import {
   X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ErrorModal from "../components/error-modal";
+import { publicApiErrorMessage } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -50,6 +51,51 @@ export default function TopupLookup() {
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
+  const [verificationRequested, setVerificationRequested] = useState(false);
+
+  const verifyLookup = async (lookupToken: string) => {
+    setOpen(true);
+    setBusy(true);
+    setError("");
+    setVerificationRequested(false);
+    try {
+      const response = await fetch(`${API}/guest/orders/topup-lookup/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lookupToken }),
+      });
+      const payload = (await response.json()) as {
+        data?: LookupResult;
+        error?: { code?: string; message?: string };
+      };
+      if (!response.ok || !payload.data)
+        throw new Error(publicApiErrorMessage(payload.error, "This recharge link is invalid or expired."));
+      setMobile(payload.data.mobile);
+      setResult(payload.data);
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${window.location.search}#recharge`,
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "This recharge link is invalid or expired.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    const lookupToken = new URLSearchParams(
+      window.location.hash.slice(1),
+    ).get("topup");
+    if (lookupToken) void verifyLookup(lookupToken);
+    // The signed token is consumed only on the initial page load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const close = () => {
     if (busy) return;
@@ -57,12 +103,13 @@ export default function TopupLookup() {
     setResult(null);
     setAlternatives(null);
     setShowAlternatives(false);
+    setVerificationRequested(false);
     setError("");
   };
 
   const lookup = async () => {
     if (!mobile.trim()) {
-      setError("Enter the mobile number you used for your last order");
+      setError("Enter the MSISDN assigned to your Visa Compass eSIM");
       return;
     }
     setOpen(true);
@@ -78,12 +125,12 @@ export default function TopupLookup() {
         body: JSON.stringify({ mobile: mobile.trim() }),
       });
       const payload = (await response.json()) as {
-        data?: LookupResult;
-        error?: { message: string };
+        data?: { verificationRequested?: boolean; message?: string };
+        error?: { code?: string; message?: string };
       };
       if (!response.ok)
-        throw new Error(payload.error?.message ?? "Lookup failed");
-      setResult(payload.data ?? null);
+        throw new Error(publicApiErrorMessage(payload.error, "We could not send the recharge link. Please try again."));
+      setVerificationRequested(Boolean(payload.data?.verificationRequested));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Lookup failed");
     } finally {
@@ -107,14 +154,15 @@ export default function TopupLookup() {
       });
       const payload = (await response.json()) as {
         data?: { allowed?: boolean; errorMessage?: string };
-        error?: { message?: string };
+        error?: { code?: string; message?: string };
       };
       const eligibility = payload.data;
       if (!response.ok || !eligibility?.allowed)
         throw new Error(
           eligibility?.errorMessage ??
-            payload.error?.message ??
+            publicApiErrorMessage(payload.error,
             "This eSIM cannot subscribe to the selected plan.",
+            )
         );
       const params = new URLSearchParams({
         plan: planId,
@@ -144,10 +192,10 @@ export default function TopupLookup() {
       );
       const payload = (await response.json()) as {
         data?: Plan[];
-        error?: { message: string };
+        error?: { code?: string; message?: string };
       };
       if (!response.ok)
-        throw new Error(payload.error?.message ?? "Plans could not be loaded");
+        throw new Error(publicApiErrorMessage(payload.error, "Plans could not be loaded"));
       setAlternatives(payload.data ?? []);
       setShowAlternatives(true);
     } catch (cause) {
@@ -205,8 +253,8 @@ export default function TopupLookup() {
               <p className="recharge-kicker">For returning travellers</p>
               <h2 id="recharge-title">Add data to your existing eSIM</h2>
               <p className="recharge-description">
-                Keep the eSIM already installed on your phone. Enter the mobile
-                number from your previous Visa Compass order to find compatible
+                Keep the eSIM already installed on your phone. Enter the MSISDN
+                from your eSIM delivery email to find compatible
                 recharge plans—no new QR code required.
               </p>
               <form
@@ -216,7 +264,7 @@ export default function TopupLookup() {
                   void lookup();
                 }}
               >
-                <label htmlFor="recharge-mobile">Mobile number</label>
+                <label htmlFor="recharge-mobile">eSIM MSISDN</label>
                 <div className="recharge-control">
                   <span className="recharge-input-icon" aria-hidden="true">
                     <Smartphone size={18} />
@@ -225,7 +273,7 @@ export default function TopupLookup() {
                     id="recharge-mobile"
                     value={mobile}
                     onChange={(event) => setMobile(event.target.value)}
-                    placeholder="e.g. +977 9841 234 567"
+                    placeholder="e.g. +33 6 12 34 56 78"
                     inputMode="tel"
                     autoComplete="tel"
                     aria-describedby="recharge-help"
@@ -245,7 +293,7 @@ export default function TopupLookup() {
                 </button>
               </form>
               <p className="recharge-help" id="recharge-help">
-                Use the same number you entered when purchasing your eSIM.
+                Use the eSIM mobile number shown in your QR-delivery email.
               </p>
             </div>
             <aside className="recharge-note" aria-label="How recharge works">
@@ -287,7 +335,7 @@ export default function TopupLookup() {
               </span>
               <div>
                 <h2 id="topup-dialog-title">Top up your eSIM</h2>
-                <p>Enter the mobile number linked to your Visa Compass eSIM.</p>
+                <p>Enter the MSISDN assigned to your Visa Compass eSIM.</p>
               </div>
             </header>
             <div className="topup-row">
@@ -296,7 +344,7 @@ export default function TopupLookup() {
                 value={mobile}
                 onChange={(event) => setMobile(event.target.value)}
                 onKeyDown={(event) => event.key === "Enter" && void lookup()}
-                placeholder="e.g. +977 9841 234 567"
+                placeholder="e.g. +33 6 12 34 56 78"
                 inputMode="tel"
               />
               <button
@@ -427,10 +475,22 @@ export default function TopupLookup() {
                   </>
                 ) : (
                   <p className="topup-note warn">
-                    No prior Visa Compass eSIM was found for this mobile number.
+                    No prior Visa Compass eSIM was found for this MSISDN.
                     Please choose a destination to buy a new eSIM.
                   </p>
                 )}
+              </div>
+            ) : null}
+            {verificationRequested ? (
+              <div className="topup-result" role="status" aria-live="polite">
+                <p className="topup-note ok">
+                  <CheckCircle2 size={15} /> Check your original purchase email
+                  for a secure recharge link. The link expires in 15 minutes.
+                </p>
+                <p className="recharge-help">
+                  For privacy, this message is the same whether or not the
+                  MSISDN is registered.
+                </p>
               </div>
             ) : null}
           </section>

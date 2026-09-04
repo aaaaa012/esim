@@ -32,3 +32,6 @@ apps/api/prisma/reset-for-fresh.cjs
 
 # Local security assessment; do not publish vulnerability details.
 docs/security/VAPT-2026-08-25.md
+
+# Stale codex push-worktree clone; do not commit as an embedded repo.
+.codex-push-worktree/

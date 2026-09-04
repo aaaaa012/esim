@@ -4,6 +4,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import AuthenticatedApiProvider from "./authenticated-api-provider";
 import OpsShell from "./ops-shell";
 import { Toaster } from "@/components/ui/sonner";
+import { ConfirmationProvider } from "@/components/confirmation-provider";
 
 export const metadata: Metadata = { title: "Visa Compass Operations" };
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -18,9 +19,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           />
         </head>
         <body>
-          <AuthenticatedApiProvider>
-            <OpsShell>{children}</OpsShell>
-          </AuthenticatedApiProvider>
+          <ConfirmationProvider>
+            <AuthenticatedApiProvider>
+              <OpsShell>{children}</OpsShell>
+            </AuthenticatedApiProvider>
+          </ConfirmationProvider>
           <Toaster />
         </body>
       </html>

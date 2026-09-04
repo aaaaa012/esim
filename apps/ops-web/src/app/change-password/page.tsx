@@ -48,7 +48,7 @@ export default function ChangePasswordPage() {
       <ErrorDialog error={error} onClose={() => setError("")} />
       <Button onClick={() => void finish()} disabled={busy}>
         {busy ? <Spinner className="text-primary-foreground" /> : null}
-        {busy ? "Continuing…" : "I've set my new password — continue"}
+        {busy ? "Continuing..." : "I've set my new password - continue"}
       </Button>
     </section>
   );

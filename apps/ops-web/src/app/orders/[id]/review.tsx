@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { ManualRefundCard } from "./manual-refund-card";
+import { useConfirmation } from "@/components/confirmation-provider";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Detail = OpsOrder & {
@@ -131,6 +132,7 @@ type ProviderCheck = {
 
 export default function OrderReview({ id }: { id: string }) {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [order, setOrder] = useState<Detail | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -214,12 +216,7 @@ export default function OrderReview({ id }: { id: string }) {
     });
   };
   const checkProvider = async () => {
-    if (
-      !window.confirm(
-        "Check Transatel now? This reads provider state and will not create another activation.",
-      )
-    )
-      return;
+    if (!(await confirm({ title: "Check provider status?", description: "This reads the current Transatel state and will not create another activation.", confirmLabel: "Check status" }))) return;
     setBusy("provider-status-check");
     setError("");
     try {
@@ -531,11 +528,11 @@ export default function OrderReview({ id }: { id: string }) {
                   }
                 />
                 <InfoRow
-                  label="Existing eSIM"
+                  label="ICCID / SIM serial"
                   value={order.assignment?.iccid ?? "Assigned during set-up"}
                 />
                 <InfoRow
-                  label="Network profile"
+                  label="Provider subscription ID"
                   value={
                     order.assignment?.providerSubscriptionId ??
                     "Waiting for network"
@@ -711,15 +708,15 @@ export default function OrderReview({ id }: { id: string }) {
                 </div>
                 <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                   <InfoRow
-                    label="eSIM number"
+                    label="ICCID / SIM serial"
                     value={order.assignment.iccid ?? "—"}
                   />
                   <InfoRow
-                    label="Mobile number"
+                    label="MSISDN"
                     value={order.assignment.msisdn ?? "—"}
                   />
                   <InfoRow
-                    label="Network profile"
+                    label="Provider subscription ID"
                     value={
                       order.assignment.providerSubscriptionId ??
                       "Waiting for network"
@@ -889,13 +886,8 @@ export default function OrderReview({ id }: { id: string }) {
                       size="sm"
                       variant="success"
                       disabled={Boolean(busy)}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            `Give final manual approval to this ${humane(document.type)} document? This Operations/Admin decision overrides the OCR result and is audited.`,
-                          )
-                        )
-                          action(`documents/${document.id}/approve`);
+                      onClick={async () => {
+                        if (await confirm({ title: `Approve ${humane(document.type)} document?`, description: "This audited manual decision overrides the OCR result.", confirmLabel: "Approve document" })) void action(`documents/${document.id}/approve`);
                       }}
                     >
                       {busy === `documents/${document.id}/approve` ? (
@@ -913,13 +905,8 @@ export default function OrderReview({ id }: { id: string }) {
                         size="sm"
                         variant="outline"
                         disabled={Boolean(busy)}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              "Ask the customer to upload a clearer copy? The reason below will be shared with them.",
-                            )
-                          )
-                            action(
+                        onClick={async () => {
+                          if (await confirm({ title: "Request a new document?", description: "The reason entered below will be shared with the customer.", confirmLabel: "Request re-upload" })) void action(
                               `documents/${document.id}/request-reupload`,
                               {
                                 reason,
@@ -1019,13 +1006,8 @@ export default function OrderReview({ id }: { id: string }) {
                   variant="success"
                   size="lg"
                   disabled={Boolean(busy) || !requiredApproved}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "Approve this order and start setting up the eSIM with the network? This cannot be undone.",
-                      )
-                    )
-                      action("approve");
+                  onClick={async () => {
+                    if (await confirm({ title: "Approve and activate this order?", description: "This submits the eSIM set-up to the network and cannot be undone.", confirmLabel: "Approve and start set-up" })) void action("approve");
                   }}
                 >
                   {busy === "approve" ? (
@@ -1052,13 +1034,8 @@ export default function OrderReview({ id }: { id: string }) {
                     variant="success"
                     size="lg"
                     disabled={Boolean(busy)}
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          "Try the set-up again? Only do this if you are sure the network did not already accept the order.",
-                        )
-                      )
-                        action("retry");
+                    onClick={async () => {
+                      if (await confirm({ title: "Retry eSIM set-up?", description: "Proceed only after confirming the network did not already accept the order, to avoid a duplicate activation.", confirmLabel: "Retry set-up", destructive: true })) void action("retry");
                     }}
                   >
                     {busy === "retry" ? (
@@ -1084,13 +1061,8 @@ export default function OrderReview({ id }: { id: string }) {
                 variant="outline"
                 size="lg"
                 disabled={Boolean(busy)}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Email the installation QR to the customer again?",
-                    )
-                  )
-                    action("resend-qr");
+                onClick={async () => {
+                  if (await confirm({ title: "Resend installation QR?", description: "The customer will receive another installation email for this eSIM.", confirmLabel: "Resend QR" })) void action("resend-qr");
                 }}
               >
                 {busy === "resend-qr" ? (

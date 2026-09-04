@@ -328,6 +328,16 @@ export class OrdersService implements OnModuleInit {
       orderBy: { createdAt: "desc" },
     });
     const latestTraveler = orders.find((order) => order.traveler)?.traveler;
+    const profileUpdates = await this.prisma.auditLog.findMany({
+      where: {
+        entity: "Customer",
+        entityId: customer.id,
+        action: { in: ["EMAIL_CORRECTED"] },
+      },
+      include: { performedBy: { select: { email: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
     const displayEmail =
       customer.source === "PARTNER" &&
       customer.email.endsWith("@partner.visacompass.invalid") &&
@@ -366,10 +376,25 @@ export class OrdersService implements OnModuleInit {
       customerCode: customer.customerCode,
       email: displayEmail,
       name: latestTraveler?.firstName,
+      profileUpdates: profileUpdates.map((update) => ({
+        id: update.id,
+        action: update.action,
+        previousValue: update.previousValue,
+        newValue: update.newValue,
+        performedBy: update.performedBy?.email ?? "System",
+        createdAt: update.createdAt.toISOString(),
+      })),
       orders: orders.map((order) => ({
         id: order.id,
         orderNumber: order.orderNumber,
         status: order.status,
+        purchaseType: order.orderType,
+        channel: order.channel,
+        topUpMobile:
+          order.orderType === "TOPUP"
+            ? ((order.pricingSnapshot as { topUpMobile?: string } | null)
+                ?.topUpMobile ?? order.customerEsim?.inventory.msisdn ?? null)
+            : null,
         plan: {
           id: order.plan.id,
           name: order.plan.name,
@@ -444,10 +469,14 @@ export class OrdersService implements OnModuleInit {
       mobile?: string;
       email?: string;
       targetEsimId?: string;
+      termsAccepted?: boolean;
+      privacyAccepted?: boolean;
     },
   ) {
     if (!compatibilityAccepted)
       throw new BadRequestException("Compatibility declaration is required");
+    if (!meta?.termsAccepted || !meta?.privacyAccepted)
+      throw new BadRequestException("Terms and privacy consent are required");
     const plan = await this.catalog.findActive(planId);
     if (!plan) throw new BadRequestException("Invalid or inactive plan");
     const id = randomUUID();
@@ -518,22 +547,27 @@ export class OrdersService implements OnModuleInit {
     };
     this.orders.set(id, order);
     await this.persistence.save(order);
-    if (meta?.ipAddress || meta?.userAgent) {
-      await this.persistence
-        .recordConsent(
+    const consentContext = [
+      ["E_SIM_COMPATIBILITY", "1.0"],
+      ["TERMS_OF_SERVICE", "1.0"],
+      ["PRIVACY_POLICY", "1.0"],
+    ] as const;
+    await Promise.all(
+      consentContext.map(([type, version]) =>
+        this.persistence.recordConsent(
           id,
           ownerId ?? "guest",
-          "E_SIM_COMPATIBILITY",
-          "1.0",
+          type,
+          version,
           meta.ipAddress ?? "unknown",
           meta.userAgent ?? "unknown",
-        )
-        .catch((error) =>
-          this.logger.warn(
-            `Consent recording failed for order ${id}: ${error instanceof Error ? error.message : "unknown"}`,
-          ),
-        );
-    }
+        ),
+      ),
+    ).catch((error) =>
+      this.logger.warn(
+        `Consent recording failed for order ${id}: ${error instanceof Error ? error.message : "unknown"}`,
+      ),
+    );
     return this.redact(order);
   }
 
@@ -630,26 +664,7 @@ export class OrdersService implements OnModuleInit {
     ];
   }
   private async priorOrderEmail(mobile: string): Promise<string | undefined> {
-    const target = normalizeMsisdn(mobile);
-    const prior = [...this.orders.values()].find(
-      (order) =>
-        order.status === OrderStatus.COMPLETED &&
-        order.traveler &&
-        normalizeMsisdn(order.traveler.mobile) === target,
-    );
-    if (prior?.traveler?.email) return prior.traveler.email;
-    if (!this.prisma.enabled) return undefined;
-    const variants = [...msisdnVariants(mobile)];
-    const found = await this.prisma.order.findFirst({
-      where: {
-        status: "COMPLETED",
-        traveler: { is: { mobile: { in: variants } } },
-      },
-      select: { traveler: { select: { mobile: true, email: true } } },
-    });
-    if (found?.traveler && normalizeMsisdn(found.traveler.mobile) === target)
-      return found.traveler.email;
-    return undefined;
+    return (await this.resolveSubscriber(mobile))?.traveler.email;
   }
   private async customerEmail(ownerId: string): Promise<string | undefined> {
     if (!this.prisma.enabled)
@@ -711,14 +726,13 @@ export class OrdersService implements OnModuleInit {
     const variants = [...msisdnVariants(mobile)];
     return {
       status: "COMPLETED" as const,
-      OR: [
-        { traveler: { is: { mobile: { in: variants } } } },
-        {
-          customerEsim: {
-            is: { inventory: { is: { msisdn: { in: variants } } } },
+      customerEsim: {
+        is: {
+          inventory: {
+            is: { msisdn: { in: variants } },
           },
         },
-      ],
+      },
     };
   }
   private matchesTopUpLookup(
@@ -1333,13 +1347,13 @@ export class OrdersService implements OnModuleInit {
   async topUpLookup(mobile: string, options?: { includeIdentity?: boolean }) {
     const target = normalizeMsisdn(mobile);
     if (!target)
-      throw new BadRequestException("A valid mobile number is required");
+      throw new BadRequestException("A valid eSIM MSISDN is required");
     const includeIdentity = Boolean(options?.includeIdentity);
-    const fromOrders = [...this.orders.values()]
-      .filter(
-        (order) => order.status === OrderStatus.COMPLETED && order.traveler,
-      )
-      .find((order) => normalizeMsisdn(order.traveler!.mobile) === target);
+    const fromOrders = [...this.orders.values()].find(
+      (order) =>
+        order.status === OrderStatus.COMPLETED &&
+        normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
+    );
     if (fromOrders)
       return {
         found: true,
@@ -1359,7 +1373,6 @@ export class OrdersService implements OnModuleInit {
       if (
         dbOrder?.traveler &&
         this.matchesTopUpLookup(target, [
-          dbOrder.traveler.mobile,
           dbOrder.customerEsim?.inventory?.msisdn,
         ])
       ) {
@@ -1405,7 +1418,10 @@ export class OrdersService implements OnModuleInit {
           }
         : {}),
     };
-    return { subscriber, topUpAvailable: Boolean(order.qrPayload) };
+    return {
+      subscriber,
+      topUpAvailable: Boolean(order.qrPayload && order.assignment?.msisdn),
+    };
   }
   private dbTopUpSubscriber(
     dbOrder: {
@@ -1509,11 +1525,11 @@ export class OrdersService implements OnModuleInit {
     };
     return {
       subscriber,
-      topUpAvailable: Boolean(dbOrder.customerEsim?.inventory),
+      topUpAvailable: Boolean(dbOrder.customerEsim?.inventory?.msisdn),
     };
   }
   /**
-   * Resolves the most recent completed order for a subscriber number, with the
+   * Resolves the most recent completed order for an eSIM MSISDN, with the
    * plaintext fields needed to provision a top-up (identity, plan country and
    * the physical eSIM to reuse). Returns null when no completed order matches.
    */
@@ -1525,10 +1541,11 @@ export class OrdersService implements OnModuleInit {
         (order) =>
           order.status === OrderStatus.COMPLETED &&
           order.traveler &&
-          normalizeMsisdn(order.traveler.mobile) === target,
+          normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
       );
       if (!prior?.traveler) return null;
       return {
+        orderId: prior.id,
         customerId: undefined,
         planCountryCode: prior.plan.countryCode,
         traveler: {
@@ -1553,13 +1570,11 @@ export class OrdersService implements OnModuleInit {
     });
     if (
       !prior?.traveler ||
-      !this.matchesTopUpLookup(target, [
-        prior.traveler.mobile,
-        prior.customerEsim?.inventory?.msisdn,
-      ])
+      !this.matchesTopUpLookup(target, [prior.customerEsim?.inventory?.msisdn])
     )
       return null;
     return {
+      orderId: prior.id,
       customerId: prior.customerId,
       planCountryCode: prior.plan.country.isoCode,
       traveler: {
@@ -1588,10 +1603,11 @@ export class OrdersService implements OnModuleInit {
         (order) =>
           order.status === OrderStatus.COMPLETED &&
           order.traveler &&
-          normalizeMsisdn(order.traveler.mobile) === target,
+          normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
       );
       if (!prior?.traveler) return null;
       return {
+        orderId: prior.id,
         customerId: undefined,
         planCountryCode: prior.plan.countryCode,
         traveler: {
@@ -1610,8 +1626,8 @@ export class OrdersService implements OnModuleInit {
 
   /**
    * Validates a recharge against the provider before money is collected.
-   * The customer's entered number can match either their traveller record or
-   * the eSIM MSISDN, but Transatel must always receive the stored MSISDN.
+   * The supplied identifier must match the eSIM MSISDN. Transatel receives the
+   * same stored MSISDN after the local ownership and lifecycle checks pass.
    */
   async checkTopUpEligibility(mobile: string, planId: string) {
     const target = await this.resolveSubscriber(mobile);
@@ -1620,8 +1636,7 @@ export class OrdersService implements OnModuleInit {
       return {
         allowed: false,
         errorKey: "ESIM_NOT_AVAILABLE",
-        errorMessage:
-          "We could not find an active eSIM for this mobile number.",
+        errorMessage: "We could not find an active eSIM for this MSISDN.",
       };
     const provider = await this.connectivity.checkEligibility(planId, msisdn);
     return provider;
@@ -2029,6 +2044,7 @@ export class OrdersService implements OnModuleInit {
           orderId: string;
           planId: string;
           eid: string;
+          purchaseType: "INITIAL_PURCHASE" | "TOPUP";
           traveler: {
             firstName: string;
             surname: string;
@@ -2066,6 +2082,7 @@ export class OrdersService implements OnModuleInit {
         orderId: order.id,
         planId: order.plan.id,
         eid: profile.eid,
+        purchaseType: order.purchaseType ?? "INITIAL_PURCHASE",
         traveler: identity,
       };
       const result = await this.connectivity.provision(request);
@@ -2079,8 +2096,9 @@ export class OrdersService implements OnModuleInit {
       delete order.provisioningFailure;
       delete order.operationalDisposition;
       order.providerSubscriptionId = result.providerSubscriptionId;
-      order.providerStatus = "PRELOADED";
-      if (result.status === "DELAYED" || !result.qrPayload) {
+      const isTopUp = order.purchaseType === "TOPUP";
+      order.providerStatus = isTopUp ? "SUBSCRIBED" : "PRELOADED";
+      if (result.status === "DELAYED" || (!isTopUp && !result.qrPayload)) {
         await this.persistence.save(order);
         await this.safeResolveAttention(
           `provisioning-failure:${order.id}`,
@@ -2091,7 +2109,7 @@ export class OrdersService implements OnModuleInit {
         );
         return this.redact(order);
       }
-      order.qrPayload = result.qrPayload;
+      if (result.qrPayload) order.qrPayload = result.qrPayload;
       if (!reuseExisting) order.qrDeliveredAt = new Date().toISOString();
       const expiresAt = new Date(
         Date.now() + order.plan.validityDays * 86_400_000,
@@ -2113,7 +2131,7 @@ export class OrdersService implements OnModuleInit {
         await this.inventory.assign(
           order.id,
           await this.inventory.customerIdForOrder(order.id),
-          result.qrPayload,
+          result.qrPayload!,
           providerInfo,
         );
       const assigned = await this.inventory.inventoryForOrder(order.id);
@@ -2127,20 +2145,35 @@ export class OrdersService implements OnModuleInit {
         };
       this.transition(
         order,
-        OrderStatus.QR_READY,
-        reuseExisting
-          ? `Provisioned top-up on attempt ${attempt}; package added to existing eSIM`
+        isTopUp ? OrderStatus.COMPLETED : OrderStatus.QR_READY,
+        isTopUp
+          ? `Top-up subscribed on attempt ${attempt}; package added to existing eSIM`
           : `Provisioned on attempt ${attempt}; activation QR delivered`,
       );
       try {
         await this.persistence.save(order);
       } catch (error) {
         if (!this.isOptimisticOrderConflict(error)) throw error;
+        if (isTopUp) {
+          await this.refreshOne(order.id, true);
+          const fresh = this.get(order.id);
+          if (fresh.status === OrderStatus.PROVISIONING) {
+            fresh.providerSubscriptionId = result.providerSubscriptionId;
+            fresh.providerStatus = "SUBSCRIBED";
+            this.transition(
+              fresh,
+              OrderStatus.COMPLETED,
+              "Recovered subscribed top-up after concurrent order update",
+            );
+            await this.persistence.save(fresh);
+          }
+          return this.redact(fresh);
+        }
         this.logger.warn(
           `Order ${order.id} changed after provider success; reloading and recovering its QR-ready state`,
         );
         return await this.recoverProvisioningQrReady(order.id, {
-          qrPayload: result.qrPayload,
+          qrPayload: result.qrPayload!,
           providerSubscriptionId: result.providerSubscriptionId,
           iccid: profile.iccid,
           reason: "Recovered provider result after concurrent order update",
