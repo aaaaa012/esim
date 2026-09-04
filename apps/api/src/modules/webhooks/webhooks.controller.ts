@@ -401,6 +401,7 @@ export class OperationsIntegrationLogsController {
     });
     return rows.map((row) => ({
       ...row,
+      endpoint: sanitizeLogEndpoint(row.endpoint),
       errorMessage: sanitizeLogText(row.errorMessage),
       requestBody: sanitizeOperationsLog(row.requestBody),
       responseBody: sanitizeOperationsLog(row.responseBody),
@@ -519,6 +520,7 @@ export class OperationsLogsController {
       durationMs: number | null;
       errorCode: string | null;
       errorMessage: string | null;
+      correlationId: string | null;
       createdAt: Date;
       requestBody: Prisma.JsonValue;
       responseBody: Prisma.JsonValue;
@@ -700,6 +702,7 @@ export class OperationsLogsController {
           row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
         createdAt: row.createdAt,
         durationMs: row.durationMs,
+        correlationId: row.correlationId,
         error: sanitizeLogText(row.errorMessage),
         requestBody: sanitizeOperationsLog(row.requestBody),
         responseBody: sanitizeOperationsLog(row.responseBody),
@@ -795,7 +798,16 @@ export class OperationsLogsController {
           responseBody: sanitizeOperationsLog(row.newValue),
         })),
     ]
-      .filter((row) => matches(row.identifier, row.title, row.detail))
+      .filter((row) =>
+        matches(
+          row.identifier,
+          row.title,
+          row.detail,
+          "correlationId" in row && typeof row.correlationId === "string"
+            ? row.correlationId
+            : null,
+        ),
+      )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
     const total =

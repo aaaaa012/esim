@@ -74,6 +74,7 @@ function ordersService(
   notifications: unknown = {},
   resilience?: unknown,
   persistenceOverrides: Record<string, unknown> = {},
+  queue: unknown = { add: vi.fn().mockResolvedValue({}) },
 ) {
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
@@ -86,7 +87,7 @@ function ordersService(
     {} as unknown as S3StorageService,
     persistence,
     inventory as unknown as InventoryService,
-    {} as unknown as QueueService,
+    queue as unknown as QueueService,
     notifications as unknown as NotificationService,
     {} as unknown as CatalogService,
     prisma as unknown as PrismaService,
@@ -343,12 +344,16 @@ describe("OrdersService asynchronous provisioning", () => {
       }),
     };
     const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const queue = { add: vi.fn().mockResolvedValue({}) };
     const orders = ordersService(
       [order],
       connectivity,
       inventory,
       { enabled: false },
       notifications,
+      undefined,
+      {},
+      queue,
     );
     await orders.refreshFromPersistence();
 
@@ -471,12 +476,16 @@ describe("OrdersService asynchronous provisioning", () => {
       },
     };
     const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const queue = { add: vi.fn().mockResolvedValue({}) };
     const orders = ordersService(
       [order],
       connectivity,
       inventory,
       prisma,
       notifications,
+      undefined,
+      {},
+      queue,
     );
     await orders.refreshFromPersistence();
 
@@ -508,6 +517,13 @@ describe("OrdersService asynchronous provisioning", () => {
       "package added to existing eSIM",
     );
     expect(notifications.enqueue).not.toHaveBeenCalled();
+    expect(queue.add).toHaveBeenCalledWith(
+      "reconciliation",
+      "reconcile-usage",
+      { id: "inventory-1", kind: "esim-usage" },
+      `topup-usage-${order.id}`,
+      expect.objectContaining({ attempts: 5 }),
+    );
   });
 
   it("retries QR-ready recovery from fresh state after bounded version conflicts", async () => {

@@ -134,6 +134,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const [email, setEmail] = useState("");
   const [emailReason, setEmailReason] = useState("");
   const [emailConfirmation, setEmailConfirmation] = useState("");
+  const [emailUpdateResult, setEmailUpdateResult] = useState("");
   const load = useCallback(() => {
     setError("");
     return authFetch(`${API}/operations/customers/${ownerId}`, { headers })
@@ -182,6 +183,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const correctEmail = async () => {
     setBusy("email");
     setError("");
+    setEmailUpdateResult("");
     try {
       const response = await authFetch(
         `${API}/operations/customers/${ownerId}/email`,
@@ -191,13 +193,29 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
           body: JSON.stringify({
             email,
             reason: emailReason,
-            confirmation: emailConfirmation,
+            confirmation: normalizedEmailConfirmation,
           }),
         },
       );
-      const value = await response.json();
+      const value = (await response.json()) as {
+        data?: {
+          changed?: boolean;
+          sessionsRevoked?: number;
+          sessionsFound?: number;
+        };
+        error?: { message?: string };
+      };
       if (!response.ok)
         throw new Error(value.error?.message ?? "Email could not be updated");
+      const sessionsFound = value.data?.sessionsFound ?? 0;
+      const sessionsRevoked = value.data?.sessionsRevoked ?? 0;
+      setEmailUpdateResult(
+        value.data?.changed
+          ? sessionsRevoked === sessionsFound
+            ? `Email updated. ${sessionsRevoked} active session${sessionsRevoked === 1 ? "" : "s"} ended.`
+            : `Email updated, but only ${sessionsRevoked} of ${sessionsFound} active sessions ended. Review the identity-service logs.`
+          : "No change was needed because this is already the customer's sign-in email.",
+      );
       setEmailReason("");
       setEmailConfirmation("");
       await load();
@@ -216,6 +234,24 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
       topUps: orders.filter((order) => order.purchaseType === "TOPUP").length,
     };
   }, [profile]);
+  const normalizedEmailConfirmation = emailConfirmation
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+  const originalEmail = (
+    profile?.identity?.customer.email ??
+    profile?.email ??
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  const normalizedEmail = email.trim().toLowerCase();
+  const emailIsValid = /^\S+@\S+\.\S+$/.test(normalizedEmail);
+  const emailUpdateReady =
+    emailIsValid &&
+    normalizedEmail !== originalEmail &&
+    emailReason.trim().length >= 10 &&
+    normalizedEmailConfirmation === "CHANGE EMAIL";
 
   return (
     <>
@@ -401,8 +437,14 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                       type="email"
                       autoComplete="off"
                       value={email}
-                      onChange={(event) => setEmail(event.target.value)}
+                      onChange={(event) => {
+                        setEmail(event.target.value);
+                        setEmailUpdateResult("");
+                      }}
                     />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Must be a valid address different from the current email.
+                    </span>
                   </label>
                   <label className="block text-sm font-medium">
                     Reason for correction
@@ -410,33 +452,54 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                       className="mt-1 min-h-24 w-full rounded-md border bg-background px-3 py-2 font-normal"
                       maxLength={500}
                       value={emailReason}
-                      onChange={(event) => setEmailReason(event.target.value)}
+                      onChange={(event) => {
+                        setEmailReason(event.target.value);
+                        setEmailUpdateResult("");
+                      }}
                       placeholder="Describe how the corrected email was verified."
                     />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {emailReason.trim().length}/500 characters. Minimum 10.
+                    </span>
                   </label>
                   <label className="block text-sm font-medium">
                     Type CHANGE EMAIL to confirm
                     <input
                       className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal"
                       value={emailConfirmation}
-                      onChange={(event) =>
-                        setEmailConfirmation(event.target.value.toUpperCase())
-                      }
+                      onChange={(event) => {
+                        setEmailConfirmation(event.target.value);
+                        setEmailUpdateResult("");
+                      }}
                       autoComplete="off"
+                      spellCheck={false}
+                      placeholder="CHANGE EMAIL"
                     />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Capitalization and extra spaces are accepted.
+                    </span>
                   </label>
+                  {!emailUpdateReady ? (
+                    <p className="text-xs text-muted-foreground" role="status">
+                      Complete all three requirements to enable this action.
+                    </p>
+                  ) : null}
                   <Button
                     type="button"
-                    disabled={
-                      busy === "email" ||
-                      emailConfirmation !== "CHANGE EMAIL" ||
-                      emailReason.trim().length < 10
-                    }
+                    disabled={busy === "email" || !emailUpdateReady}
                     onClick={() => void correctEmail()}
                   >
                     {busy === "email" ? <Spinner /> : null}
                     Update email and end active sessions
                   </Button>
+                  {emailUpdateResult ? (
+                    <p
+                      className={`text-sm ${emailUpdateResult.includes("only") ? "text-destructive" : "text-emerald-700"}`}
+                      role="status"
+                    >
+                      {emailUpdateResult}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </section>

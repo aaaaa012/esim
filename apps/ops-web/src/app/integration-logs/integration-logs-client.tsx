@@ -68,6 +68,7 @@ export default function IntegrationLogsClient() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [operation, setOperation] = useState("ALL");
+  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Log | null>(null);
 
   const load = (refreshOnly = false) => {
@@ -95,10 +96,20 @@ export default function IntegrationLogsClient() {
     () => Array.from(new Set(items.map((item) => item.operation))).sort(),
     [items],
   );
-  const visible =
-    operation === "ALL"
-      ? items
-      : items.filter((item) => item.operation === operation);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visible = items.filter(
+    (item) =>
+      (operation === "ALL" || item.operation === operation) &&
+      (!normalizedQuery ||
+        [
+          item.correlationId,
+          item.operation,
+          item.method,
+          item.endpoint,
+          item.errorCode,
+          item.errorMessage,
+        ].some((value) => value?.toLowerCase().includes(normalizedQuery))),
+  );
   const stats = useMemo(() => {
     const ok = items.filter((item) => OK(item.status)).length;
     return { total: items.length, ok, failed: items.length - ok };
@@ -111,6 +122,7 @@ export default function IntegrationLogsClient() {
         log.method,
         log.endpoint,
         `=> ${log.status}`,
+        log.correlationId ? `correlation=${log.correlationId}` : "",
         log.durationMs != null ? `(${log.durationMs}ms)` : "( - ms)",
         log.errorMessage ?? log.errorCode ?? "",
       ]
@@ -206,6 +218,13 @@ export default function IntegrationLogsClient() {
         description={`The most recent 200 requests`}
         actions={
           <>
+            <input
+              className="h-9 w-64 rounded-md border bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Order, reference, endpoint or error"
+              aria-label="Search integration logs"
+            />
             <div className="w-52">
               <Select value={operation} onValueChange={setOperation}>
                 <SelectTrigger className="h-9">
@@ -260,6 +279,7 @@ export default function IntegrationLogsClient() {
               <TableRow>
                 <TableHead>Time</TableHead>
                 <TableHead>Operation</TableHead>
+                <TableHead>Order / correlation</TableHead>
                 <TableHead>Request</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Duration</TableHead>
@@ -285,6 +305,9 @@ export default function IntegrationLogsClient() {
                       )}
                       {log.operation}
                     </span>
+                  </TableCell>
+                  <TableCell className="max-w-[180px] break-all font-mono text-xs text-muted-foreground">
+                    {log.correlationId ?? "—"}
                   </TableCell>
                   <TableCell>
                     <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold">

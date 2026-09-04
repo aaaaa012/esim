@@ -530,7 +530,11 @@ export class OperationsController {
     @Req() req: AuthenticatedRequest,
   ) {
     requireRole(req, [UserRole.SUPER_ADMIN]);
-    if (body.confirmation !== "CHANGE EMAIL")
+    const confirmation = (body.confirmation ?? "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+    if (confirmation !== "CHANGE EMAIL")
       throw new BadRequestException('Type "CHANGE EMAIL" to confirm');
     const profile = await this.orders.customerProfile(ownerId);
     const customerId = profile.identity?.customer.id;

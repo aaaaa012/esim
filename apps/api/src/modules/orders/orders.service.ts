@@ -2230,6 +2230,8 @@ export class OrdersService implements OnModuleInit {
             );
             await this.persistence.save(fresh);
           }
+          if (assigned)
+            await this.queueTopUpUsageRefresh(assigned.id, order.id);
           return this.redact(fresh);
         }
         this.logger.warn(
@@ -2246,6 +2248,8 @@ export class OrdersService implements OnModuleInit {
         `provisioning-failure:${order.id}`,
         "Provider accepted the provisioning request",
       );
+      if (isTopUp && assigned)
+        await this.queueTopUpUsageRefresh(assigned.id, order.id);
       if (!reuseExisting) await this.safeNotify(order, "QR_READY");
       return this.redact(order);
     } catch (error) {
@@ -2417,6 +2421,36 @@ export class OrdersService implements OnModuleInit {
         });
       }
       throw error;
+    }
+  }
+
+  private async queueTopUpUsageRefresh(inventoryId: string, orderId: string) {
+    try {
+      await this.queues.add(
+        QUEUES.reconciliation,
+        "reconcile-usage",
+        { id: inventoryId, kind: "esim-usage" },
+        `topup-usage-${orderId}`,
+        { attempts: 5, backoff: { type: "exponential", delay: 15_000 } },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Could not queue immediate usage refresh for top-up ${orderId}: ${error instanceof Error ? error.message : "unknown"}`,
+      );
+      await this.resilience?.attention({
+        dedupeKey: `topup-usage-refresh:${orderId}`,
+        category: "SUBSCRIPTION_ASSIGNMENT_CONFLICT",
+        entityType: "Order",
+        entityId: orderId,
+        orderId,
+        severity: "WARNING",
+        summary: "Immediate top-up balance refresh could not be queued",
+        detail:
+          "The regular usage reconciliation cycle will retry this package automatically.",
+        lastSuccessfulStep: "TOPUP_SUBSCRIBED",
+        failureCategory: "USAGE_REFRESH_QUEUE_UNAVAILABLE",
+        availableActions: ["RECHECK_ORDER_PROVIDER"],
+      });
     }
   }
   /**
