@@ -83,6 +83,15 @@ cases, all green**. Run the root suite to refresh the cross-workspace aggregate.
 3. Rate-limit an auth endpoint past 60/min → 429.
 4. Confirm Swagger (`/api/docs`) is NOT reachable when `SWAGGER_ENABLED` unset.
 
+### E2E-7 Customer navigation, recovery, and recharge
+1. From the homepage, click Destinations, Recharge, and How it works twice each; every click scrolls to the labelled section without jumping to the top.
+2. Repeat those menu actions from Compatibility, My eSIMs, Orders, and the mobile menu; each returns to the correct homepage section.
+3. Open a protected customer URL while signed out; sign in and expect to return to that exact URL. Direct header sign-in falls back to `/account/esims`.
+4. Start guest checkout, copy the private recovery link, close the tab, and reopen the copied link; expect the same order and verification state. Confirm the fragment token disappears from the address bar after exchange.
+5. Save guest traveller details and open the emailed recovery link on another device; expect the same order. Claim it after modal sign-in and confirm old guest access is revoked.
+6. Enter an existing eSIM MSISDN, open the emailed recharge link, select the current plan and another destination plan, and finish payment. Expect the package on the existing eSIM with no replacement QR.
+7. Run step 6 from a signed-in customer dashboard and from a partner-hosted top-up session; verify success, failed payment, retry, and provisioning-attention final actions.
+
 ## 5. Regression command sheet
 
 ```bash

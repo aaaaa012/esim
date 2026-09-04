@@ -2,6 +2,7 @@ export type ProvisionRequest = {
   orderId: string;
   planId: string;
   eid: string;
+  purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   traveler: {
     firstName: string;
     surname: string;

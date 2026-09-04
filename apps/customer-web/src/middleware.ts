@@ -7,20 +7,19 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 export default clerkMiddleware(async (auth, request) => {
   if (isTerminal(request)) return;
   if (!isProtected(request)) return;
-  const session = await auth();
-  if (!session.userId) {
-    await auth.protect();
-    return;
-  }
-  const token = await session.getToken();
-  // A signed-in session that cannot issue a token, or that is not a customer
-  // account, must never land on a bare 404. Send them to a meaningful page.
   const destination = request.nextUrl.pathname + request.nextUrl.search;
   const redirect = (path: string) => {
     const url = new URL(path, request.url);
     url.searchParams.set(path === "/sign-in" ? "redirect_url" : "returnTo", destination);
     return NextResponse.redirect(url);
   };
+  const session = await auth();
+  if (!session.userId) {
+    return redirect("/sign-in");
+  }
+  const token = await session.getToken();
+  // A signed-in session that cannot issue a token, or that is not a customer
+  // account, must never land on a bare 404. Send them to a meaningful page.
   if (!token) return redirect("/service-unavailable");
   try {
     const response = await fetch(`${API}/auth/me`, {

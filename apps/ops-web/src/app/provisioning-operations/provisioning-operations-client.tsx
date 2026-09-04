@@ -11,6 +11,7 @@ import ErrorDialog from "@/components/error-dialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { useConfirmation } from "@/components/confirmation-provider";
+import { operationalIssue } from "@/lib/operational-issue";
 import {
   Table,
   TableBody,
@@ -33,29 +34,8 @@ type Operation = {
   order: { orderNumber: string; status: string; orderType: string };
 };
 
-function humaniseTitle(title: string) {
-  return title
-    .replace(/_/g, " ")
-    .toLowerCase()
-    .replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
-
 function shortError(item: Operation): string {
-  const raw = item.lastErrorMessage;
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as { title?: string; detail?: string };
-      if (parsed.title) return humaniseTitle(parsed.title);
-      if (parsed.detail)
-        return parsed.detail.length > 120
-          ? `${parsed.detail.slice(0, 120)}…`
-          : parsed.detail;
-    } catch {
-      /* not JSON */
-    }
-    return raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
-  }
-  return item.lastErrorCategory ? humaniseTitle(item.lastErrorCategory) : "—";
+  return operationalIssue(item.lastErrorMessage, item.lastErrorCategory).title;
 }
 
 export default function ProvisioningOperationsClient() {
@@ -120,7 +100,7 @@ export default function ProvisioningOperationsClient() {
       <ErrorDialog error={error} onClose={() => setError("")} />
       <ErrorDialog
         error={viewError}
-        title="Full problem details"
+        title="What happened and what to do"
         onClose={() => setViewError(null)}
       />
       <Panel
@@ -169,7 +149,7 @@ export default function ProvisioningOperationsClient() {
                   <TableCell className="max-w-56">
                     <span
                       className="truncate text-xs text-muted-foreground"
-                      title={item.lastErrorMessage ?? undefined}
+                      title={shortError(item)}
                     >
                       {shortError(item)}
                     </span>
@@ -177,11 +157,17 @@ export default function ProvisioningOperationsClient() {
                       <button
                         type="button"
                         className="ml-2 text-xs font-medium text-primary hover:underline"
-                        onClick={() =>
-                          setViewError(item.lastErrorMessage ?? "")
-                        }
+                        onClick={() => {
+                          const issue = operationalIssue(
+                            item.lastErrorMessage,
+                            item.lastErrorCategory,
+                          );
+                          setViewError(
+                            `${issue.summary}\n\nRecommended action\n${issue.action}\n\nReference: ${issue.code}`,
+                          );
+                        }}
                       >
-                        View
+                        Explain
                       </button>
                     )}
                   </TableCell>

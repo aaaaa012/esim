@@ -11,7 +11,7 @@ export default function CustomerSignUpPage() {
         routing="path"
         path="/sign-up"
         signInUrl="/sign-in"
-        forceRedirectUrl="/account/esims"
+        fallbackRedirectUrl="/account/esims"
       />
     </CustomerAuthFrame>
   );

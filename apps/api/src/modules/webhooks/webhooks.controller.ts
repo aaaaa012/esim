@@ -380,7 +380,7 @@ export class OperationsIntegrationLogsController {
   ) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     if (!this.prisma.enabled) return [];
-    return this.prisma.integrationLog.findMany({
+    const rows = await this.prisma.integrationLog.findMany({
       where: operation ? { operation } : {},
       select: {
         id: true,
@@ -391,11 +391,20 @@ export class OperationsIntegrationLogsController {
         durationMs: true,
         errorCode: true,
         errorMessage: true,
+        correlationId: true,
+        requestBody: true,
+        responseBody: true,
         createdAt: true,
       },
       orderBy: { createdAt: "desc" },
       take: 200,
     });
+    return rows.map((row) => ({
+      ...row,
+      errorMessage: sanitizeLogText(row.errorMessage),
+      requestBody: sanitizeOperationsLog(row.requestBody),
+      responseBody: sanitizeOperationsLog(row.responseBody),
+    }));
   }
 }
 

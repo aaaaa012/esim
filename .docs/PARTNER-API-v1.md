@@ -28,7 +28,7 @@ This is the partner-facing, server-to-server integration specification. It cover
 
 ```text
 1. GET  /partners/plans?country=JP
-2. POST /partners/orders with purchaseType=TOPUP and topUpMobile set to the existing eSIM's MSISDN
+2. POST /partners/orders with purchaseType=TOPUP and topUpMobile
 3. GET  /partners/orders/{id}, receive webhook, or both
 ```
 
@@ -108,6 +108,7 @@ All JSON examples use illustrative UUIDs, dates, prices, names, and secrets. The
 | 409 | `IDEMPOTENCY_CONFLICT` | `Idempotent request is still being processed; retry shortly` | Retry the exact request/key after a short delay. |
 | 429 | `PARTNER_RATE_LIMITED` | `Too many requests. Please wait and try again.` | Wait `Retry-After`, then retry with backoff. |
 | 500 | `UNEXPECTED` | `Something went wrong. Please try again.` | Retry only with bounded backoff; supply correlation ID to support if persistent. |
+| 409 | `HTTP_409` | `No eSIM inventory is currently available` | No fresh sellable eSIM inventory exists for a new purchase. | Do not retry immediately; refresh availability later or choose another plan. |
 
 ## 3. Access scopes
 
@@ -139,7 +140,6 @@ Examples below use illustrative IDs, dates, and prices; their field names, nesti
 | order `links` | Relative API paths; prefix with the API host. |
 | order `esimDetailsAvailable` | Whether eSIM details may be retrieved. |
 | order `documentReviewPolicy` / `documentReviewStatus` | Configured review path and the current document-review state. |
-| order `documents` | Document summaries for the order. They include review state but never include upload URLs or file contents. |
 | eSIM `activationCode`, `iccid`, `msisdn` | Sensitive activation data; never log it. |
 | ledger `amountPaisa` / `balanceAfterPaisa` | Entry amount and resulting balance. |
 | event `id` | Durable event ID; use for webhook deduplication. |
@@ -354,7 +354,7 @@ Idempotency-Key: agency-order-1042-passport-confirm-v1
 
 There is no body.
 
-**200 response when other documents remain:**
+**201 response when other documents remain:**
 
 ```json
 {
@@ -368,7 +368,7 @@ There is no body.
 }
 ```
 
-**200 response after final document:**
+**201 response after final document:**
 
 ```json
 {
@@ -425,8 +425,8 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "consumedAt": null,
     "orderCreationAllowed": true,
     "documents": [
-      { "id": "30000000-0000-4000-8000-000000000001", "type": "PASSPORT", "uploadVerified": true, "status": "VERIFIED", "code": null, "replacementEligible": false, "verifiedAt": "2026-08-31T04:15:15.000Z" },
-      { "id": "30000000-0000-4000-8000-000000000002", "type": "TICKET", "uploadVerified": true, "status": "VERIFIED", "code": null, "replacementEligible": false, "verifiedAt": "2026-08-31T04:15:15.000Z" }
+      { "id": "30000000-0000-4000-8000-000000000001", "type": "PASSPORT", "uploadVerified": true, "status": "VERIFIED", "code": null, "verifiedAt": "2026-08-31T04:15:15.000Z" },
+      { "id": "30000000-0000-4000-8000-000000000002", "type": "TICKET", "uploadVerified": true, "status": "VERIFIED", "code": null, "verifiedAt": "2026-08-31T04:15:15.000Z" }
     ]
   },
   "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:16.000Z" }
@@ -435,7 +435,7 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 
 **Carry forward:** only send this response's `id` as `documentVerificationId` in §7.1 when `orderCreationAllowed` is `true`. This permits creation of the pending order; it does **not** permit provisioning. Its `externalOrderId` must equal the order request's `externalOrderId`. After order creation, use `fulfillmentAllowed` as the authoritative permission to call §7.1a.
 
-The implementation also returns `reviewPolicy`, `linkedOrderId`, `requiredDocuments`, `draftCreationAllowed` (the same boolean as `orderCreationAllowed`), and `fulfillmentAllowed`. Each `documents[]` item includes `replacementEligible` (boolean): it is `true` only when that required document has been explicitly requested for replacement on the linked pending order. `fulfillmentAllowed` becomes true only when the created order's required documents have passed the configured review policy.
+The implementation also returns `reviewPolicy`, `linkedOrderId`, `requiredDocuments`, `draftCreationAllowed` (the same boolean as `orderCreationAllowed`), and `fulfillmentAllowed`. `fulfillmentAllowed` becomes true only when the created order's required documents have passed the configured review policy.
 
 | Status | Meaning | Partner action |
 | --- | --- | --- |
@@ -554,9 +554,12 @@ Content-Type: application/json
 POST /api/v1/partners/orders/40000000-0000-4000-8000-000000000001/finalize
 Authorization: Bearer vc_partner_<key-prefix>.<secret>
 Idempotency-Key: agency-order-1042-finalize-v1
+Content-Type: application/json
 ```
 
-There is no request body. This endpoint performs the final partner-account debit, changes the order to `APPROVED`, and starts provisioning. It is safe to call again after success: for an already `APPROVED`, provisioning, ready, attention, or completed order it returns the current order with **200**. Call it only when the order response's `fulfillmentAllowed` is `true`. Relevant failures are `404 PARTNER_ORDER_NOT_FOUND`, `409 VERIFICATION_NOT_READY`, `422 DOCUMENT_REUPLOAD_REQUIRED`, `409 PLAN_UNAVAILABLE`, `409 ORDER_CONFLICT`, `400 INSUFFICIENT_PARTNER_BALANCE`, and `409 ESIM_INVENTORY_UNAVAILABLE` / `No eSIM inventory is currently available`. For inventory exhaustion, do not retry immediately; refresh availability later or choose another plan.
+There is no request body. This endpoint performs the final partner-account debit, changes the order to `APPROVED`, and starts provisioning. It is safe to call again after success: for an already `APPROVED`, provisioning, ready, attention, or completed order it returns the current order.
+
+Call it only when the order response's `fulfillmentAllowed` is `true`. Relevant failures are `404 PARTNER_ORDER_NOT_FOUND`, `409 VERIFICATION_NOT_READY`, `422 DOCUMENT_REUPLOAD_REQUIRED`, `409 PLAN_UNAVAILABLE`, `409 ORDER_CONFLICT`, `400 INSUFFICIENT_PARTNER_BALANCE`, and `409 HTTP_409` when fresh eSIM inventory is unavailable.
 
 ### 7.1b Replace a document requested during review
 
@@ -600,7 +603,7 @@ Content-Type: application/json
   "externalCustomerId": "customer-91",
   "planId": "10000000-0000-4000-8000-000000000002",
   "purchaseType": "TOPUP",
-  "topUpMobile": "+33612345678",
+  "topUpMobile": "+9779812345678",
   "consent": {
     "compatibilityAccepted": true,
     "termsAccepted": true,
@@ -610,7 +613,7 @@ Content-Type: application/json
 }
 ```
 
-**Do not send** `documentVerificationId`. `topUpMobile` is required for this flow and must contain the provider-assigned MSISDN of the existing eSIM; it is not the traveller's contact number. The v1 field name is retained for compatibility. `purchaseType: "TOPUP"` is accepted and recommended for clarity, but is optional. `externalCustomerId` must be the same partner customer ID used when the original eSIM was bought.
+**Do not send** `documentVerificationId`. `topUpMobile` is required for this flow and is what makes the request a top-up; `purchaseType: "TOPUP"` is accepted and recommended for clarity, but is optional. `externalCustomerId` must be the same partner customer ID used when the original eSIM was bought.
 
 **201 response:**
 
@@ -679,10 +682,7 @@ Query fields: `cursor` (opaque cursor from prior response), `status` (order stat
         "totalAmountPaisa": 250000,
         "plan": { "id": "10000000-0000-4000-8000-000000000001", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
         "travelerComplete": true,
-        "documents": [
-          { "id": "50000000-0000-4000-8000-000000000001", "type": "PASSPORT", "status": "APPROVED", "passportVerificationStatus": "VERIFIED" },
-          { "id": "50000000-0000-4000-8000-000000000002", "type": "TICKET", "status": "APPROVED", "passportVerificationStatus": null }
-        ],
+        "documents": [],
         "refund": null,
         "timeline": [],
         "fulfillmentStatus": "READY",
@@ -698,7 +698,7 @@ Query fields: `cursor` (opaque cursor from prior response), `status` (order stat
 }
 ```
 
-Use `nextCursor` as the next request's `cursor`. Use each item `id` for §8.2, §8.4, §8.5, §9, and §10. The `documents` array contains the same document summaries returned by the order endpoints; it never contains upload URLs or file contents. List results never contain activation secrets.
+Use `nextCursor` as the next request's `cursor`. Use each item `id` for §8.2, §8.4, §8.5, §9, and §10. List results never contain activation secrets.
 
 ### 8.2 Get order by Visa Compass ID
 
@@ -725,10 +725,7 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "totalAmountPaisa": 250000,
     "plan": { "id": "10000000-0000-4000-8000-000000000001", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
     "travelerComplete": true,
-    "documents": [
-      { "id": "50000000-0000-4000-8000-000000000001", "type": "PASSPORT", "status": "APPROVED", "passportVerificationStatus": "VERIFIED" },
-      { "id": "50000000-0000-4000-8000-000000000002", "type": "TICKET", "status": "APPROVED", "passportVerificationStatus": null }
-    ],
+    "documents": [],
     "refund": null,
     "timeline": [],
     "fulfillmentStatus": "READY",
@@ -768,10 +765,7 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "totalAmountPaisa": 250000,
     "plan": { "id": "10000000-0000-4000-8000-000000000001", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
     "travelerComplete": true,
-    "documents": [
-      { "id": "50000000-0000-4000-8000-000000000001", "type": "PASSPORT", "status": "APPROVED", "passportVerificationStatus": "VERIFIED" },
-      { "id": "50000000-0000-4000-8000-000000000002", "type": "TICKET", "status": "APPROVED", "passportVerificationStatus": null }
-    ],
+    "documents": [],
     "refund": null,
     "timeline": [],
     "fulfillmentStatus": "READY",
@@ -848,7 +842,7 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
       "version": 0,
       "resourceId": "40000000-0000-4000-8000-000000000001",
       "correlationId": "<correlation-id>",
-      "payload": { "orderId": "40000000-0000-4000-8000-000000000001", "externalOrderId": "agency-order-1042", "status": "REVIEW_PENDING", "fulfillmentStatus": "NOT_READY", "version": 0, "amountPaisa": 250000, "currency": "NPR" },
+      "payload": { "orderId": "40000000-0000-4000-8000-000000000001", "externalOrderId": "agency-order-1042", "status": "APPROVED", "fulfillmentStatus": "PENDING", "version": 0, "amountPaisa": 250000, "currency": "NPR" },
       "occurredAt": "2026-08-31T04:15:20.000Z"
     }
   ],
@@ -977,7 +971,7 @@ Content-Type: application/json
 
 `reason` is required, trimmed, and 3-1000 characters. Cancellation is permitted only in `DRAFT`, `PAYMENT_PENDING`, `AWAITING_CUSTOMER`, or `REVIEW_PENDING`.
 
-**200 response:**
+**201 response:**
 
 ```json
 {
@@ -1078,8 +1072,6 @@ Content-Type: application/json
 
 | Status | Meaning | Partner action |
 | --- | --- | --- |
-| `DRAFT` | An order record has been started but is not yet approved for fulfillment. | Complete or cancel it; do not expect a debit or eSIM. |
-| `PAYMENT_PENDING` | A payment step is pending. This state is retained for lifecycle compatibility; it is not normally produced for `PARTNER_ACCOUNT` settlement. | Resolve the payment state or cancel; do not provision. |
 | `APPROVED` | Order and debit succeeded. | Await provisioning. |
 | `REVIEW_PENDING` | Initial-purchase order was created and awaits or has completed document review. | Poll until `fulfillmentAllowed=true`, then call §7.1a. |
 | `AWAITING_CUSTOMER` | A required document needs a replacement. | Use §7.1b when the verification marks it eligible. |

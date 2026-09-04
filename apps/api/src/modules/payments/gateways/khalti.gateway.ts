@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
@@ -97,12 +98,15 @@ export class KhaltiGateway implements PaymentGateway {
     const endpoint = this.logEndpoint(url);
     try {
       const response = await fetch(url, init);
+      const responseBody = await this.logBody(response);
       await this.record({
         operation: `khalti-${operation}`,
         method,
         endpoint,
         status: response.status,
         durationMs: Date.now() - startedAt,
+        requestBody: this.logRequestBody(init.body),
+        responseBody,
         ...(response.ok
           ? {}
           : {
@@ -148,6 +152,8 @@ export class KhaltiGateway implements PaymentGateway {
     durationMs: number;
     errorCode?: string;
     errorMessage?: string;
+    requestBody?: Prisma.InputJsonValue;
+    responseBody?: Prisma.InputJsonValue;
   }): Promise<void> {
     if (!this.prisma?.enabled) return;
     try {
@@ -158,6 +164,45 @@ export class KhaltiGateway implements PaymentGateway {
         error,
       );
     }
+  }
+
+  private logRequestBody(body: BodyInit | null | undefined): Prisma.InputJsonValue {
+    if (typeof body !== "string") return {};
+    try {
+      return this.redactLogBody(JSON.parse(body));
+    } catch {
+      return body.slice(0, 20_000);
+    }
+  }
+
+  private async logBody(response: Response): Promise<Prisma.InputJsonValue> {
+    try {
+      const raw = await response.clone().text();
+      if (!raw) return "";
+      try {
+        return this.redactLogBody(JSON.parse(raw));
+      } catch {
+        return raw.slice(0, 20_000);
+      }
+    } catch {
+      return "Response body could not be read";
+    }
+  }
+
+  private redactLogBody(value: unknown): Prisma.InputJsonValue {
+    if (Array.isArray(value)) return value.map((item) => this.redactLogBody(item));
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+          key,
+          /authorization|secret|password|api_?key|payment_url/i.test(key)
+            ? "[REDACTED]"
+            : this.redactLogBody(item),
+        ]),
+      );
+    if (["string", "number", "boolean"].includes(typeof value))
+      return value as string | number | boolean;
+    return "";
   }
 
   private async post(
@@ -307,7 +352,10 @@ export class KhaltiGateway implements PaymentGateway {
       };
       return {
         reference,
-        status: statuses[data.status.toLowerCase()] ?? PaymentStatus.FAILED,
+        // Khalti requires any status outside its documented terminal set to
+        // remain on hold. Treating an unfamiliar future status as FAILED can
+        // incorrectly close a payment that may still complete.
+        status: statuses[data.status.toLowerCase()] ?? PaymentStatus.PENDING,
         // A completed lookup without an amount is not verifiable. Never
         // substitute our expected amount: that turns a missing provider field
         // into a false successful amount check.

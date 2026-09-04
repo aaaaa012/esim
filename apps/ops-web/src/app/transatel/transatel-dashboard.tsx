@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge } from "@/components/status-badge";
 import ErrorDialog from "@/components/error-dialog";
+import { operationalIssue } from "@/lib/operational-issue";
 import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { EmptyState } from "@/components/empty-state";
@@ -615,7 +616,7 @@ export default function TransatelDashboard() {
                               </span>
                             ) : row.providerCheckError ? (
                               <span className="text-destructive">
-                                {row.providerCheckError}
+                                {operationalIssue(row.providerCheckError).title}
                               </span>
                             ) : (
                               <span className="text-muted-foreground">—</span>
@@ -692,7 +693,10 @@ export default function TransatelDashboard() {
                             {row.endpoint}
                           </TableCell>
                           <TableCell className="max-w-80 truncate text-xs text-destructive">
-                            {row.errorCode ?? row.errorMessage ?? "Unknown"}
+                            {
+                              operationalIssue(row.errorMessage, row.errorCode)
+                                .title
+                            }
                           </TableCell>
                         </TableRow>
                       ))}

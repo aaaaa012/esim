@@ -388,6 +388,13 @@ export class OrdersService implements OnModuleInit {
         id: order.id,
         orderNumber: order.orderNumber,
         status: order.status,
+        purchaseType: order.orderType,
+        channel: order.channel,
+        topUpMobile:
+          order.orderType === "TOPUP"
+            ? ((order.pricingSnapshot as { topUpMobile?: string } | null)
+                ?.topUpMobile ?? order.customerEsim?.inventory.msisdn ?? null)
+            : null,
         plan: {
           id: order.plan.id,
           name: order.plan.name,
@@ -2037,6 +2044,7 @@ export class OrdersService implements OnModuleInit {
           orderId: string;
           planId: string;
           eid: string;
+          purchaseType: "INITIAL_PURCHASE" | "TOPUP";
           traveler: {
             firstName: string;
             surname: string;
@@ -2074,6 +2082,7 @@ export class OrdersService implements OnModuleInit {
         orderId: order.id,
         planId: order.plan.id,
         eid: profile.eid,
+        purchaseType: order.purchaseType ?? "INITIAL_PURCHASE",
         traveler: identity,
       };
       const result = await this.connectivity.provision(request);

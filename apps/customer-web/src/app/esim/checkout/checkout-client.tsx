@@ -188,9 +188,11 @@ export default function CheckoutClient({
     const value = { token, expiresAt };
     setRecovery(value);
     try {
-      localStorage.setItem(recoveryKey(id), JSON.stringify(value));
+      // A recovery token is a bearer credential. Keep it only for this tab;
+      // cross-device and closed-tab recovery must use the copied/emailed link.
+      sessionStorage.setItem(recoveryKey(id), JSON.stringify(value));
     } catch {
-      /* localStorage unavailable; the copyable link remains usable */
+      /* sessionStorage unavailable; the copyable link remains usable */
     }
   };
 
@@ -349,7 +351,7 @@ export default function CheckoutClient({
             `${window.location.pathname}${window.location.search}`,
           );
         } else {
-          const stored = localStorage.getItem(recoveryKey(orderId));
+          const stored = sessionStorage.getItem(recoveryKey(orderId));
           saved = stored ? (JSON.parse(stored) as typeof saved) : null;
         }
       } catch {
@@ -939,7 +941,7 @@ export default function CheckoutClient({
         );
       try {
         sessionStorage.removeItem(tokenKey(order.id));
-        localStorage.removeItem(recoveryKey(order.id));
+        sessionStorage.removeItem(recoveryKey(order.id));
       } catch {
         /* storage unavailable */
       }

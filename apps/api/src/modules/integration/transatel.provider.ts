@@ -694,6 +694,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   async provision(request: ProvisionRequest): Promise<ProvisionResult> {
     const mvnoRef = process.env.TRANSATEL_MVNO_REF;
+    const isTopUp = request.purchaseType === "TOPUP";
     if (!mvnoRef)
       throw new ApiException({
         code: ApiErrorCode.CONNECTIVITY_CONFIGURATION,
@@ -749,8 +750,8 @@ export class TransatelProvider implements ConnectivityProvider {
     const idempotencyKey =
       existingOperation?.idempotencyKey ??
       (generation > 0
-        ? `transatel:preload:${request.orderId}:profile-${generation}`
-        : `transatel:preload:${request.orderId}`);
+        ? `transatel:${isTopUp ? "subscribe" : "preload"}:${request.orderId}:profile-${generation}`
+        : `transatel:${isTopUp ? "subscribe" : "preload"}:${request.orderId}`);
     const operationPayload = {
       orderId: request.orderId,
       planId: request.planId,
@@ -873,7 +874,7 @@ export class TransatelProvider implements ConnectivityProvider {
     const payload = {
       bind: { msisdn: bindMsisdn },
       source: "api",
-      orderType: "preload",
+      orderType: isTopUp ? "subscribe" : "preload",
       mvnoRef,
       product: { productId: plan.providerPlanId },
       payment: { provider: "customer" },
@@ -881,7 +882,7 @@ export class TransatelProvider implements ConnectivityProvider {
     };
 
     this.logger.log(
-      `Submitting OCS preload for ICCID ${profile.iccid}, product ${plan.providerPlanId}, order ${request.orderId}`,
+      `Submitting OCS ${isTopUp ? "subscribe" : "preload"} for ICCID ${profile.iccid}, product ${plan.providerPlanId}, order ${request.orderId}`,
     );
     let response: Response;
     try {
@@ -919,7 +920,7 @@ export class TransatelProvider implements ConnectivityProvider {
         response.headers.get("retry-after"),
       );
       this.logger.error(
-        `OCS product preload failed. Status: ${response.status}, Error: ${detail}`,
+        `OCS product ${isTopUp ? "subscribe" : "preload"} failed. Status: ${response.status}, Error: ${detail}`,
       );
       if (this.prisma.enabled)
         await this.prisma.provisioningOperation.update({
@@ -938,6 +939,15 @@ export class TransatelProvider implements ConnectivityProvider {
         await this.prisma.order.update({
           where: { id: request.orderId },
           data: { providerStatus: "REJECTED", version: { increment: 1 } },
+        });
+      if (/SUBSCRIBER_STATUS_NOT_ELIGIBLE/i.test(detail))
+        throw new ApiException({
+          code: ApiErrorCode.ELIGIBILITY_REJECTED,
+          message: isTopUp
+            ? "This eSIM cannot receive a top-up in its current network state. Our support team can check its status before you try again."
+            : "This eSIM cannot receive the selected plan right now. Please contact support or choose another plan.",
+          status: 409,
+          details: `PERMANENT_SUBSCRIBER_STATUS_NOT_ELIGIBLE: ${detail}`,
         });
       throw new ApiException({
         code: ApiErrorCode.PROVISIONING_FAILED,
@@ -1480,16 +1490,32 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel eligibility check failed: ${detail}`,
       });
     }
-    const data = (await response.json()) as ProductCatalogResponse;
-    const details = Array.isArray(data.products) ? data.products[0] : undefined;
+    const data = (await response.json()) as ProductDetails | ProductCatalogResponse;
+    // Transatel deployments have exposed the product-detail response both as
+    // the product itself and wrapped in a `products` collection. Accept both
+    // documented shapes so eligibility never becomes a false rejection merely
+    // because the tenant is on a different compatible API revision.
+    const details =
+      "canSubscribe" in data
+        ? data
+        : Array.isArray(data.products)
+          ? data.products[0]
+          : undefined;
+    const allowed = Boolean(details?.canSubscribe?.allowed);
+    if (!allowed) {
+      const providerCode = details?.canSubscribe?.errorKey;
+      return {
+        allowed: false,
+        errorKey: providerCode ?? "ELIGIBILITY_REJECTED",
+        errorMessage: /SUBSCRIBER_STATUS_NOT_ELIGIBLE/i.test(
+          providerCode ?? "",
+        )
+          ? "This eSIM cannot receive a top-up in its current network state. Please contact support before trying again."
+          : "This eSIM cannot receive the selected plan right now. Please contact support or choose another plan.",
+      };
+    }
     return {
-      allowed: Boolean(details?.canSubscribe?.allowed),
-      ...(details?.canSubscribe?.errorKey
-        ? { errorKey: details.canSubscribe.errorKey }
-        : {}),
-      ...(details?.canSubscribe?.errorMessage
-        ? { errorMessage: details.canSubscribe.errorMessage }
-        : {}),
+      allowed: true,
     };
   }
 

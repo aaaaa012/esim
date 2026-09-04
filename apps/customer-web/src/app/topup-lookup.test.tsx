@@ -53,8 +53,20 @@ describe("customer recharge journey", () => {
     render(<TopupLookup />);
     expect(await screen.findByText("France 5 GB")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /continue with this plan/i }));
-    await waitFor(() => expect(push).toHaveBeenCalledWith(expect.stringContaining("/esim/checkout?")));
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith(
+        "/esim/checkout?plan=plan-1&mobile=%2B9779800000000&lookup=signed-token&country=FR",
+      ),
+    );
     expect(request.mock.calls[0]?.[0]).toContain("/topup-lookup/verify");
     expect(request.mock.calls[1]?.[0]).toContain("/topup-eligibility");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        mobile: "+9779800000000",
+        lookupToken: "signed-token",
+        planId: "plan-1",
+      }),
+    });
   });
 });

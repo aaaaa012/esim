@@ -41,6 +41,9 @@ type Order = {
   status: string;
   createdAt: string;
   totalAmountNpr: number;
+  purchaseType: "INITIAL_PURCHASE" | "TOPUP";
+  channel: string;
+  topUpMobile?: string | null;
   plan: {
     id: string;
     name: string;
@@ -204,10 +207,15 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
       setBusy("");
     }
   };
-  const completed = useMemo(
-    () => profile?.orders.filter((order) => order.status === "COMPLETED") ?? [],
-    [profile],
-  );
+  const orderSummary = useMemo(() => {
+    const orders = profile?.orders ?? [];
+    return {
+      firstPurchases: orders.filter(
+        (order) => order.purchaseType === "INITIAL_PURCHASE",
+      ).length,
+      topUps: orders.filter((order) => order.purchaseType === "TOPUP").length,
+    };
+  }, [profile]);
 
   return (
     <>
@@ -221,9 +229,9 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         badge={
           <span className="inline-flex items-center gap-2 rounded-full bg-success-soft px-3 py-1 text-xs font-semibold text-success-foreground">
             <UserRound className="size-3.5" />
-            {profile?.orders?.length ?? "—"} orders · {completed.length}{" "}
-            completed eSIM
-            {completed.length === 1 ? "" : "s"}
+            {profile?.orders?.length ?? "—"} orders · {orderSummary.firstPurchases}{" "}
+            eSIM{orderSummary.firstPurchases === 1 ? "" : "s"} · {orderSummary.topUps}{" "}
+            top-up{orderSummary.topUps === 1 ? "" : "s"}
           </span>
         }
         actions={
@@ -496,6 +504,17 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                         >
                           {order.orderNumber}
                         </Link>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          <StatusBadge
+                            label={order.purchaseType}
+                            tone={
+                              order.purchaseType === "TOPUP"
+                                ? "info"
+                                : "default"
+                            }
+                          />
+                          <StatusBadge label={order.channel} />
+                        </div>
                         <p className="text-xs text-muted-foreground">
                           {new Date(order.createdAt).toLocaleDateString()}
                         </p>

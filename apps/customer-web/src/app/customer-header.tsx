@@ -7,6 +7,25 @@ import { Bell, Menu, X } from "lucide-react";
 import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import ThemeToggle from "./theme-toggle";
 
+export function scrollToHomeSection(href: string, pathname: string) {
+  if (pathname !== "/" || !href.startsWith("/#")) return false;
+
+  const hash = href.slice(1);
+  const target = document.getElementById(href.slice(2));
+  if (!target) return false;
+
+  if (window.location.hash !== hash) {
+    window.history.pushState(null, "", hash);
+  }
+  target.scrollIntoView({
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth",
+    block: "start",
+  });
+  return true;
+}
+
 export default function CustomerHeader() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
@@ -40,7 +59,11 @@ export default function CustomerHeader() {
     <Link
       href={href}
       className={path === href || path.startsWith(href) || (href.startsWith("/#") && path === "/" && activeHash === href.slice(1)) ? "nav-active" : ""}
-      onClick={() => setOpen(false)}
+      onClick={(event) => {
+        if (scrollToHomeSection(href, path)) event.preventDefault();
+        setActiveHash(window.location.hash);
+        setOpen(false);
+      }}
     >
       {label}
     </Link>
