@@ -500,6 +500,9 @@ describe("OrdersService asynchronous provisioning", () => {
       status: OrderStatus.COMPLETED,
       providerSubscriptionId: "topup-sub-1",
     });
+    expect(inventory.assignTopup.mock.calls[0]![4]).not.toHaveProperty(
+      "expiresAt",
+    );
     expect(orders.get(order.id).qrDeliveredAt).toBeUndefined();
     expect(orders.get(order.id).timeline.at(-1)?.reason).toContain(
       "package added to existing eSIM",

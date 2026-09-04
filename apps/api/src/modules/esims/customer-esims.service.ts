@@ -28,10 +28,9 @@ export class CustomerEsimsService {
     const customer = await this.customer(ownerId);
     if (!customer) return [];
     const rows = await this.prisma.esimInventory.findMany({
-      where: { customerEsims: { some: { customerId: customer.id } } },
+      where: { customerEsims: this.ownedAssignment(customer.id) },
       include: {
         customerEsims: {
-          where: { customerId: customer.id },
           include: {
             order: { include: { plan: { include: { country: true } } } },
             subscriptions: true,
@@ -57,10 +56,9 @@ export class CustomerEsimsService {
     const customer = await this.customer(ownerId);
     if (!customer) throw new NotFoundException("eSIM not found");
     const row = await this.prisma.esimInventory.findFirst({
-      where: { id, customerEsims: { some: { customerId: customer.id } } },
+      where: { id, customerEsims: this.ownedAssignment(customer.id) },
       include: {
         customerEsims: {
-          where: { customerId: customer.id },
           include: { subscriptions: true },
         },
       },
@@ -82,7 +80,7 @@ export class CustomerEsimsService {
       return refreshed;
     }
     const usage = await this.connectivity.getUsage(row.iccid);
-    if (usage.usageAvailable === false)
+    if (usage.usageAvailable === false && !usage.subscriptions?.length)
       throw new BadRequestException(
         "Transatel found the subscription but has not published a usable data balance yet. Please retry shortly.",
       );
@@ -103,9 +101,13 @@ export class CustomerEsimsService {
           return this.prisma.subscription.update({
             where: { id: subscription.id },
             data: {
-              usedMb: balance.usedMb,
-              totalMb: balance.totalMb,
-              usageLastCheckedAt: checkedAt,
+              ...(balance.usageAvailable === false
+                ? {}
+                : {
+                    usedMb: balance.usedMb,
+                    totalMb: balance.totalMb,
+                    usageLastCheckedAt: checkedAt,
+                  }),
               providerLastSeenAt: checkedAt,
               assignmentVerificationStatus: "VERIFIED",
               assignmentVerifiedAt:
@@ -130,12 +132,13 @@ export class CustomerEsimsService {
     const customer = await this.customer(ownerId);
     if (!customer) throw new NotFoundException("eSIM not found");
     const row = await this.prisma.esimInventory.findFirst({
-      where: { id, customerEsims: { some: { customerId: customer.id } } },
+      where: { id, customerEsims: this.ownedAssignment(customer.id) },
       select: {
         customerEsims: {
           where: {
-            customerId: customer.id,
             order: {
+              customerId: customer.id,
+              orderType: "INITIAL_PURCHASE",
               status: { in: [OrderStatus.QR_READY, OrderStatus.COMPLETED] },
             },
           },
@@ -159,6 +162,18 @@ export class CustomerEsimsService {
       filename: "visa-compass-esim-activation.png",
       contentType: "image/png",
       bytes,
+    };
+  }
+
+  private ownedAssignment(customerId: string) {
+    return {
+      some: { order: { orderType: "INITIAL_PURCHASE" as const, customerId } },
+      none: {
+        order: {
+          orderType: "INITIAL_PURCHASE" as const,
+          customerId: { not: customerId },
+        },
+      },
     };
   }
 
@@ -197,7 +212,9 @@ export class CustomerEsimsService {
         totalMb: subscription.totalMb,
         remainingMb: Math.max(0, subscription.totalMb - subscription.usedMb),
         activatedAt: subscription.activatedAt?.toISOString(),
-        expiresAt: subscription.expiresAt?.toISOString(),
+        expiresAt: subscription.activatedAt
+          ? subscription.expiresAt?.toISOString()
+          : undefined,
         lastCheckedAt: subscription.usageLastCheckedAt?.toISOString(),
         assignmentVerificationStatus: subscription.assignmentVerificationStatus,
         assignmentVerifiedAt: subscription.assignmentVerifiedAt?.toISOString(),
@@ -224,7 +241,8 @@ export class CustomerEsimsService {
       : null;
     const qrOrder = row.customerEsims.find(
       (link: any) =>
-        link.order.status === "COMPLETED" || link.order.status === "QR_READY",
+        link.order.orderType === "INITIAL_PURCHASE" &&
+        (link.order.status === "COMPLETED" || link.order.status === "QR_READY"),
     );
     const mask = (value?: string | null) =>
       value ? `${value.slice(0, 4)}••••${value.slice(-4)}` : undefined;

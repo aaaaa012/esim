@@ -157,6 +157,61 @@ describe("UsageService", () => {
     });
   });
 
+  it("confirms a ready subscription without inventing a balance or marking mismatch", async () => {
+    const { service, resilience } = context([
+      {
+        providerSubscriptionId: "provider-1",
+        status: "active",
+        usedMb: 0,
+        totalMb: 1024,
+      },
+      {
+        providerSubscriptionId: "provider-2",
+        status: "readyForUse",
+        usedMb: 0,
+        totalMb: 0,
+        usageAvailable: false,
+      },
+    ]);
+    const result = await service.refresh("inventory-1");
+    expect(result.summary.totalMb).toBe(1024);
+    expect(result.packages[1]).toMatchObject({
+      verificationStatus: "VERIFIED",
+      balanceStatus: "WAITING_FOR_FIRST_USE",
+      expiresAt: null,
+      lastCheckedAt: null,
+    });
+    expect(resilience.attention).not.toHaveBeenCalled();
+  });
+
+  it("processes inventory evidence even when no package has a balance", async () => {
+    const { service, connectivity, resilience } = context([]);
+    connectivity.getUsage.mockResolvedValue({
+      usedMb: 0,
+      totalMb: 0,
+      usageAvailable: false,
+      subscriptions: [
+        {
+          providerSubscriptionId: "provider-1",
+          status: "readyForUse",
+          usageAvailable: false,
+        },
+        {
+          providerSubscriptionId: "provider-2",
+          status: "readyForUse",
+          usageAvailable: false,
+        },
+      ],
+    });
+    const result = await service.refresh("inventory-1");
+    expect(result.usageStatus).toBe("WAITING_FOR_FIRST_USE");
+    expect(result.summary.confirmedPackageCount).toBe(0);
+    expect(
+      result.packages.every((p) => p.verificationStatus === "VERIFIED"),
+    ).toBe(true);
+    expect(resilience.attention).not.toHaveBeenCalled();
+  });
+
   it("preserves and excludes a missing package while reporting partial usage", async () => {
     const { service, resilience } = context([
       {

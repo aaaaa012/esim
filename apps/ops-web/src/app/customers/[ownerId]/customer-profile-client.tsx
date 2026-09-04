@@ -210,9 +210,9 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const orderSummary = useMemo(() => {
     const orders = profile?.orders ?? [];
     return {
-      firstPurchases: orders.filter(
-        (order) => order.purchaseType === "INITIAL_PURCHASE",
-      ).length,
+      firstPurchases: new Set(
+        (profile?.esimGroups ?? []).map((group) => group.esim.id),
+      ).size,
       topUps: orders.filter((order) => order.purchaseType === "TOPUP").length,
     };
   }, [profile]);
@@ -229,9 +229,10 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         badge={
           <span className="inline-flex items-center gap-2 rounded-full bg-success-soft px-3 py-1 text-xs font-semibold text-success-foreground">
             <UserRound className="size-3.5" />
-            {profile?.orders?.length ?? "—"} orders · {orderSummary.firstPurchases}{" "}
-            eSIM{orderSummary.firstPurchases === 1 ? "" : "s"} · {orderSummary.topUps}{" "}
-            top-up{orderSummary.topUps === 1 ? "" : "s"}
+            {profile?.orders?.length ?? "—"} orders ·{" "}
+            {orderSummary.firstPurchases} eSIM
+            {orderSummary.firstPurchases === 1 ? "" : "s"} ·{" "}
+            {orderSummary.topUps} top-up{orderSummary.topUps === 1 ? "" : "s"}
           </span>
         }
         actions={
@@ -297,7 +298,11 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                         </div>
                         <StatusBadge label={item.balanceStatus} />
                         <span className="text-sm font-medium tabular-nums">
-                          {item.remainingMb.toLocaleString()} MB remaining
+                          {item.balanceStatus === "WAITING_FOR_FIRST_USE"
+                            ? "Awaiting activation"
+                            : item.balanceStatus === "UNAVAILABLE"
+                              ? "Balance unavailable"
+                              : `${item.remainingMb.toLocaleString()} MB remaining`}
                         </span>
                       </div>
                     ))}

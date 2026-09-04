@@ -433,10 +433,7 @@ describe("TransatelProvider", () => {
         }),
     });
 
-    const result = await provider.checkEligibility(
-      "plan-1",
-      "882470001850263",
-    );
+    const result = await provider.checkEligibility("plan-1", "882470001850263");
 
     expect(result).toEqual({
       allowed: false,
@@ -596,6 +593,71 @@ describe("TransatelProvider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "retains ready packages without balances and excludes walled-garden products (active=%s)",
+    async (active) => {
+      const prisma = prismaStub();
+      prisma.esimInventory.findFirst = vi
+        .fn()
+        .mockResolvedValue({
+          iccid: "8988247076000000319",
+          msisdn: "33612345678",
+        });
+      const provider = new TransatelProvider(prisma);
+      const balance = {
+        data: [
+          {
+            resourceUnit: "KB",
+            resourceStartValue: 1048576,
+            resourceValue: 1048576,
+          },
+        ],
+      };
+      route({
+        "/authentication/api/token": () =>
+          jsonResponse({ access_token: "token", expires_in: 3600 }),
+        "/ocs/inventory/api/subscriptions/products": () =>
+          jsonResponse({
+            productSubscriptions: [
+              ...(active
+                ? [
+                    {
+                      subscriptionId: "original",
+                      status: "active",
+                      balances: balance,
+                    },
+                  ]
+                : []),
+              {
+                subscriptionId: "recharge",
+                status: "readyForUse",
+                balances: {},
+                expirationDate: "2027-03-04T00:00:00Z",
+              },
+              {
+                subscriptionId: "infrastructure",
+                status: "active",
+                balances: balance,
+                productDefinition: { tags: ["WALLED_GARDEN"] },
+              },
+            ],
+          }),
+      });
+      const result = await provider.getUsage(ORDER_UUID);
+      expect(result.totalMb).toBe(active ? 1024 : 0);
+      expect(result.usageAvailable).toBe(active);
+      expect(result.subscriptions).toHaveLength(active ? 2 : 1);
+      const recharge = result.subscriptions!.find(
+        (s) => s.providerSubscriptionId === "recharge",
+      );
+      expect(recharge).toMatchObject({
+        status: "readyForUse",
+        usageAvailable: false,
+      });
+      expect(recharge).not.toHaveProperty("expiresAt");
+    },
+  );
+
   it("normalizes KB balances into used and total MB", async () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
@@ -639,6 +701,7 @@ describe("TransatelProvider", () => {
           usedMb: 4096,
           totalMb: 5120,
           priority: 1,
+          usageAvailable: true,
         },
       ],
     });
@@ -798,6 +861,7 @@ describe("TransatelProvider", () => {
           usedMb: 0,
           totalMb: 1,
           priority: 1,
+          usageAvailable: true,
         },
       ],
     });

@@ -1461,13 +1461,6 @@ export class OrdersService implements OnModuleInit {
     return { found: false, mobile };
   }
   private topUpSubscriber(order: DemoOrder, includeIdentity: boolean) {
-    const expiredAt =
-      order.createdAt && order.plan.validityDays
-        ? new Date(
-            new Date(order.createdAt).getTime() +
-              order.plan.validityDays * 86_400_000,
-          ).toISOString()
-        : undefined;
     const subscriber: Record<string, unknown> = {
       currentPlan: {
         id: order.plan.id,
@@ -1480,7 +1473,6 @@ export class OrdersService implements OnModuleInit {
       countryCode: order.plan.countryCode,
       countryName: order.plan.countryName,
       ...(order.usage ? { usage: order.usage } : {}),
-      ...(expiredAt ? { expiresAt: expiredAt } : {}),
       hasActiveEsim: Boolean(order.qrPayload),
       ...(includeIdentity && order.traveler
         ? {
@@ -2186,13 +2178,9 @@ export class OrdersService implements OnModuleInit {
       }
       if (result.qrPayload) order.qrPayload = result.qrPayload;
       if (!reuseExisting) order.qrDeliveredAt = new Date().toISOString();
-      const expiresAt = new Date(
-        Date.now() + order.plan.validityDays * 86_400_000,
-      ).toISOString();
       const providerInfo = {
         provider: this.connectivity.descriptor().provider,
         providerSubscriptionId: result.providerSubscriptionId,
-        expiresAt,
       };
       if (reuseExisting)
         await this.inventory.assignTopup(
@@ -2458,13 +2446,9 @@ export class OrdersService implements OnModuleInit {
 
       const target = await this.provisioningTarget(order);
       const customerId = await this.inventory.customerIdForOrder(order.id);
-      const expiresAt = new Date(
-        Date.now() + order.plan.validityDays * 86_400_000,
-      ).toISOString();
       const providerInfo = {
         provider: this.connectivity.descriptor().provider,
         providerSubscriptionId: input.providerSubscriptionId,
-        expiresAt,
       };
       if (target) {
         await this.inventory.assignTopup(

@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { createHmac } from "node:crypto";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
@@ -93,7 +97,7 @@ export class UsageService {
   async refresh(inventoryId: string): Promise<EsimUsageView> {
     const row = await this.load(inventoryId);
     const usage = await this.connectivity.getUsage(row.iccid);
-    if (usage.usageAvailable === false)
+    if (usage.usageAvailable === false && !usage.subscriptions?.length)
       throw new BadRequestException(
         "Transatel found the eSIM but did not return a usable data balance",
       );
@@ -136,9 +140,33 @@ export class UsageService {
         return this.prisma.subscription.update({
           where: { id: subscription.id },
           data: {
-            usedMb: balance.usedMb,
-            totalMb: balance.totalMb,
-            usageLastCheckedAt: checkedAt,
+            ...(balance.usageAvailable === false
+              ? {}
+              : {
+                  usedMb: balance.usedMb,
+                  totalMb: balance.totalMb,
+                  usageLastCheckedAt: checkedAt,
+                }),
+            ...(["readyForUse", "pendingForFirstUse", "scheduled"].includes(
+              balance.status,
+            )
+              ? {
+                  status: "PENDING",
+                  activatedAt: null,
+                  expiresAt: null,
+                  usageLastCheckedAt: null,
+                }
+              : balance.status === "active"
+                ? {
+                    status: "ACTIVE",
+                    ...(balance.activatedAt
+                      ? { activatedAt: new Date(balance.activatedAt) }
+                      : {}),
+                    ...(balance.expiresAt
+                      ? { expiresAt: new Date(balance.expiresAt) }
+                      : {}),
+                  }
+                : {}),
             providerLastSeenAt: checkedAt,
             assignmentVerificationStatus: "VERIFIED",
             assignmentVerifiedAt:
@@ -155,7 +183,7 @@ export class UsageService {
           return this.resilience.resolve(
             key,
             null,
-            "Provider usage confirms the assigned subscription",
+            "Provider inventory confirms the assigned subscription",
           );
         return this.resilience.attention({
           dedupeKey: key,
@@ -233,7 +261,11 @@ export class UsageService {
         },
       },
     });
-    if (!row) throw new NotFoundException({ code: "ESIM_NOT_FOUND", message: "eSIM not found" });
+    if (!row)
+      throw new NotFoundException({
+        code: "ESIM_NOT_FOUND",
+        message: "eSIM not found",
+      });
     return row;
   }
 
@@ -285,7 +317,9 @@ export class UsageService {
           totalMb: subscription.totalMb,
           remainingMb: Math.max(0, subscription.totalMb - subscription.usedMb),
           activatedAt: subscription.activatedAt?.toISOString() ?? null,
-          expiresAt: subscription.expiresAt?.toISOString() ?? null,
+          expiresAt: subscription.activatedAt
+            ? (subscription.expiresAt?.toISOString() ?? null)
+            : null,
           lastConfirmedAt:
             subscription.usageLastCheckedAt?.toISOString() ?? null,
           lastCheckedAt: subscription.usageLastCheckedAt?.toISOString() ?? null,

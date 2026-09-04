@@ -51,6 +51,9 @@ export type UsageBreakdown = {
     usedMb: number;
     totalMb: number;
     priority?: number;
+    usageAvailable?: boolean;
+    activatedAt?: string;
+    expiresAt?: string;
   }[];
 };
 export type LifecycleResult = {

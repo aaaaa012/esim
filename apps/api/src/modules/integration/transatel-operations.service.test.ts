@@ -216,6 +216,59 @@ describe("TransatelOperationsService reconciliation", () => {
     );
   });
 
+  it("reconciles a recharge through its existing inventory without inventing balance or asking for installation", async () => {
+    const context = setup();
+    vi.mocked(context.prisma.order.findUnique).mockResolvedValue({
+      id: "order-1",
+      orderType: "TOPUP",
+      status: "COMPLETED",
+      providerSubscriptionId: "sub-1",
+      inventory: null,
+      customerEsim: {
+        id: "link",
+        subscriptions: [],
+        inventory: {
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          status: "ACTIVATED",
+        },
+      },
+      transatelLifecycleOperations: [],
+    } as never);
+    context.connectivity.getEsimDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "enabled" });
+    context.connectivity.getUsage = vi
+      .fn()
+      .mockResolvedValue({
+        usageAvailable: true,
+        subscriptions: [
+          {
+            providerSubscriptionId: "sub-1",
+            status: "readyForUse",
+            usedMb: 0,
+            totalMb: 0,
+            usageAvailable: false,
+          },
+        ],
+      });
+    const result = await context.service.reconcile("order-1");
+    expect(result).toMatchObject({
+      classification: "AWAITING_ACTIVATION",
+      orderStatus: "COMPLETED",
+      usageAvailable: false,
+    });
+    expect(result.recommendedAction).toContain("No new installation");
+    expect(context.tx.subscription.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.not.objectContaining({
+          usageLastCheckedAt: expect.anything(),
+        }),
+      }),
+    );
+    expect(context.orders.applyProviderEvent).not.toHaveBeenCalled();
+  });
+
   it("does not activate an order from the eSIM profile status alone", async () => {
     const context = setup();
     (

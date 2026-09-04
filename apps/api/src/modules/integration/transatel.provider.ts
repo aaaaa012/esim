@@ -87,6 +87,7 @@ interface ProductSubscription {
   status: SubscriptionStatus;
   productDefinition?: {
     productId: string;
+    tags?: string[];
     productCategory?: "Add-on" | "One-off" | "Recurring";
     allowances?: unknown;
     countryList?: string[];
@@ -120,6 +121,7 @@ interface ProductDetails {
   prices?: { subscriptionFee?: Price[][]; renewalFee?: Price[][] };
   productDefinition: {
     productId: string;
+    tags?: string[];
     productCategory?: "Add-on" | "One-off" | "Recurring";
     allowances?: unknown;
     countryList?: string[];
@@ -136,7 +138,6 @@ interface ProductDetails {
       productValidityPeriod?: string;
     };
     unlimited?: boolean;
-    tags?: string[];
     parentProductIds?: string[];
   };
 }
@@ -246,10 +247,7 @@ export class TransatelProvider implements ConnectivityProvider {
   private providerFailed() {
     this.consecutiveFailures += 1;
     const threshold = resiliencePolicy.connectivityCircuitFailures();
-    if (
-      this.consecutiveFailures >=
-      threshold
-    )
+    if (this.consecutiveFailures >= threshold)
       this.circuitOpenedAt = Date.now();
   }
 
@@ -1104,7 +1102,9 @@ export class TransatelProvider implements ConnectivityProvider {
 
     const data = (await response.json()) as ProductSubscriptionsResponse;
     const subscriptions = data.productSubscriptions.filter(
-      (item) => item.status !== "terminated",
+      (item) =>
+        item.status !== "terminated" &&
+        !item.productDefinition?.tags?.includes("WALLED_GARDEN"),
     );
     if (!subscriptions.length)
       throw new ApiException({
@@ -1115,45 +1115,35 @@ export class TransatelProvider implements ConnectivityProvider {
         details: "No active subscription found for this subscriber",
       });
 
-    const usage = subscriptions
-      .map((item) => ({ item, usage: this.usageFromBalances(item.balances) }))
-      .filter(
-        (
-          entry,
-        ): entry is {
-          item: ProductSubscription;
-          usage: { usedMb: number; totalMb: number };
-        } => Boolean(entry.usage),
-      );
-    if (!usage.length)
+    const packages = subscriptions.map((item, index) => {
+      const balance = this.usageFromBalances(item.balances);
       return {
-        usedMb: 0,
-        totalMb: 0,
-        usageAvailable: false,
-        subscriptions: subscriptions.map((item, index) => ({
-          providerSubscriptionId: item.subscriptionId,
-          status: item.status,
-          usedMb: 0,
-          totalMb: 0,
-          priority: index + 1,
-        })),
-      };
-    const aggregate = usage.reduce(
-      (acc, entry) => ({
-        usedMb: acc.usedMb + entry.usage.usedMb,
-        totalMb: acc.totalMb + entry.usage.totalMb,
-      }),
-      { usedMb: 0, totalMb: 0 },
-    );
-    return {
-      ...aggregate,
-      usageAvailable: true,
-      subscriptions: usage.map(({ item, usage: balance }, index) => ({
         providerSubscriptionId: item.subscriptionId,
         status: item.status,
-        ...balance,
+        usedMb: balance?.usedMb ?? 0,
+        totalMb: balance?.totalMb ?? 0,
+        usageAvailable: Boolean(balance),
         priority: index + 1,
-      })),
+        ...(item.activationDate ? { activatedAt: item.activationDate } : {}),
+        // Before activation expirationDate is an activation deadline, not plan expiry.
+        ...(item.activationDate && item.expirationDate
+          ? { expiresAt: item.expirationDate }
+          : {}),
+      };
+    });
+    const aggregate = packages
+      .filter((item) => item.usageAvailable)
+      .reduce(
+        (total, item) => ({
+          usedMb: total.usedMb + item.usedMb,
+          totalMb: total.totalMb + item.totalMb,
+        }),
+        { usedMb: 0, totalMb: 0 },
+      );
+    return {
+      ...aggregate,
+      usageAvailable: packages.some((item) => item.usageAvailable),
+      subscriptions: packages,
     };
   }
 
@@ -1513,7 +1503,8 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel eligibility check failed: ${detail}`,
       });
     }
-    const data = (await response.json()) as ProductDetails | ProductCatalogResponse;
+    const data = (await response.json()) as
+      ProductDetails | ProductCatalogResponse;
     // Transatel deployments have exposed the product-detail response both as
     // the product itself and wrapped in a `products` collection. Accept both
     // documented shapes so eligibility never becomes a false rejection merely
@@ -1530,9 +1521,7 @@ export class TransatelProvider implements ConnectivityProvider {
       return {
         allowed: false,
         errorKey: providerCode ?? "ELIGIBILITY_REJECTED",
-        errorMessage: /SUBSCRIBER_STATUS_NOT_ELIGIBLE/i.test(
-          providerCode ?? "",
-        )
+        errorMessage: /SUBSCRIBER_STATUS_NOT_ELIGIBLE/i.test(providerCode ?? "")
           ? "This eSIM cannot receive a top-up in its current network state. Please contact support before trying again."
           : "This eSIM cannot receive the selected plan right now. Please contact support or choose another plan.",
       };

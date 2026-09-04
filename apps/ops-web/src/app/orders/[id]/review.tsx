@@ -816,14 +816,24 @@ export default function OrderReview({ id }: { id: string }) {
                       Package usage · this order
                     </p>
                     <p className="mt-2 text-2xl font-semibold tabular-nums">
-                      {order.packageUsage
-                        ? `${order.packageUsage.remainingMb.toLocaleString()} MB`
-                        : "Not confirmed"}
+                      {order.packageUsage?.balanceStatus ===
+                      "WAITING_FOR_FIRST_USE"
+                        ? "Awaiting activation"
+                        : order.packageUsage?.balanceStatus === "UNAVAILABLE"
+                          ? "Balance unavailable"
+                          : order.packageUsage
+                            ? `${order.packageUsage.remainingMb.toLocaleString()} MB`
+                            : "Not confirmed"}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {order.packageUsage
-                        ? `${order.packageUsage.usedMb.toLocaleString()} MB used of ${order.packageUsage.totalMb.toLocaleString()} MB · ${humane(order.packageUsage.balanceStatus)}`
-                        : "Usage will appear after provider reconciliation."}
+                      {order.packageUsage?.balanceStatus ===
+                      "WAITING_FOR_FIRST_USE"
+                        ? "Package added to the existing eSIM. Balance appears after activation."
+                        : order.packageUsage?.balanceStatus === "UNAVAILABLE"
+                          ? "The provider has not confirmed a usable balance."
+                          : order.packageUsage
+                            ? `${order.packageUsage.usedMb.toLocaleString()} MB used of ${order.packageUsage.totalMb.toLocaleString()} MB · ${humane(order.packageUsage.balanceStatus)}`
+                            : "Usage will appear after provider reconciliation."}
                     </p>
                   </div>
                   <div className="rounded-lg border p-4">
@@ -1000,7 +1010,11 @@ export default function OrderReview({ id }: { id: string }) {
             <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5 text-sm">
               <span className="text-muted-foreground">Documents</span>
               <StatusBadge
-                label={order.documentReviewStatus ?? "NOT STARTED"}
+                label={
+                  order.purchaseType === "TOPUP"
+                    ? "NOT REQUIRED"
+                    : (order.documentReviewStatus ?? "NOT STARTED")
+                }
               />
             </div>
             {canReviewDocuments && !canAdvanceOrder && (
@@ -1141,7 +1155,9 @@ export default function OrderReview({ id }: { id: string }) {
               <Button className="w-full" variant="outline" size="lg" asChild>
                 <Link href="/provisioning-operations">
                   <RefreshCcw className="size-4" />
-                  Reconcile QR assignment
+                  {order.purchaseType === "TOPUP"
+                    ? "Reconcile recharge assignment"
+                    : "Reconcile QR assignment"}
                 </Link>
               </Button>
             ) : (

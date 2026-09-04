@@ -530,11 +530,11 @@ export class TransatelOperationsService {
   async reconcile(orderId: string, actorId?: string) {
     if (!this.prisma.enabled)
       throw new ServiceUnavailableException("Database persistence is required");
-    const order = await this.prisma.order.findUnique({
+    const storedOrder = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
         inventory: true,
-        customerEsim: { include: { subscriptions: true } },
+        customerEsim: { include: { subscriptions: true, inventory: true } },
         transatelLifecycleOperations: {
           orderBy: { createdAt: "desc" },
           take: 1,
@@ -542,6 +542,13 @@ export class TransatelOperationsService {
         provisioningOperation: { select: { state: true } },
       },
     });
+    const order = storedOrder
+      ? {
+          ...storedOrder,
+          inventory:
+            storedOrder.inventory ?? storedOrder.customerEsim?.inventory,
+        }
+      : null;
     if (!order?.inventory)
       throw new NotFoundException("The order does not have an assigned eSIM");
     const details = await this.connectivity.getEsimDetails(
@@ -568,6 +575,8 @@ export class TransatelOperationsService {
       observedState,
     );
     const awaitingInstallation = [
+      "READYFORUSE",
+      "SCHEDULED",
       "PENDINGFORFIRSTUSE",
       "PENDING",
       "PRELOADED",
@@ -620,7 +629,8 @@ export class TransatelOperationsService {
                 data: {
                   status: SubscriptionStatus.ACTIVE,
                   providerLastSeenAt: checkedAt,
-                  ...(usage?.usageAvailable !== false
+                  ...(usage?.usageAvailable !== false &&
+                  providerSubscription?.usageAvailable !== false
                     ? {
                         usedMb: providerSubscription.usedMb,
                         totalMb: providerSubscription.totalMb,
@@ -639,7 +649,10 @@ export class TransatelOperationsService {
         providerStatus: observedSubscriptionStatus ?? observedProfileStatus,
         profileStatus: observedProfileStatus,
         subscriptionStatus: observedSubscriptionStatus,
-        usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
+        usageAvailable:
+          Boolean(usage) &&
+          usage?.usageAvailable !== false &&
+          providerSubscription?.usageAvailable !== false,
         provisioningState: "ACTIVATED",
         changed: true,
         checkedAt: checkedAt.toISOString(),
@@ -654,7 +667,10 @@ export class TransatelOperationsService {
         providerStatus: observedState,
         profileStatus: observedProfileStatus,
         subscriptionStatus: observedSubscriptionStatus,
-        usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
+        usageAvailable:
+          Boolean(usage) &&
+          usage?.usageAvailable !== false &&
+          providerSubscription?.usageAvailable !== false,
         provisioningState: order.provisioningOperation?.state ?? null,
         changed: false,
         checkedAt: checkedAt.toISOString(),
@@ -717,7 +733,8 @@ export class TransatelOperationsService {
           data: {
             ...(subscriptionStatus ? { status: subscriptionStatus } : {}),
             providerLastSeenAt: checkedAt,
-            ...(usage?.usageAvailable !== false
+            ...(usage?.usageAvailable !== false &&
+            providerSubscription?.usageAvailable !== false
               ? {
                   usedMb: providerSubscription.usedMb,
                   totalMb: providerSubscription.totalMb,
@@ -815,14 +832,19 @@ export class TransatelOperationsService {
           : usageUnavailable
             ? ("PROVIDER_UNAVAILABLE" as const)
             : awaitingInstallation
-              ? ("AWAITING_INSTALLATION" as const)
+              ? order.orderType === "TOPUP"
+                ? ("AWAITING_ACTIVATION" as const)
+                : ("AWAITING_INSTALLATION" as const)
               : ("PROVISIONING_PENDING" as const),
       orderId,
       orderStatus: critical ? "ACTIVATION_ATTENTION" : order.status,
       providerStatus: observedSubscriptionStatus ?? observedProfileStatus,
       profileStatus: observedProfileStatus,
       subscriptionStatus: observedSubscriptionStatus,
-      usageAvailable: Boolean(usage) && usage?.usageAvailable !== false,
+      usageAvailable:
+        Boolean(usage) &&
+        usage?.usageAvailable !== false &&
+        providerSubscription?.usageAvailable !== false,
       provisioningState: order.provisioningOperation?.state ?? null,
       changed: critical && order.status !== "ACTIVATION_ATTENTION",
       checkedAt: checkedAt.toISOString(),
@@ -833,7 +855,9 @@ export class TransatelOperationsService {
           : usageUnavailable
             ? "Provider usage status is temporarily unavailable; local state was preserved."
             : awaitingInstallation
-              ? "Ask the customer to install the eSIM and connect to a supported network."
+              ? order.orderType === "TOPUP"
+                ? "Package is added to the existing eSIM and awaiting activation. No new installation is required."
+                : "Ask the customer to install the eSIM and connect to a supported network."
               : "The provider setup is still pending; check again later.",
     };
   }
@@ -1084,7 +1108,10 @@ export class TransatelOperationsService {
         const balance = usage.subscriptions?.find(
           (item) => item.providerSubscriptionId === sub.providerSubscriptionId,
         );
-        if (usage.subscriptions?.length && !balance) {
+        if (
+          (usage.subscriptions?.length && !balance) ||
+          balance?.usageAvailable === false
+        ) {
           failed += 1;
           continue;
         }
