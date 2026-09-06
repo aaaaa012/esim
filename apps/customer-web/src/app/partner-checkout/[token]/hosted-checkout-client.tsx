@@ -170,6 +170,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [verification, setVerification] = useState<Verification | null>(null);
   const [compatibilityConsent, setCompatibilityConsent] = useState(false);
   const [legalConsent, setLegalConsent] = useState(false);
+  const [resumeAfterConsent, setResumeAfterConsent] = useState(2);
+  const consentKey = `hosted-checkout-consent:v1:${token}`;
+  const clearSavedConsent = () => {
+    try {
+      window.sessionStorage.removeItem(consentKey);
+    } catch {
+      /* Storage may be unavailable. */
+    }
+  };
   const [showAccountChoice, setShowAccountChoice] = useState(false);
   const [checkoutAccessMode, setCheckoutAccessMode] = useState<
     "account" | "guest" | null
@@ -267,10 +276,21 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             method: "tesseract-ocr",
           });
         }
-        if (allUploaded) stepJump(4);
-        else if (uploaded.length > 0 || value.order.travelerComplete)
-          stepJump(uploaded.length > 0 ? 3 : 2);
-        else stepJump(1);
+        const resumeStep = allUploaded
+          ? 4
+          : uploaded.length > 0 || value.order.travelerComplete
+            ? 3
+            : 2;
+        setResumeAfterConsent(resumeStep);
+        let accepted = false;
+        try {
+          accepted = window.sessionStorage.getItem(consentKey) === "accepted";
+        } catch {
+          /* Start at consent if storage is unavailable. */
+        }
+        setCompatibilityConsent(accepted);
+        setLegalConsent(accepted);
+        stepJump(accepted ? resumeStep : 1);
       })
       .catch(() => !cancelled && setLoadFailed(true));
     return () => {
@@ -297,7 +317,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const advanceAfterAccountChoice = (mode: "account" | "guest") => {
     setCheckoutAccessMode(mode);
     setShowAccountChoice(false);
-    stepPush(session?.order.orderType === "TOPUP" ? 4 : 2);
+    stepPush(session?.order.orderType === "TOPUP" ? 4 : resumeAfterConsent);
   };
   const continueWithAccount = () =>
     run(async () => {
@@ -996,55 +1016,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         . No traveller details or new documents are required.
                       </p>
                     )}
-                    {!isTopUp && (
-                      <label className="confirm-box">
-                        <input
-                          type="checkbox"
-                          checked={compatibilityConsent}
-                          onChange={(e) =>
-                            setCompatibilityConsent(e.target.checked)
-                          }
-                        />
-                        <span>
-                          <b>
-                            I confirm the device is unlocked and eSIM-compatible
-                          </b>
-                          <small>
-                            I understand incompatible devices are not eligible
-                            for a refund.
-                          </small>
-                        </span>
-                      </label>
-                    )}
-                    <label className="confirm-box">
-                      <input
-                        type="checkbox"
+                    {isTopUp && (
+                      <PurchaseConsent
                         checked={legalConsent}
-                        onChange={(e) => setLegalConsent(e.target.checked)}
+                        onChange={setLegalConsent}
+                        recharge
                       />
-                      <span>
-                        <b>
-                          {isTopUp
-                            ? "I approve this eSIM recharge"
-                            : "I agree to the purchase terms"}
-                        </b>
-                        <small>
-                          I have read the{" "}
-                          <a href="/terms" target="_blank">
-                            Terms
-                          </a>
-                          ,{" "}
-                          <a href="/privacy" target="_blank">
-                            Privacy Policy
-                          </a>{" "}
-                          and{" "}
-                          <a href="/refund-policy" target="_blank">
-                            Refund Policy
-                          </a>
-                          .
-                        </small>
-                      </span>
-                    </label>
+                    )}
                   </>
                 )}
                 <div className="gateway-grid">
@@ -1106,7 +1084,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         <div className="fonepay-bank-section">
                           <div className="fonepay-bank-heading">
                             <b>Or pay with your banking app</b>
-                            <small>Select your bank to continue securely.</small>
+                            <small>
+                              Select your bank to continue securely.
+                            </small>
                           </div>
                           <label className="fonepay-bank-search">
                             <span className="sr-only">Search banking apps</span>
@@ -1161,10 +1141,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                               </button>
                             ))}
                           </div>
-                          {!filterFonepayBanks(
-                            payment.banks,
-                            fonepayBankQuery,
-                          ).length ? (
+                          {!filterFonepayBanks(payment.banks, fonepayBankQuery)
+                            .length ? (
                             <p className="fonepay-bank-empty">
                               No matching banking app. Try another name or scan
                               the QR code.
@@ -1235,39 +1213,65 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     <span className="form-icon">
                       <ShieldCheck />
                     </span>
-                    <h1>Device compatibility</h1>
+                    <h1>
+                      {isTopUp ? "Your eSIM recharge" : "Device compatibility"}
+                    </h1>
                     <p>
-                      Your phone must support eSIM and be carrier-unlocked.
-                      Coverage starts after first connection at your
-                      destination.
+                      {isTopUp
+                        ? "Add data to your existing eSIM. You will confirm the purchase terms when you pay."
+                        : "Your phone must support eSIM and be carrier-unlocked. Coverage starts after first connection at your destination."}
                     </p>
-                    <label
-                      className={`confirm-box${isTopUp ? " payment-consent" : ""}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={compatibilityConsent}
-                        onChange={(e) =>
-                          setCompatibilityConsent(e.target.checked)
-                        }
-                      />
-                      <span>
-                        <b>I confirm my device is eSIM compatible</b>
-                        <small>
-                          Incompatible devices are not eligible for a refund.
-                        </small>
-                      </span>
-                    </label>
+                    {!isTopUp && (
+                      <>
+                        <label className="confirm-box">
+                          <input
+                            type="checkbox"
+                            checked={compatibilityConsent}
+                            onChange={(e) => {
+                              setCompatibilityConsent(e.target.checked);
+                              clearSavedConsent();
+                            }}
+                          />
+                          <span>
+                            <b>I confirm my device is eSIM compatible</b>
+                            <small>
+                              Incompatible devices are not eligible for a
+                              refund.
+                            </small>
+                          </span>
+                        </label>
+                        <PurchaseConsent
+                          checked={legalConsent}
+                          onChange={(accepted) => {
+                            setLegalConsent(accepted);
+                            clearSavedConsent();
+                          }}
+                        />
+                      </>
+                    )}
                     <Nav
                       back={() => {}}
                       backHidden
                       busy={busy}
                       next={() =>
                         run(async () => {
-                          if (!compatibilityConsent)
+                          if (
+                            !isTopUp &&
+                            (!compatibilityConsent || !legalConsent)
+                          )
                             throw new Error(
-                              "Confirm your device is eSIM compatible first",
+                              "Confirm device compatibility and accept the purchase terms first",
                             );
+                          if (!isTopUp) {
+                            try {
+                              window.sessionStorage.setItem(
+                                consentKey,
+                                "accepted",
+                              );
+                            } catch {
+                              /* Consent remains valid for this page session. */
+                            }
+                          }
                           if (isSignedIn === true) await continueWithAccount();
                           else setShowAccountChoice(true);
                         })
@@ -1647,6 +1651,48 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         </div>
       )}
     </main>
+  );
+}
+
+function PurchaseConsent({
+  checked,
+  onChange,
+  recharge = false,
+}: {
+  checked: boolean;
+  onChange: (accepted: boolean) => void;
+  recharge?: boolean;
+}) {
+  return (
+    <label className="confirm-box">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span>
+        <b>
+          {recharge
+            ? "I approve this eSIM recharge"
+            : "I agree to the purchase terms"}
+        </b>
+        <small>
+          I have read the{" "}
+          <a href="/terms" target="_blank">
+            Terms
+          </a>
+          ,{" "}
+          <a href="/privacy" target="_blank">
+            Privacy Policy
+          </a>{" "}
+          and{" "}
+          <a href="/refund-policy" target="_blank">
+            Refund Policy
+          </a>
+          .
+        </small>
+      </span>
+    </label>
   );
 }
 

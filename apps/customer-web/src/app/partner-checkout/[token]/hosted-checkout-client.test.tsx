@@ -50,6 +50,11 @@ const session = (verification = "VERIFIED", status = "DRAFT") => ({
 });
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  sessionStorage.clear();
+  sessionStorage.setItem(
+    "hosted-checkout-consent:v1:private-token",
+    "accepted",
+  );
   window.history.replaceState({}, "", "/partner-checkout/private-token?step=3");
   mocks.signedIn = false;
   mocks.authFetch.mockReset();
@@ -83,6 +88,115 @@ const acceptConsents = () =>
 
 describe("hosted checkout payment flow", () => {
   it.each([false, true])(
+    "collects first-purchase consent at the beginning once, including after refresh (signed in: %s)",
+    async (signedIn) => {
+      sessionStorage.clear();
+      mocks.signedIn = signedIn;
+      mocks.authFetch.mockResolvedValue(ok(session()));
+      const view = render(<HostedCheckoutClient token="private-token" />);
+      await screen.findByRole("heading", { name: "Device compatibility" });
+      expect(
+        screen.getByRole("checkbox", { name: /I agree to the purchase terms/ }),
+      ).toBeDefined();
+      expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: /I confirm my device/ }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Save and continue" }),
+      );
+      await screen.findByRole("alertdialog");
+      expect(mocks.authFetch).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss message" }));
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: /I agree to the purchase terms/ }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Save and continue" }),
+      );
+      if (!signedIn)
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Continue as guest" }),
+        );
+      await screen.findByRole("heading", { name: "Pay NPR 2" });
+      expect(screen.queryByRole("checkbox")).toBeNull();
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Continue to Khalti",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false);
+      view.unmount();
+      render(<HostedCheckoutClient token="private-token" />);
+      await screen.findByRole("heading", { name: "Pay NPR 2" });
+      expect(screen.queryByRole("checkbox")).toBeNull();
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Continue to Khalti",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false);
+    },
+  );
+
+  it("does not reuse consent from a different hosted checkout link", async () => {
+    render(<HostedCheckoutClient token="another-token" />);
+    await screen.findByRole("heading", { name: "Device compatibility" });
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: /I agree to the purchase terms/,
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+    expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+  });
+
+  it.each([false, true])(
+    "keeps recharge consent at payment without repeating compatibility (signed in: %s)",
+    async (signedIn) => {
+      mocks.signedIn = signedIn;
+      const recharge = {
+        ...session(),
+        order: {
+          ...session().order,
+          orderType: "TOPUP",
+          documents: [],
+          requiredDocuments: [],
+        },
+      };
+      fetchMock.mockImplementation(async (url: string) =>
+        url.endsWith("/payments/providers")
+          ? ok({ providers: ["KHALTI"] })
+          : ok(recharge),
+      );
+      mocks.authFetch.mockResolvedValue(ok(recharge));
+      render(<HostedCheckoutClient token="private-token" />);
+      await screen.findByRole("heading", { name: "Your eSIM recharge" });
+      expect(screen.queryByRole("checkbox")).toBeNull();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Save and continue" }),
+      );
+      if (!signedIn)
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Continue as guest" }),
+        );
+      await screen.findByRole("heading", { name: "Pay NPR 2" });
+      expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+      const pay = screen.getByRole("button", {
+        name: "Continue to Khalti",
+      }) as HTMLButtonElement;
+      expect(pay.disabled).toBe(true);
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: /I approve this eSIM recharge/ }),
+      );
+      expect(pay.disabled).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
     "offers payment methods after verification before submitting (signed in: %s)",
     async (signedIn) => {
       mocks.signedIn = signedIn;
@@ -104,8 +218,8 @@ describe("hosted checkout payment flow", () => {
       const pay = screen.getByRole("button", {
         name: "Continue to Fonepay",
       }) as HTMLButtonElement;
-      expect(pay.disabled).toBe(true);
-      acceptConsents();
+      expect(pay.disabled).toBe(false);
+      expect(screen.queryByRole("checkbox")).toBeNull();
       fireEvent.click(pay);
       await waitFor(() =>
         expect(
@@ -140,7 +254,6 @@ describe("hosted checkout payment flow", () => {
       );
       render(<HostedCheckoutClient token="private-token" />);
       await screen.findByRole("heading", { name: "Pay NPR 2" });
-      acceptConsents();
       expect(
         (
           screen.getByRole("button", {
@@ -159,6 +272,7 @@ describe("hosted checkout payment flow", () => {
   it.each([false, true])(
     "continues from compatibility to traveller details (signed in: %s)",
     async (signedIn) => {
+      sessionStorage.clear();
       mocks.signedIn = signedIn;
       const fresh = session();
       fresh.order.travelerComplete = false;
@@ -171,7 +285,7 @@ describe("hosted checkout payment flow", () => {
       mocks.authFetch.mockResolvedValue(ok(fresh));
       render(<HostedCheckoutClient token="private-token" />);
       await screen.findByRole("heading", { name: "Device compatibility" });
-      fireEvent.click(screen.getByRole("checkbox"));
+      acceptConsents();
       fireEvent.click(
         screen.getByRole("button", { name: "Save and continue" }),
       );
@@ -250,7 +364,6 @@ describe("hosted checkout payment flow", () => {
     });
     render(<HostedCheckoutClient token="private-token" />);
     await screen.findByRole("heading", { name: "Pay NPR 2" });
-    acceptConsents();
     fireEvent.click(screen.getByRole("button", { name: "Continue to Khalti" }));
     await screen.findByRole("alertdialog");
     fireEvent.click(screen.getByRole("button", { name: "Dismiss message" }));
