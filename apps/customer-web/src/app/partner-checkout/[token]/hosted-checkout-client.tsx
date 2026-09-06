@@ -167,7 +167,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [verification, setVerification] = useState<Verification | null>(null);
   const [compatibilityConsent, setCompatibilityConsent] = useState(false);
   const [legalConsent, setLegalConsent] = useState(false);
-  const [compatible, setCompatible] = useState(false);
   const [showAccountChoice, setShowAccountChoice] = useState(false);
   const [checkoutAccessMode, setCheckoutAccessMode] = useState<
     "account" | "guest" | null
@@ -227,6 +226,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           setOrderNumber(value.order.orderNumber);
           if (value.order.status === "PAYMENT_PENDING") {
             setSubmitted(true);
+            stepJump(4);
             return;
           }
           setOutcome({
@@ -236,7 +236,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           return;
         }
         if (value.order.orderType === "TOPUP") {
-          setStep(1);
+          stepJump(1);
           return;
         }
         const uploaded = value.order.requiredDocuments.filter((type) =>
@@ -263,10 +263,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             method: "tesseract-ocr",
           });
         }
-        if (allUploaded) setStep(4);
+        if (allUploaded) stepJump(4);
         else if (uploaded.length > 0 || value.order.travelerComplete)
-          setStep(uploaded.length > 0 ? 3 : 2);
-        else setStep(1);
+          stepJump(uploaded.length > 0 ? 3 : 2);
+        else stepJump(1);
       })
       .catch(() => !cancelled && setLoadFailed(true));
     return () => {
@@ -293,7 +293,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const advanceAfterAccountChoice = (mode: "account" | "guest") => {
     setCheckoutAccessMode(mode);
     setShowAccountChoice(false);
-    setStep(session?.order.orderType === "TOPUP" ? 4 : 2);
+    stepPush(session?.order.orderType === "TOPUP" ? 4 : 2);
   };
   const continueWithAccount = () =>
     run(async () => {
@@ -473,7 +473,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       setVerifying(true);
       setVerifyingDoc("in-progress");
       try {
-        if (await runVerification()) setStep(4);
+        if (await runVerification()) stepPush(4);
       } catch {
         setVerifyingDoc("failed");
       } finally {
@@ -554,7 +554,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             { method: "POST", body: "{}" },
           );
         }
-        if (await runVerification()) setStep(4);
+        if (await runVerification()) stepPush(4);
       } catch (e) {
         setVerifyingDoc(null);
         throw e;
@@ -674,6 +674,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         throw new Error(
           "Complete the required confirmations before continuing",
         );
+      if (!gatePassed) throw new Error("Verify your documents before paying");
       const result = await api<{
         orderId: string;
         orderNumber: string;
@@ -780,6 +781,47 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       : ""}
                   </span>
                 </div>
+              </div>
+            )}
+            {!showAccountChoice && !outcome && (
+              <div className="step-tabs">
+                {(isTopUp
+                  ? ["Recharge", "Payment"]
+                  : ["Compatibility", "Traveller", "Documents", "Payment"]
+                ).map((label, index) => {
+                  const value = isTopUp ? (index === 0 ? 1 : 4) : index + 1;
+                  return (
+                    <div
+                      key={label}
+                      className={
+                        (submitted ? 4 : step) === value
+                          ? "active"
+                          : (submitted ? 4 : step) > value
+                            ? "done"
+                            : ""
+                      }
+                    >
+                      <i>
+                        {(submitted ? 4 : step) > value ? (
+                          <Check size={13} />
+                        ) : (
+                          value
+                        )}
+                      </i>
+                      {!submitted && step > value ? (
+                        <button
+                          type="button"
+                          onClick={() => stepJump(value)}
+                          title={`Go back to ${label}`}
+                        >
+                          <span>{label}</span>
+                        </button>
+                      ) : (
+                        <span>{label}</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
             {showAccountChoice ? (
@@ -905,7 +947,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   )}
                 </div>
               </div>
-            ) : submitted ? (
+            ) : submitted || step === 4 ? (
               <div className="form-section">
                 <span className="form-icon">
                   <LockKeyhole />
@@ -915,9 +957,92 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   {session!.order.amountNpr.toLocaleString()}
                 </h2>
                 <p>
-                  {orderNumber} · The server checks the exact order, reference
-                  and immutable NPR amount.
+                  {orderNumber || session!.order.orderNumber} · Choose how you
+                  would like to pay.
                 </p>
+                {!submitted && (
+                  <>
+                    {!isTopUp &&
+                      (verification === null && !verifying ? (
+                        <PassportCheck
+                          status={undefined}
+                          busy={false}
+                          onRecheck={() => void verifyPassport()}
+                        />
+                      ) : verification === null ? (
+                        <PassportCheck
+                          status={undefined}
+                          busy={verifying}
+                          onRecheck={() => void verifyPassport()}
+                        />
+                      ) : (
+                        <PassportCheck
+                          status={verification.status}
+                          busy={false}
+                          onRecheck={() => void verifyPassport()}
+                          onEdit={() => setStep(2)}
+                        />
+                      ))}
+                    {isTopUp && (
+                      <p className="form-note">
+                        This is a data top-up for your existing eSIM
+                        {session!.order.topUpMsisdnMasked
+                          ? ` with MSISDN ${session!.order.topUpMsisdnMasked}`
+                          : ""}
+                        . No traveller details or new documents are required.
+                      </p>
+                    )}
+                    {!isTopUp && (
+                      <label className="confirm-box">
+                        <input
+                          type="checkbox"
+                          checked={compatibilityConsent}
+                          onChange={(e) =>
+                            setCompatibilityConsent(e.target.checked)
+                          }
+                        />
+                        <span>
+                          <b>
+                            I confirm the device is unlocked and eSIM-compatible
+                          </b>
+                          <small>
+                            I understand incompatible devices are not eligible
+                            for a refund.
+                          </small>
+                        </span>
+                      </label>
+                    )}
+                    <label className="confirm-box">
+                      <input
+                        type="checkbox"
+                        checked={legalConsent}
+                        onChange={(e) => setLegalConsent(e.target.checked)}
+                      />
+                      <span>
+                        <b>
+                          {isTopUp
+                            ? "I approve this eSIM recharge"
+                            : "I agree to the purchase terms"}
+                        </b>
+                        <small>
+                          I have read the{" "}
+                          <a href="/terms" target="_blank">
+                            Terms
+                          </a>
+                          ,{" "}
+                          <a href="/privacy" target="_blank">
+                            Privacy Policy
+                          </a>{" "}
+                          and{" "}
+                          <a href="/refund-policy" target="_blank">
+                            Refund Policy
+                          </a>
+                          .
+                        </small>
+                      </span>
+                    </label>
+                  </>
+                )}
                 <div className="gateway-grid">
                   <button
                     className={
@@ -994,12 +1119,33 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   )
                 ) : (
                   <>
-                    <Action busy={busy} onClick={initiatePayment}>
+                    <Action
+                      busy={busy}
+                      disabled={
+                        !submitted &&
+                        (verifying ||
+                          !gatePassed ||
+                          !legalConsent ||
+                          (!isTopUp && !compatibilityConsent))
+                      }
+                      onClick={submitted ? initiatePayment : complete}
+                    >
                       Continue to{" "}
                       {provider === PaymentProvider.FONEPAY
                         ? "Fonepay"
                         : "Khalti"}
                     </Action>
+                    {!submitted && (
+                      <div className="form-actions">
+                        <button
+                          className="button secondary"
+                          onClick={() => stepJump(isTopUp ? 1 : 3)}
+                        >
+                          <ChevronLeft size={16} />{" "}
+                          {isTopUp ? "Back" : "Documents"}
+                        </button>
+                      </div>
+                    )}
                     {submitted && (
                       <div className="form-actions">
                         <button
@@ -1016,35 +1162,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               </div>
             ) : (
               <>
-                <div className="step-tabs">
-                  {(isTopUp
-                    ? ["Recharge", "Review"]
-                    : ["Compatibility", "Traveller", "Documents", "Review"]
-                  ).map((label, index) => {
-                    const value = isTopUp ? (index === 0 ? 1 : 4) : index + 1;
-                    return (
-                      <div
-                        key={label}
-                        className={
-                          step === value ? "active" : step > value ? "done" : ""
-                        }
-                      >
-                        <i>{step > value ? <Check size={13} /> : value}</i>
-                        {step > value ? (
-                          <button
-                            type="button"
-                            onClick={() => stepJump(value)}
-                            title={`Go back to ${label}`}
-                          >
-                            <span>{label}</span>
-                          </button>
-                        ) : (
-                          <span>{label}</span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
                 {step === 1 && (
                   <div className="form-section">
                     <span className="form-icon">
@@ -1061,8 +1178,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     >
                       <input
                         type="checkbox"
-                        checked={compatible}
-                        onChange={(e) => setCompatible(e.target.checked)}
+                        checked={compatibilityConsent}
+                        onChange={(e) =>
+                          setCompatibilityConsent(e.target.checked)
+                        }
                       />
                       <span>
                         <b>I confirm my device is eSIM compatible</b>
@@ -1077,11 +1196,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       busy={busy}
                       next={() =>
                         run(async () => {
-                          if (!compatible)
+                          if (!compatibilityConsent)
                             throw new Error(
                               "Confirm your device is eSIM compatible first",
                             );
-                          setShowAccountChoice(true);
+                          if (isSignedIn === true) await continueWithAccount();
+                          else setShowAccountChoice(true);
                         })
                       }
                     />
@@ -1291,124 +1411,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     />
                   </div>
                 )}
-                {step === 4 && (
-                  <div className="form-section">
-                    {isTopUp ? (
-                      <h2>Review &amp; confirm data top-up</h2>
-                    ) : (
-                      <h2>Review &amp; confirm</h2>
-                    )}
-                    {!isTopUp &&
-                      (verification === null && !verifying ? (
-                        <PassportCheck
-                          status={undefined}
-                          busy={false}
-                          onRecheck={() => void verifyPassport()}
-                        />
-                      ) : verification === null ? (
-                        <PassportCheck
-                          status={undefined}
-                          busy={verifying}
-                          onRecheck={() => void verifyPassport()}
-                        />
-                      ) : (
-                        <PassportCheck
-                          status={verification.status}
-                          busy={false}
-                          onRecheck={() => void verifyPassport()}
-                          onEdit={() => setStep(2)}
-                        />
-                      ))}
-                    {isTopUp && (
-                      <p className="form-note">
-                        This is a data top-up for your existing eSIM
-                        {session!.order.topUpMsisdnMasked
-                          ? ` with MSISDN ${session!.order.topUpMsisdnMasked}`
-                          : ""}
-                        . No traveller details or new documents are required.
-                      </p>
-                    )}
-                    {!isTopUp && (
-                      <label className="confirm-box">
-                        <input
-                          type="checkbox"
-                          checked={compatibilityConsent}
-                          onChange={(e) =>
-                            setCompatibilityConsent(e.target.checked)
-                          }
-                        />
-                        <span>
-                          <b>
-                            I confirm the device is unlocked and eSIM-compatible
-                          </b>
-                          <small>
-                            I understand incompatible devices are not eligible
-                            for a refund.
-                          </small>
-                        </span>
-                      </label>
-                    )}
-                    <label className="confirm-box">
-                      <input
-                        type="checkbox"
-                        checked={legalConsent}
-                        onChange={(e) => setLegalConsent(e.target.checked)}
-                      />
-                      <span>
-                        <b>
-                          {isTopUp
-                            ? "I approve this eSIM recharge"
-                            : "I agree to the purchase terms"}
-                        </b>
-                        <small>
-                          I have read the{" "}
-                          <a href="/terms" target="_blank">
-                            Terms
-                          </a>
-                          ,{" "}
-                          <a href="/privacy" target="_blank">
-                            Privacy Policy
-                          </a>{" "}
-                          and{" "}
-                          <a href="/refund-policy" target="_blank">
-                            Refund Policy
-                          </a>
-                          .
-                        </small>
-                      </span>
-                    </label>
-                    <div className="form-actions">
-                      {!isTopUp && (
-                        <button
-                          className="button secondary"
-                          onClick={() => stepJump(3)}
-                        >
-                          <ChevronLeft size={16} /> Documents
-                        </button>
-                      )}
-                      {isTopUp && (
-                        <button
-                          className="button secondary"
-                          onClick={() => stepJump(1)}
-                        >
-                          <ChevronLeft size={16} /> Back
-                        </button>
-                      )}
-                      <Action
-                        busy={busy}
-                        disabled={
-                          verifying ||
-                          !gatePassed ||
-                          !legalConsent ||
-                          (!isTopUp && !compatibilityConsent)
-                        }
-                        onClick={complete}
-                      >
-                        Complete order
-                      </Action>
-                    </div>
-                  </div>
-                )}
               </>
             )}
           </section>
@@ -1505,9 +1507,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   {verification?.status === "SKIPPED"
                     ? "Document verification is disabled in this environment."
                     : verification?.status === "MANUALLY_APPROVED"
-                      ? "Your documents were reviewed and approved. You can now review and confirm your order."
+                      ? "Your documents were reviewed and approved. You can now choose a payment method and pay."
                       : verification?.status === "VERIFIED"
-                        ? "Your passport matches the details you provided. You can now review and confirm your order."
+                        ? "Your passport matches the details you provided. You can now choose a payment method and pay."
                         : "Your passport matched your traveller details."}
                 </p>
               </>
