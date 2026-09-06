@@ -203,7 +203,7 @@ export default function TransatelDashboard() {
       const value = await response.json();
       if (!response.ok)
         throw new Error(value.error?.message ?? "Reconciliation failed");
-      toast.success(`${profile.iccid} reconciled`);
+      toast.success(`Network status refreshed for ${profile.iccid}`);
       await load();
     } catch (cause) {
       toast.error(
@@ -320,9 +320,7 @@ export default function TransatelDashboard() {
       );
       void load();
     } catch (cause) {
-      toast.error(
-        cause instanceof Error ? cause.message : "Usage sync failed",
-      );
+      toast.error(cause instanceof Error ? cause.message : "Usage sync failed");
     } finally {
       setBusy("");
     }
@@ -458,7 +456,7 @@ export default function TransatelDashboard() {
               <TabsTrigger value="inventory">Unassigned eSIMs</TabsTrigger>
               <TabsTrigger value="failures">Issues</TabsTrigger>
               <TabsTrigger value="actions">
-                Suspend &amp; terminate history
+                Mobile data pause and eSIM closure history
               </TabsTrigger>
             </TabsList>
             <TabsContent value="subscribers" className="mt-4">
@@ -493,7 +491,9 @@ export default function TransatelDashboard() {
                             </p>
                           </TableCell>
                           <TableCell>
-                            <p className="text-[11px] text-muted-foreground">ICCID / SIM serial</p>
+                            <p className="text-[11px] text-muted-foreground">
+                              ICCID / SIM serial
+                            </p>
                             <code className="text-xs">{row.iccid}</code>
                             <p className="text-xs text-muted-foreground">
                               MSISDN: {row.msisdn ?? "Not assigned"}
@@ -640,7 +640,8 @@ export default function TransatelDashboard() {
                                 disabled={busy === row.id}
                                 onClick={() => void reconcile(row)}
                               >
-                                <RefreshCcw className="size-3.5" /> Check network
+                                <RefreshCcw className="size-3.5" /> Refresh
+                                network status
                               </Button>
                               {row.status === "QUARANTINED" && canTerminate ? (
                                 <Button
@@ -722,8 +723,8 @@ export default function TransatelDashboard() {
             </TabsContent>
             <TabsContent value="actions" className="mt-4">
               <Panel
-                title="Suspend and terminate history"
-                description="Record of suspend and terminate requests"
+                title="Mobile data pause and eSIM closure history"
+                description="Record of temporary data pauses and permanent eSIM closure requests sent to Transatel"
                 actions={searchControl(
                   "actions",
                   "Search order, actor, reason or reference…",

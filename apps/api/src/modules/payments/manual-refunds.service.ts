@@ -42,6 +42,7 @@ export class ManualRefundsService {
     };
     const include = {
       order: { select: { orderNumber: true, status: true, totalAmount: true } },
+      payment: { select: { provider: true } },
       requestedBy: { select: { email: true } },
       reviewedBy: { select: { email: true } },
     } as const;
@@ -251,7 +252,7 @@ export class ManualRefundsService {
     const reference = input.providerReference.trim();
     if (reference.length < 3 || reference.length > 200)
       throw new BadRequestException(
-        "A valid Khalti refund reference is required",
+        "A valid payment-provider refund reference is required",
       );
     const completedAt = new Date(input.completedAt);
     if (
@@ -342,7 +343,7 @@ export class ManualRefundsService {
         error.code === "P2002"
       )
         throw new ConflictException(
-          "This Khalti refund reference has already been recorded",
+          "This payment-provider refund reference has already been recorded",
         );
       throw error;
     }

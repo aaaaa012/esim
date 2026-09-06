@@ -24,13 +24,12 @@ describe("LifecycleActions", () => {
         canTerminate
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Suspend" }));
-    const submit = screen.getByRole("button", { name: "Suspend connectivity" });
+    fireEvent.click(screen.getByRole("button", { name: "Pause mobile data" }));
+    const submit = screen.getByRole("button", { name: "Confirm data pause" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(
-      screen.getByPlaceholderText("Reason (required)"),
-      { target: { value: "Customer reported device theft" } },
-    );
+    fireEvent.change(screen.getByPlaceholderText("Reason (required)"), {
+      target: { value: "Customer reported device theft" },
+    });
     fireEvent.change(screen.getByLabelText(/Type.*SUSPEND.*to confirm/), {
       target: { value: "SUSPEND" },
     });
@@ -53,6 +52,8 @@ describe("LifecycleActions", () => {
         canTerminate={false}
       />,
     );
-    expect(screen.queryByRole("button", { name: "Terminate" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Permanently end eSIM" }),
+    ).toBeNull();
   });
 });

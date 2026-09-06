@@ -128,7 +128,7 @@ export default function IntegrationsClient() {
     }
   };
   const transatelAction = async (
-    action: "sync-catalog" | "sync-usage" | "ensure-webhook",
+    action: "sync-catalog" | "sync-usage",
   ) => {
     setBusy(`transatel:${action}`);
     try {
@@ -138,9 +138,7 @@ export default function IntegrationsClient() {
       toast.success(
         action === "sync-catalog"
           ? "Plans synced with the network provider"
-          : action === "sync-usage"
-            ? "Data usage synchronized with network provider"
-            : "Automatic notifications set up",
+          : "Data usage synchronized with network provider",
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
@@ -290,24 +288,19 @@ export default function IntegrationsClient() {
                       )}
                       Sync usage
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => transatelAction("ensure-webhook")}
-                      disabled={busy === "transatel:ensure-webhook"}
-                    >
-                      {busy === "transatel:ensure-webhook" ? (
-                        <Spinner />
-                      ) : (
-                        <Pencil className="size-4" />
-                      )}
-                      Register webhook
-                    </Button>
                   </>
                 )}
               </div>
               {item.id === "transatel" && (
                 <div className="mt-4 space-y-3 rounded-lg border border-dashed p-4">
+                  <div>
+                    <p className="text-sm font-medium">Provider notifications</p>
+                    <p className="text-xs text-muted-foreground">
+                      Configure the callback URL and event subscriptions in the
+                      Transatel Developer Console. Transatel no longer permits
+                      webhook registration through its API.
+                    </p>
+                  </div>
                   <p className="text-sm font-medium">Eligibility check</p>
                   <Input
                     placeholder="Search country or plan…"

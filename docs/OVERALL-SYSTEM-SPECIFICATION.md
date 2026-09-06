@@ -217,7 +217,9 @@ Production requires `ORDER_WORKFLOW_MODE=database-first`. Lifecycle mutations re
 - Partner complete orders require compatibility, terms and privacy consent. Direct checkout requires compatibility acceptance before progress.
 - Passport and ticket are required. VISA requirement comes from destination configuration.
 - Direct payment requires passport verification where the flow calls it. Sensitive information must not go into metadata or logs.
-- Khalti is the only payment provider. Only a verified matching result confirms payment.
+- Khalti and Checkout by Fonepay are supported payment providers. Only an
+  authoritative server-side lookup with matching reference, provider, order,
+  currency and amount confirms payment.
 - QR data is delivered once available. Email uses an unencrypted QR image attachment, not a PDF. An authenticated customer can download an unencrypted QR PDF.
 - Partner accounts use prepaid NPR paisa. Optimistic locking protects balance changes and partner IDs isolate records.
 - Inventory reservation is atomic. Provider events decide the provider lifecycle state.

@@ -416,7 +416,7 @@ export class OperationsIntegrationLogsController {
  * diagnostic API used by the integrations workspace.
  */
 const SENSITIVE_LOG_KEY =
-  /authorization|cookie|password|secret|token|api.?key|signature|passport|document|email|phone|mobile|msisdn|qr|activation.?code|otp|pin|card|account.?number/i;
+  /(^|_)(authorization|cookie|password|secret|client_?secret|webhook_?secret|access_?token|refresh_?token|lookup_?token|guest_?access_?token|api_?key|signature|passport|document|email|phone|mobile|qr_?(code|payload)|activation_?code|matching_?id|otp|pin|card|account_?number|payment_?url|recovery_?(link|url|token))$/i;
 
 export function sanitizeOperationsLog(value: unknown, depth = 0): unknown {
   if (depth > 8) return "[TRUNCATED]";

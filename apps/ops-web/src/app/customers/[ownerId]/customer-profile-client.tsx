@@ -2,7 +2,15 @@
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Mail, RefreshCcw, UserRound } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Circle,
+  Mail,
+  RefreshCcw,
+  UserRound,
+} from "lucide-react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge, humane } from "@/components/status-badge";
@@ -134,7 +142,6 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const [email, setEmail] = useState("");
   const [emailReason, setEmailReason] = useState("");
   const [emailConfirmation, setEmailConfirmation] = useState("");
-  const [emailUpdateResult, setEmailUpdateResult] = useState("");
   const load = useCallback(() => {
     setError("");
     return authFetch(`${API}/operations/customers/${ownerId}`, { headers })
@@ -183,7 +190,6 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const correctEmail = async () => {
     setBusy("email");
     setError("");
-    setEmailUpdateResult("");
     try {
       const response = await authFetch(
         `${API}/operations/customers/${ownerId}/email`,
@@ -209,13 +215,17 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         throw new Error(value.error?.message ?? "Email could not be updated");
       const sessionsFound = value.data?.sessionsFound ?? 0;
       const sessionsRevoked = value.data?.sessionsRevoked ?? 0;
-      setEmailUpdateResult(
-        value.data?.changed
-          ? sessionsRevoked === sessionsFound
-            ? `Email updated. ${sessionsRevoked} active session${sessionsRevoked === 1 ? "" : "s"} ended.`
-            : `Email updated, but only ${sessionsRevoked} of ${sessionsFound} active sessions ended. Review the identity-service logs.`
-          : "No change was needed because this is already the customer's sign-in email.",
-      );
+      if (!value.data?.changed) {
+        toast.info("This is already the customer's sign-in email.");
+      } else if (sessionsRevoked === sessionsFound) {
+        toast.success(
+          `Sign-in email updated. ${sessionsRevoked} active session${sessionsRevoked === 1 ? "" : "s"} ended.`,
+        );
+      } else {
+        toast.warning(
+          `Email updated, but ${sessionsFound - sessionsRevoked} active session${sessionsFound - sessionsRevoked === 1 ? "" : "s"} could not be ended. Check identity-service logs.`,
+        );
+      }
       setEmailReason("");
       setEmailConfirmation("");
       await load();
@@ -252,6 +262,20 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
     normalizedEmail !== originalEmail &&
     emailReason.trim().length >= 10 &&
     normalizedEmailConfirmation === "CHANGE EMAIL";
+  const emailRequirements = [
+    {
+      met: emailIsValid && normalizedEmail !== originalEmail,
+      label: "A valid new email, different from the current address",
+    },
+    {
+      met: emailReason.trim().length >= 10,
+      label: "A verification reason of at least 10 characters",
+    },
+    {
+      met: normalizedEmailConfirmation === "CHANGE EMAIL",
+      label: "The confirmation words “CHANGE EMAIL”",
+    },
+  ];
 
   return (
     <>
@@ -439,7 +463,6 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                       value={email}
                       onChange={(event) => {
                         setEmail(event.target.value);
-                        setEmailUpdateResult("");
                       }}
                     />
                     <span className="mt-1 block text-xs text-muted-foreground">
@@ -454,7 +477,6 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                       value={emailReason}
                       onChange={(event) => {
                         setEmailReason(event.target.value);
-                        setEmailUpdateResult("");
                       }}
                       placeholder="Describe how the corrected email was verified."
                     />
@@ -469,7 +491,6 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                       value={emailConfirmation}
                       onChange={(event) => {
                         setEmailConfirmation(event.target.value);
-                        setEmailUpdateResult("");
                       }}
                       autoComplete="off"
                       spellCheck={false}
@@ -479,27 +500,42 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                       Capitalization and extra spaces are accepted.
                     </span>
                   </label>
-                  {!emailUpdateReady ? (
-                    <p className="text-xs text-muted-foreground" role="status">
-                      Complete all three requirements to enable this action.
+                  <div
+                    className="rounded-md border bg-background/70 p-3"
+                    role="status"
+                  >
+                    <p className="mb-2 text-xs font-medium">
+                      Before the button is enabled:
                     </p>
-                  ) : null}
+                    <ul className="space-y-1.5">
+                      {emailRequirements.map((requirement) => (
+                        <li
+                          key={requirement.label}
+                          className={`flex items-start gap-2 text-xs ${requirement.met ? "text-emerald-700" : "text-muted-foreground"}`}
+                        >
+                          {requirement.met ? (
+                            <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
+                          ) : (
+                            <Circle className="mt-0.5 size-3.5 shrink-0" />
+                          )}
+                          {requirement.label}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                   <Button
                     type="button"
                     disabled={busy === "email" || !emailUpdateReady}
+                    title={
+                      emailUpdateReady
+                        ? "Update the login email and sign the customer out everywhere"
+                        : "Complete the three requirements shown above"
+                    }
                     onClick={() => void correctEmail()}
                   >
                     {busy === "email" ? <Spinner /> : null}
                     Update email and end active sessions
                   </Button>
-                  {emailUpdateResult ? (
-                    <p
-                      className={`text-sm ${emailUpdateResult.includes("only") ? "text-destructive" : "text-emerald-700"}`}
-                      role="status"
-                    >
-                      {emailUpdateResult}
-                    </p>
-                  ) : null}
                 </div>
               </div>
             </section>

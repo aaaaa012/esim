@@ -128,36 +128,53 @@ export function LifecycleActions({
   };
   return (
     <>
-      <div className="flex justify-end gap-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void reconcile()}
-          title="Get the latest eSIM status from the network provider"
-        >
-          <RefreshCcw className="size-3.5" /> Check status
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={pending || !suspendable}
-          onClick={() => setAction("suspend")}
-        >
-          <PauseCircle className="size-3.5" /> Suspend
-        </Button>
-        {canTerminate ? (
+      <div className="grid gap-2 sm:grid-cols-3">
+        <div className="rounded-md border bg-muted/20 p-2">
           <Button
+            className="w-full"
             size="sm"
-            variant="destructive"
-            disabled={
-              providerStatus === "TERMINATED" ||
-              providerStatus === "TERMINATION_PENDING"
-            }
-            onClick={() => setAction("terminate")}
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void reconcile()}
           >
-            <Trash2 className="size-3.5" /> Terminate
+            <RefreshCcw className="size-3.5" /> Refresh network status
           </Button>
+          <p className="mt-1 px-1 text-xs text-muted-foreground">
+            Reads the latest Transatel status. Makes no service change.
+          </p>
+        </div>
+        <div className="rounded-md border bg-muted/20 p-2">
+          <Button
+            className="w-full"
+            size="sm"
+            variant="outline"
+            disabled={pending || !suspendable}
+            onClick={() => setAction("suspend")}
+          >
+            <PauseCircle className="size-3.5" /> Pause mobile data
+          </Button>
+          <p className="mt-1 px-1 text-xs text-muted-foreground">
+            Temporarily stops data. The eSIM can be reconnected later.
+          </p>
+        </div>
+        {canTerminate ? (
+          <div className="rounded-md border border-destructive/25 bg-destructive/5 p-2">
+            <Button
+              className="w-full"
+              size="sm"
+              variant="destructive"
+              disabled={
+                providerStatus === "TERMINATED" ||
+                providerStatus === "TERMINATION_PENDING"
+              }
+              onClick={() => setAction("terminate")}
+            >
+              <Trash2 className="size-3.5" /> Permanently end eSIM
+            </Button>
+            <p className="mt-1 px-1 text-xs text-muted-foreground">
+              Removes it from the network forever. Remaining data is lost.
+            </p>
+          </div>
         ) : null}
       </div>
       <Dialog
@@ -171,12 +188,12 @@ export function LifecycleActions({
             <DialogTitle>
               {action === "terminate"
                 ? "Permanently terminate eSIM"
-                : "Suspend eSIM connectivity"}
+                : "Pause this eSIM's mobile data"}
             </DialogTitle>
             <DialogDescription>
               {action === "terminate"
                 ? "This permanently removes the eSIM from the network and cannot be undone. Any remaining data will be lost."
-                : "Temporarily pauses the customer's mobile data. They can be reconnected later. The network processes this automatically."}
+                : "This asks Transatel to temporarily stop mobile data on this eSIM. The eSIM remains registered and can be reconnected later."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -220,7 +237,7 @@ export function LifecycleActions({
                 ? "Submitting…"
                 : action === "terminate"
                   ? "Terminate permanently"
-                  : "Suspend connectivity"}
+                  : "Confirm data pause"}
             </Button>
           </DialogFooter>
         </DialogContent>

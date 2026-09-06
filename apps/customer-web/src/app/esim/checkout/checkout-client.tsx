@@ -5,7 +5,7 @@ import { SignInButton, useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import ErrorModal from "../../../components/error-modal";
-import { fonepayBankIntentUrl } from "./payment-intent";
+import { filterFonepayBanks, fonepayBankIntentUrl } from "./payment-intent";
 import { paymentActionDisabled } from "./payment-gates";
 import Link from "next/link";
 import {
@@ -524,6 +524,7 @@ export default function CheckoutClient({
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
   const [verifyingPassport, setVerifyingPassport] = useState(false);
+  const [fonepayBankQuery, setFonepayBankQuery] = useState("");
   const [availableProviders, setAvailableProviders] = useState<
     PaymentProvider[]
   >([PaymentProvider.KHALTI]);
@@ -1259,7 +1260,7 @@ export default function CheckoutClient({
           <h1>We could not load this checkout</h1>
           <p>The plan link may be incomplete or no longer available.</p>
           <div>
-            <Link className="button" href="/#plans">
+            <Link className="button" href="/destinations">
               Choose a plan
             </Link>
             {isSignedIn === true && (
@@ -1918,11 +1919,17 @@ export default function CheckoutClient({
                 ) : order && order.status === "PROVISIONING_FAILED" ? (
                   <div className="error-panel">
                     <AlertTriangle size={42} />
-                    <b>Your recharge needs attention</b>
+                    <b>
+                      {isTopUp
+                        ? "Your recharge needs attention"
+                        : "Your eSIM activation needs attention"}
+                    </b>
                     <span>{order.orderNumber}</span>
                     <p>
                       {order.provisioningFailure?.message ??
-                        "Your payment was received, but we could not complete the recharge with the network provider. Our team is reviewing it and will contact you."}
+                        (isTopUp
+                          ? "Your payment was received, but we could not complete the recharge with the network provider. Our team is reviewing it and will contact you."
+                          : "Your payment was received, but we could not finish the eSIM activation. Our team is reviewing it and will contact you.")}
                     </p>
                     <Link className="button secondary" href="/">
                       Return home
@@ -2112,8 +2119,22 @@ export default function CheckoutClient({
                                   Select your bank to continue securely.
                                 </small>
                               </div>
+                              <label className="fonepay-bank-search">
+                                <span className="sr-only">Search banking apps</span>
+                                <input
+                                  type="search"
+                                  value={fonepayBankQuery}
+                                  onChange={(event) =>
+                                    setFonepayBankQuery(event.target.value)
+                                  }
+                                  placeholder="Search banking apps"
+                                />
+                              </label>
                               <div className="fonepay-bank-list">
-                                {payment.banks.map((bank) => (
+                                {filterFonepayBanks(
+                                  payment.banks,
+                                  fonepayBankQuery,
+                                ).map((bank) => (
                                   <button
                                     key={bank.bankCode}
                                     onClick={() => {
@@ -2122,8 +2143,11 @@ export default function CheckoutClient({
                                         bank.intentScheme,
                                         payment.qrPayload,
                                       );
-                                      if (target)
-                                        window.location.assign(target);
+                                      if (target) window.location.assign(target);
+                                      else
+                                        setError(
+                                          "This banking app cannot be opened securely. Please choose another bank or scan the QR code.",
+                                        );
                                     }}
                                   >
                                     <span className="fonepay-bank-identity">
@@ -2148,6 +2172,15 @@ export default function CheckoutClient({
                                   </button>
                                 ))}
                               </div>
+                              {!filterFonepayBanks(
+                                payment.banks,
+                                fonepayBankQuery,
+                              ).length ? (
+                                <p className="fonepay-bank-empty">
+                                  No matching banking app. Try another name or
+                                  scan the QR code.
+                                </p>
+                              ) : null}
                             </div>
                           ) : null}
                           <Action

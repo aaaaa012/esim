@@ -607,7 +607,7 @@ export default function EsimDetails({ id }: { id: string }) {
                     another plan without being charged.
                   </small>
                   <div className="qr-recovery-buttons">
-                    <Link className="button" href="/#plans">
+                    <Link className="button" href="/destinations">
                       Choose another plan
                     </Link>
                   </div>

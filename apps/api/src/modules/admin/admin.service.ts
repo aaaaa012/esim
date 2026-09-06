@@ -883,11 +883,6 @@ export class AdminService {
     return raw;
   }
 
-  async ensureTransatelWebhook() {
-    this.requireTransatel();
-    return this.connectivity.ensureWebhook();
-  }
-
   async transatelEligibility(planId: string, msisdn: string) {
     this.requireTransatel();
     if (!/^\d{6,15}$/.test(msisdn))

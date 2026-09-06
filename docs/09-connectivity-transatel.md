@@ -100,13 +100,11 @@ top-ups use `subscribe`.
 - 403/404 → `{ allowed: false, errorKey: 'ELIGIBILITY_REJECTED', ... }`.
 - Otherwise returns `allowed` from `canSubscribe.allowed` plus errorKey/message.
 
-### Webhook registration (`ensureWebhook`, `transatel.provider.ts:477-506`)
+### Webhook datastream configuration
 
-- Requires `TRANSATEL_WEBHOOK_TARGET_URL`.
-- Lists `GET {base}/webhooks/api/webhooks`; if an existing webhook matches
-  targetUrl+mvnoRef it PUTs, else POSTs with `{ mvnoRef, status: 'active',
-targetUrl, email, secret?, events }`.
-- Events default from `TRANSATEL_WEBHOOK_EVENTS`.
+- API-based webhook subscription was removed by Transatel in February 2026.
+- Configure the callback URL, shared secret and required lifecycle events as a
+  datastream in the Transatel Developer Console, then send a Console test event.
 
 ### Inbound webhook handling (`handleWebhook`, `transatel.provider.ts:508-582`)
 
@@ -133,9 +131,7 @@ endpoint, status, duration, errorCode/errorMessage) when Prisma is enabled
 `connectivity.service.ts` — a thin wrapper delegating every method to
 `TransatelProvider` (`connectivity.service.ts:35-43`), plus startup hooks:
 
-- On module init, if `TRANSATEL_WEBHOOK_TARGET_URL` is set, registers the
-  webhook (best-effort, warns on failure)
-  (`connectivity.service.ts:10-22`).
+- It never attempts obsolete API-based webhook registration on startup.
 - If `TRANSATEL_CATALOG_SYNC_ON_STARTUP === 'true'`, syncs the catalog
   (`connectivity.service.ts:23-32`).
 

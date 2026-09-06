@@ -71,6 +71,13 @@ local guest-order continuity.
 | `KHALTI_BASE_URL`           | `https://dev.khalti.com/api/v2` (from `.env.example`) | Khalti API root (`khalti.gateway.ts:22-25`)                                                                                 |
 | `KHALTI_SECRET_KEY`         | —                                                     | Khalti auth; its presence reports gateway UP (`khalti.gateway.ts:27-30`, `orders.controller.ts:30`, `admin.service.ts:209`) |
 | `KHALTI_REQUEST_TIMEOUT_MS` | `15000`                                               | Khalti request timeout (`khalti.gateway.ts:31-34`)                                                                          |
+| `FONEPAY_ENABLED`           | `false`                                               | Exposes Checkout by Fonepay only when every required credential is present                                                   |
+| `FONEPAY_BASE_URL`          | —                                                     | Merchant API root supplied by Fonepay                                                                                         |
+| `FONEPAY_USERNAME`          | —                                                     | Server-side OAuth username                                                                                                    |
+| `FONEPAY_PASSWORD`          | —                                                     | Server-side OAuth password; never sent to either web frontend                                                                 |
+| `FONEPAY_TERMINAL_ID`       | —                                                     | Merchant terminal identifier, maximum 16 characters                                                                           |
+| `FONEPAY_PRIVATE_KEY_BASE64`| —                                                     | PKCS8 RSA private key used to sign the exact request JSON; server only                                                        |
+| `FONEPAY_REQUEST_TIMEOUT_MS`| `15000`                                               | Fonepay request timeout                                                                                                       |
 
 ## Connectivity (Transatel)
 
@@ -81,13 +88,10 @@ local guest-order continuity.
 | `TRANSATEL_CLIENT_SECRET`           | —                                                                                      | OAuth client credentials (`transatel.provider.ts:157-171`)                                |
 | `TRANSATEL_MVNO_REF`                | —                                                                                      | OCS order MVNO reference (`transatel.provider.ts:288-289,306`)                            |
 | `TRANSATEL_COS`                     | `WW_COS_UBG_MKP_EUR`                                                                   | Catalog COS (`transatel.provider.ts:379,462`)                                             |
-| `TRANSATEL_PAYMENT_PROVIDER`        | —                                                                                      | OCS order payment (omitted when empty) (`transatel.provider.ts:308`)                      |
 | `TRANSATEL_FX_TO_NPR`               | —                                                                                      | Catalog currency→NPR conversion (`transatel.provider.ts:630`)                             |
 | `TRANSATEL_CATALOG_SYNC_ON_STARTUP` | —                                                                                      | `true` syncs catalog at startup (`connectivity.service.ts:23`)                            |
-| `TRANSATEL_WEBHOOK_TARGET_URL`      | —                                                                                      | Registers webhook at startup (`connectivity.service.ts:11-16`)                            |
-| `TRANSATEL_WEBHOOK_CONTACT_EMAIL`   | `it-operations@visacompass.local`                                                      | Webhook registration (`transatel.provider.ts:481`)                                        |
+| `TRANSATEL_WEBHOOK_TARGET_URL`      | —                                                                                      | Public callback URL that must be configured as a Developer Console datastream             |
 | `TRANSATEL_WEBHOOK_SECRET`          | —                                                                                      | Webhook signature verification (`webhooks.controller.ts:76`, `transatel.provider.ts:482`) |
-| `TRANSATEL_WEBHOOK_EVENTS`          | OCS lifecycle plus `CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED` and `.../TERMINATED` | Registered product and subscriber lifecycle events                                        |
 | `TRANSATEL_REQUEST_TIMEOUT_MS`      | `15000`                                                                                | Outbound request timeout (`transatel.provider.ts:151-154`)                                |
 
 ## Private document storage

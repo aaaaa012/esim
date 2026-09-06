@@ -146,7 +146,6 @@ From `apps/api/src/modules/admin/admin.controller.ts:22-99`.
 | GET    | `/admin/integrations`                          | Integration statuses (email, khalti, transatel, S3, whatsapp)        |
 | POST   | `/admin/integrations/:id/test`                 | Test integration configuration                                        |
 | POST   | `/admin/integrations/transatel/sync-catalog`   | Sync Transatel catalog                                                |
-| POST   | `/admin/integrations/transatel/ensure-webhook` | Register/update Transatel webhook                                     |
 | POST   | `/admin/integrations/transatel/eligibility`    | Body `{ planId, msisdn }` eligibility check                           |
 | GET    | `/admin/users`                                 | Users with roles, capabilities, customerCode                          |
 | PATCH  | `/admin/users/:id/account-type`                | Body `{ accountType }` (OPERATIONS/SUPER_ADMIN)                       |
@@ -207,7 +206,7 @@ exempt. Returns HTTP 202.
 | Method | Path                               | Verification                                                                                 | Behavior                                                                                   |
 | ------ | ---------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | POST   | `/webhooks/clerk`                  | Svix via `CLERK_WEBHOOK_SECRET`; simulated (accepted) when not configured and not production | Synchronizes user lifecycle (`clerk-sync.service.ts`)                                      |
-| POST   | `/webhooks/payments/:provider`     | Required `x-visa-signature` HMAC over raw bytes; Khalti only                                 | Persists durable inbox event + enqueues payment/dispute callback processing                |
+| POST   | `/webhooks/payments/:provider`     | Optional merchant-specific Khalti integration; required `x-visa-signature` HMAC over raw bytes | Persists durable inbox event + enqueues payment/dispute callback processing; Fonepay uses WebSocket signal plus status lookup, not this route |
 | POST   | `/webhooks/connectivity/:provider` | `x-tsl-signature-256` or `x-visa-signature`; required in production                          | Persists event + enqueues `providerCallbacks` job `connectivity-callback` (Transatel only) |
 
 ## Integration events & logs (auth: OPERATIONS/SUPER_ADMIN)

@@ -147,19 +147,6 @@ interface ProductCatalogResponse {
   products: ProductDetails[];
 }
 
-interface WebhookResponse {
-  id: string;
-  mvnoRef: string;
-  status: "active" | "inactive" | "suspended";
-  targetUrl: string;
-  email: string;
-  events: Array<string | { eventType: string }>;
-}
-
-interface WebhooksResponse {
-  webhooks: WebhookResponse[];
-}
-
 interface ApiError {
   error?: string;
   error_description?: string;
@@ -1604,95 +1591,6 @@ export class TransatelProvider implements ConnectivityProvider {
     return {
       allowed: true,
     };
-  }
-
-  async ensureWebhook(): Promise<{
-    registered: boolean;
-    id?: string;
-    targetUrl: string;
-    events: string[];
-  }> {
-    const targetUrl = process.env.TRANSATEL_WEBHOOK_TARGET_URL;
-    if (!targetUrl) return { registered: false, targetUrl: "", events: [] };
-    const mvnoRef = this.env("TRANSATEL_MVNO_REF");
-    const email =
-      process.env.TRANSATEL_WEBHOOK_CONTACT_EMAIL ??
-      "it-operations@visacompass.local";
-    const secret = process.env.TRANSATEL_WEBHOOK_SECRET ?? "";
-    const events = (
-      process.env.TRANSATEL_WEBHOOK_EVENTS ??
-      "OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/CANCELED,OCS/PRODUCT/EXPIRED,OCS/PRODUCT/TERMINATED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED"
-    )
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-    const base = this.baseUrl("webhooks");
-    const listResponse = await this.authorizedFetch(`${base}/api/webhooks`, {
-      method: "GET",
-      operation: "webhook",
-    });
-    if (!listResponse.ok)
-      throw new ApiException({
-        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
-        message: "Webhook registration is unavailable right now.",
-        status: 502,
-        details: `Failed to list Transatel webhooks: ${await this.errorText(listResponse)}`,
-      });
-    const listed = (await listResponse.json()) as WebhooksResponse;
-    const existing = (
-      Array.isArray(listed.webhooks) ? listed.webhooks : []
-    ).find((item) => item.targetUrl === targetUrl && item.mvnoRef === mvnoRef);
-
-    const definition = {
-      mvnoRef,
-      status: "active",
-      targetUrl,
-      email,
-      ...(secret ? { secret } : {}),
-      events,
-    };
-    let id: string | undefined;
-    if (existing) {
-      const updateResponse = await this.authorizedFetch(
-        `${base}/api/webhooks/${existing.id}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(definition),
-          operation: "webhook",
-        },
-      );
-      if (!updateResponse.ok)
-        throw new ApiException({
-          code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
-          message: "Webhook registration is unavailable right now.",
-          status: 502,
-          details: `Failed to update Transatel webhook: ${await this.errorText(updateResponse)}`,
-        });
-      id = existing.id;
-      this.logger.log(`Updated Transatel webhook ${id} for ${targetUrl}`);
-    } else {
-      const createResponse = await this.authorizedFetch(
-        `${base}/api/webhooks`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(definition),
-          operation: "webhook",
-        },
-      );
-      if (!createResponse.ok)
-        throw new ApiException({
-          code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
-          message: "Webhook registration is unavailable right now.",
-          status: 502,
-          details: `Failed to register Transatel webhook: ${await this.errorText(createResponse)}`,
-        });
-      id = ((await createResponse.json()) as WebhookResponse).id;
-      this.logger.log(`Registered Transatel webhook ${id} for ${targetUrl}`);
-    }
-    return { registered: true, id, targetUrl, events };
   }
 
   async handleWebhook(payload: unknown): Promise<ProviderWebhookResult> {

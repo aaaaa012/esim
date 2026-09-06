@@ -405,7 +405,6 @@ separation (customer portal 404s for staff and vice-versa) and MFA redirects.
 | `GET /admin/integrations`                                                  | Config status of Email/Khalti/Transatel/Amazon S3/WhatsApp with masked secret values. |
 | `POST /admin/integrations/:id/test`                                        | Health check per integration.                                                          |
 | `POST /admin/integrations/transatel/sync-catalog`                          | Pulls Transatel catalog → plans (see §6.6).                                            |
-| `POST /admin/integrations/transatel/ensure-webhook`                        | Registers/updates the Transatel webhook (see §6.7).                                    |
 | `POST /admin/integrations/transatel/eligibility`                           | Checks plan eligibility for an MSISDN.                                                 |
 | `GET /admin/users`                                                         | Users with effective capabilities, status, customer code.                              |
 | `PATCH /admin/users/:id/account-type`                                      | Staff role change (audited; cannot convert customers).                                 |
@@ -476,7 +475,7 @@ Request: `POST <root>/ocs/subscriptions/api/orders/products`
   "orderType": "preload",
   "mvnoRef": "<TRANSATEL_MVNO_REF>",
   "product": { "productId": "<plan.providerPlanId>" },
-  "payment": { "provider": "<TRANSATEL_PAYMENT_PROVIDER>" }, // optional
+  "payment": { "provider": "customer" },
   "transactionReference": "<order.id>"
 }
 ```
@@ -564,15 +563,12 @@ skipped. Upsert `Country` + `Plan` (key `countryId_providerPlanId`) inside a
 transaction per product, setting `status: ACTIVE`, `sellingPrice = costPrice`.
 Returns `{ synced, skipped }`.
 
-### 6.7 Webhook registration
+### 6.7 Webhook datastream
 
-- Events (default): `OCS/PRODUCT/PRELOADED, OCS/PRODUCT/ACTIVATED,
-OCS/PRODUCT/EXPIRED, OCS/PRODUCT/TERMINATED` (`TRANSATEL_WEBHOOK_EVENTS`).
-- Lists `GET <root>/webhooks/api/webhooks`; updates by id via PUT or creates
-  via POST with `{ mvnoRef, status:'active', targetUrl, email, secret?,
-events }`.
-- Runs at startup when `TRANSATEL_WEBHOOK_TARGET_URL` is set
-  (`connectivity.service.ts:10`), and on demand via Admin.
+API registration is no longer supported. Configure the callback URL, shared
+secret and required product/subscriber lifecycle events in the Transatel
+Developer Console. The application makes no webhook-control-plane request at
+startup or from Admin.
 
 ### 6.8 Inbound webhook → order effects
 
@@ -639,7 +635,7 @@ purchase_order_name: orderNumber }` → `{ pidx, payment_url, expires_at }`.
 
 ### 7.2 eSewa (removed)
 
-eSewa support was removed. The platform now integrates Khalti as the sole
+eSewa support was removed. The platform now integrates Khalti and Checkout by Fonepay as
 payment gateway (see §7.1). There are no eSewa gateway adapters, env vars, or
 `PaymentProvider.ESEWA` in the codebase.
 
@@ -929,7 +925,7 @@ redirects unverified-MFA Super Admins to `/security`.
 | Queues        | `REDIS_URL` (empty → simulation), `QUEUE_CONCURRENCY` (3), `RECONCILIATION_INTERVAL_MINUTES` (15)                                                                                                                                                                                                                                                                                                                                          |
 | Hardening     | `RATE_LIMIT_PER_MINUTE` (300), `AUTH_RATE_LIMIT_PER_MINUTE` (60)                                                                                                                                                                                                                                                                                                                                                                           |
 | Payments      | `PAYMENT_MODE` (simulator), `PAYMENT_SIMULATOR_SECRET`, `KHALTI_BASE_URL`, `KHALTI_SECRET_KEY`                                                                                                                                                                                                                                                                                                                                             |
-| Transatel     | `TRANSATEL_BASE_URL`, `TRANSATEL_CLIENT_ID`, `TRANSATEL_CLIENT_SECRET`, `TRANSATEL_MVNO_REF`, `TRANSATEL_COS`, `TRANSATEL_PAYMENT_PROVIDER` (customer), `TRANSATEL_FX_TO_NPR` (170), `TRANSATEL_CATALOG_SYNC_ON_STARTUP` (false), `TRANSATEL_WEBHOOK_TARGET_URL`, `TRANSATEL_WEBHOOK_CONTACT_EMAIL`, `TRANSATEL_WEBHOOK_SECRET`, `TRANSATEL_WEBHOOK_EVENTS`, `TRANSATEL_REQUEST_TIMEOUT_MS` (15000) |
+| Transatel     | `TRANSATEL_BASE_URL`, `TRANSATEL_CLIENT_ID`, `TRANSATEL_CLIENT_SECRET`, `TRANSATEL_MVNO_REF`, `TRANSATEL_COS`, `TRANSATEL_FX_TO_NPR` (170), `TRANSATEL_CATALOG_SYNC_ON_STARTUP` (false), `TRANSATEL_WEBHOOK_TARGET_URL`, `TRANSATEL_WEBHOOK_SECRET`, `TRANSATEL_REQUEST_TIMEOUT_MS` (15000) |
 | Storage       | `AWS_REGION`, `AWS_S3_BUCKET`; optional `AWS_S3_ENDPOINT`, `AWS_S3_FORCE_PATH_STYLE` for local compatible storage                                                                                                                                                                                                                                                                                                                          |
 | Notifications | `NOTIFICATION_MODE` (simulator), `EMAIL_PROVIDER` (`ses`), `AWS_SES_REGION`, `AWS_SES_CONFIGURATION_SET`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`, `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`                                                                                                                                       |
 | Web apps      | `NEXT_PUBLIC_API_URL`                                                                                                                                                                                                                                                                                                                                                                                                                      |

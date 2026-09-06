@@ -42,6 +42,7 @@ const qrResponseSchema = z
     qrMessage: z.string().min(1).optional(),
     qrString: z.string().min(1).optional(),
     websocketId: z.string().url().optional(),
+    status: z.string().min(1),
   })
   .refine(
     (value) => value.qrMessage || value.qrString,
@@ -264,6 +265,14 @@ export class FonepayGateway implements PaymentGateway {
     amountNpr: number;
     returnUrl: string;
   }): Promise<PaymentInitiation> {
+    if (
+      !Number.isFinite(input.amountNpr) ||
+      input.amountNpr < 1 ||
+      input.amountNpr > 9_999_999
+    )
+      return this.fail("Fonepay amount must be between NPR 1 and NPR 9,999,999");
+    if (!input.orderNumber.trim())
+      return this.fail("Fonepay billId must not be blank");
     const reference = `VC${input.attemptId.replace(/[^A-Za-z0-9]/g, "").slice(0, 28)}`;
     const banksRaw = await this.request(
       "/api/merchant/third-party/v2/banks/list",
@@ -292,6 +301,8 @@ export class FonepayGateway implements PaymentGateway {
     const parsedQr = qrResponseSchema.safeParse(qrRaw);
     if (!parsedQr.success) return this.fail("Fonepay QR response was invalid");
     const qr = parsedQr.data;
+    if (qr.status.toLowerCase() !== "success")
+      return this.fail(`Fonepay QR generation returned status: ${qr.status}`);
     if (qr.prn !== reference)
       return this.fail("Fonepay QR reference did not match the request");
     const qrPayload = qr.qrMessage ?? qr.qrString!;

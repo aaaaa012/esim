@@ -103,7 +103,7 @@ export default function CustomerHeader() {
           />
         </Link>
         <nav className="navlinks">
-          {navLink("/#plans", "Destinations")}
+          {navLink("/destinations", "Destinations")}
           {navLink("/#recharge", "Recharge")}
           {navLink("/#how", "How it works")}
           {navLink("/compatibility", "Compatibility")}
@@ -154,7 +154,7 @@ export default function CustomerHeader() {
       {open && (
         <div className="nav-menu" id="customer-navigation-menu">
           <div className="shell nav-menu-inner">
-            {navLink("/#plans", "Destinations")}
+            {navLink("/destinations", "Destinations")}
             {navLink("/#recharge", "Recharge")}
             {navLink("/#how", "How it works")}
             {navLink("/compatibility", "Compatibility")}

@@ -491,7 +491,7 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
-  const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
+  const transatelAction = async (action: "sync-catalog") => {
     if (
       action === "sync-catalog" &&
       !(await confirm({ title: "Sync provider catalogue?", description: "Package data and costs will be refreshed. Existing selling prices, visibility, and popularity are preserved; new plans are created as drafts.", confirmLabel: "Sync catalogue" }))
@@ -506,9 +506,7 @@ export default function AdminWorkspace() {
         },
       );
       toast.success(
-        action === "sync-catalog"
-          ? `Synced ${result.synced ?? 0} plan row(s)${result.skipped?.length ? `; ${result.skipped.length} product(s) skipped` : ""}`
-          : "Automatic notifications set up",
+        `Synced ${result.synced ?? 0} plan row(s)${result.skipped?.length ? `; ${result.skipped.length} product(s) skipped` : ""}`,
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
@@ -1320,24 +1318,21 @@ export default function AdminWorkspace() {
                           )}
                           Sync catalog
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => transatelAction("ensure-webhook")}
-                          disabled={busy === "transatel:ensure-webhook"}
-                        >
-                          {busy === "transatel:ensure-webhook" ? (
-                            <Spinner />
-                          ) : (
-                            <Pencil className="size-4" />
-                          )}
-                          Register webhook
-                        </Button>
                       </>
                     )}
                   </div>
                   {item.id === "transatel" && (
                     <div className="mt-4 space-y-3 rounded-lg border border-dashed p-4">
+                      <div>
+                        <p className="text-sm font-medium">
+                          Provider notifications
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Configure the callback URL and subscribed events in
+                          the Transatel Developer Console. Transatel no longer
+                          permits webhook registration through its API.
+                        </p>
+                      </div>
                       <div>
                         <p className="text-sm font-medium">Eligibility check</p>
                         <p className="text-xs text-muted-foreground">

@@ -49,6 +49,7 @@ describe("FonepayGateway", () => {
         const body = JSON.parse(String(init.body));
         return json({
           prn: body.referenceLabel,
+          status: "Success",
           qrMessage: "fonepay-qr-payload",
           websocketId: "wss://fonepay.example/status/1",
         });
@@ -71,6 +72,59 @@ describe("FonepayGateway", () => {
     const qrHeaders = new Headers(fetchMock.mock.calls[2]?.[1]?.headers);
     expect(bankHeaders.has("signature")).toBe(false);
     expect(qrHeaders.get("signature")).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+  });
+
+  it("rejects QR amounts outside the provider contract before any API call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new FonepayGateway();
+
+    await expect(
+      gateway.initiate({
+        attemptId: "attempt-low",
+        orderId: "order-1",
+        orderNumber: "VC-100",
+        amountNpr: 0,
+        returnUrl: "https://checkout.example/return",
+      }),
+    ).rejects.toMatchObject({ response: expect.anything() });
+    await expect(
+      gateway.initiate({
+        attemptId: "attempt-high",
+        orderId: "order-2",
+        orderNumber: "VC-101",
+        amountNpr: 10_000_000,
+        returnUrl: "https://checkout.example/return",
+      }),
+    ).rejects.toMatchObject({ response: expect.anything() });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsuccessful QR-generation response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(json({ accessToken: "token" }))
+        .mockResolvedValueOnce(json({ bankDetails: [] }))
+        .mockResolvedValueOnce(
+          json({
+            prn: "VCattempt",
+            status: "Failed",
+            qrMessage: "not-authoritative",
+          }),
+        ),
+    );
+
+    await expect(
+      new FonepayGateway().initiate({
+        attemptId: "attempt",
+        orderId: "order-1",
+        orderNumber: "VC-100",
+        amountNpr: 100,
+        returnUrl: "https://checkout.example/return",
+      }),
+    ).rejects.toMatchObject({ response: expect.anything() });
   });
 
   it("refreshes authentication according to Fonepay expiresIn", async () => {

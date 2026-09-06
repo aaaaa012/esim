@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
+  catalogDestinationHref,
   initialCatalogDestination,
   rankCatalogPlans,
   type Plan,
 } from "./catalog-plans.js";
+
+describe("customer catalog destination navigation", () => {
+  it("routes selections from the homepage to the destination catalog", () => {
+    expect(catalogDestinationHref("/", "", "AU")).toBe(
+      "/destinations?country=AU",
+    );
+  });
+
+  it("preserves a targeted eSIM while clearing stale plan filters", () => {
+    expect(
+      catalogDestinationHref(
+        "/destinations",
+        "esim=sim-1&country=JP&data=1024&days=7",
+        "SG",
+      ),
+    ).toBe("/destinations?esim=sim-1&country=SG");
+  });
+});
 
 const countries = [
   { code: "AU", name: "Australia" },

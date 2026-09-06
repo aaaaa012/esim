@@ -251,9 +251,12 @@ Life of a payment:
 - **Wrong amount returned** → verify refuses; order stays `PAYMENT_PENDING`.
 - **Payment window expires** → ops runs `POST .../payments/expire-stale` which finds
   overdue `PAYMENT_PENDING` orders and marks them `PAYMENT_FAILED`.
-- **Refund** (ops only) → `requestRefund` (only from a paid, non-cancelled order, only if
-  not already refunded) → `REFUND_PENDING` → Khalti refund API → `REFUNDED`. The "final
-  super admin" rule does _not_ apply here; any ops/super-admin can trigger a refund.
+- **Refund** uses dual control for Khalti and Fonepay. Operations may request
+  one only for a confirmed, not-yet-refunded payment. A Super Admin approves
+  or rejects it. Staff completes the money movement in the original provider,
+  then a Super Admin records the exact full amount, completion time and unique
+  provider reference. Only that final atomic action marks the payment and order
+  `REFUNDED`; requesting or approving never sends money or changes paid state.
 - **Simulator timeout scenario** is blocked in production (`simulate` endpoint refuses to
   run when `NODE_ENV=production`).
 
@@ -400,12 +403,10 @@ when provisioning succeeds).
 
 ### Webhooks — Transatel calls us back
 
-- **Registration.** `POST/PUT {base}/webhooks/api/webhooks` with
-  `{ mvnoRef, status: "active", targetUrl, email, secret?, events }`. Events default
-  to `OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/EXPIRED,OCS/PRODUCT/TERMINATED`.
-  ⚠️ Transatel has **deprecated this self-service registration API (Feb 2026)** —
-  the Developer Console "Data Streams" is now the recommended path.
-  → `transatel.provider.ts` (`ensureWebhook`)
+- **Registration.** Transatel removed API-based webhook subscriptions in
+  February 2026. Configure the callback URL, shared secret and required OCS and
+  subscriber events as a Data Stream in the Developer Console, then send a
+  Console test event. There is deliberately no registration action in Ops.
 - **Inbound.** Transatel POSTs to `POST /api/v1/webhooks/connectivity/transatel`
   (202 accepted). The signature header is `x-tsl-signature-256` (format
   `sha256=<hmac>` of the raw body using `TRANSATEL_WEBHOOK_SECRET`), verified with

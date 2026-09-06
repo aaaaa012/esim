@@ -125,10 +125,6 @@ export class AdminController {
   exportCatalog(@Body() body: { cos?: string }) {
     return this.admin.exportTransatelCatalog(body?.cos);
   }
-  @Post("integrations/transatel/ensure-webhook")
-  ensureWebhook() {
-    return this.admin.ensureTransatelWebhook();
-  }
   @Post("integrations/transatel/eligibility")
   eligibility(@Body() body: { planId: string; msisdn: string }) {
     return this.admin.transatelEligibility(body.planId, body.msisdn);

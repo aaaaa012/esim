@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("sanitizeOperationsLog", () => {
-  it("redacts credentials, personal data, and QR installation material", () => {
+  it("keeps operational identifiers while redacting credentials and personal data", () => {
     expect(
       sanitizeOperationsLog({
         authorization: "Bearer credential",
@@ -30,7 +30,7 @@ describe("sanitizeOperationsLog", () => {
       }),
     ).toEqual({
       authorization: "[REDACTED]",
-      msisdn: "[REDACTED]",
+      msisdn: "9779800000000",
       qrCode: "[REDACTED]",
       safe: "kept",
     });
@@ -162,7 +162,7 @@ describe("OperationsLogsController", () => {
         expect.objectContaining({
           id: "integration-1",
           title: "GET /usage",
-          requestBody: { msisdn: "[REDACTED]" },
+          requestBody: { msisdn: "9779800000000" },
           responseBody: { accessToken: "[REDACTED]", safe: true },
         }),
         expect.objectContaining({

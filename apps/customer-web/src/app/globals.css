@@ -895,6 +895,87 @@ button {
   }
 }
 
+/* ---------- Cross-device resilience ---------- */
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+:where(main, section, article, aside, form, fieldset, label, div) {
+  min-width: 0;
+}
+
+:where(h1, h2, h3, h4, p, li, dd, dt, a, button, label, small, strong) {
+  overflow-wrap: anywhere;
+}
+
+:where(input, select, textarea, button) {
+  max-width: 100%;
+}
+
+.button {
+  min-height: 44px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+}
+
+.form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.error-modal {
+  width: min(460px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.error-modal-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.error-modal-actions .button {
+  min-width: 112px;
+}
+
+@media (max-width: 700px) {
+  .shell {
+    padding-inline: 16px;
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .form-grid .full {
+    grid-column: 1;
+  }
+  .error-modal-backdrop {
+    align-items: end;
+    padding: 12px;
+  }
+  .error-modal {
+    grid-template-columns: 38px minmax(0, 1fr);
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - 24px);
+    padding: 20px;
+    border-radius: 18px;
+  }
+  .error-modal-icon {
+    width: 38px;
+    height: 38px;
+  }
+  .error-modal-actions,
+  .error-modal-actions .button {
+    width: 100%;
+  }
+}
+
 /* ---------- Auth pages ---------- */
 
 .customer-auth-page {
@@ -928,7 +1009,10 @@ button {
   width: 174px;
 }
 
-.customer-auth-brand img { width: 100%; height: auto; }
+.customer-auth-brand img {
+  width: 100%;
+  height: auto;
+}
 
 .customer-auth-kicker {
   margin: 66px 0 14px;
@@ -977,8 +1061,12 @@ button {
   border-radius: 999px;
 }
 
-.customer-auth-route span:nth-child(2) { border-color: #7dd3fc; }
-.customer-auth-route span:nth-child(3) { border-color: #f0b36a; }
+.customer-auth-route span:nth-child(2) {
+  border-color: #7dd3fc;
+}
+.customer-auth-route span:nth-child(3) {
+  border-color: #f0b36a;
+}
 
 .customer-auth-panel {
   width: 100%;
@@ -997,12 +1085,26 @@ button {
   box-shadow: none;
 }
 
-.customer-auth-panel .cl-card { padding: 0; }
-.customer-auth-panel .cl-headerTitle { color: #10243d; font-size: 24px; letter-spacing: -0.03em; }
-.customer-auth-panel .cl-headerSubtitle { color: #52657a; }
-.customer-auth-panel .cl-formButtonPrimary { background: #075985; }
-.customer-auth-panel .cl-formButtonPrimary:hover { background: #06466a; }
-.customer-auth-panel .cl-footerActionLink { color: #075985; }
+.customer-auth-panel .cl-card {
+  padding: 0;
+}
+.customer-auth-panel .cl-headerTitle {
+  color: #10243d;
+  font-size: 24px;
+  letter-spacing: -0.03em;
+}
+.customer-auth-panel .cl-headerSubtitle {
+  color: #52657a;
+}
+.customer-auth-panel .cl-formButtonPrimary {
+  background: #075985;
+}
+.customer-auth-panel .cl-formButtonPrimary:hover {
+  background: #06466a;
+}
+.customer-auth-panel .cl-footerActionLink {
+  color: #075985;
+}
 
 .customer-auth-orbit {
   position: absolute;
@@ -1014,18 +1116,45 @@ button {
   pointer-events: none;
 }
 
-.customer-auth-orbit-one { top: -310px; left: -168px; }
-.customer-auth-orbit-two { right: -245px; bottom: -345px; border-color: rgb(94 234 212 / 0.15); }
+.customer-auth-orbit-one {
+  top: -310px;
+  left: -168px;
+}
+.customer-auth-orbit-two {
+  right: -245px;
+  bottom: -345px;
+  border-color: rgb(94 234 212 / 0.15);
+}
 
 @media (max-width: 760px) {
-  .customer-auth-page { min-height: calc(100dvh - 144px); padding: 28px 16px 48px; }
-  .customer-auth-layout { grid-template-columns: 1fr; min-height: 0; gap: 32px; }
-  .customer-auth-intro { max-width: none; }
-  .customer-auth-brand { width: 150px; }
-  .customer-auth-kicker { margin-top: 34px; }
-  .customer-auth-intro h1 { max-width: 440px; font-size: clamp(34px, 11vw, 47px); }
-  .customer-auth-route { margin-top: 28px; }
-  .customer-auth-panel { padding: 22px 18px; }
+  .customer-auth-page {
+    min-height: calc(100dvh - 144px);
+    padding: 28px 16px 48px;
+  }
+  .customer-auth-layout {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    gap: 32px;
+  }
+  .customer-auth-intro {
+    max-width: none;
+  }
+  .customer-auth-brand {
+    width: 150px;
+  }
+  .customer-auth-kicker {
+    margin-top: 34px;
+  }
+  .customer-auth-intro h1 {
+    max-width: 440px;
+    font-size: clamp(34px, 11vw, 47px);
+  }
+  .customer-auth-route {
+    margin-top: 28px;
+  }
+  .customer-auth-panel {
+    padding: 22px 18px;
+  }
 }
 
 /* ---------- Footer ---------- */

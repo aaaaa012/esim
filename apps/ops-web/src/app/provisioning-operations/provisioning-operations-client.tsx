@@ -61,11 +61,15 @@ export default function ProvisioningOperationsClient() {
     );
   }, []);
   const checkProvider = async (item: Operation) => {
-    if (!(await confirm({
-      title: "Check provider status?",
-      description: "This reads the current Transatel state and will not create another activation.",
-      confirmLabel: "Check status",
-    }))) return;
+    if (
+      !(await confirm({
+        title: "Refresh status from Transatel?",
+        description:
+          "This only reads the latest activation state. It will not submit another activation or charge the customer.",
+        confirmLabel: "Refresh network status",
+      }))
+    )
+      return;
     setBusy(item.id);
     setError("");
     try {
@@ -194,7 +198,7 @@ export default function ProvisioningOperationsClient() {
                         onClick={() => void checkProvider(item)}
                       >
                         <RefreshCcw className="size-3.5" />
-                        Check provider status
+                        Refresh network status
                       </Button>
                     </div>
                   </TableCell>

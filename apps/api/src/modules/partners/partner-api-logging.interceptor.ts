@@ -8,7 +8,8 @@ import { catchError, tap, throwError } from "rxjs";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { PartnerRequest } from "./partner-auth.guard.js";
 
-const SECRET = /authorization|cookie|password|secret|token|api.?key|signature|passport|document|email|phone|mobile|msisdn|qr|activation.?code|otp|pin|card|account.?number/i;
+const SECRET =
+  /(^|_)(authorization|cookie|password|secret|client_?secret|webhook_?secret|access_?token|refresh_?token|lookup_?token|guest_?access_?token|api_?key|signature|passport|document|email|phone|mobile|qr_?(code|payload)|activation_?code|matching_?id|otp|pin|card|account_?number|payment_?url|recovery_?(link|url|token))$/i;
 
 function redact(value: unknown, depth = 0): unknown {
   if (depth > 6) return "[TRUNCATED]";

@@ -108,7 +108,7 @@ describe("homepage campaigns", () => {
       within(dialog)
         .getByRole("link", { name: /view plans/i })
         .getAttribute("href"),
-    ).toBe("/?country=AU#plans");
+    ).toBe("/destinations?country=AU");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Close poster viewer" }),

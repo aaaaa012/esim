@@ -11,3 +11,16 @@ export function fonepayBankIntentUrl(
   if (!SAFE_SCHEME.test(scheme) || BLOCKED_SCHEMES.has(scheme)) return null;
   return `${scheme}://payment/?qrPayload=${encodeURIComponent(qrPayload)}`;
 }
+
+export function filterFonepayBanks<T extends { bankName: string; bankCode: string }>(
+  banks: T[] | undefined,
+  query: string,
+): T[] {
+  const normalized = query.trim().toLocaleLowerCase();
+  if (!normalized) return banks ?? [];
+  return (banks ?? []).filter(
+    (bank) =>
+      bank.bankName.toLocaleLowerCase().includes(normalized) ||
+      bank.bankCode.toLocaleLowerCase().includes(normalized),
+  );
+}

@@ -55,6 +55,7 @@ export type ManualRefund = {
   reviewNote?: string | null;
   createdAt: string;
   order: { orderNumber: string; status: string };
+  payment: { provider: "KHALTI" | "FONEPAY" };
   requestedBy: { email: string };
   reviewedBy?: { email: string } | null;
 };
@@ -154,7 +155,7 @@ export default function ManualRefundsClient() {
       void act(item, "reject", { note: note.trim() });
     } else {
       if (!providerReference.trim()) {
-        toast.error("Please add the Khalti payment reference.");
+        toast.error("Please add the payment provider's refund reference.");
         return;
       }
       void act(item, "complete", {
@@ -170,7 +171,7 @@ export default function ManualRefundsClient() {
     <>
       <PageHeader
         title="Manual refunds"
-        description="Rare refunds for company errors, processed in Khalti and recorded here."
+        description="Rare refunds for company errors, completed in the original payment provider and recorded here."
         actions={
           <div className="flex gap-2">
             <Select value={status} onValueChange={setStatus}>
@@ -207,7 +208,7 @@ export default function ManualRefundsClient() {
             </DialogTitle>
             <DialogDescription>
               {dialog?.action === "complete"
-                ? "Only confirm after you have completed the refund in Khalti. This records the refund as done."
+                ? `Only confirm after you have completed the refund in ${humane(dialog.item.payment.provider)}. This records the refund as done.`
                 : "The refund request will be declined. A note is required for the record."}
             </DialogDescription>
           </DialogHeader>
@@ -216,14 +217,14 @@ export default function ManualRefundsClient() {
               <>
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">
-                    Khalti payment reference
+                    {humane(dialog.item.payment.provider)} refund reference
                   </Label>
                   <Input
                     value={providerReference}
                     onChange={(event) =>
                       setProviderReference(event.target.value)
                     }
-                    placeholder="The reference Khalti shows for the refund"
+                    placeholder={`The reference ${humane(dialog.item.payment.provider)} shows for the refund`}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -272,7 +273,7 @@ export default function ManualRefundsClient() {
       </Dialog>
       <Panel
         title="Refund register"
-        description="Submitting or approving never sends money. Complete the refund in Khalti before confirming it here."
+        description="Submitting or approving never sends money. Complete the refund in the original payment provider before confirming it here."
         noPadding
       >
         <Table>
@@ -323,7 +324,7 @@ export default function ManualRefundsClient() {
                           onClick={async () => {
                             if (await confirm({
                               title: "Approve manual refund?",
-                              description: "This authorizes the refund for completion in Khalti. The payment is not marked complete until the provider reference is recorded.",
+                              description: `This authorizes the refund for completion in ${humane(item.payment.provider)}. The payment is not marked complete until the provider reference is recorded.`,
                               confirmLabel: "Approve refund",
                             })) void act(item, "approve");
                           }}

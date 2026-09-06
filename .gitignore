@@ -6,7 +6,10 @@ coverage
 .env
 .env.*
 !.env.example
+!.env.e2e.example
 !.env.production.example
+artifacts/
+.audit-fonepay/
 Live-visa-compass-api.env
 graphify-out/
 *.log

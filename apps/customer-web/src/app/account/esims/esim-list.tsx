@@ -84,7 +84,7 @@ export default function OrderList() {
               events.
             </p>
           </div>
-          <Link className="button" href="/#plans">
+          <Link className="button" href="/destinations">
             <Plus size={17} />
             Buy a plan
           </Link>
@@ -151,7 +151,7 @@ export default function OrderList() {
             <QrCode size={35} />
             <h2>No orders yet</h2>
             <p>Your purchases and top-ups will appear here.</p>
-            <Link className="button" href="/#plans">
+            <Link className="button" href="/destinations">
               Browse plans
             </Link>
           </div>
