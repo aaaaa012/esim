@@ -97,6 +97,70 @@ function ordersService(
   );
 }
 
+describe("OrdersService operations attribution", () => {
+  it.each(["PARTNER_HOSTED", "PARTNER_API", "CUSTOMER_WEB"])(
+    "uses the order's partner customer independently of its login owner (%s)",
+    async (channel) => {
+      const partnerCustomer =
+        channel === "CUSTOMER_WEB"
+          ? null
+          : {
+              id: "order-partner-customer",
+              externalCustomerId: "partner-traveler-reference",
+              partner: { id: "partner-1", code: "test2", name: "test2" },
+            };
+      const now = new Date();
+      const findUnique = vi.fn().mockResolvedValue({
+        channel,
+        partnerCustomer,
+        purchasedBy: null,
+        targetInventoryId: null,
+        notifications: [],
+        customer: {
+          id: "signed-in-customer",
+          customerCode: "VC-CUSTOMER",
+          email: "customer@example.com",
+          phone: null,
+          source: "WEBSITE",
+          status: "ACTIVE",
+          createdAt: now,
+          user: {
+            id: "login-1",
+            email: "customer@example.com",
+            status: "ACTIVE",
+            accountType: "CUSTOMER",
+            createdAt: now,
+          },
+          partnerIdentity: {
+            id: "unrelated-partner-customer",
+            externalCustomerId: "unrelated",
+            partner: { id: "other-partner" },
+          },
+        },
+      });
+      const instance = ordersService([readyOrder()], {}, undefined, {
+        enabled: true,
+        order: { findUnique },
+      });
+      await instance.refreshFromPersistence();
+      const result = await instance.operationsView("q-1");
+      expect(result).toMatchObject({
+        channel,
+        customer: { id: "signed-in-customer", source: "WEBSITE" },
+        loginAccount: { id: "login-1" },
+        partnerCustomer,
+      });
+      expect(findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({
+            partnerCustomer: expect.any(Object),
+          }),
+        }),
+      );
+    },
+  );
+});
+
 describe("OrdersService guest ownership claims", () => {
   it("allows one explicit claim and rejects a different account afterward", async () => {
     const instance = ordersService(

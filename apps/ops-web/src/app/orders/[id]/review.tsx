@@ -32,6 +32,11 @@ import {
 import { cn } from "@/lib/utils";
 import { ManualRefundCard } from "./manual-refund-card";
 import { useConfirmation } from "@/components/confirmation-provider";
+import {
+  documentReviewLabel,
+  orderEventLabel,
+  orderSourceLabel,
+} from "./review-status";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Detail = OpsOrder & {
@@ -76,14 +81,21 @@ type Detail = OpsOrder & {
     passportNumber: string;
     passportExpiryDate: string;
   };
-  documents: { id: string; type: string; fileName: string; status: string }[];
+  documents: {
+    id: string;
+    type: string;
+    fileName: string;
+    status: string;
+    uploadVerified?: boolean;
+  }[];
+  passportVerification?: { status: string };
   payment?: {
     provider: string;
     status: string;
     reference?: string;
     providerTransactionId?: string;
   };
-  timeline: { to: string; at: string; reason?: string }[];
+  timeline: { from?: string | null; to: string; at: string; reason?: string }[];
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   purchasedBy?: { id: string; email: string } | null;
   targetInventoryId?: string | null;
@@ -190,7 +202,8 @@ export default function OrderReview({ id }: { id: string }) {
       );
       const value = await response.json();
       if (!response.ok) throw new Error(value.error?.message);
-      setOrder(value.data);
+      // Mutation responses omit the operations identity and usage context.
+      await load();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Action failed");
     } finally {
@@ -621,9 +634,22 @@ export default function OrderReview({ id }: { id: string }) {
                     </>
                   )}
                   <InfoRow
-                    label="Source"
+                    label="Order source"
+                    value={orderSourceLabel(
+                      order.channel,
+                      Boolean(order.partner),
+                    )}
+                  />
+                  <InfoRow
+                    label="Customer signup source"
                     value={humane(order.customer.source)}
                   />
+                  {order.partner && (
+                    <InfoRow
+                      label="Partner"
+                      value={`${order.partner.name} · ${order.partner.code}`}
+                    />
+                  )}
                   <InfoRow
                     label="Login account"
                     value={
@@ -635,7 +661,10 @@ export default function OrderReview({ id }: { id: string }) {
                   <InfoRow
                     label="Partner customer"
                     value={
-                      order.partnerCustomer?.externalCustomerId ?? "Direct"
+                      order.partnerCustomer?.externalCustomerId ??
+                      (order.partner
+                        ? "Partner reference not recorded"
+                        : "Not applicable")
                     }
                   />
                 </dl>
@@ -828,7 +857,9 @@ export default function OrderReview({ id }: { id: string }) {
                     <p className="text-xs text-muted-foreground">
                       {order.packageUsage?.balanceStatus ===
                       "WAITING_FOR_FIRST_USE"
-                        ? "Package added to the existing eSIM. Balance appears after activation."
+                        ? order.purchaseType === "TOPUP"
+                          ? "Package added to the existing eSIM. Balance appears after activation."
+                          : "Your first package is ready. Balance appears after the eSIM connects to a supported network."
                         : order.packageUsage?.balanceStatus === "UNAVAILABLE"
                           ? "The provider has not confirmed a usable balance."
                           : order.packageUsage
@@ -841,9 +872,10 @@ export default function OrderReview({ id }: { id: string }) {
                       Physical eSIM overview
                     </p>
                     <p className="mt-2 text-2xl font-semibold tabular-nums">
-                      {order.esimUsage?.summary.remainingMb.toLocaleString() ??
-                        "—"}{" "}
-                      MB
+                      {order.esimUsage &&
+                      order.esimUsage.summary.confirmedPackageCount > 0
+                        ? `${order.esimUsage.summary.remainingMb.toLocaleString()} MB`
+                        : "Balance not confirmed"}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {order.esimUsage
@@ -907,7 +939,20 @@ export default function OrderReview({ id }: { id: string }) {
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <StatusBadge label={document.status} />
+                  <StatusBadge
+                    label={documentReviewLabel(
+                      document,
+                      order.passportVerification?.status,
+                    )}
+                    tone={
+                      documentReviewLabel(
+                        document,
+                        order.passportVerification?.status,
+                      ) === "Verified automatically"
+                        ? "success"
+                        : undefined
+                    }
+                  />
                   <Button
                     size="sm"
                     variant="outline"
@@ -986,7 +1031,7 @@ export default function OrderReview({ id }: { id: string }) {
                       awaitingPartnerFinalization &&
                         event.to === "REVIEW_PENDING"
                         ? "AWAITING_PARTNER_FINALIZATION"
-                        : event.to,
+                        : orderEventLabel(event),
                     )}
                   </p>
                   <p className="text-xs text-muted-foreground">
@@ -1010,7 +1055,9 @@ export default function OrderReview({ id }: { id: string }) {
               Paid through {humane(order.payment?.provider ?? "—")}
             </p>
             <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5 text-sm">
-              <span className="text-muted-foreground">Documents</span>
+              <span className="text-muted-foreground">
+                Checkout verification
+              </span>
               <StatusBadge
                 label={
                   order.purchaseType === "TOPUP"
@@ -1019,29 +1066,40 @@ export default function OrderReview({ id }: { id: string }) {
                 }
               />
             </div>
-            {canReviewDocuments && !canAdvanceOrder && (
-              <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
-                <p className="text-xs text-muted-foreground">
-                  Document review remains open while activation continues. Your
-                  decision updates the document record and does not stop or
-                  reverse the eSIM lifecycle.
-                </p>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">
-                    Reason for a re-upload request
-                  </Label>
-                  <textarea
-                    value={reason}
-                    onChange={(event) => setReason(event.target.value)}
-                    rows={3}
-                    className="w-full rounded-md border border-input bg-transparent p-3 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2"
-                  />
-                </div>
-                <p className="text-xs font-medium">
-                  Use Approve or Re-upload beside each document.
-                </p>
-              </div>
+            {order.documentReviewStatus === "VERIFIED" && (
+              <p className="text-xs text-muted-foreground">
+                Passport verification passed. This is separate from manual
+                review of the individual attachments below.
+              </p>
             )}
+            {canReviewDocuments &&
+              !canAdvanceOrder &&
+              order.documents.some(
+                (document) => document.status !== "APPROVED",
+              ) && (
+                <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
+                  <p className="text-xs text-muted-foreground">
+                    Manual attachment review is available. Passport OCR does not
+                    approve the ticket or visa. Any decision here updates the
+                    attachment record and does not reverse payment or
+                    activation.
+                  </p>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">
+                      Reason for a re-upload request
+                    </Label>
+                    <textarea
+                      value={reason}
+                      onChange={(event) => setReason(event.target.value)}
+                      rows={3}
+                      className="w-full rounded-md border border-input bg-transparent p-3 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2"
+                    />
+                  </div>
+                  <p className="text-xs font-medium">
+                    Use Approve or Re-upload beside each document.
+                  </p>
+                </div>
+              )}
             {canAdvanceOrder ? (
               <>
                 <div className="space-y-1.5">

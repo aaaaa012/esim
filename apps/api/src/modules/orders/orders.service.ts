@@ -220,6 +220,13 @@ export class OrdersService implements OnModuleInit {
       where: { id },
       select: {
         channel: true,
+        partnerCustomer: {
+          select: {
+            id: true,
+            externalCustomerId: true,
+            partner: { select: { id: true, code: true, name: true } },
+          },
+        },
         purchasedBy: { select: { id: true, email: true } },
         targetInventoryId: true,
         notifications: {
@@ -244,13 +251,6 @@ export class OrdersService implements OnModuleInit {
                 status: true,
                 accountType: true,
                 createdAt: true,
-              },
-            },
-            partnerIdentity: {
-              select: {
-                id: true,
-                externalCustomerId: true,
-                partner: { select: { id: true, code: true, name: true } },
               },
             },
           },
@@ -278,14 +278,7 @@ export class OrdersService implements OnModuleInit {
             createdAt: identity.customer.user.createdAt.toISOString(),
           }
         : null,
-      partnerCustomer: identity.customer.partnerIdentity
-        ? {
-            id: identity.customer.partnerIdentity.id,
-            externalCustomerId:
-              identity.customer.partnerIdentity.externalCustomerId,
-            partner: identity.customer.partnerIdentity.partner,
-          }
-        : null,
+      partnerCustomer: identity.partnerCustomer ?? null,
       qrDelivery: {
         lastSuccessfulAt:
           identity.notifications
