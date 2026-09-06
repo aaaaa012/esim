@@ -31,7 +31,7 @@ top-ups, so the inventory row is not the authoritative owner of every package.
 | Subscriber suspension | Tenant connectivity-management `.../sim-serial/{iccid}/suspend` | Audited, idempotent command; pending until provider confirmation | Needs tenant-contract/live certification |
 | Subscriber termination | Tenant connectivity-management `.../sim-serial/{iccid}/terminate` | Super-admin-only irreversible action; pending until confirmation | Needs tenant-contract/live certification |
 | Catalog sync | `GET /ocs/catalog/api/cos/{cosRef}/products` | Imports available one-off products and converts provider pricing/allowance units | Aligned; commercial FX/margin approval required |
-| Webhooks | Signed raw-body inbox with durable dedupe/retry/dead-letter | Maps lifecycle events without state regression | Payload/signature must be certified with tenant samples |
+| Webhooks | Configure a datastream in the Transatel Developer Console; signed raw-body inbox with durable dedupe/retry/dead-letter | Maps lifecycle events without state regression; deprecated API registration action removed | Payload/signature and Console event selection must be certified with tenant samples |
 
 Transatel also publishes SIM reserve/release endpoints. Visa Compass currently
 uses approved inventory batch imports instead. This is complete only if the
@@ -63,12 +63,43 @@ expects just-in-time reservation, reserve/release must be implemented.
 | Unknown future status | Hold for review | Corrected; no longer falsely failed |
 | Expired/User canceled | Do not provide service | Aligned |
 | Refunded/Partially refunded | Do not provide new service | Parsed; post-completion monitoring needs operational reconciliation |
-| Refund API | `POST /api/merchant-transaction/{transaction_id}/refund/` | **Not implemented**; current workflow records an externally completed refund |
+| Refund policy | Manual provider action with dual-control local evidence | Intentional: request, Super Admin approval, external completion, then exact amount/time/reference recording |
 
 Public KPG-2 documents a browser return plus authoritative lookup; it does not
 document the custom signed Khalti webhook accepted by this application. Do not
 treat that webhook as a production dependency until Khalti confirms its schema,
 signature, retries and dispute events for this merchant account.
+
+## Additional integration matrices
+
+## Fonepay dynamic QR matrix
+
+| Action | Local behavior | Audit result |
+| --- | --- | --- |
+| Merchant authentication | Authenticates server-to-server and refreshes the token from provider expiry | Implemented and failure-closed |
+| QR initiation | Enforces NPR 1-9,999,999, generates a <=30-character alphanumeric PRN, signs the exact JSON, and validates response status and PRN | Aligned with supplied v1.10 contract |
+| Payment status | Polls the provider, validates PRN, merchant code and exact requested amount before completion | Implemented and automated-tested |
+| Unknown/mismatched result | Rejects completion and retains provider-call evidence | Implemented and automated-tested |
+| WebSocket notification | Browser listens to the returned `wss:` URL and triggers authoritative backend status lookup; polling/manual check remain available | Aligned; socket data is never trusted as payment evidence |
+| Refunds | No automatic provider call; shared dual-control manual workflow records the externally completed refund | Intentional product policy, implemented for Khalti and Fonepay |
+
+The adapter was reconciled against the supplied Checkout by Fonepay Intent Flow
+v1.10 (May 2026) and Postman collection. The document does not define an HTTP
+payment webhook or refund endpoint. Its realtime mechanism is a WebSocket
+notification followed by the authoritative status API, which is the implemented
+model. Merchant-sandbox E2E remains the provider-certification gate.
+
+## Partner API matrix
+
+The first-party Partner API implements scoped bearer credentials, capabilities,
+catalogue and quotes, document upload/confirmation, prepaid and hosted orders,
+traveller updates, payment sessions, cancellation, refund requests, eSIM and
+usage reads/refresh, order events and notification requests. Administrative
+flows cover partner lifecycle, keys, price lists, ledger adjustments, hosted
+links, outbound webhook endpoints/deliveries/replay and refund review. Contract,
+prepaid, hosted, usage and admin suites exercise ownership, scope, idempotency
+and settlement behavior. Consumer certification against the published OpenAPI
+and at least one real partner client remains a release gate.
 
 ## Credential-backed release gates
 
@@ -81,10 +112,12 @@ signature, retries and dispute events for this merchant account.
 5. Replay/reorder real webhooks, including expiry of an older package after a
    newer top-up.
 6. Suspend and terminate only a designated test eSIM and reconcile final state.
+   Configure and test the callback datastream in the Transatel Developer
+   Console; API-based webhook subscription is no longer supported.
 7. Run Khalti Completed, Pending, Expired and User-canceled lookups; verify
    exact paisa, pidx and transaction ID persistence.
-8. Decide whether refunds remain dual-control/manual or implement Khalti's
-   Refund API with idempotency and reconciliation.
+8. Exercise manual refunds for one Khalti and one Fonepay payment, including
+   rejection, duplicate request/reference, wrong amount and concurrent completion.
 9. Confirm batch inventory delivery versus Transatel reserve/release.
 
 Until these checks pass, the system is contract-audited and automated-test

@@ -72,9 +72,7 @@ describe("TransatelProvider", () => {
     process.env.TRANSATEL_MVNO_REF = "visacompass-test";
     process.env.TRANSATEL_COS = "WW_COS_TEST";
     process.env.TRANSATEL_FX_TO_NPR = "170";
-    process.env.TRANSATEL_SUBSCRIBER_IDENTIFIER = "iccid";
     delete process.env.TRANSATEL_WEBHOOK_TARGET_URL;
-    delete process.env.TRANSATEL_WEBHOOK_CONTACT_EMAIL;
     delete process.env.TRANSATEL_WEBHOOK_SECRET;
   });
   afterEach(() => {
@@ -84,7 +82,6 @@ describe("TransatelProvider", () => {
     delete process.env.TRANSATEL_MVNO_REF;
     delete process.env.TRANSATEL_COS;
     delete process.env.TRANSATEL_FX_TO_NPR;
-    delete process.env.TRANSATEL_SUBSCRIBER_IDENTIFIER;
   });
 
   function route(routes: Record<string, (init?: FetchInit) => Response>) {
@@ -1464,96 +1461,6 @@ describe("TransatelProvider", () => {
     });
     const { rows } = await provider.catalogReport();
     expect(rows).toHaveLength(0);
-  });
-
-  it("registers a webhook when none exists for the target URL", async () => {
-    process.env.TRANSATEL_WEBHOOK_TARGET_URL =
-      "https://api.visacompass.example/webhooks/connectivity/transatel";
-    process.env.TRANSATEL_WEBHOOK_CONTACT_EMAIL = "ops@visacompass.example";
-    process.env.TRANSATEL_WEBHOOK_SECRET = "webhook-secret";
-    const provider = new TransatelProvider(prismaStub());
-    route({
-      "/authentication/api/token": () =>
-        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
-      "/webhooks/api/webhooks": (init) => {
-        if (init?.method === "POST")
-          return jsonResponse({
-            id: "webhook-1",
-            ...JSON.parse(String(init.body)),
-          });
-        return jsonResponse({ webhooks: [] });
-      },
-    });
-    const result = await provider.ensureWebhook();
-    expect(result.registered).toBe(true);
-    expect(result.id).toBe("webhook-1");
-    const createCall = fetchMock.mock.calls.find(
-      (call) =>
-        String(call[0]).includes("/webhooks/api/webhooks") &&
-        call[1]?.method === "POST",
-    );
-    expect(createCall).toBeDefined();
-    expect(JSON.parse(String(createCall![1].body))).toMatchObject({
-      mvnoRef: "visacompass-test",
-      status: "active",
-      targetUrl:
-        "https://api.visacompass.example/webhooks/connectivity/transatel",
-      secret: "webhook-secret",
-      events: [
-        "OCS/PRODUCT/PRELOADED",
-        "OCS/PRODUCT/ACTIVATED",
-        "OCS/PRODUCT/CANCELED",
-        "OCS/PRODUCT/EXPIRED",
-        "OCS/PRODUCT/TERMINATED",
-        "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED",
-        "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED",
-      ],
-    });
-  });
-
-  it("updates an existing webhook instead of creating a duplicate", async () => {
-    process.env.TRANSATEL_WEBHOOK_TARGET_URL =
-      "https://api.visacompass.example/webhooks/connectivity/transatel";
-    process.env.TRANSATEL_WEBHOOK_CONTACT_EMAIL = "ops@visacompass.example";
-    const provider = new TransatelProvider(prismaStub());
-    route({
-      "/authentication/api/token": () =>
-        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
-      "/webhooks/api/webhooks": (init) => {
-        if (init?.method === "GET")
-          return jsonResponse({
-            webhooks: [
-              {
-                id: "webhook-1",
-                mvnoRef: "visacompass-test",
-                targetUrl:
-                  "https://api.visacompass.example/webhooks/connectivity/transatel",
-              },
-            ],
-          });
-        if (init?.method === "PUT")
-          return jsonResponse({
-            id: "webhook-1",
-            ...JSON.parse(String(init.body)),
-          });
-        throw new Error("Expected PUT, got POST");
-      },
-    });
-    const result = await provider.ensureWebhook();
-    expect(result.registered).toBe(true);
-    expect(result.id).toBe("webhook-1");
-    const putCall = fetchMock.mock.calls.find(
-      (call) => call[1]?.method === "PUT",
-    );
-    expect(putCall).toBeDefined();
-    expect(String(putCall![0])).toContain("/webhooks/api/webhooks/webhook-1");
-  });
-
-  it("does not register a webhook when no target URL is configured", async () => {
-    const provider = new TransatelProvider(prismaStub());
-    const result = await provider.ensureWebhook();
-    expect(result).toEqual({ registered: false, targetUrl: "", events: [] });
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reports health based on the configured credentials", async () => {

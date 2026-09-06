@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
@@ -60,6 +60,21 @@ export function rankCatalogPlans(plans: Plan[]) {
   );
 }
 
+export function catalogDestinationHref(
+  pathname: string,
+  currentSearch: string,
+  countryCode: string,
+) {
+  const params = new URLSearchParams(currentSearch);
+  params.set("country", countryCode);
+  params.delete("data");
+  params.delete("days");
+  const query = params.toString();
+  return `${pathname === "/destinations" ? pathname : "/destinations"}${
+    query ? `?${query}` : ""
+  }`;
+}
+
 export default function CatalogPlans() {
   const router = useRouter();
   const pathname = usePathname();
@@ -74,6 +89,7 @@ export default function CatalogPlans() {
   const [plansBusy, setPlansBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAllDestinations, setShowAllDestinations] = useState(false);
+  const revealResultsFor = useRef<string | null>(null);
 
   useEffect(() => {
     if (targetCountry) setSelected(targetCountry.toUpperCase());
@@ -167,7 +183,27 @@ export default function CatalogPlans() {
   }, [selected]);
 
   useEffect(() => {
-    if (!selected) return;
+    if (
+      plansBusy ||
+      plans === null ||
+      revealResultsFor.current !== selected
+    )
+      return;
+    revealResultsFor.current = null;
+    requestAnimationFrame(() => {
+      const target = document.getElementById("plan-results");
+      target?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+        block: "start",
+      });
+      target?.focus({ preventScroll: true });
+    });
+  }, [plans, plansBusy, selected]);
+
+  useEffect(() => {
+    if (!selected || pathname !== "/destinations") return;
     const params = new URLSearchParams(searchParams.toString());
     params.set("country", selected);
     params.delete("data");
@@ -204,22 +240,30 @@ export default function CatalogPlans() {
         Number(popularCountries.has(a.code)) || a.name.localeCompare(b.name),
   );
   const selectDestination = (code: string) => {
+    if (pathname !== "/destinations") {
+      router.push(
+        catalogDestinationHref(pathname, searchParams.toString(), code),
+      );
+      return;
+    }
+    revealResultsFor.current = code;
     setSelected(code);
     setShowAllDestinations(false);
-    requestAnimationFrame(() => {
-      document
-        .getElementById("plan-picker")
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
   };
 
   const focusPopularPlan = (plan: Plan) => {
+    if (pathname !== "/destinations") {
+      router.push(
+        catalogDestinationHref(
+          pathname,
+          searchParams.toString(),
+          plan.countryCode,
+        ),
+      );
+      return;
+    }
+    revealResultsFor.current = plan.countryCode;
     setSelected(plan.countryCode);
-    requestAnimationFrame(() => {
-      document
-        .getElementById("plan-results")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
   };
 
   return (
@@ -398,7 +442,12 @@ export default function CatalogPlans() {
       ) : plansBusy ? (
         <p className="catalog-empty">Loading plans for this destination…</p>
       ) : visible.length ? (
-        <div className="cards" id="plan-results">
+        <div
+          className="cards"
+          id="plan-results"
+          tabIndex={-1}
+          aria-label={`Available plans for ${countryList.find((country) => country.code === selected)?.name ?? selected}`}
+        >
           {visible.map((plan) => (
             <article className="card" key={plan.id}>
               {plan.popular ? <span className="badge">POPULAR</span> : null}

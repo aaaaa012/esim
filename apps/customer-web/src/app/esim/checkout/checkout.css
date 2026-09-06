@@ -1104,6 +1104,31 @@
   margin-top: 8px;
 }
 
+.fonepay-bank-search input {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #d8d8d8;
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--fonepay-black);
+  font: inherit;
+}
+
+.fonepay-bank-search input:focus-visible {
+  border-color: var(--fonepay-red);
+  outline: 3px solid rgb(206 32 39 / 16%);
+  outline-offset: 1px;
+}
+
+.fonepay-bank-empty {
+  margin: 8px 0 0;
+  color: #666666;
+  font-size: 14px;
+  text-align: center;
+}
+
 .fonepay-bank-list button {
   display: flex;
   align-items: center;

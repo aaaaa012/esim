@@ -42,8 +42,8 @@ function setup() {
     manualRefund: {
       findUnique: vi.fn(),
       findUniqueOrThrow: vi.fn().mockResolvedValue(created),
-      findMany: vi.fn(),
-      count: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
     },
     $transaction: vi.fn(async (work: (client: typeof tx) => unknown) =>
       work(tx),
@@ -59,6 +59,18 @@ function setup() {
 }
 
 describe("ManualRefundsService", () => {
+  it("loads the original provider for gateway-neutral Ops instructions", async () => {
+    const context = setup();
+    await context.service.list({});
+    expect(context.prisma.manualRefund.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          payment: { select: { provider: true } },
+        }),
+      }),
+    );
+  });
+
   it("records a company-fault request without changing payment or order state", async () => {
     const context = setup();
     await context.service.request("order-1", "actor-1", {

@@ -63,9 +63,11 @@ for `simulate` calls (`payments.service.ts:23`).
 - `verifyCallback(orderId, reference)` (`payments.service.ts:13`): same but
   used by the payment webhook worker (skips ownership check, already completed
   short-circuit).
-- Refunds use the dual-control manual-refund workflow. The current adapter does
-  not call Khalti's Refund API; an approved refund is completed only after an
-  operator records the provider transaction reference and exact amount.
+- Refunds use the intentional dual-control manual-refund workflow for both
+  Khalti and Fonepay. No adapter sends refund money automatically. Operations
+  requests the refund, a Super Admin approves it, staff completes it in the
+  original provider, and a Super Admin records the exact amount, completion
+  time and unique provider reference before local payment/order state changes.
 - `simulate(orderId, ownerId, reference, scenario='SUCCESS')`
   (`payments.service.ts:23`):
   - Disabled in production.
@@ -107,8 +109,19 @@ expiresAt }`.
   Refunded/Partially Refunded→REFUNDED, Expired→FAILED, "User canceled"→CANCELLED;
   amount `total_amount / 100`; the response `transaction_id` is persisted as
   the payment's `providerTransactionId` on confirmation.
-- Khalti's Refund API is not implemented by `KhaltiGateway`. Refund completion
-  is recorded after an operator performs and verifies it externally.
+- Automated refunds are intentionally outside `KhaltiGateway`. The shared
+  manual-refund workflow records completion only after staff performs and
+  verifies the refund in Khalti.
+
+## Fonepay gateway
+
+`fonepay.gateway.ts` implements the supplied Checkout by Fonepay v1.10
+contract: signed OAuth login, issuer bank list, single-use Intent QR creation,
+WebSocket notification, and authoritative server-side status lookup. The
+WebSocket never confirms payment by itself; it only prompts a signed backend
+lookup. The adapter checks the PRN, terminal, requested amount and documented
+status before payment completion. Automated refunds are intentionally outside
+the adapter and use the same manual-refund workflow as Khalti.
 
 **Error handling** (`khalti.gateway.ts:32-69`): provider failures are thrown
 as `ApiException` with code `PAYMENT_PROVIDER_ERROR` (502). The provider's

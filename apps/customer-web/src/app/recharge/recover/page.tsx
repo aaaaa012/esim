@@ -1,6 +1,5 @@
 "use client";
 import {
-  AlertCircle,
   ArrowLeft,
   CheckCircle2,
   LoaderCircle,
@@ -9,6 +8,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import ErrorModal from "../../../components/error-modal";
 import "../../esim/checkout/checkout.css";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 export default function RecoverRecharge() {
@@ -106,13 +106,13 @@ export default function RecoverRecharge() {
             )}
           </button>
         </form>
-        {message ? (
+        {message && !failed ? (
           <div
-            className={`recovery-feedback ${failed ? "error" : "success"}`}
-            role={failed ? "alert" : "status"}
+            className="recovery-feedback success"
+            role="status"
             aria-live="polite"
           >
-            {failed ? <AlertCircle size={20} /> : <CheckCircle2 size={20} />}
+            <CheckCircle2 size={20} />
             <span>{message}</span>
           </div>
         ) : null}
@@ -121,6 +121,15 @@ export default function RecoverRecharge() {
           matches.
         </p>
       </section>
+      {failed && message ? (
+        <ErrorModal
+          error={message}
+          onClose={() => {
+            setFailed(false);
+            setMessage("");
+          }}
+        />
+      ) : null}
     </main>
   );
 }
