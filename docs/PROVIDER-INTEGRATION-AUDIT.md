@@ -6,14 +6,14 @@ Audited against the public Transatel OpenAPI documents (OCS subscriptions
 
 ## Identifier contract
 
-| Identifier | Meaning | Valid shape | Where it is used |
-| --- | --- | --- | --- |
-| MSISDN | Transatel subscriber/mobile network number | 6-15 digits, international format without `+` | OCS product orders (`bind.msisdn`), catalog eligibility (`?msisdn=`), OCS inventory/usage (`?msisdn=`), webhook `body.msisdn` |
-| ICCID / `simSerial` | Physical SIM/eSIM profile serial | 13-20 digits | SIM-management details (`/api/esims/sim-serial/{simSerial}`), connectivity-management lifecycle URLs, webhook `body.iccid` or lifecycle `body.simSerial` |
-| EID | Device eUICC identifier | exactly 32 digits | eSIM allocation/release only; local target matching where supplied. Never used as an OCS subscriber identifier |
-| Product subscription ID | One subscribed plan/package | provider string/UUID | Stored per order and per `Subscription`; correlates each top-up package and its events |
-| Product ID | Catalog plan reference | provider catalog identifier | `product.productId` in preload/subscribe orders |
-| Transaction reference | Visa Compass order/operation identifier | <=255 characters | Sent to Transatel for reconciliation and webhook correlation |
+| Identifier              | Meaning                                    | Valid shape                                   | Where it is used                                                                                                                                         |
+| ----------------------- | ------------------------------------------ | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MSISDN                  | Transatel subscriber/mobile network number | 6-15 digits, international format without `+` | OCS product orders (`bind.msisdn`), catalog eligibility (`?msisdn=`), OCS inventory/usage (`?msisdn=`), webhook `body.msisdn`                            |
+| ICCID / `simSerial`     | Physical SIM/eSIM profile serial           | 13-20 digits                                  | SIM-management details (`/api/esims/sim-serial/{simSerial}`), connectivity-management lifecycle URLs, webhook `body.iccid` or lifecycle `body.simSerial` |
+| EID                     | Device eUICC identifier                    | exactly 32 digits                             | eSIM allocation/release only; local target matching where supplied. Never used as an OCS subscriber identifier                                           |
+| Product subscription ID | One subscribed plan/package                | provider string/UUID                          | Stored per order and per `Subscription`; correlates each top-up package and its events                                                                   |
+| Product ID              | Catalog plan reference                     | provider catalog identifier                   | `product.productId` in preload/subscribe orders                                                                                                          |
+| Transaction reference   | Visa Compass order/operation identifier    | <=255 characters                              | Sent to Transatel for reconciliation and webhook correlation                                                                                             |
 
 An ICCID must never be substituted for `bind.msisdn` or an OCS inventory
 `msisdn` query. One ICCID can have multiple product subscription IDs after
@@ -21,17 +21,17 @@ top-ups, so the inventory row is not the authoritative owner of every package.
 
 ## Transatel command matrix
 
-| Business action | Provider request | Local behavior | Audit result |
-| --- | --- | --- | --- |
-| Initial purchase | `POST /ocs/subscriptions/api/orders/products`, `orderType=preload`, real MSISDN | Persist provider acceptance before QR lookup; fetch QR using ICCID | Aligned |
-| Top-up | Same endpoint, `orderType=subscribe`, real MSISDN | Treat `201`/`done` as package commit; reuse existing eSIM QR record; do not request or send a new QR | Corrected in this audit |
-| Eligibility | `GET /ocs/catalog/api/cos/{cosRef}/products/{productId}?msisdn=...` | Honor `canSubscribe.allowed`; retain provider code internally and return safe copy | Aligned |
-| Usage | `GET /ocs/inventory/api/subscriptions/products?msisdn=...&withBalances=true` | Aggregate non-terminated KB balances by product subscription | Corrected: ICCID fallback removed |
-| eSIM details | `GET /sim-management/sims/api/esims/sim-serial/{iccid}` | Retrieve profile state and activation material | Aligned |
-| Subscriber suspension | Tenant connectivity-management `.../sim-serial/{iccid}/suspend` | Audited, idempotent command; pending until provider confirmation | Needs tenant-contract/live certification |
-| Subscriber termination | Tenant connectivity-management `.../sim-serial/{iccid}/terminate` | Super-admin-only irreversible action; pending until confirmation | Needs tenant-contract/live certification |
-| Catalog sync | `GET /ocs/catalog/api/cos/{cosRef}/products` | Imports available one-off products and converts provider pricing/allowance units | Aligned; commercial FX/margin approval required |
-| Webhooks | Configure a datastream in the Transatel Developer Console; signed raw-body inbox with durable dedupe/retry/dead-letter | Maps lifecycle events without state regression; deprecated API registration action removed | Payload/signature and Console event selection must be certified with tenant samples |
+| Business action        | Provider request                                                                                                       | Local behavior                                                                                       | Audit result                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Initial purchase       | `POST /ocs/subscriptions/api/orders/products`, `orderType=preload`, real MSISDN                                        | Persist provider acceptance before QR lookup; fetch QR using ICCID                                   | Aligned                                                                             |
+| Top-up                 | Same endpoint, `orderType=subscribe`, real MSISDN                                                                      | Treat `201`/`done` as package commit; reuse existing eSIM QR record; do not request or send a new QR | Corrected in this audit                                                             |
+| Eligibility            | `GET /ocs/catalog/api/cos/{cosRef}/products/{productId}?msisdn=...`                                                    | Honor `canSubscribe.allowed`; retain provider code internally and return safe copy                   | Aligned                                                                             |
+| Usage                  | `GET /ocs/inventory/api/subscriptions/products?msisdn=...&withBalances=true`                                           | Aggregate non-terminated KB balances by product subscription                                         | Corrected: ICCID fallback removed                                                   |
+| eSIM details           | `GET /sim-management/sims/api/esims/sim-serial/{iccid}`                                                                | Retrieve profile state and activation material                                                       | Aligned                                                                             |
+| Subscriber suspension  | Tenant connectivity-management `.../sim-serial/{iccid}/suspend`                                                        | Audited, idempotent command; pending until provider confirmation                                     | Needs tenant-contract/live certification                                            |
+| Subscriber termination | Tenant connectivity-management `.../sim-serial/{iccid}/terminate`                                                      | Super-admin-only irreversible action; pending until confirmation                                     | Needs tenant-contract/live certification                                            |
+| Catalog sync           | `GET /ocs/catalog/api/cos/{cosRef}/products`                                                                           | Imports available one-off products and converts provider pricing/allowance units                     | Aligned; commercial FX/margin approval required                                     |
+| Webhooks               | Configure a datastream in the Transatel Developer Console; signed raw-body inbox with durable dedupe/retry/dead-letter | Maps lifecycle events without state regression; deprecated API registration action removed           | Payload/signature and Console event selection must be certified with tenant samples |
 
 Transatel also publishes SIM reserve/release endpoints. Visa Compass currently
 uses approved inventory batch imports instead. This is complete only if the
@@ -40,30 +40,30 @@ expects just-in-time reservation, reserve/release must be implemented.
 
 ## Status handling
 
-| External state/event | Local package/inventory effect | Order effect |
-| --- | --- | --- |
-| OCS `done` for `preload` | Provider reference saved; wait for QR/activation | Remains `PROVISIONING`, then `QR_READY`/`COMPLETED` through activation |
-| OCS `done` for `subscribe` | New `Subscription` linked to the existing physical eSIM | Top-up becomes `COMPLETED`; no new QR |
-| PRELOADED | Package pending; cannot regress active/terminal state | No completed order regression |
-| ACTIVATED | Inventory activated; package active; dates and identity verified | Completes initial provisioning when activation material exists |
-| SUSPENDED | Package/subscriber displayed suspended | Confirms an approved lifecycle operation; unexpected suspension opens critical attention |
-| CANCELED | Stops future renewal but preserves service until expiration | Order history retained |
-| EXPIRED | Package/inventory expired | Purchase history retained |
-| TERMINATED | Package/inventory terminal | Confirms approved termination or opens critical attention |
-| Unknown/out-of-order | Raw event retained; no unsafe mutation | Attention or ignored regression, never guessed |
+| External state/event       | Local package/inventory effect                                   | Order effect                                                                             |
+| -------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| OCS `done` for `preload`   | Provider reference saved; wait for QR/activation                 | Remains `PROVISIONING`, then `QR_READY`/`COMPLETED` through activation                   |
+| OCS `done` for `subscribe` | New `Subscription` linked to the existing physical eSIM          | Top-up becomes `COMPLETED`; no new QR                                                    |
+| PRELOADED                  | Package pending; cannot regress active/terminal state            | No completed order regression                                                            |
+| ACTIVATED                  | Inventory activated; package active; dates and identity verified | Completes initial provisioning when activation material exists                           |
+| SUSPENDED                  | Package/subscriber displayed suspended                           | Confirms an approved lifecycle operation; unexpected suspension opens critical attention |
+| CANCELED                   | Stops future renewal but preserves service until expiration      | Order history retained                                                                   |
+| EXPIRED                    | Package/inventory expired                                        | Purchase history retained                                                                |
+| TERMINATED                 | Package/inventory terminal                                       | Confirms approved termination or opens critical attention                                |
+| Unknown/out-of-order       | Raw event retained; no unsafe mutation                           | Attention or ignored regression, never guessed                                           |
 
 ## Khalti KPG-2 matrix
 
-| Action | Contract | Audit result |
-| --- | --- | --- |
-| Initiate | Server `POST /api/v2/epayment/initiate/`, NPR converted to integer paisa | Aligned |
-| Customer return | Browser GET return is only a signal | Aligned: server performs lookup before service |
-| Lookup | Server `POST /api/v2/epayment/lookup/` using `pidx` | Aligned: only `Completed` confirms payment; exact amount is checked |
-| Pending/Initiated | Hold and recheck | Aligned |
-| Unknown future status | Hold for review | Corrected; no longer falsely failed |
-| Expired/User canceled | Do not provide service | Aligned |
-| Refunded/Partially refunded | Do not provide new service | Parsed; post-completion monitoring needs operational reconciliation |
-| Refund policy | Manual provider action with dual-control local evidence | Intentional: request, Super Admin approval, external completion, then exact amount/time/reference recording |
+| Action                      | Contract                                                                 | Audit result                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Initiate                    | Server `POST /api/v2/epayment/initiate/`, NPR converted to integer paisa | Aligned                                                                                                     |
+| Customer return             | Browser GET return is only a signal                                      | Aligned: server performs lookup before service                                                              |
+| Lookup                      | Server `POST /api/v2/epayment/lookup/` using `pidx`                      | Aligned: only `Completed` confirms payment; exact amount is checked                                         |
+| Pending/Initiated           | Hold and recheck                                                         | Aligned                                                                                                     |
+| Unknown future status       | Hold for review                                                          | Corrected; no longer falsely failed                                                                         |
+| Expired/User canceled       | Do not provide service                                                   | Aligned                                                                                                     |
+| Refunded/Partially refunded | Do not provide new service                                               | Parsed; post-completion monitoring needs operational reconciliation                                         |
+| Refund policy               | Manual provider action with dual-control local evidence                  | Intentional: request, Super Admin approval, external completion, then exact amount/time/reference recording |
 
 Public KPG-2 documents a browser return plus authoritative lookup; it does not
 document the custom signed Khalti webhook accepted by this application. Do not
@@ -74,14 +74,14 @@ signature, retries and dispute events for this merchant account.
 
 ## Fonepay dynamic QR matrix
 
-| Action | Local behavior | Audit result |
-| --- | --- | --- |
-| Merchant authentication | Authenticates server-to-server and refreshes the token from provider expiry | Implemented and failure-closed |
-| QR initiation | Enforces NPR 1-9,999,999, generates a <=30-character alphanumeric PRN, signs the exact JSON, and validates response status and PRN | Aligned with supplied v1.10 contract |
-| Payment status | Polls the provider, validates PRN, merchant code and exact requested amount before completion | Implemented and automated-tested |
-| Unknown/mismatched result | Rejects completion and retains provider-call evidence | Implemented and automated-tested |
-| WebSocket notification | Browser listens to the returned `wss:` URL and triggers authoritative backend status lookup; polling/manual check remain available | Aligned; socket data is never trusted as payment evidence |
-| Refunds | No automatic provider call; shared dual-control manual workflow records the externally completed refund | Intentional product policy, implemented for Khalti and Fonepay |
+| Action                    | Local behavior                                                                                                                     | Audit result                                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Merchant authentication   | Authenticates server-to-server and refreshes the token from provider expiry                                                        | Implemented and failure-closed                                 |
+| QR initiation             | Enforces NPR 1-9,999,999, generates a <=30-character alphanumeric PRN, signs the exact JSON, and validates response status and PRN | Aligned with supplied v1.10 contract                           |
+| Payment status            | Polls the provider, validates PRN, merchant code and exact requested amount before completion                                      | Implemented and automated-tested                               |
+| Unknown/mismatched result | Rejects completion and retains provider-call evidence                                                                              | Implemented and automated-tested                               |
+| WebSocket notification    | Browser listens to the returned `wss:` URL and triggers authoritative backend status lookup; polling/manual check remain available | Aligned; socket data is never trusted as payment evidence      |
+| Refunds                   | No automatic provider call; shared dual-control manual workflow records the externally completed refund                            | Intentional product policy, implemented for Khalti and Fonepay |
 
 The adapter was reconciled against the supplied Checkout by Fonepay Intent Flow
 v1.10 (May 2026) and Postman collection. The document does not define an HTTP
@@ -100,6 +100,17 @@ links, outbound webhook endpoints/deliveries/replay and refund review. Contract,
 prepaid, hosted, usage and admin suites exercise ownership, scope, idempotency
 and settlement behavior. Consumer certification against the published OpenAPI
 and at least one real partner client remains a release gate.
+
+Partner API and partner-hosted checkout support universal cross-channel
+top-ups. The MSISDN identifies the beneficiary eSIM and `externalCustomerId`
+identifies the partner-side purchaser. The order remains attached to the
+established eSIM owner through `customerId` and `targetInventoryId`; `partnerId`
+and `partnerCustomerId` separately retain the initiating partner and purchaser.
+This is a blind add-value operation, not an ownership transfer. Purchasing a
+top-up does not grant access to the beneficiary's identity, activation details,
+aggregate usage, documents, other orders or lifecycle controls. Management and
+usage access require that the partner supplied the physical eSIM through an
+initial-purchase order.
 
 ## Credential-backed release gates
 

@@ -195,6 +195,100 @@ describe("partner prepaid settlement", () => {
     });
   });
 
+  it("records a partner API top-up purchaser separately from its beneficiary", async () => {
+    const orderCreate = vi.fn();
+    const tx = {
+      order: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: orderCreate,
+      },
+      partnerCustomer: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "partner-purchaser",
+          customerId: "purchaser-customer",
+        }),
+      },
+      customerConsent: { createMany: vi.fn() },
+      partnerAccount: {
+        upsert: vi.fn().mockResolvedValue({
+          id: "account-1",
+          balancePaisa: 10_000,
+          version: 1,
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      partnerLedgerEntry: { create: vi.fn() },
+      partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
+      partnerEvent: { create: vi.fn() },
+      outboxMessage: { create: vi.fn() },
+    };
+    const applicationOrders = {
+      resolveSubscriber: vi.fn().mockResolvedValue({
+        customerId: "beneficiary-owner",
+        inventory: {
+          id: "beneficiary-esim",
+          msisdn: "882470015492842",
+        },
+      }),
+      checkTopUpEligibility: vi.fn().mockResolvedValue({ allowed: true }),
+      refreshFromPersistence: vi.fn().mockResolvedValue(undefined),
+      approveToProvisioning: vi.fn().mockResolvedValue(undefined),
+    };
+    const instance = service(
+      {
+        partner: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: "partner-1",
+            code: "DEMO",
+            status: "ACTIVE",
+          }),
+        },
+        plan: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: "plan-1",
+            name: "Asia 1 GB",
+            sellingPrice: 50,
+            dataAllowance: "1 GB",
+            validityDays: 7,
+            country: { isoCode: "SG" },
+          }),
+        },
+        $transaction: vi.fn((callback) => callback(tx)),
+      },
+      applicationOrders,
+      { enqueuePending: vi.fn().mockResolvedValue(undefined) },
+    );
+    vi.spyOn(instance, "order").mockResolvedValue({
+      id: "topup-order",
+    } as never);
+
+    await instance.createCompleteOrder(
+      "partner-1",
+      {
+        externalOrderId: "cross-channel-topup-1",
+        externalCustomerId: "partner-user-91",
+        planId: "plan-1",
+        topUpMobile: "882470015492842",
+        consent: {
+          compatibilityAccepted: true,
+          termsAccepted: true,
+          privacyAccepted: true,
+          acceptedAt: new Date().toISOString(),
+        },
+      },
+      { ipAddress: "127.0.0.1", userAgent: "test" },
+    );
+
+    expect(orderCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        customerId: "beneficiary-owner",
+        partnerCustomerId: "partner-purchaser",
+        targetInventoryId: "beneficiary-esim",
+        orderType: "TOPUP",
+      }),
+    });
+  });
+
   it("does not allow a debit beyond the prepaid balance", async () => {
     const tx = {
       partnerAccount: {

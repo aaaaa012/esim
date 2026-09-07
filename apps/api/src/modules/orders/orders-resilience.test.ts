@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConflictException } from "@nestjs/common";
-import { OrderStatus, PaymentStatus } from "@visa-compass/shared";
+import {
+  DocumentStatus,
+  DocumentType,
+  OrderStatus,
+  PaymentStatus,
+} from "@visa-compass/shared";
 import { OrdersService, type DemoOrder } from "./orders.service.js";
 import type { ConnectivityService } from "../integration/connectivity.service.js";
 import type { S3StorageService } from "../../infrastructure/s3-storage.service.js";
@@ -75,6 +80,7 @@ function ordersService(
   resilience?: unknown,
   persistenceOverrides: Record<string, unknown> = {},
   queue: unknown = { add: vi.fn().mockResolvedValue({}) },
+  storage: unknown = {},
 ) {
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
@@ -84,7 +90,7 @@ function ordersService(
   } as unknown as OrdersPersistenceService;
   return new OrdersService(
     connectivity as unknown as ConnectivityService,
-    {} as unknown as S3StorageService,
+    storage as unknown as S3StorageService,
     persistence,
     inventory as unknown as InventoryService,
     queue as unknown as QueueService,
@@ -159,6 +165,69 @@ describe("OrdersService operations attribution", () => {
       );
     },
   );
+});
+
+describe("OrdersService document evidence invalidation", () => {
+  it("invalidates a successful verdict when the passport is replaced", async () => {
+    const saved = vi.fn().mockResolvedValue(undefined);
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: "document-order",
+          ownerId: "customer-1",
+          status: OrderStatus.DRAFT,
+          traveler: customerTraveler(),
+          documentReviewStatus: "VERIFIED",
+          documentReviewStartedAt: new Date().toISOString(),
+          passportVerification: {
+            status: "VERIFIED",
+            matchedFields: ["passportNumber"],
+            checkedAt: new Date().toISOString(),
+            method: "tesseract-ocr",
+          },
+          documents: [
+            {
+              id: "old-passport",
+              type: DocumentType.PASSPORT,
+              fileName: "old.jpg",
+              privateAssetId: "old-asset",
+              status: DocumentStatus.APPROVED,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { save: saved },
+      undefined,
+      {
+        createDocumentUpload: vi.fn().mockResolvedValue({
+          assetId: "new-asset",
+          upload: { mode: "test" },
+        }),
+      },
+    );
+    await instance.refreshFromPersistence();
+
+    await instance.addDocument("document-order", "customer-1", {
+      type: DocumentType.PASSPORT,
+      fileName: "new.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const updated = instance.get("document-order", "customer-1");
+    expect(updated.documentReviewStatus).toBe("NOT_STARTED");
+    expect(updated.documentReviewStartedAt).toBeUndefined();
+    expect(updated.passportVerification).toBeUndefined();
+    expect(updated.documents).toHaveLength(1);
+    expect(updated.documents[0]).toMatchObject({ privateAssetId: "new-asset" });
+    expect(updated.documents[0]).not.toHaveProperty("uploadVerified");
+    expect(saved).toHaveBeenCalled();
+  });
 });
 
 describe("OrdersService guest ownership claims", () => {

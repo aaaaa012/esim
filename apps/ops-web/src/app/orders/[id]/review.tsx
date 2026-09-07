@@ -618,14 +618,25 @@ export default function OrderReview({ id }: { id: string }) {
               <div className="space-y-4">
                 <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                   <InfoRow
-                    label="Customer"
+                    label={
+                      order.purchaseType === "TOPUP"
+                        ? "Beneficiary / eSIM owner"
+                        : "Customer"
+                    }
                     value={`${order.customer.customerCode} · ${order.customer.email}`}
                   />
                   {order.purchaseType === "TOPUP" && (
                     <>
                       <InfoRow
                         label="Placed by"
-                        value={order.purchasedBy?.email ?? "Guest"}
+                        value={
+                          order.purchasedBy?.email ??
+                          (order.partnerCustomer
+                            ? `${order.partnerCustomer.externalCustomerId} via ${order.partnerCustomer.partner.name}`
+                            : order.partner
+                              ? order.partner.name
+                              : "Guest")
+                        }
                       />
                       <InfoRow
                         label="Target eSIM reference"
@@ -659,7 +670,7 @@ export default function OrderReview({ id }: { id: string }) {
                     }
                   />
                   <InfoRow
-                    label="Partner customer"
+                    label="Partner purchaser ID"
                     value={
                       order.partnerCustomer?.externalCustomerId ??
                       (order.partner

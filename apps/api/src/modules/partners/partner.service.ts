@@ -1372,25 +1372,10 @@ export class PartnerService {
           "This eSIM MSISDN cannot be used for a top-up with the selected plan. Create a documented initial purchase only after customer consent.",
         status: 422,
       });
-    const existingPartnerCustomer =
-      await this.prisma.partnerCustomer.findUnique({
-        where: {
-          partnerId_externalCustomerId: {
-            partnerId: partner.id,
-            externalCustomerId: input.externalCustomerId,
-          },
-        },
-        select: { customerId: true },
-      });
-    if (
-      !existingPartnerCustomer ||
-      !target.customerId ||
-      existingPartnerCustomer.customerId !== target.customerId
-    )
+    if (!target.customerId)
       throw new ApiException({
-        code: "TOPUP_CUSTOMER_MISMATCH",
-        message:
-          "This eSIM is not attached to the supplied partner customer. Use the same externalCustomerId as the original purchase.",
+        code: "TOPUP_NOT_ELIGIBLE",
+        message: "This eSIM cannot receive the selected package.",
         status: 422,
       });
     const eligibility = await this.applicationOrders.checkTopUpEligibility(
@@ -1433,7 +1418,11 @@ export class PartnerService {
           id: orderId,
           orderNumber: `VC-${new Date().getUTCFullYear()}-${orderId.slice(0, 8).toUpperCase()}`,
           channel: OrderChannel.PARTNER_API,
-          customerId: partnerCustomer.customerId,
+          // A top-up may be purchased through any channel. Keep the order and
+          // resulting CustomerEsim attached to the established eSIM owner;
+          // partnerCustomerId separately records who initiated the purchase.
+          customerId: target.customerId,
+          targetInventoryId: inventory.id,
           partnerId: partner.id,
           partnerCustomerId: partnerCustomer.id,
           externalOrderId: input.externalOrderId,
@@ -1914,6 +1903,13 @@ export class PartnerService {
         message: "Order not found",
         status: 404,
       });
+    if (order.orderType === "TOPUP")
+      throw new ApiException({
+        code: "PARTNER_ESIM_MANAGEMENT_NOT_GRANTED",
+        message:
+          "A top-up purchase does not grant access to eSIM activation details.",
+        status: 403,
+      });
     if (
       order.status !== OrderStatus.QR_READY &&
       order.status !== OrderStatus.ACTIVATION_ATTENTION &&
@@ -2004,7 +2000,7 @@ export class PartnerService {
     );
     const document = await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
-      return tx.travelerDocument.upsert({
+      const saved = await tx.travelerDocument.upsert({
         where: { orderId_type: { orderId, type: input.type } },
         update: {
           fileName: input.fileName,
@@ -2030,6 +2026,15 @@ export class PartnerService {
           privateAssetId: signed.assetId,
         },
       });
+      await tx.order.update({
+        where: { id: order.id },
+        data: {
+          documentReviewStatus: "NOT_STARTED",
+          documentReviewStartedAt: null,
+          documentCheckoutReleaseAt: null,
+        },
+      });
+      return saved;
     });
     return {
       id: document.id,
@@ -2058,8 +2063,13 @@ export class PartnerService {
       where: { id: document.id },
       data: { uploadVerified: true },
     });
-    if (document.type === DocumentType.PASSPORT)
-      await this.enqueuePassportOcr(orderId, documentId);
+    // Any required evidence replacement invalidates the order verdict. When a
+    // ticket is the replaced file, rerun verification against the current
+    // passport as well; otherwise the order can remain at NOT_STARTED forever.
+    await this.enqueuePassportOcr(
+      orderId,
+      document.type === DocumentType.PASSPORT ? documentId : undefined,
+    );
     return {
       id: document.id,
       type: document.type,
@@ -2131,7 +2141,9 @@ export class PartnerService {
             plan.id,
           )
         : null;
-    const isTopUp = Boolean(topUp?.inventory && eligibility?.allowed);
+    const isTopUp = Boolean(
+      topUp?.customerId && topUp.inventory && eligibility?.allowed,
+    );
     if (input.topUpMobile && !isTopUp && !input.allowInitialPurchaseFallback)
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
@@ -2170,7 +2182,16 @@ export class PartnerService {
           id,
           orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`,
           channel: OrderChannel.PARTNER_HOSTED,
-          customerId: partnerCustomer.customerId,
+          // Hosted checkout is a sales channel, not an ownership transfer.
+          // The beneficiary remains the established owner of the target eSIM,
+          // while partnerCustomerId records the partner-side purchaser.
+          customerId:
+            isTopUp && topUp?.customerId
+              ? topUp.customerId
+              : partnerCustomer.customerId,
+          ...(isTopUp && topUp?.inventory
+            ? { targetInventoryId: topUp.inventory.id }
+            : {}),
           partnerId,
           partnerCustomerId: partnerCustomer.id,
           externalOrderId: input.externalOrderId,
@@ -2230,11 +2251,6 @@ export class PartnerService {
             msisdn: input.topUpMobile,
             // Retained for Partner API v1 response compatibility.
             mobile: input.topUpMobile,
-            ...(topUp?.traveler
-              ? {
-                  subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}`,
-                }
-              : {}),
             status: "BOUND",
           }
         : undefined,
@@ -2513,7 +2529,7 @@ export class PartnerService {
     );
     const document = await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
-      return tx.travelerDocument.upsert({
+      const saved = await tx.travelerDocument.upsert({
         where: { orderId_type: { orderId: order.id, type: input.type } },
         update: {
           fileName: input.fileName,
@@ -2539,6 +2555,15 @@ export class PartnerService {
           privateAssetId: signed.assetId,
         },
       });
+      await tx.order.update({
+        where: { id: order.id },
+        data: {
+          documentReviewStatus: "NOT_STARTED",
+          documentReviewStartedAt: null,
+          documentCheckoutReleaseAt: null,
+        },
+      });
+      return saved;
     });
     return {
       id: document.id,
@@ -2549,7 +2574,10 @@ export class PartnerService {
   }
 
   async confirmHostedDocument(token: string, documentId: string) {
-    const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    const order = await this.sessionOrder(token, [
+      OrderStatus.DRAFT,
+      OrderStatus.AWAITING_CUSTOMER,
+    ]);
     const document = await this.prisma.travelerDocument.findFirst({
       where: { id: documentId, orderId: order.id },
     });
@@ -2564,6 +2592,17 @@ export class PartnerService {
       where: { id: document.id },
       data: { uploadVerified: true },
     });
+    const remainingRequired = this.requiredDocuments(
+      order.plan.country.isoCode,
+    ).filter(
+      (type) =>
+        !order.documents.some(
+          (item) =>
+            item.type === type &&
+            (item.id === document.id || item.uploadVerified),
+        ),
+    );
+    if (remainingRequired.length === 0) await this.verifyHostedPassport(token);
     return {
       id: document.id,
       type: document.type,
@@ -2580,7 +2619,10 @@ export class PartnerService {
    * triggers a full order re-save.
    */
   async verifyHostedPassport(token: string) {
-    const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    const order = await this.sessionOrder(token, [
+      OrderStatus.DRAFT,
+      OrderStatus.AWAITING_CUSTOMER,
+    ]);
     if (
       ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
         order.documentReviewStatus,
@@ -3282,6 +3324,7 @@ export class PartnerService {
         message: "Usage details are available once the eSIM is provisioned",
         status: 409,
       });
+    await this.authorizePartnerEsim(partnerId, order.customerEsim.inventoryId);
     if (!this.usageService) return this.connectivity.getUsage(orderId);
     return this.partnerUsageView(
       partnerId,
@@ -3344,6 +3387,7 @@ export class PartnerService {
         message: "Order or provisioned eSIM was not found",
         status: 404,
       });
+    await this.authorizePartnerEsim(partnerId, order.customerEsim.inventoryId);
     return this.refreshPartnerEsim(
       partnerId,
       order.customerEsim.inventoryId,
@@ -3416,7 +3460,14 @@ export class PartnerService {
 
   private async authorizePartnerEsim(partnerId: string, esimId: string) {
     const link = await this.prisma.customerEsim.findFirst({
-      where: { inventoryId: esimId, order: { partnerId } },
+      // Buying a top-up for an eSIM is intentionally allowed across channels,
+      // but it does not grant the purchasing partner management or usage
+      // access. That access exists only when this partner supplied the
+      // physical eSIM through an initial-purchase order.
+      where: {
+        inventoryId: esimId,
+        order: { partnerId, orderType: "INITIAL_PURCHASE" },
+      },
       select: { id: true },
     });
     if (!link)
@@ -3528,11 +3579,14 @@ export class PartnerService {
   }
 
   private normalizeOrder(order: PartnerOrderRow) {
+    const isTopUp = order.orderType === "TOPUP";
     return {
       id: order.id,
       orderNumber: order.orderNumber,
       externalOrderId: order.externalOrderId,
-      esimId: order.customerEsim?.inventoryId ?? null,
+      // A blind top-up exposes the purchased order, not the beneficiary's
+      // internal eSIM identifier or management surfaces.
+      esimId: isTopUp ? null : (order.customerEsim?.inventoryId ?? null),
       status: order.status,
       settlementMethod: order.partnerSettlementMethod,
       metadata: order.partnerMetadata,
@@ -3562,7 +3616,9 @@ export class PartnerService {
       fulfillmentStatus: this.fulfillmentStatus(order.status),
       documentReviewPolicy: order.documentReviewPolicy,
       documentReviewStatus: order.documentReviewStatus,
-      requiredDocuments: [DocumentType.PASSPORT, DocumentType.TICKET],
+      requiredDocuments: isTopUp
+        ? []
+        : [DocumentType.PASSPORT, DocumentType.TICKET],
       fulfillmentAllowed:
         order.status === OrderStatus.REVIEW_PENDING &&
         ((order.documentReviewPolicy === "AUTO_OCR" &&
@@ -3576,13 +3632,18 @@ export class PartnerService {
       links: {
         order: `/api/v1/partners/orders/${order.id}`,
         events: `/api/v1/partners/orders/${order.id}/events`,
-        esim: `/api/v1/partners/orders/${order.id}/esim`,
-        usage: `/api/v1/partners/orders/${order.id}/usage`,
+        ...(!isTopUp
+          ? {
+              esim: `/api/v1/partners/orders/${order.id}/esim`,
+              usage: `/api/v1/partners/orders/${order.id}/usage`,
+            }
+          : {}),
       },
       esimDetailsAvailable:
-        order.status === OrderStatus.QR_READY ||
-        order.status === OrderStatus.ACTIVATION_ATTENTION ||
-        order.status === OrderStatus.COMPLETED,
+        !isTopUp &&
+        (order.status === OrderStatus.QR_READY ||
+          order.status === OrderStatus.ACTIVATION_ATTENTION ||
+          order.status === OrderStatus.COMPLETED),
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
     };

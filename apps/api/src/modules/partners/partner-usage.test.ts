@@ -87,7 +87,7 @@ const usageView = {
   ],
 };
 
-function service() {
+function service(managementAccess = true) {
   const prisma = {
     order: {
       findFirst: vi.fn().mockResolvedValue({
@@ -95,6 +95,11 @@ function service() {
         partnerId: "partner-1",
         customerEsim: { inventoryId: "esim-1" },
       }),
+    },
+    customerEsim: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue(managementAccess ? { id: "owner-link" } : null),
     },
   };
   const usage = {
@@ -141,5 +146,14 @@ describe("partner eSIM usage", () => {
     expect(result.packages[1]).not.toHaveProperty("orderId");
     expect(result.packages[1]).not.toHaveProperty("externalOrderId");
     expect(result.packages[1]).not.toHaveProperty("providerSubscriptionId");
+  });
+
+  it("does not grant usage access merely because the partner bought a top-up", async () => {
+    const { instance, usage } = service(false);
+
+    await expect(instance.usage("partner-1", "order-1")).rejects.toMatchObject({
+      response: { code: "PARTNER_ESIM_NOT_FOUND" },
+    });
+    expect(usage.cached).not.toHaveBeenCalled();
   });
 });

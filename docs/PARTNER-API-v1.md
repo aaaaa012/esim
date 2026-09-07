@@ -96,55 +96,55 @@ All JSON examples use illustrative UUIDs, dates, prices, names, and secrets. The
 
 ### Shared errors
 
-| HTTP | Code | Message | Action |
-| --- | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Field-specific validation text | Correct the named field and create a new request/key. |
-| 400 | `IDEMPOTENCY_KEY_REQUIRED` | `Idempotency-Key is required for partner mutations` | Add the header. |
-| 400 | `INVALID_IDEMPOTENCY_KEY` | `Invalid idempotency key` | Use an 8-200 character key. |
-| 401 | `PARTNER_UNAUTHORIZED` | `Your API key is invalid.` or `Your API key is invalid or has expired.` | Stop; correct or rotate the credential. |
-| 403 | `PARTNER_SCOPE_FORBIDDEN` | `Your API key is not allowed to use this endpoint. Contact support to request access.` | Request the endpoint scope from Visa Compass. |
-| 403 | `PARTNER_SUSPENDED` | `Your partner account is suspended. Contact support for help.` | Contact Visa Compass; do not retry mutations. |
-| 409 | `IDEMPOTENCY_CONFLICT` | `Idempotency key was already used with a different request` | Never change request content under an existing key. |
-| 409 | `IDEMPOTENCY_CONFLICT` | `Idempotent request is still being processed; retry shortly` | Retry the exact request/key after a short delay. |
-| 429 | `PARTNER_RATE_LIMITED` | `Too many requests. Please wait and try again.` | Wait `Retry-After`, then retry with backoff. |
-| 500 | `UNEXPECTED` | `Something went wrong. Please try again.` | Retry only with bounded backoff; supply correlation ID to support if persistent. |
+| HTTP | Code                       | Message                                                                                | Action                                                                           |
+| ---- | -------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| 400  | `VALIDATION_ERROR`         | Field-specific validation text                                                         | Correct the named field and create a new request/key.                            |
+| 400  | `IDEMPOTENCY_KEY_REQUIRED` | `Idempotency-Key is required for partner mutations`                                    | Add the header.                                                                  |
+| 400  | `INVALID_IDEMPOTENCY_KEY`  | `Invalid idempotency key`                                                              | Use an 8-200 character key.                                                      |
+| 401  | `PARTNER_UNAUTHORIZED`     | `Your API key is invalid.` or `Your API key is invalid or has expired.`                | Stop; correct or rotate the credential.                                          |
+| 403  | `PARTNER_SCOPE_FORBIDDEN`  | `Your API key is not allowed to use this endpoint. Contact support to request access.` | Request the endpoint scope from Visa Compass.                                    |
+| 403  | `PARTNER_SUSPENDED`        | `Your partner account is suspended. Contact support for help.`                         | Contact Visa Compass; do not retry mutations.                                    |
+| 409  | `IDEMPOTENCY_CONFLICT`     | `Idempotency key was already used with a different request`                            | Never change request content under an existing key.                              |
+| 409  | `IDEMPOTENCY_CONFLICT`     | `Idempotent request is still being processed; retry shortly`                           | Retry the exact request/key after a short delay.                                 |
+| 429  | `PARTNER_RATE_LIMITED`     | `Too many requests. Please wait and try again.`                                        | Wait `Retry-After`, then retry with backoff.                                     |
+| 500  | `UNEXPECTED`               | `Something went wrong. Please try again.`                                              | Retry only with bounded backoff; supply correlation ID to support if persistent. |
 
 ## 3. Access scopes
 
-| Scope | Endpoints |
-| --- | --- |
-| `catalog:read` | Capabilities and plans |
+| Scope             | Endpoints                                                   |
+| ----------------- | ----------------------------------------------------------- |
+| `catalog:read`    | Capabilities and plans                                      |
 | `documents:write` | Document upload sessions, confirmation, verification lookup |
-| `orders:read` | Orders, events, account, ledger |
-| `orders:write` | Create order, cancel, notifications |
-| `esims:read` | eSIM details |
-| `usage:read` | Usage |
-| `refunds:write` | Refund requests |
+| `orders:read`     | Orders, events, account, ledger                             |
+| `orders:write`    | Create order, cancel, notifications                         |
+| `esims:read`      | eSIM details                                                |
+| `usage:read`      | Usage                                                       |
+| `refunds:write`   | Refund requests                                             |
 
 ## 4. Response field reference
 
 Examples below use illustrative IDs, dates, and prices; their field names, nesting, and envelopes match the implementation. Optional fields can be absent or `null` when no value exists.
 
-| Response field | Meaning |
-| --- | --- |
-| upload session `verificationId` | Send as `documentVerificationId` when creating an initial order. |
-| upload session `documents[].id` | Use as `documentId` when confirming that upload. |
-| upload session `documents[].upload` | Direct-upload instructions; `endpoint` is short-lived and sensitive. |
-| verification `orderCreationAllowed` | Authoritative permission to submit an initial order. |
-| verification/order `fulfillmentAllowed` | Authoritative permission to finalize the pending initial order and debit the partner account. |
-| verification `consumedAt` | Non-null means it has already been used for an order. |
-| order `id` | Visa Compass order ID for all `/orders/{id}` endpoints. |
-| order `externalOrderId` | Partner sale ID for reconciliation and lookup. |
-| order `totalAmountPaisa` | Final debit amount in paisa. |
-| order `links` | Relative API paths; prefix with the API host. |
-| order `esimDetailsAvailable` | Whether eSIM details may be retrieved. |
-| order `documentReviewPolicy` / `documentReviewStatus` | Configured review path and the current document-review state. |
-| order `documents` | Document summaries for the order. They include review state but never include upload URLs or file contents. |
-| eSIM `activationCode`, `iccid`, `msisdn` | Sensitive activation data; never log it. |
-| ledger `amountPaisa` / `balanceAfterPaisa` | Entry amount and resulting balance. |
-| event `id` | Durable event ID; use for webhook deduplication. |
-| refund decision fields | `decidedById` and `decidedAt` are null until a decision. |
-| notification `status` | `QUEUED` confirms queue acceptance, not delivery to the traveler. |
+| Response field                                        | Meaning                                                                                                     |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| upload session `verificationId`                       | Send as `documentVerificationId` when creating an initial order.                                            |
+| upload session `documents[].id`                       | Use as `documentId` when confirming that upload.                                                            |
+| upload session `documents[].upload`                   | Direct-upload instructions; `endpoint` is short-lived and sensitive.                                        |
+| verification `orderCreationAllowed`                   | Authoritative permission to submit an initial order.                                                        |
+| verification/order `fulfillmentAllowed`               | Authoritative permission to finalize the pending initial order and debit the partner account.               |
+| verification `consumedAt`                             | Non-null means it has already been used for an order.                                                       |
+| order `id`                                            | Visa Compass order ID for all `/orders/{id}` endpoints.                                                     |
+| order `externalOrderId`                               | Partner sale ID for reconciliation and lookup.                                                              |
+| order `totalAmountPaisa`                              | Final debit amount in paisa.                                                                                |
+| order `links`                                         | Relative API paths; prefix with the API host.                                                               |
+| order `esimDetailsAvailable`                          | Whether eSIM details may be retrieved.                                                                      |
+| order `documentReviewPolicy` / `documentReviewStatus` | Configured review path and the current document-review state.                                               |
+| order `documents`                                     | Document summaries for the order. They include review state but never include upload URLs or file contents. |
+| eSIM `activationCode`, `iccid`, `msisdn`              | Sensitive activation data; never log it.                                                                    |
+| ledger `amountPaisa` / `balanceAfterPaisa`            | Entry amount and resulting balance.                                                                         |
+| event `id`                                            | Durable event ID; use for webhook deduplication.                                                            |
+| refund decision fields                                | `decidedById` and `decidedAt` are null until a decision.                                                    |
+| notification `status`                                 | `QUEUED` confirms queue acceptance, not delivery to the traveler.                                           |
 
 ## 5. Catalogue endpoints
 
@@ -172,7 +172,10 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "idempotencyRequiredForMutations": true,
     "outboundWebhooks": true
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:00.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:00.000Z"
+  }
 }
 ```
 
@@ -215,7 +218,10 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
       "currency": "NPR"
     }
   ],
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:01.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:01.000Z"
+  }
 }
 ```
 
@@ -260,21 +266,21 @@ Content-Type: application/json
 
 **Request fields:**
 
-| Field | Required | Rules |
-| --- | --- | --- |
-| `externalOrderId` | Yes | Your unique sale ID, 1-120 characters. Reuse it in §7.1. |
-| `traveler.title` | Yes | `MR`, `MS`, or `MRS`. |
-| `traveler.firstName`, `surname`, `city` | Yes | Trimmed non-empty strings. |
-| `traveler.dateOfBirth` | Yes | ISO date in the past. |
-| `traveler.nationality`, `countryOfResidence` | Yes | Two-character country codes. |
-| `traveler.email`, `mobile` | Yes | Valid email; phone-like 7-20 character number. |
-| `traveler.passportNumber`, `passportExpiryDate` | Yes | Passport number 5-30 alphanumeric/hyphen chars; future ISO expiry date. |
-| `traveler.middleName`, `employerOrBusinessName`, `pointOfSaleCode` | No | Optional values. |
-| `documents` | Yes | 2-3 unique entries. Must include `PASSPORT` and `TICKET`; `VISA` is accepted as the optional third entry. |
-| `documents[].type` | Yes | `PASSPORT`, `TICKET`, or `VISA`. |
-| `documents[].fileName` | Yes | 1-180 characters. |
-| `documents[].contentType` | Yes | `application/pdf`, `image/jpeg`, or `image/png`. |
-| `documents[].sizeBytes` | Yes | Integer from 1 through 10,485,760. |
+| Field                                                              | Required | Rules                                                                                                     |
+| ------------------------------------------------------------------ | -------- | --------------------------------------------------------------------------------------------------------- |
+| `externalOrderId`                                                  | Yes      | Your unique sale ID, 1-120 characters. Reuse it in §7.1.                                                  |
+| `traveler.title`                                                   | Yes      | `MR`, `MS`, or `MRS`.                                                                                     |
+| `traveler.firstName`, `surname`, `city`                            | Yes      | Trimmed non-empty strings.                                                                                |
+| `traveler.dateOfBirth`                                             | Yes      | ISO date in the past.                                                                                     |
+| `traveler.nationality`, `countryOfResidence`                       | Yes      | Two-character country codes.                                                                              |
+| `traveler.email`, `mobile`                                         | Yes      | Valid email; phone-like 7-20 character number.                                                            |
+| `traveler.passportNumber`, `passportExpiryDate`                    | Yes      | Passport number 5-30 alphanumeric/hyphen chars; future ISO expiry date.                                   |
+| `traveler.middleName`, `employerOrBusinessName`, `pointOfSaleCode` | No       | Optional values.                                                                                          |
+| `documents`                                                        | Yes      | 2-3 unique entries. Must include `PASSPORT` and `TICKET`; `VISA` is accepted as the optional third entry. |
+| `documents[].type`                                                 | Yes      | `PASSPORT`, `TICKET`, or `VISA`.                                                                          |
+| `documents[].fileName`                                             | Yes      | 1-180 characters.                                                                                         |
+| `documents[].contentType`                                          | Yes      | `application/pdf`, `image/jpeg`, or `image/png`.                                                          |
+| `documents[].sizeBytes`                                            | Yes      | Integer from 1 through 10,485,760.                                                                        |
 
 **201 response:**
 
@@ -316,7 +322,10 @@ Content-Type: application/json
       }
     ]
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:02.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:02.000Z"
+  }
 }
 ```
 
@@ -364,7 +373,10 @@ There is no body.
     "verificationQueued": false,
     "remaining": 1
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:10.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:10.000Z"
+  }
 }
 ```
 
@@ -378,18 +390,21 @@ There is no body.
     "verificationQueued": true,
     "remaining": 0
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:15.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:15.000Z"
+  }
 }
 ```
 
 **Relevant failures:**
 
-| HTTP | Code | Message | Action |
-| --- | --- | --- | --- |
-| 400 | `PARTNER_DOCUMENT_INVALID` | File-validation message | Correct the source file, upload it again, then confirm. |
-| 422 | `UPLOAD_DECLARATION_MISMATCH` | `Uploaded bytes do not match the declared size or content type` | Upload the originally declared file, or create a new session with accurate file metadata. |
-| 404 | `DOCUMENT_VERIFICATION_NOT_FOUND` | `Document verification not found` | Check the stored verification ID. |
-| 404 | `PARTNER_DOCUMENT_NOT_FOUND` | `Document not found` | Use exactly the document ID returned by §6.1. |
+| HTTP | Code                              | Message                                                         | Action                                                                                    |
+| ---- | --------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| 400  | `PARTNER_DOCUMENT_INVALID`        | File-validation message                                         | Correct the source file, upload it again, then confirm.                                   |
+| 422  | `UPLOAD_DECLARATION_MISMATCH`     | `Uploaded bytes do not match the declared size or content type` | Upload the originally declared file, or create a new session with accurate file metadata. |
+| 404  | `DOCUMENT_VERIFICATION_NOT_FOUND` | `Document verification not found`                               | Check the stored verification ID.                                                         |
+| 404  | `PARTNER_DOCUMENT_NOT_FOUND`      | `Document not found`                                            | Use exactly the document ID returned by §6.1.                                             |
 
 ### 6.3a Verification controls
 
@@ -425,11 +440,30 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "consumedAt": null,
     "orderCreationAllowed": true,
     "documents": [
-      { "id": "30000000-0000-4000-8000-000000000001", "type": "PASSPORT", "uploadVerified": true, "status": "VERIFIED", "code": null, "replacementEligible": false, "verifiedAt": "2026-08-31T04:15:15.000Z" },
-      { "id": "30000000-0000-4000-8000-000000000002", "type": "TICKET", "uploadVerified": true, "status": "VERIFIED", "code": null, "replacementEligible": false, "verifiedAt": "2026-08-31T04:15:15.000Z" }
+      {
+        "id": "30000000-0000-4000-8000-000000000001",
+        "type": "PASSPORT",
+        "uploadVerified": true,
+        "status": "VERIFIED",
+        "code": null,
+        "replacementEligible": false,
+        "verifiedAt": "2026-08-31T04:15:15.000Z"
+      },
+      {
+        "id": "30000000-0000-4000-8000-000000000002",
+        "type": "TICKET",
+        "uploadVerified": true,
+        "status": "VERIFIED",
+        "code": null,
+        "replacementEligible": false,
+        "verifiedAt": "2026-08-31T04:15:15.000Z"
+      }
     ]
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:16.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:16.000Z"
+  }
 }
 ```
 
@@ -437,14 +471,14 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 
 The implementation also returns `reviewPolicy`, `linkedOrderId`, `requiredDocuments`, `draftCreationAllowed` (the same boolean as `orderCreationAllowed`), and `fulfillmentAllowed`. Each `documents[]` item includes `replacementEligible` (boolean): it is `true` only when that required document has been explicitly requested for replacement on the linked pending order. `fulfillmentAllowed` becomes true only when the created order's required documents have passed the configured review policy.
 
-| Status | Meaning | Partner action |
-| --- | --- | --- |
-| `AWAITING_UPLOAD` | At least one document not confirmed. | Upload/confirm it. |
-| `PROCESSING` | Verification running. | Follow `orderCreationAllowed`: it can be true once every required upload is confirmed, even while review continues. |
+| Status                                                          | Meaning                                                           | Partner action                                                                                                           |
+| --------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `AWAITING_UPLOAD`                                               | At least one document not confirmed.                              | Upload/confirm it.                                                                                                       |
+| `PROCESSING`                                                    | Verification running.                                             | Follow `orderCreationAllowed`: it can be true once every required upload is confirmed, even while review continues.      |
 | `PROCESSING_BACKGROUND`, `VERIFIED`, `MANUAL_REVIEW`, `SKIPPED` | Required uploads have been received; review may still be running. | Create the pending order only when `orderCreationAllowed=true`; wait for `fulfillmentAllowed=true` before finalizing it. |
-| `INVALID` | Documents were rejected or require replacement. | If a pending order exists and the document has `replacementEligible=true`, use §7.1b; otherwise start a new session. |
-| `EXPIRED` | Verification expired. | Start a new session. |
-| `CONSUMED` | Verification already used. | Find the existing order by external order ID. |
+| `INVALID`                                                       | Documents were rejected or require replacement.                   | If a pending order exists and the document has `replacementEligible=true`, use §7.1b; otherwise start a new session.     |
+| `EXPIRED`                                                       | Verification expired.                                             | Start a new session.                                                                                                     |
+| `CONSUMED`                                                      | Verification already used.                                        | Find the existing order by external order ID.                                                                            |
 
 ## 7. Create orders
 
@@ -477,16 +511,16 @@ Content-Type: application/json
 
 **Field rules:**
 
-| Field | Required | Rules / source |
-| --- | --- | --- |
-| `externalOrderId` | Yes | Same value used in §6.1; 1-120 characters and unique per partner. |
-| `externalCustomerId` | Yes | Your stable customer ID; 1-120 characters. Use the same value for that customer's future top-ups. |
-| `planId` | Yes | ID from §5.2. |
-| `settlement.method` | No | Omit or set exactly `PARTNER_ACCOUNT`. Other settlement is not supported. |
-| `documentVerificationId` | Yes | Verification `id` from §6.4, with `orderCreationAllowed=true`. |
-| `consent.*Accepted` | Yes | All three must be literal `true`. |
-| `consent.acceptedAt` | Yes | ISO datetime when the traveler accepted. |
-| `metadata` | No | String-to-string partner reference data; each value max 500 characters. |
+| Field                    | Required | Rules / source                                                                                             |
+| ------------------------ | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `externalOrderId`        | Yes      | Same value used in §6.1; 1-120 characters and unique per partner.                                          |
+| `externalCustomerId`     | Yes      | Your stable ID for the purchaser; 1-120 characters. It does not establish ownership of a beneficiary eSIM. |
+| `planId`                 | Yes      | ID from §5.2.                                                                                              |
+| `settlement.method`      | No       | Omit or set exactly `PARTNER_ACCOUNT`. Other settlement is not supported.                                  |
+| `documentVerificationId` | Yes      | Verification `id` from §6.4, with `orderCreationAllowed=true`.                                             |
+| `consent.*Accepted`      | Yes      | All three must be literal `true`.                                                                          |
+| `consent.acceptedAt`     | Yes      | ISO datetime when the traveler accepted.                                                                   |
+| `metadata`               | No       | String-to-string partner reference data; each value max 500 characters.                                    |
 
 **201 response:**
 
@@ -501,14 +535,37 @@ Content-Type: application/json
     "metadata": { "branch": "KTM-01" },
     "currency": "NPR",
     "totalAmountPaisa": 250000,
-    "plan": { "id": "10000000-0000-4000-8000-000000000001", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
+    "plan": {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "countryCode": "JP",
+      "name": "Japan 10 GB / 30 days",
+      "dataAllowance": "10 GB",
+      "validityDays": 30
+    },
     "travelerComplete": true,
     "documents": [
-      { "id": "50000000-0000-4000-8000-000000000001", "type": "PASSPORT", "status": "APPROVED", "passportVerificationStatus": "VERIFIED" },
-      { "id": "50000000-0000-4000-8000-000000000002", "type": "TICKET", "status": "APPROVED", "passportVerificationStatus": null }
+      {
+        "id": "50000000-0000-4000-8000-000000000001",
+        "type": "PASSPORT",
+        "status": "APPROVED",
+        "passportVerificationStatus": "VERIFIED"
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000002",
+        "type": "TICKET",
+        "status": "APPROVED",
+        "passportVerificationStatus": null
+      }
     ],
     "refund": null,
-    "timeline": [{ "from": null, "to": "REVIEW_PENDING", "reason": null, "at": "2026-08-31T04:15:20.000Z" }],
+    "timeline": [
+      {
+        "from": null,
+        "to": "REVIEW_PENDING",
+        "reason": null,
+        "at": "2026-08-31T04:15:20.000Z"
+      }
+    ],
     "fulfillmentStatus": "NOT_READY",
     "documentReviewPolicy": "AUTO_OCR",
     "documentReviewStatus": "VERIFIED",
@@ -523,7 +580,10 @@ Content-Type: application/json
     "createdAt": "2026-08-31T04:15:20.000Z",
     "updatedAt": "2026-08-31T04:15:21.000Z"
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:21.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:21.000Z"
+  }
 }
 ```
 
@@ -531,19 +591,19 @@ Content-Type: application/json
 
 **Relevant failures:**
 
-| HTTP | Code | Message | Action |
-| --- | --- | --- | --- |
-| 400 | `PLAN_UNAVAILABLE` | `Plan is unavailable` | Refresh plans; choose another plan. |
-| 400 | `DOCUMENT_VERIFICATION_REQUIRED` | `Document verification is required for an initial purchase` | Complete §6. |
-| 400 | `VERIFICATION_ORDER_MISMATCH` | `Document verification does not match this order` | Use verification for this external order only. |
-| 400 | `DOCUMENT_REQUIRED` | `Missing required documents: ...` | Supply the named document type. |
-| 400 | `INSUFFICIENT_PARTNER_BALANCE` | `Partner prepaid balance is insufficient` | Top up partner account; then submit a new request. |
-| 409 | `VERIFICATION_NOT_READY` | `Document verification is not complete` | Poll §6.4. |
-| 409 | `DOCUMENT_UPLOAD_NOT_CONFIRMED` | `Confirm every required document upload before placing the order` | Confirm all files. |
-| 409 | `EXTERNAL_ORDER_ID_EXISTS` | `External order ID already exists` | Call §8.3 by external order ID; do not duplicate the sale. |
-| 409 | `VERIFICATION_ALREADY_CONSUMED` | `Document verification was already consumed` | Find the existing order. |
-| 410 | `VERIFICATION_EXPIRED` | `Document verification has expired` | Restart §6.1. |
-| 422 | `DOCUMENT_REUPLOAD_REQUIRED` | `Documents are invalid; upload replacements` | Re-upload corrected documents. |
+| HTTP | Code                             | Message                                                           | Action                                                     |
+| ---- | -------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------- |
+| 400  | `PLAN_UNAVAILABLE`               | `Plan is unavailable`                                             | Refresh plans; choose another plan.                        |
+| 400  | `DOCUMENT_VERIFICATION_REQUIRED` | `Document verification is required for an initial purchase`       | Complete §6.                                               |
+| 400  | `VERIFICATION_ORDER_MISMATCH`    | `Document verification does not match this order`                 | Use verification for this external order only.             |
+| 400  | `DOCUMENT_REQUIRED`              | `Missing required documents: ...`                                 | Supply the named document type.                            |
+| 400  | `INSUFFICIENT_PARTNER_BALANCE`   | `Partner prepaid balance is insufficient`                         | Top up partner account; then submit a new request.         |
+| 409  | `VERIFICATION_NOT_READY`         | `Document verification is not complete`                           | Poll §6.4.                                                 |
+| 409  | `DOCUMENT_UPLOAD_NOT_CONFIRMED`  | `Confirm every required document upload before placing the order` | Confirm all files.                                         |
+| 409  | `EXTERNAL_ORDER_ID_EXISTS`       | `External order ID already exists`                                | Call §8.3 by external order ID; do not duplicate the sale. |
+| 409  | `VERIFICATION_ALREADY_CONSUMED`  | `Document verification was already consumed`                      | Find the existing order.                                   |
+| 410  | `VERIFICATION_EXPIRED`           | `Document verification has expired`                               | Restart §6.1.                                              |
+| 422  | `DOCUMENT_REUPLOAD_REQUIRED`     | `Documents are invalid; upload replacements`                      | Re-upload corrected documents.                             |
 
 ### 7.1a Finalize a verified initial purchase
 
@@ -610,7 +670,7 @@ Content-Type: application/json
 }
 ```
 
-**Do not send** `documentVerificationId`. `topUpMobile` is required for this flow and must contain the provider-assigned MSISDN of the existing eSIM; it is not the traveller's contact number. The v1 field name is retained for compatibility. `purchaseType: "TOPUP"` is accepted and recommended for clarity, but is optional. `externalCustomerId` must be the same partner customer ID used when the original eSIM was bought.
+**Do not send** `documentVerificationId`. `topUpMobile` is required for this flow and must contain the provider-assigned MSISDN of the beneficiary eSIM; it is not the traveller's contact number. The v1 field name is retained for compatibility. `purchaseType: "TOPUP"` is accepted and recommended for clarity, but is optional. The eSIM may have been purchased through any Visa Compass channel. `externalCustomerId` identifies your purchaser and does not transfer the beneficiary eSIM into that partner customer's ownership.
 
 **201 response:**
 
@@ -625,28 +685,49 @@ Content-Type: application/json
     "metadata": null,
     "currency": "NPR",
     "totalAmountPaisa": 250000,
-    "plan": { "id": "10000000-0000-4000-8000-000000000002", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
+    "plan": {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "countryCode": "JP",
+      "name": "Japan 10 GB / 30 days",
+      "dataAllowance": "10 GB",
+      "validityDays": 30
+    },
     "travelerComplete": false,
     "documents": [],
     "refund": null,
-    "timeline": [{ "from": null, "to": "APPROVED", "reason": null, "at": "2026-08-31T04:30:01.000Z" }],
+    "timeline": [
+      {
+        "from": null,
+        "to": "APPROVED",
+        "reason": null,
+        "at": "2026-08-31T04:30:01.000Z"
+      }
+    ],
     "fulfillmentStatus": "PENDING",
-    "links": { "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000002", "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000002/events", "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000002/esim" },
+    "links": {
+      "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000002",
+      "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000002/events",
+      "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000002/esim"
+    },
     "esimDetailsAvailable": false,
     "createdAt": "2026-08-31T04:30:01.000Z",
     "updatedAt": "2026-08-31T04:30:01.000Z"
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:30:01.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:30:01.000Z"
+  }
 }
 ```
 
 **Relevant failures:**
 
-| HTTP | Code | Message | Action |
-| --- | --- | --- | --- |
-| 422 | `TOPUP_NOT_ELIGIBLE` | For example: `This eSIM cannot subscribe to the selected plan.` | Do not force top-up; obtain consent and use a documented initial purchase if appropriate. |
-| 422 | `TOPUP_CUSTOMER_MISMATCH` | `This eSIM is not attached to the supplied partner customer. Use the same externalCustomerId as the original purchase.` | Correct `externalCustomerId`; never attach another customer's eSIM. |
-| 409 | `EXTERNAL_ORDER_ID_EXISTS` | `External order ID already exists` | Read the existing order. |
+| HTTP | Code                       | Message                                                         | Action                                                                                    |
+| ---- | -------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| 422  | `TOPUP_NOT_ELIGIBLE`       | For example: `This eSIM cannot subscribe to the selected plan.` | Do not force top-up; obtain consent and use a documented initial purchase if appropriate. |
+| 409  | `EXTERNAL_ORDER_ID_EXISTS` | `External order ID already exists`                              | Read the existing order.                                                                  |
+
+For a top-up, `externalCustomerId` identifies the partner-side purchaser and the MSISDN identifies the beneficiary eSIM. A partner may add a package to an eligible Visa Compass eSIM purchased through another channel. This does not transfer ownership and does not grant access to the beneficiary's identity, usage, activation details, or other orders.
 
 ## 8. Read and reconcile orders
 
@@ -677,16 +758,36 @@ Query fields: `cursor` (opaque cursor from prior response), `status` (order stat
         "metadata": { "branch": "KTM-01" },
         "currency": "NPR",
         "totalAmountPaisa": 250000,
-        "plan": { "id": "10000000-0000-4000-8000-000000000001", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
+        "plan": {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "countryCode": "JP",
+          "name": "Japan 10 GB / 30 days",
+          "dataAllowance": "10 GB",
+          "validityDays": 30
+        },
         "travelerComplete": true,
         "documents": [
-          { "id": "50000000-0000-4000-8000-000000000001", "type": "PASSPORT", "status": "APPROVED", "passportVerificationStatus": "VERIFIED" },
-          { "id": "50000000-0000-4000-8000-000000000002", "type": "TICKET", "status": "APPROVED", "passportVerificationStatus": null }
+          {
+            "id": "50000000-0000-4000-8000-000000000001",
+            "type": "PASSPORT",
+            "status": "APPROVED",
+            "passportVerificationStatus": "VERIFIED"
+          },
+          {
+            "id": "50000000-0000-4000-8000-000000000002",
+            "type": "TICKET",
+            "status": "APPROVED",
+            "passportVerificationStatus": null
+          }
         ],
         "refund": null,
         "timeline": [],
         "fulfillmentStatus": "READY",
-        "links": { "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001", "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events", "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/esim" },
+        "links": {
+          "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001",
+          "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events",
+          "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/esim"
+        },
         "esimDetailsAvailable": true,
         "createdAt": "2026-08-31T04:15:20.000Z",
         "updatedAt": "2026-08-31T04:16:10.000Z"
@@ -694,7 +795,10 @@ Query fields: `cursor` (opaque cursor from prior response), `status` (order stat
     ],
     "nextCursor": null
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:16:15.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:16:15.000Z"
+  }
 }
 ```
 
@@ -723,21 +827,44 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "metadata": { "branch": "KTM-01" },
     "currency": "NPR",
     "totalAmountPaisa": 250000,
-    "plan": { "id": "10000000-0000-4000-8000-000000000001", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
+    "plan": {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "countryCode": "JP",
+      "name": "Japan 10 GB / 30 days",
+      "dataAllowance": "10 GB",
+      "validityDays": 30
+    },
     "travelerComplete": true,
     "documents": [
-      { "id": "50000000-0000-4000-8000-000000000001", "type": "PASSPORT", "status": "APPROVED", "passportVerificationStatus": "VERIFIED" },
-      { "id": "50000000-0000-4000-8000-000000000002", "type": "TICKET", "status": "APPROVED", "passportVerificationStatus": null }
+      {
+        "id": "50000000-0000-4000-8000-000000000001",
+        "type": "PASSPORT",
+        "status": "APPROVED",
+        "passportVerificationStatus": "VERIFIED"
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000002",
+        "type": "TICKET",
+        "status": "APPROVED",
+        "passportVerificationStatus": null
+      }
     ],
     "refund": null,
     "timeline": [],
     "fulfillmentStatus": "READY",
-    "links": { "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001", "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events", "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/esim" },
+    "links": {
+      "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001",
+      "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events",
+      "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/esim"
+    },
     "esimDetailsAvailable": true,
     "createdAt": "2026-08-31T04:15:20.000Z",
     "updatedAt": "2026-08-31T04:16:10.000Z"
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:16:16.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:16:16.000Z"
+  }
 }
 ```
 
@@ -766,21 +893,44 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "metadata": { "branch": "KTM-01" },
     "currency": "NPR",
     "totalAmountPaisa": 250000,
-    "plan": { "id": "10000000-0000-4000-8000-000000000001", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
+    "plan": {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "countryCode": "JP",
+      "name": "Japan 10 GB / 30 days",
+      "dataAllowance": "10 GB",
+      "validityDays": 30
+    },
     "travelerComplete": true,
     "documents": [
-      { "id": "50000000-0000-4000-8000-000000000001", "type": "PASSPORT", "status": "APPROVED", "passportVerificationStatus": "VERIFIED" },
-      { "id": "50000000-0000-4000-8000-000000000002", "type": "TICKET", "status": "APPROVED", "passportVerificationStatus": null }
+      {
+        "id": "50000000-0000-4000-8000-000000000001",
+        "type": "PASSPORT",
+        "status": "APPROVED",
+        "passportVerificationStatus": "VERIFIED"
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000002",
+        "type": "TICKET",
+        "status": "APPROVED",
+        "passportVerificationStatus": null
+      }
     ],
     "refund": null,
     "timeline": [],
     "fulfillmentStatus": "READY",
-    "links": { "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001", "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events", "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/esim" },
+    "links": {
+      "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001",
+      "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events",
+      "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/esim"
+    },
     "esimDetailsAvailable": true,
     "createdAt": "2026-08-31T04:15:20.000Z",
     "updatedAt": "2026-08-31T04:16:10.000Z"
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:16:16.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:16:16.000Z"
+  }
 }
 ```
 
@@ -788,6 +938,8 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 **Relevant failure:** `404 PARTNER_ORDER_NOT_FOUND` / `Order not found`.
 
 ### 8.4 Get eSIM activation details
+
+This endpoint is for initial-purchase orders. A top-up order does not expose the beneficiary's ICCID, activation code, or other eSIM management details, even when the partner paid for that top-up. Use the partner's original initial-purchase order when the partner supplied the physical eSIM.
 
 **Scope:** `esims:read`  
 **Request:**
@@ -815,17 +967,20 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "activatedAt": null,
     "expiresAt": "2026-09-30T04:15:30.000Z"
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:15:31.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:31.000Z"
+  }
 }
 ```
 
 `activationCode`, `iccid`, and `msisdn` are sensitive. Deliver them only to the intended traveler; do not log or include them in analytics.
 
-| HTTP | Code | Message | Action |
-| --- | --- | --- | --- |
-| 404 | `PARTNER_ORDER_NOT_FOUND` | `Order not found` | Check order ID. |
-| 409 | `PARTNER_ORDER_NOT_READY` | `Activation details are available once the eSIM is ready to use` | Poll order until `QR_READY`, `ACTIVATION_ATTENTION`, or `COMPLETED`. |
-| 404 | `PARTNER_ACTIVATION_UNAVAILABLE` | `Activation details are not available yet` | Retry GET with backoff; contact support if persistent. |
+| HTTP | Code                             | Message                                                          | Action                                                               |
+| ---- | -------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------- |
+| 404  | `PARTNER_ORDER_NOT_FOUND`        | `Order not found`                                                | Check order ID.                                                      |
+| 409  | `PARTNER_ORDER_NOT_READY`        | `Activation details are available once the eSIM is ready to use` | Poll order until `QR_READY`, `ACTIVATION_ATTENTION`, or `COMPLETED`. |
+| 404  | `PARTNER_ACTIVATION_UNAVAILABLE` | `Activation details are not available yet`                       | Retry GET with backoff; contact support if persistent.               |
 
 ### 8.5 Get events
 
@@ -848,17 +1003,30 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
       "version": 0,
       "resourceId": "40000000-0000-4000-8000-000000000001",
       "correlationId": "<correlation-id>",
-      "payload": { "orderId": "40000000-0000-4000-8000-000000000001", "externalOrderId": "agency-order-1042", "status": "REVIEW_PENDING", "fulfillmentStatus": "NOT_READY", "version": 0, "amountPaisa": 250000, "currency": "NPR" },
+      "payload": {
+        "orderId": "40000000-0000-4000-8000-000000000001",
+        "externalOrderId": "agency-order-1042",
+        "status": "REVIEW_PENDING",
+        "fulfillmentStatus": "NOT_READY",
+        "version": 0,
+        "amountPaisa": 250000,
+        "currency": "NPR"
+      },
       "occurredAt": "2026-08-31T04:15:20.000Z"
     }
   ],
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:16:20.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:16:20.000Z"
+  }
 }
 ```
 
 Use events for audit/reconciliation; treat the current order endpoint as authoritative.
 
 ### 8.6 Get usage
+
+Usage is available only when this partner supplied the physical eSIM through an initial-purchase order. Buying a cross-channel top-up does not grant usage access. The top-up order status and events remain available for confirming that specific purchase.
 
 **Scope:** `usage:read`  
 **Request:**
@@ -877,10 +1045,19 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "totalMb": 10240,
     "usageAvailable": true,
     "subscriptions": [
-      { "providerSubscriptionId": "provider-subscription-1", "status": "active", "usedMb": 1024, "totalMb": 10240, "priority": 1 }
+      {
+        "providerSubscriptionId": "provider-subscription-1",
+        "status": "active",
+        "usedMb": 1024,
+        "totalMb": 10240,
+        "priority": 1
+      }
     ]
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:17:00.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:17:00.000Z"
+  }
 }
 ```
 
@@ -916,7 +1093,10 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "averageOrderValuePaisa": 250000,
     "updatedAt": "2026-08-31T04:15:21.000Z"
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:16:00.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:16:00.000Z"
+  }
 }
 ```
 
@@ -947,13 +1127,20 @@ Optional query fields: `cursor`, `from`/`to` ISO datetimes, `externalOrderId`, `
         "balanceAfterPaisa": 9750000,
         "currency": "NPR",
         "reference": "debit:<partner-id>:agency-order-1042",
-        "order": { "id": "40000000-0000-4000-8000-000000000001", "externalOrderId": "agency-order-1042", "orderNumber": "VC-2026-40000000" },
+        "order": {
+          "id": "40000000-0000-4000-8000-000000000001",
+          "externalOrderId": "agency-order-1042",
+          "orderNumber": "VC-2026-40000000"
+        },
         "createdAt": "2026-08-31T04:15:20.000Z"
       }
     ],
     "nextCursor": null
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:16:01.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:16:01.000Z"
+  }
 }
 ```
 
@@ -990,18 +1177,38 @@ Content-Type: application/json
     "metadata": { "branch": "KTM-01" },
     "currency": "NPR",
     "totalAmountPaisa": 250000,
-    "plan": { "id": "10000000-0000-4000-8000-000000000001", "countryCode": "JP", "name": "Japan 10 GB / 30 days", "dataAllowance": "10 GB", "validityDays": 30 },
+    "plan": {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "countryCode": "JP",
+      "name": "Japan 10 GB / 30 days",
+      "dataAllowance": "10 GB",
+      "validityDays": 30
+    },
     "travelerComplete": true,
     "documents": [],
     "refund": null,
-    "timeline": [{ "from": "REVIEW_PENDING", "to": "CANCELLED", "reason": "Customer cancelled before provisioning", "at": "2026-08-31T04:17:10.000Z" }],
+    "timeline": [
+      {
+        "from": "REVIEW_PENDING",
+        "to": "CANCELLED",
+        "reason": "Customer cancelled before provisioning",
+        "at": "2026-08-31T04:17:10.000Z"
+      }
+    ],
     "fulfillmentStatus": "NOT_READY",
-    "links": { "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001", "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events", "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/esim" },
+    "links": {
+      "order": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001",
+      "events": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events",
+      "esim": "/api/v1/partners/orders/40000000-0000-4000-8000-000000000001/esim"
+    },
     "esimDetailsAvailable": false,
     "createdAt": "2026-08-31T04:15:20.000Z",
     "updatedAt": "2026-08-31T04:17:10.000Z"
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:17:10.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:17:10.000Z"
+  }
 }
 ```
 
@@ -1037,7 +1244,10 @@ Content-Type: application/json
     "createdAt": "2026-08-31T04:17:20.000Z",
     "updatedAt": "2026-08-31T04:17:20.000Z"
   },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:17:20.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:17:20.000Z"
+  }
 }
 ```
 
@@ -1066,7 +1276,10 @@ Content-Type: application/json
 ```json
 {
   "data": { "id": "90000000-0000-4000-8000-000000000001", "status": "QUEUED" },
-  "meta": { "correlationId": "<correlation-id>", "timestamp": "2026-08-31T04:17:30.000Z" }
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:17:30.000Z"
+  }
 }
 ```
 
@@ -1076,21 +1289,21 @@ Content-Type: application/json
 
 ## 10. Order statuses and partner action
 
-| Status | Meaning | Partner action |
-| --- | --- | --- |
-| `DRAFT` | An order record has been started but is not yet approved for fulfillment. | Complete or cancel it; do not expect a debit or eSIM. |
-| `PAYMENT_PENDING` | A payment step is pending. This state is retained for lifecycle compatibility; it is not normally produced for `PARTNER_ACCOUNT` settlement. | Resolve the payment state or cancel; do not provision. |
-| `APPROVED` | Order and debit succeeded. | Await provisioning. |
-| `REVIEW_PENDING` | Initial-purchase order was created and awaits or has completed document review. | Poll until `fulfillmentAllowed=true`, then call §7.1a. |
-| `AWAITING_CUSTOMER` | A required document needs a replacement. | Use §7.1b when the verification marks it eligible. |
-| `PROVISIONING` | eSIM provisioning in progress. | Poll/read webhook; do not create another order. |
-| `QR_READY` | Activation details can be retrieved. | Call §8.4 and deliver securely. |
-| `COMPLETED` | eSIM is active. | Call §8.6 for usage if needed. |
-| `ACTIVATION_ATTENTION` | Operational review is needed. | Contact Visa Compass; do not duplicate the order. |
-| `PROVISIONING_FAILED` | Fulfillment failed. | Contact Visa Compass or create an eligible refund request. |
-| `CANCELLED` | Closed by cancellation. | Reconcile ledger. |
-| `REFUND_PENDING` | Refund request awaiting decision. | Await webhook/order/ledger update. |
-| `REFUNDED` | Refund completed. | Reconcile `REFUND` ledger entry. |
+| Status                 | Meaning                                                                                                                                      | Partner action                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `DRAFT`                | An order record has been started but is not yet approved for fulfillment.                                                                    | Complete or cancel it; do not expect a debit or eSIM.      |
+| `PAYMENT_PENDING`      | A payment step is pending. This state is retained for lifecycle compatibility; it is not normally produced for `PARTNER_ACCOUNT` settlement. | Resolve the payment state or cancel; do not provision.     |
+| `APPROVED`             | Order and debit succeeded.                                                                                                                   | Await provisioning.                                        |
+| `REVIEW_PENDING`       | Initial-purchase order was created and awaits or has completed document review.                                                              | Poll until `fulfillmentAllowed=true`, then call §7.1a.     |
+| `AWAITING_CUSTOMER`    | A required document needs a replacement.                                                                                                     | Use §7.1b when the verification marks it eligible.         |
+| `PROVISIONING`         | eSIM provisioning in progress.                                                                                                               | Poll/read webhook; do not create another order.            |
+| `QR_READY`             | Activation details can be retrieved.                                                                                                         | Call §8.4 and deliver securely.                            |
+| `COMPLETED`            | eSIM is active.                                                                                                                              | Call §8.6 for usage if needed.                             |
+| `ACTIVATION_ATTENTION` | Operational review is needed.                                                                                                                | Contact Visa Compass; do not duplicate the order.          |
+| `PROVISIONING_FAILED`  | Fulfillment failed.                                                                                                                          | Contact Visa Compass or create an eligible refund request. |
+| `CANCELLED`            | Closed by cancellation.                                                                                                                      | Reconcile ledger.                                          |
+| `REFUND_PENDING`       | Refund request awaiting decision.                                                                                                            | Await webhook/order/ledger update.                         |
+| `REFUNDED`             | Refund completed.                                                                                                                            | Reconcile `REFUND` ledger entry.                           |
 
 ## 11. Outbound webhooks
 
@@ -1116,7 +1329,10 @@ VC-Webhook-Signature: v1=<hex-hmac>
   "resourceId": "40000000-0000-4000-8000-000000000001",
   "occurredAt": "2026-08-31T04:15:20.000Z",
   "correlationId": "<correlation-id>",
-  "data": { "orderId": "40000000-0000-4000-8000-000000000001", "externalOrderId": "agency-order-1042" }
+  "data": {
+    "orderId": "40000000-0000-4000-8000-000000000001",
+    "externalOrderId": "agency-order-1042"
+  }
 }
 ```
 

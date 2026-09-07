@@ -58,7 +58,9 @@ Errors use:
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "traveler.email: Invalid email address",
-    "details": [{ "field": "traveler.email", "message": "Invalid email address" }]
+    "details": [
+      { "field": "traveler.email", "message": "Invalid email address" }
+    ]
   },
   "meta": { "correlationId": "…", "timestamp": "…" }
 }
@@ -68,25 +70,25 @@ Common status codes: `400` invalid input or unsupported state, `401` invalid/exp
 
 ## API-key scopes
 
-| Scope | Access |
-| --- | --- |
-| `catalog:read` | Capabilities and plans |
+| Scope             | Access                                                        |
+| ----------------- | ------------------------------------------------------------- |
+| `catalog:read`    | Capabilities and plans                                        |
 | `documents:write` | Document upload sessions and verification status/confirmation |
-| `orders:read` | Account, ledger, and orders/events |
-| `orders:write` | Create/cancel orders and request notifications |
-| `esims:read` | eSIM activation details |
-| `refunds:write` | Refund requests |
-| `usage:read` | Active eSIM usage |
-| `checkout:write` | Hosted checkout-link session creation |
+| `orders:read`     | Account, ledger, and orders/events                            |
+| `orders:write`    | Create/cancel orders and request notifications                |
+| `esims:read`      | eSIM activation details                                       |
+| `refunds:write`   | Refund requests                                               |
+| `usage:read`      | Active eSIM usage                                             |
+| `checkout:write`  | Hosted checkout-link session creation                         |
 
 ## Recommended API endpoints
 
 ### Capabilities and plan catalogue
 
-| Method | Path | Scope | Description |
-| --- | --- | --- | --- |
-| `GET` | `/partners/capabilities` | `catalog:read` | API capabilities, currency, settlement methods, integration availability |
-| `GET` | `/partners/plans?country=JP` | `catalog:read` | Active sellable plans; optional ISO country filter |
+| Method | Path                         | Scope          | Description                                                              |
+| ------ | ---------------------------- | -------------- | ------------------------------------------------------------------------ |
+| `GET`  | `/partners/capabilities`     | `catalog:read` | API capabilities, currency, settlement methods, integration availability |
+| `GET`  | `/partners/plans?country=JP` | `catalog:read` | Active sellable plans; optional ISO country filter                       |
 
 `GET /partners/plans` returns an array of plans. Each item contains `id`, `countryCode`, `countryName`, `name`, `dataAllowance`, `validityDays`, `coverage`, `destination`, `price: { amountPaisa, currency }`, `requiredDocuments`, `availability`, `compatibilityDisclaimer`, `refundSummary`, `updatedAt`, and `currency`.
 
@@ -127,7 +129,7 @@ Common status codes: `400` invalid input or unsupported state, `401` invalid/exp
 }
 ```
 
-`traveler.middleName`, `traveler.employerOrBusinessName`, and `traveler.pointOfSaleCode` are optional. `title` is `MR`, `MS`, or `MRS`; `nationality` and `countryOfResidence` are two-character codes. `dateOfBirth` must be in the past and `passportExpiryDate` in the future. `mobile` must be 7–20 characters and valid phone-like digits. 
+`traveler.middleName`, `traveler.employerOrBusinessName`, and `traveler.pointOfSaleCode` are optional. `title` is `MR`, `MS`, or `MRS`; `nationality` and `countryOfResidence` are two-character codes. `dateOfBirth` must be in the past and `passportExpiryDate` in the future. `mobile` must be 7–20 characters and valid phone-like digits.
 
 Supply 2–3 unique documents, always including `PASSPORT` and `TICKET`. Accepted content types are `application/pdf`, `image/jpeg`, and `image/png`; each document must be no larger than 10 MiB. The response includes `verificationId`, expiry times, a status, and a signed `upload` object for each document. Upload the raw document using the method, URL, and headers in that signed object. Do not send document bytes to this API endpoint.
 
@@ -170,21 +172,21 @@ For an initial purchase, submit:
 
 Only `PARTNER_ACCOUNT` settlement is supported. The amount is debited from the partner account when the order is accepted. The response is the complete partner order object; provisioning begins asynchronously.
 
-For a top-up, set `purchaseType: "TOPUP"` and provide `topUpMobile`; do **not** send `documentVerificationId`. Despite the v1 field name, this value must be the provider-assigned MSISDN of the existing eSIM, not the traveller's contact number. The eSIM must be eligible and bound to the supplied `externalCustomerId`. For a new purchase, `purchaseType` may be omitted (the default) and `documentVerificationId` is mandatory. A duplicate `externalOrderId` for the same partner returns `409 EXTERNAL_ORDER_ID_EXISTS`.
+For a top-up, set `purchaseType: "TOPUP"` and provide `topUpMobile`; do **not** send `documentVerificationId`. Despite the v1 field name, this value must be the provider-assigned MSISDN of the beneficiary eSIM, not the traveller's contact number. The eSIM may have been purchased through any Visa Compass channel. `externalCustomerId` identifies the partner-side purchaser; the top-up does not transfer ownership or grant usage, activation-detail, or lifecycle-management access. For a new purchase, `purchaseType` may be omitted (the default) and `documentVerificationId` is mandatory. A duplicate `externalOrderId` for the same partner returns `409 EXTERNAL_ORDER_ID_EXISTS`.
 
 ### Orders, eSIMs, usage, notifications, and refunds
 
-| Method | Path | Scope | Notes |
-| --- | --- | --- | --- |
-| `GET` | `/partners/orders?cursor=&status=&externalOrderId=&limit=` | `orders:read` | Lists partner-scoped orders. `limit` is 1–100, default 25. Returns `{ items, nextCursor }`. |
-| `GET` | `/partners/orders/{id}` | `orders:read` | Retrieves a partner-scoped order. |
-| `GET` | `/partners/orders/by-external-id/{externalOrderId}` | `orders:read` | Retrieves by the partner's external order ID. |
-| `GET` | `/partners/orders/{id}/events` | `orders:read` | Partner event history, oldest first. |
-| `GET` | `/partners/orders/{id}/esim` | `esims:read` | eSIM activation data after `QR_READY`, `ACTIVATION_ATTENTION`, or `COMPLETED`. |
-| `GET` | `/partners/orders/{id}/usage` | `usage:read` | Usage only after `COMPLETED`. |
-| `POST` | `/partners/orders/{id}/cancel` | `orders:write` | Body: `{ "reason": "…" }`; reason length 3–1000. Allowed before provisioning. |
-| `POST` | `/partners/orders/{id}/refund-requests` | `refunds:write` | Body: `{ "reason": "…" }`; creates a refund request when eligible. |
-| `POST` | `/partners/orders/{id}/notifications` | `orders:write` | Body: `{ "channel": "EMAIL", "template": "QR_READY" }`. |
+| Method | Path                                                       | Scope           | Notes                                                                                                                                         |
+| ------ | ---------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/partners/orders?cursor=&status=&externalOrderId=&limit=` | `orders:read`   | Lists partner-scoped orders. `limit` is 1–100, default 25. Returns `{ items, nextCursor }`.                                                   |
+| `GET`  | `/partners/orders/{id}`                                    | `orders:read`   | Retrieves a partner-scoped order.                                                                                                             |
+| `GET`  | `/partners/orders/by-external-id/{externalOrderId}`        | `orders:read`   | Retrieves by the partner's external order ID.                                                                                                 |
+| `GET`  | `/partners/orders/{id}/events`                             | `orders:read`   | Partner event history, oldest first.                                                                                                          |
+| `GET`  | `/partners/orders/{id}/esim`                               | `esims:read`    | Initial-purchase activation data after `QR_READY`, `ACTIVATION_ATTENTION`, or `COMPLETED`; blind top-up orders never grant activation access. |
+| `GET`  | `/partners/orders/{id}/usage`                              | `usage:read`    | Usage only when the partner supplied the physical eSIM through an initial-purchase order.                                                     |
+| `POST` | `/partners/orders/{id}/cancel`                             | `orders:write`  | Body: `{ "reason": "…" }`; reason length 3–1000. Allowed before provisioning.                                                                 |
+| `POST` | `/partners/orders/{id}/refund-requests`                    | `refunds:write` | Body: `{ "reason": "…" }`; creates a refund request when eligible.                                                                            |
+| `POST` | `/partners/orders/{id}/notifications`                      | `orders:write`  | Body: `{ "channel": "EMAIL", "template": "QR_READY" }`.                                                                                       |
 
 Order-list status filters accept the service order-status enum, including `DRAFT`, `APPROVED`, `PROVISIONING`, `QR_READY`, `COMPLETED`, `CANCELLED`, `PROVISIONING_FAILED`, and `REFUND_PENDING`.
 
@@ -196,10 +198,10 @@ Notification channels are `EMAIL` and `WHATSAPP`. Templates are `ORDER_STATUS`, 
 
 ### Partner account and ledger
 
-| Method | Path | Scope | Description |
-| --- | --- | --- | --- |
-| `GET` | `/partners/account` | `orders:read` | Account balance and order aggregates. |
-| `GET` | `/partners/ledger?cursor=&from=&to=&externalOrderId=&orderNumber=&reference=&type=&limit=` | `orders:read` | Ledger entries with cursor pagination. |
+| Method | Path                                                                                       | Scope         | Description                            |
+| ------ | ------------------------------------------------------------------------------------------ | ------------- | -------------------------------------- |
+| `GET`  | `/partners/account`                                                                        | `orders:read` | Account balance and order aggregates.  |
+| `GET`  | `/partners/ledger?cursor=&from=&to=&externalOrderId=&orderNumber=&reference=&type=&limit=` | `orders:read` | Ledger entries with cursor pagination. |
 
 Ledger `from` and `to` are ISO datetimes; `type` is `CREDIT`, `DEBIT`, `REFUND`, or `ADJUSTMENT`; `limit` is 1–100 (default 25). Entries contain `id`, `type`, `amountPaisa`, `balanceAfterPaisa`, `currency`, `reference`, optional order details, and `createdAt`.
 
@@ -260,13 +262,13 @@ Use `VC-Event-Id` for deduplication and reject stale timestamps according to you
 
 The following remain for backward compatibility and should not be used in new integrations:
 
-| Method | Path | Result |
-| --- | --- | --- |
-| `POST` | `/partners/quotes` | `410 QUOTES_DEPRECATED` |
-| `POST` | `/partners/orders/{id}/hosted-checkout-session` | `410 HOSTED_PAYMENT_DEPRECATED` |
-| `POST` | `/partners/orders/{id}/payment-session` | `410 HOSTED_PAYMENT_DEPRECATED` |
-| `POST` | `/partners/orders/{id}/traveler` | Deprecated legacy order flow |
-| `POST` | `/partners/orders/{id}/documents` | Deprecated legacy order flow |
-| `POST` | `/partners/orders/{id}/documents/{documentId}/confirm` | Deprecated legacy order flow |
+| Method | Path                                                   | Result                          |
+| ------ | ------------------------------------------------------ | ------------------------------- |
+| `POST` | `/partners/quotes`                                     | `410 QUOTES_DEPRECATED`         |
+| `POST` | `/partners/orders/{id}/hosted-checkout-session`        | `410 HOSTED_PAYMENT_DEPRECATED` |
+| `POST` | `/partners/orders/{id}/payment-session`                | `410 HOSTED_PAYMENT_DEPRECATED` |
+| `POST` | `/partners/orders/{id}/traveler`                       | Deprecated legacy order flow    |
+| `POST` | `/partners/orders/{id}/documents`                      | Deprecated legacy order flow    |
+| `POST` | `/partners/orders/{id}/documents/{documentId}/confirm` | Deprecated legacy order flow    |
 
 Use `POST /partners/document-upload-sessions` and then `POST /partners/orders` instead.
