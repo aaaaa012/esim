@@ -1,4 +1,4 @@
-import CheckoutClient from "./checkout-client";
+import CheckoutEntry from "./checkout-entry";
 import AuthenticatedApiProvider from "../../authenticated-api-provider";
 import "./checkout.css";
 
@@ -17,7 +17,7 @@ export default async function Checkout({
   const { plan, order, mobile, lookup, esim, country } = await searchParams;
   return (
     <AuthenticatedApiProvider>
-      <CheckoutClient
+      <CheckoutEntry
         planId={plan ?? ""}
         orderId={order ?? ""}
         mobile={mobile ?? ""}

@@ -9,6 +9,7 @@ import { GuestOrderAccessService } from "./guest-order-access.service.js";
 import { resolveRechargeOwner } from "./recharge-ownership.js";
 import { decideRepair } from "../../../prisma/reconcile-recharge-customers.js";
 import { OrdersService } from "./orders.service.js";
+import { ConflictException } from "@nestjs/common";
 
 type Any = any;
 const makeOrder = (extra: Any = {}) => ({
@@ -57,6 +58,205 @@ function setup(order = makeOrder()) {
   );
   return { service, prisma, orders, access, payments, order, notifications };
 }
+describe("automatic recharge target discovery", () => {
+  it.each(["QR_READY", "COMPLETED"])(
+    "accepts a provisioned initial purchase as a recharge target (%s)",
+    async (status) => {
+      const { service, prisma } = setup();
+      prisma.order.findMany.mockResolvedValue([
+        {
+          id: "original",
+          customerId: "customer",
+          status,
+          customer: { status: "ACTIVE", user: { clerkId: "owner" } },
+          traveler: { email: "owner@example.com" },
+          customerEsim: { inventory: { msisdn: "882470001234" } },
+        },
+      ]);
+      await expect(service.target("inventory")).resolves.toMatchObject({
+        inventoryId: "inventory",
+        ownerId: "owner",
+      });
+    },
+  );
+
+  it.each([
+    "DRAFT",
+    "PAYMENT_PENDING",
+    "PAYMENT_CONFIRMED",
+    "PROVISIONING",
+    "CANCELLED",
+    "REFUNDED",
+  ])(
+    "never recharges an unprovisioned or cancelled original (%s)",
+    async (status) => {
+      const { service, prisma } = setup();
+      prisma.order.findMany.mockResolvedValue([
+        {
+          id: "original",
+          customerId: "customer",
+          status,
+          customer: { status: "ACTIVE", user: { clerkId: "owner" } },
+          traveler: { email: "owner@example.com" },
+          customerEsim: { inventory: { msisdn: "882470001234" } },
+        },
+      ]);
+      await expect(service.target("inventory")).rejects.toThrow(/not eligible/);
+    },
+  );
+
+  it("checks provider eligibility for ready-to-install eSIMs before creating a recharge", async () => {
+    const instance: Any = Object.create(OrdersService.prototype);
+    const findFirst = vi.fn().mockResolvedValue({
+      id: "original",
+      customerId: "customer",
+      status: "QR_READY",
+      plan: { country: { isoCode: "NP" } },
+      traveler: {
+        firstName: "Test",
+        surname: "Traveler",
+        email: "owner@example.com",
+        mobile: "123456789",
+        city: "City",
+        countryOfResidence: "NP",
+      },
+      customerEsim: {
+        inventory: {
+          id: "inventory",
+          msisdn: "882470001234",
+          iccid: "test-iccid",
+        },
+      },
+    });
+    instance.prisma = { enabled: true, order: { findFirst } };
+    instance.catalog = {
+      findActive: vi.fn().mockResolvedValue({ id: "plan", countryCode: "IN" }),
+    };
+    instance.targetForMobile = vi.fn().mockResolvedValue(null);
+    instance.connectivity = {
+      checkEligibility: vi
+        .fn()
+        .mockResolvedValue({
+          allowed: false,
+          errorMessage: "Selected plan is not eligible",
+        }),
+    };
+    instance.persistence = { save: vi.fn() };
+    await expect(
+      instance.create("owner", "plan", true, {
+        mobile: "882470001234",
+        termsAccepted: true,
+        privacyAccepted: true,
+        recharge: {
+          orderId: "recharge",
+          inventoryId: "inventory",
+          customerId: "customer",
+        },
+      }),
+    ).rejects.toThrow("Selected plan is not eligible");
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: { in: ["QR_READY", "COMPLETED"] },
+        }),
+      }),
+    );
+    expect(instance.connectivity.checkEligibility).toHaveBeenCalledWith(
+      "plan",
+      "882470001234",
+    );
+    expect(instance.persistence.save).not.toHaveBeenCalled();
+  });
+
+  const candidate = (id: string) => ({
+    customerEsim: {
+      inventoryId: id,
+      inventory: { iccid: `898824700000${id}` },
+    },
+  });
+  it("discovers verified initial purchases owned by the signed-in customer across all purchase channels", async () => {
+    const { service, prisma } = setup();
+    prisma.order.findMany.mockResolvedValue([
+      candidate("1234"),
+      candidate("1234"),
+    ]);
+    const resolve = vi.spyOn(service, "target").mockResolvedValue({
+      inventoryId: "1234",
+      originalOrderId: "original",
+      customerId: "beneficiary",
+      ownerId: "owner",
+      mobile: "private-mobile",
+      email: "private@example.com",
+    });
+    await expect(service.eligibleTargets(user("owner"))).resolves.toEqual({
+      targets: [{ id: "1234", label: "Travel eSIM · 1234" }],
+    });
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(prisma.order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          orderType: "INITIAL_PURCHASE",
+          status: { in: ["QR_READY", "COMPLETED"] },
+          documentReviewStatus: { in: ["VERIFIED", "MANUALLY_APPROVED"] },
+          customer: { user: { clerkId: "owner" }, status: { not: "BLOCKED" } },
+          customerEsim: { isNot: null },
+        },
+      }),
+    );
+  });
+
+  it("omits targets whose owner changed or whose ownership is ambiguous", async () => {
+    const { service, prisma } = setup();
+    prisma.order.findMany.mockResolvedValue([
+      candidate("1234"),
+      candidate("5678"),
+    ]);
+    vi.spyOn(service, "target")
+      .mockResolvedValueOnce({
+        inventoryId: "1234",
+        originalOrderId: "original",
+        customerId: "other",
+        ownerId: "someone-else",
+        mobile: "private",
+        email: "private@example.com",
+      })
+      .mockRejectedValueOnce(new ConflictException("Ownership needs review"));
+    await expect(service.eligibleTargets(user("owner"))).resolves.toEqual({
+      targets: [],
+    });
+  });
+
+  it("does not treat a database failure as proof the customer needs a new eSIM", async () => {
+    const { service, prisma } = setup();
+    prisma.order.findMany.mockResolvedValue([candidate("1234")]);
+    vi.spyOn(service, "target").mockRejectedValue(
+      new Error("Database unavailable"),
+    );
+    await expect(service.eligibleTargets(user("owner"))).rejects.toThrow(
+      "Database unavailable",
+    );
+  });
+
+  it("returns no targets for a customer with no verified completed initial purchases", async () => {
+    const { service, prisma } = setup();
+    prisma.order.findMany.mockResolvedValue([]);
+    await expect(
+      service.eligibleTargets(user("new-customer")),
+    ).resolves.toEqual({ targets: [] });
+  });
+
+  it("rejects non-customer and password-reset accounts before reading targets", async () => {
+    const { service, prisma } = setup();
+    await expect(
+      service.eligibleTargets({ ...user(), accountType: "OPERATIONS" }),
+    ).rejects.toThrow();
+    await expect(
+      service.eligibleTargets({ ...user(), mustChangePassword: true }),
+    ).rejects.toThrow();
+    expect(prisma.order.findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe("recharge ownership and privacy", () => {
   it("uses only an unambiguous initial purchase; missing or multiple origins require review", () => {
     expect(

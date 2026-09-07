@@ -789,10 +789,12 @@ export class OrdersService implements OnModuleInit {
         }
       : null;
   }
-  private topUpLookupWhere(mobile: string) {
+  private topUpLookupWhere(mobile: string, allowReadyToInstall = false) {
     const variants = [...msisdnVariants(mobile)];
     return {
-      status: "COMPLETED" as const,
+      status: allowReadyToInstall
+        ? { in: ["QR_READY" as const, "COMPLETED" as const] }
+        : ("COMPLETED" as const),
       orderType: "INITIAL_PURCHASE" as const,
       customerEsim: {
         is: {
@@ -1589,17 +1591,21 @@ export class OrdersService implements OnModuleInit {
     };
   }
   /**
-   * Resolves the most recent completed order for an eSIM MSISDN, with the
-   * plaintext fields needed to provision a top-up (identity, plan country and
-   * the physical eSIM to reuse). Returns null when no completed order matches.
+   * Resolves an eSIM's original purchase and provisioning identity. Recharge
+   * eligibility can also inspect paid, ready-to-install eSIMs; ordinary lookup
+   * keeps its existing completed-order requirement.
    */
-  private async priorCompletedOrderFor(mobile: string) {
+  private async priorCompletedOrderFor(
+    mobile: string,
+    allowReadyToInstall = false,
+  ) {
     const target = normalizeMsisdn(mobile);
     if (!target) return null;
     if (!this.prisma.enabled) {
       const prior = [...this.orders.values()].find(
         (order) =>
-          order.status === OrderStatus.COMPLETED &&
+          (order.status === OrderStatus.COMPLETED ||
+            (allowReadyToInstall && order.status === OrderStatus.QR_READY)) &&
           order.traveler &&
           normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
       );
@@ -1620,7 +1626,7 @@ export class OrdersService implements OnModuleInit {
       };
     }
     const prior = await this.prisma.order.findFirst({
-      where: this.topUpLookupWhere(mobile),
+      where: this.topUpLookupWhere(mobile, allowReadyToInstall),
       include: {
         plan: { include: { country: true } },
         customerEsim: { include: { inventory: true } },
@@ -1655,13 +1661,14 @@ export class OrdersService implements OnModuleInit {
         : null,
     };
   }
-  async resolveSubscriber(mobile: string) {
+  async resolveSubscriber(mobile: string, allowReadyToInstall = false) {
     const target = normalizeMsisdn(mobile);
     if (!target) return null;
     if (!this.prisma.enabled) {
       const prior = [...this.orders.values()].find(
         (order) =>
-          order.status === OrderStatus.COMPLETED &&
+          (order.status === OrderStatus.COMPLETED ||
+            (allowReadyToInstall && order.status === OrderStatus.QR_READY)) &&
           order.traveler &&
           normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
       );
@@ -1681,7 +1688,7 @@ export class OrdersService implements OnModuleInit {
         inventory: null,
       };
     }
-    return this.priorCompletedOrderFor(mobile);
+    return this.priorCompletedOrderFor(mobile, allowReadyToInstall);
   }
 
   /**
@@ -1690,7 +1697,7 @@ export class OrdersService implements OnModuleInit {
    * same stored MSISDN after the local ownership and lifecycle checks pass.
    */
   async checkTopUpEligibility(mobile: string, planId: string) {
-    const target = await this.resolveSubscriber(mobile);
+    const target = await this.resolveSubscriber(mobile, true);
     const msisdn = target?.inventory?.msisdn;
     if (!target?.inventory || !msisdn)
       return {

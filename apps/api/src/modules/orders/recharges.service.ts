@@ -132,7 +132,7 @@ export class RechargesService {
     const original = resolveRechargeOwner(originals);
     const inventory = original.customerEsim!.inventory;
     if (
-      original.status !== "COMPLETED" ||
+      !["QR_READY", "COMPLETED"].includes(original.status) ||
       !inventory.msisdn ||
       !original.traveler?.email ||
       original.customer.status === "BLOCKED"
@@ -148,6 +148,60 @@ export class RechargesService {
       email: original.traveler.email,
       mobile: inventory.msisdn,
     };
+  }
+
+  async eligibleTargets(user: AuthenticatedUser) {
+    if (user.accountType !== "CUSTOMER" || user.mustChangePassword)
+      throw new ForbiddenException("A customer account is required");
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Recharge requires database persistence");
+    // Only the owner of an initial purchase can automatically reuse its eSIM.
+    // Paying for somebody else's recharge does not establish ownership.
+    const originals = await this.prisma.order.findMany({
+      where: {
+        orderType: "INITIAL_PURCHASE",
+        status: { in: ["QR_READY", "COMPLETED"] },
+        documentReviewStatus: { in: ["VERIFIED", "MANUALLY_APPROVED"] },
+        customer: { user: { clerkId: user.id }, status: { not: "BLOCKED" } },
+        customerEsim: { isNot: null },
+      },
+      select: {
+        customerEsim: {
+          select: {
+            inventoryId: true,
+            inventory: { select: { iccid: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    const candidates = new Map(
+      originals.flatMap((order) =>
+        order.customerEsim
+          ? [[order.customerEsim.inventoryId, order.customerEsim] as const]
+          : [],
+      ),
+    );
+    const targets = await Promise.all(
+      [...candidates.values()].map(async (candidate) => {
+        try {
+          const target = await this.target(candidate.inventoryId);
+          if (target.ownerId !== user.id) return null;
+          return {
+            id: target.inventoryId,
+            label: `Travel eSIM · ${candidate.inventory.iccid.slice(-4)}`,
+          };
+        } catch (error) {
+          if (
+            error instanceof ConflictException ||
+            error instanceof NotFoundException
+          )
+            return null;
+          throw error;
+        }
+      }),
+    );
+    return { targets: targets.filter((target) => target !== null) };
   }
 
   async targetFromLookup(token: string) {

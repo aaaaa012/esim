@@ -132,6 +132,7 @@ export default function CheckoutClient({
   lookupToken,
   targetEsimId,
   targetCountry,
+  rechargeTargetLabel,
 }: {
   planId: string;
   orderId: string;
@@ -139,6 +140,7 @@ export default function CheckoutClient({
   lookupToken?: string;
   targetEsimId?: string;
   targetCountry?: string;
+  rechargeTargetLabel?: string;
 }) {
   const authFetch = useAuthenticatedFetch();
   const rechargeMode = useRef(
@@ -2009,6 +2011,12 @@ export default function CheckoutClient({
                       Review the total before continuing. Your payment and
                       recharge status will be shown here.
                     </p>
+                    {isTopUp && rechargeTargetLabel && (
+                      <p className="form-note">
+                        Adding data to {rechargeTargetLabel}. Keep using your
+                        existing eSIM.
+                      </p>
+                    )}
                     <div className="gateway-grid">
                       <button
                         className={
@@ -2120,7 +2128,9 @@ export default function CheckoutClient({
                                 </small>
                               </div>
                               <label className="fonepay-bank-search">
-                                <span className="sr-only">Search banking apps</span>
+                                <span className="sr-only">
+                                  Search banking apps
+                                </span>
                                 <input
                                   type="search"
                                   value={fonepayBankQuery}
@@ -2143,7 +2153,8 @@ export default function CheckoutClient({
                                         bank.intentScheme,
                                         payment.qrPayload,
                                       );
-                                      if (target) window.location.assign(target);
+                                      if (target)
+                                        window.location.assign(target);
                                       else
                                         setError(
                                           "This banking app cannot be opened securely. Please choose another bank or scan the QR code.",

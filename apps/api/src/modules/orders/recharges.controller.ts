@@ -65,6 +65,11 @@ export class RechargesController {
   purchases(@Req() req: AuthenticatedRequest) {
     return this.recharges.purchases(req.user!);
   }
+  @Get("targets")
+  @UseGuards(AuthGuard)
+  targets(@Req() req: AuthenticatedRequest) {
+    return this.recharges.eligibleTargets(req.user!);
+  }
   @Post("recovery-link")
   @UseGuards(GuestLookupRateLimitGuard)
   requestRecovery(@Body() body: unknown) {
