@@ -123,12 +123,26 @@ export default function Home() {
                       <small>valid</small>
                     </span>
                   </div>
-                  <div className="qr" />
+                  <div className="connection-route" aria-hidden="true">
+                    <span>Kathmandu</span>
+                    <i><Plane size={12} /></i>
+                    <span>Dubai</span>
+                  </div>
+                  <div className="qr">
+                    <span className="qr-scan" aria-hidden="true" />
+                  </div>
                   <div className="qr-caption">Scan to install your eSIM</div>
                   <button className="install-pill" disabled>
                     <QrCode size={15} />
                     Install now
                   </button>
+                  <div className="activation-toast" aria-hidden="true">
+                    <span><CheckCircle2 size={14} /></span>
+                    <div>
+                      <b>Ready before take-off</b>
+                      <small>Your plan activates on arrival</small>
+                    </div>
+                  </div>
                   <span className="iphone-home-indicator" aria-hidden="true" />
                 </div>
               </div>

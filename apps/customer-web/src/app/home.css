@@ -1134,6 +1134,46 @@
   box-shadow: 0 20px 40px -18px rgba(0, 0, 0, 0.5);
 }
 
+.connection-route {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 7px -10px;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.connection-route i {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #67e8f9;
+}
+
+.connection-route i:before,
+.connection-route i:after {
+  content: "";
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(103, 232, 249, 0.6));
+}
+
+.connection-route i:after {
+  background: linear-gradient(90deg, rgba(103, 232, 249, 0.6), transparent);
+}
+
+.connection-route svg {
+  flex: 0 0 auto;
+  margin: 0 5px;
+  animation: route-pulse 2.8s ease-in-out infinite;
+}
+
 .qr:after {
   content: "VC";
   display: grid;
@@ -1146,6 +1186,25 @@
   font-weight: 900;
   letter-spacing: 0.02em;
   box-shadow: 0 8px 20px -6px rgba(7, 89, 133, 0.7);
+}
+
+.qr-scan {
+  position: absolute;
+  inset: 10px;
+  z-index: 2;
+  overflow: hidden;
+  border-radius: 17px;
+}
+
+.qr-scan:after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #22d3ee;
+  box-shadow: 0 0 15px 5px rgba(34, 211, 238, 0.42);
+  animation: qr-scan 3.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
 .qr-caption {
@@ -1179,6 +1238,58 @@
   box-shadow:
     0 14px 26px -12px rgba(0, 0, 0, 0.5),
     inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.activation-toast {
+  position: absolute;
+  z-index: 4;
+  left: 18px;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(110, 231, 183, 0.2);
+  border-radius: 14px;
+  background: rgba(5, 20, 31, 0.88);
+  color: #fff;
+  opacity: 0;
+  transform: translateY(12px);
+  backdrop-filter: blur(14px);
+  animation: activation-toast 6.5s ease-in-out infinite;
+}
+
+.activation-toast > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  background: rgba(52, 211, 153, 0.15);
+  color: #6ee7b7;
+}
+
+.activation-toast div { display: grid; gap: 1px; text-align: left; }
+.activation-toast b { font-size: 11px; }
+.activation-toast small { color: #a7b6c8; font-size: 9px; }
+
+@keyframes qr-scan {
+  0%, 12% { top: 8%; opacity: 0; }
+  22% { opacity: 1; }
+  70% { top: 88%; opacity: 1; }
+  82%, 100% { top: 88%; opacity: 0; }
+}
+
+@keyframes route-pulse {
+  0%, 100% { transform: translateX(-5px); opacity: 0.55; }
+  50% { transform: translateX(5px); opacity: 1; }
+}
+
+@keyframes activation-toast {
+  0%, 58%, 100% { opacity: 0; transform: translateY(12px); }
+  66%, 88% { opacity: 1; transform: translateY(0); }
 }
 
 /* ---------- Floating badges ---------- */
@@ -2892,6 +3003,75 @@
 }
 
 @media (max-width: 540px) {
+  .hero {
+    min-height: auto;
+    padding: 34px 0 44px;
+  }
+  .hero-grid {
+    gap: 30px;
+    text-align: left;
+  }
+  .hero p { margin: 0; }
+  .hero h1 {
+    max-width: 9ch;
+    margin-top: 18px;
+    font-size: clamp(40px, 13vw, 54px);
+  }
+  .hero .actions {
+    display: grid;
+    grid-template-columns: 1fr auto;
+  }
+  .hero .actions .button { width: auto; padding-inline: 18px; }
+  .hero-proof {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 9px 12px;
+  }
+  .hero-proof span:last-child { grid-column: 1 / -1; }
+  .phone-stage {
+    min-height: 476px;
+    margin-inline: -20px;
+    padding: 10px 0 18px;
+    overflow: hidden;
+  }
+  .phone-stage:before {
+    width: 360px;
+    height: 360px;
+  }
+  .phone-stage:after {
+    width: 440px;
+    height: 440px;
+  }
+  .phone {
+    width: 246px;
+    padding: 11px;
+    border-radius: 44px;
+    transform: rotateY(-7deg) rotateZ(4deg) translateX(8px);
+    animation-name: device-float-mobile;
+  }
+  .phone:before { top: 16px; width: 78px; height: 23px; }
+  .phone:after { top: 24px; left: calc(50% + 24px); }
+  .screen { min-height: 430px; border-radius: 34px; padding: 14px 17px 24px; }
+  .plan-chip { margin-top: 18px; padding: 10px; gap: 8px; border-radius: 16px; }
+  .plan-chip .flag { width: 36px; height: 36px; font-size: 20px; }
+  .pc-txt b { font-size: 12px; }
+  .pc-meta b { font-size: 12px; }
+  .qr { width: 146px; height: 146px; margin-top: 22px; border-radius: 19px; }
+  .qr:after { width: 42px; height: 42px; border-radius: 12px; }
+  .qr-caption { margin-top: 13px; }
+  .install-pill { height: 42px; margin-top: 10px; font-size: 13px; }
+  .activation-toast { left: 13px; right: 13px; bottom: 13px; }
+  .float-chip { border-radius: 15px; box-shadow: 0 18px 42px -18px rgba(15, 23, 42, 0.5); }
+  .float-a { top: 8%; left: calc(50% - 182px); }
+  .float-b { right: calc(50% - 184px); bottom: 8%; }
+  .fc-ic { width: 32px; height: 32px; }
+  .fc-txt em { font-size: 12px; }
+  .fc-txt small { font-size: 10px; }
+
+  @keyframes device-float-mobile {
+    0%, 100% { transform: rotateY(-7deg) rotateZ(4deg) translate(8px, 0); }
+    50% { transform: rotateY(-3deg) rotateZ(2deg) translate(4px, -9px); }
+  }
   .campaign-featured,
   .campaign-gallery-section {
     padding-top: 54px;
@@ -3042,9 +3222,6 @@
   }
   .topup-row .button {
     width: 100%;
-  }
-  .hero h1 {
-    font-size: clamp(38px, 12vw, 44px);
   }
   .actions {
     align-items: stretch;
