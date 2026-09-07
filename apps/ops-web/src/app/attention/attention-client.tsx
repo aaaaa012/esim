@@ -1,7 +1,8 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, RefreshCcw } from "lucide-react";
+import { AlertTriangle, Download, RefreshCcw } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
@@ -146,6 +147,43 @@ export default function AttentionClient() {
       <Panel
         title="Open cases"
         description={`${items.length} case(s) need attention`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `attention-cases-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Created",
+                  "Severity",
+                  "Category",
+                  "Summary",
+                  "Order",
+                  "Status",
+                  "Failure category",
+                  "Retry count",
+                  "Available actions",
+                ],
+                items.map((item) => [
+                  item.createdAt,
+                  item.severity,
+                  item.category,
+                  item.summary,
+                  item.order?.orderNumber,
+                  item.status,
+                  item.failureCategory,
+                  item.retryCount,
+                  item.availableActions.join(" | "),
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
       >
         {loading ? (
           <div className="py-10 text-center text-sm text-muted-foreground">

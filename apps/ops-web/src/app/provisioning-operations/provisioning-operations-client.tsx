@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { RefreshCcw } from "lucide-react";
+import { Download, RefreshCcw } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
@@ -131,6 +132,41 @@ export default function ProvisioningOperationsClient() {
       <Panel
         title="Orders needing attention"
         description="Set-ups that are delayed, uncertain, or waiting for review"
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `pending-activations-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Updated",
+                  "Order",
+                  "Order type",
+                  "Order status",
+                  "Operation state",
+                  "ICCID / SIM serial",
+                  "Subscription ID",
+                  "Last problem",
+                ],
+                items.map((item) => [
+                  item.updatedAt,
+                  item.order.orderNumber,
+                  item.order.orderType,
+                  item.order.status,
+                  item.state,
+                  item.iccid,
+                  item.providerSubscriptionId,
+                  shortError(item),
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
         noPadding
       >
         {!items.length ? (

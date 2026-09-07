@@ -1,8 +1,9 @@
 # Provider integration release audit
 
-Audited against the public Transatel OpenAPI documents (OCS subscriptions
-1.85, catalog, inventory and SIM management) and Khalti KPG-2 documentation on
-2026-09-04.
+Reconciled with the implementation on 2026-09-08 against the public Transatel
+OpenAPI documents (OCS subscriptions 1.85, catalog, inventory and SIM
+management), Khalti KPG-2 documentation, and the supplied Fonepay Intent Flow
+v1.10 material.
 
 ## Identifier contract
 

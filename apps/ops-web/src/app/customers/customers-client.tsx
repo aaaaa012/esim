@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Download } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
@@ -136,7 +137,10 @@ export default function CustomersClient() {
           </SelectContent>
         </Select>
         <Select value={orderStatus} onValueChange={setOrderStatus}>
-          <SelectTrigger aria-label="Filter customers by order status" className="w-44">
+          <SelectTrigger
+            aria-label="Filter customers by order status"
+            className="w-44"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -149,7 +153,10 @@ export default function CustomersClient() {
           </SelectContent>
         </Select>
         <Select value={esimStatus} onValueChange={setEsimStatus}>
-          <SelectTrigger aria-label="Filter customers by eSIM status" className="w-44">
+          <SelectTrigger
+            aria-label="Filter customers by eSIM status"
+            className="w-44"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -165,6 +172,46 @@ export default function CustomersClient() {
       <Panel
         title="Customer directory"
         description={`${total} customers`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={loading || !items.length}
+            onClick={() =>
+              downloadCsv(
+                `customers-page-${page}-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Customer code",
+                  "Name",
+                  "Email",
+                  "Phone",
+                  "Orders",
+                  "Completed eSIMs",
+                  "Active eSIMs",
+                  "Confirmed remaining MB",
+                  "Usage checked at",
+                  "Total spent NPR",
+                  "Last order",
+                ],
+                items.map((customer) => [
+                  customer.customerCode,
+                  customer.name,
+                  customer.email,
+                  customer.phone,
+                  customer.orders,
+                  customer.completedEsims,
+                  customer.activeEsims,
+                  customer.remainingMb,
+                  customer.usageLastCheckedAt,
+                  customer.spendNpr,
+                  customer.lastOrderAt,
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" /> Export visible rows
+          </Button>
+        }
         noPadding
       >
         {loading ? (
