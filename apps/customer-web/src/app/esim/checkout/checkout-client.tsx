@@ -1532,7 +1532,7 @@ export default function CheckoutClient({
                     </small>
                   </span>
                 </label>
-                <label className="confirm-box">
+                <label className="confirm-box legal-consent">
                   <input
                     type="checkbox"
                     checked={legalAccepted}
@@ -2034,7 +2034,7 @@ export default function CheckoutClient({
                     </div>
                     {isTopUp && !order ? (
                       <>
-                        <label className="confirm-box payment-consent">
+                        <label className="confirm-box payment-consent legal-consent">
                           <input
                             type="checkbox"
                             checked={legalAccepted}

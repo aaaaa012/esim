@@ -1005,6 +1005,7 @@ export default function AdminWorkspace() {
                     Download editable catalog
                   </Button>
                   <Input
+                    aria-label="Choose catalog spreadsheet"
                     type="file"
                     accept=".csv,.xlsx,.xls,text/csv"
                     onChange={(e) =>

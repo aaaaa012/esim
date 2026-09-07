@@ -1664,7 +1664,7 @@ function PurchaseConsent({
   recharge?: boolean;
 }) {
   return (
-    <label className="confirm-box">
+    <label className="confirm-box legal-consent">
       <input
         type="checkbox"
         checked={checked}

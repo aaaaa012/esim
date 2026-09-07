@@ -60,12 +60,21 @@ type Profile = {
   effectiveCapabilities: string[];
 };
 
-function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
+function SidebarLink({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: NavItem;
+  active: boolean;
+  onNavigate?: () => void;
+}) {
   const Icon = item.icon;
   return (
     <Link
       href={item.href}
       className={cn("ops-sidebar-link", active && "active")}
+      {...(onNavigate ? { onClick: onNavigate } : {})}
     >
       <Icon className="size-4" />
       {item.label}
@@ -153,6 +162,7 @@ export default function OpsSidebar({
               key={item.href}
               item={item}
               active={isActive(path, item.href)}
+              {...(onClose ? { onNavigate: onClose } : {})}
             />
           ))}
         </nav>

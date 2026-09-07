@@ -17,7 +17,6 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
   const { signOut } = useClerk();
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  useEffect(() => setMobileNavOpen(false), [pathname]);
   useEffect(() => {
     if (!mobileNavOpen) return;
     const previous = document.body.style.overflow;

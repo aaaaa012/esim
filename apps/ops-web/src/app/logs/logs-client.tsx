@@ -27,6 +27,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { activityLabel } from "./log-activity";
+import { toast } from "sonner";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -183,6 +184,7 @@ export default function LogsClient() {
           setItems(value.data?.items ?? []);
           setTotal(value.data?.total ?? 0);
           setError("");
+          if (refreshOnly) toast.success("Logs refreshed");
         })
         .catch((cause) => setError(cause.message))
         .finally(() => {
@@ -379,7 +381,7 @@ export default function LogsClient() {
           <>
             <div className="w-56">
               <Select value={group} onValueChange={(v) => changeGroup(v as Group)}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label="Filter logs by category" className="h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(Object.keys(GROUP_LABELS) as Group[]).map((g) => (
                     <SelectItem key={g} value={g}>{GROUP_LABELS[g]}</SelectItem>
@@ -389,7 +391,7 @@ export default function LogsClient() {
             </div>
             <div className="w-64">
               <Select value={actionFilter} onValueChange={setActionFilter}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label="Filter logs by action" className="h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {ACTION_FILTER_OPTIONS.map((opt) => (
                     <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
@@ -425,7 +427,7 @@ export default function LogsClient() {
             description="Try a different category or search term. Records appear as the system actually receives and sends messages."
           />
         ) : (
-          <Table>
+          <Table className="responsive-log-table">
             <TableHeader>
               <TableRow>
                 <TableHead>Time</TableHead>
@@ -444,10 +446,10 @@ export default function LogsClient() {
                     className={cn("cursor-pointer hover:bg-muted/60 transition-colors", failed && "bg-destructive/[0.03]")}
                     onClick={() => setInspectEntry(entry)}
                   >
-                    <TableCell className="whitespace-nowrap text-muted-foreground text-xs font-mono">
+                    <TableCell data-label="Time" className="whitespace-nowrap text-muted-foreground text-xs font-mono">
                       {new Date(entry.createdAt).toLocaleString()}
                     </TableCell>
-                    <TableCell>
+                    <TableCell data-label="Type and action">
                       <div className="flex items-center gap-2">
                         <span className="inline-flex items-center gap-1 font-semibold text-xs">
                           <Icon className="size-3.5 text-muted-foreground" />
@@ -464,7 +466,7 @@ export default function LogsClient() {
                         <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-1">{entry.detail}</p>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell data-label="Result">
                       {entry.statusLabel ? (
                         <StatusBadge
                           label={entry.statusLabel}
@@ -485,7 +487,7 @@ export default function LogsClient() {
                         <span className="ml-2 text-xs tabular-nums text-muted-foreground">{entry.status}</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                    <TableCell data-label="Actions" className="text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1.5">
                         <Button
                           size="sm"

@@ -228,7 +228,7 @@ export default function OrdersClient({
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full sm:w-40">
+            <SelectTrigger aria-label="Filter orders by source" className="w-full sm:w-40">
               <SelectValue placeholder="Source" />
             </SelectTrigger>
             <SelectContent>
@@ -245,7 +245,7 @@ export default function OrdersClient({
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full sm:w-48">
+            <SelectTrigger aria-label="Filter orders by partner" className="w-full sm:w-48">
               <SelectValue placeholder="Partner" />
             </SelectTrigger>
             <SelectContent>
@@ -264,7 +264,7 @@ export default function OrdersClient({
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full sm:w-44">
+            <SelectTrigger aria-label="Filter orders by channel" className="w-full sm:w-44">
               <SelectValue placeholder="Channel" />
             </SelectTrigger>
             <SelectContent>
@@ -281,7 +281,7 @@ export default function OrdersClient({
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full sm:w-44">
+            <SelectTrigger aria-label="Filter orders by status" className="w-full sm:w-44">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>

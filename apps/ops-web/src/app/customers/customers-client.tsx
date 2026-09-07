@@ -124,7 +124,7 @@ export default function CustomersClient() {
           className="w-full sm:w-72"
         />
         <Select value={searchBy} onValueChange={setSearchBy}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger aria-label="Search customers by" className="w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -136,7 +136,7 @@ export default function CustomersClient() {
           </SelectContent>
         </Select>
         <Select value={orderStatus} onValueChange={setOrderStatus}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger aria-label="Filter customers by order status" className="w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -149,7 +149,7 @@ export default function CustomersClient() {
           </SelectContent>
         </Select>
         <Select value={esimStatus} onValueChange={setEsimStatus}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger aria-label="Filter customers by eSIM status" className="w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

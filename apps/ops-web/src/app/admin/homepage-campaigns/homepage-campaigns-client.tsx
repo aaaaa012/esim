@@ -582,6 +582,7 @@ export default function HomepageCampaignsClient() {
                 </Field>
                 <Field label="Sort order">
                   <Input
+                    aria-label="Campaign sort order"
                     type="number"
                     min="0"
                     max="9999"
@@ -623,6 +624,7 @@ export default function HomepageCampaignsClient() {
                   </p>
                 </div>
                 <Switch
+                  aria-label="Campaign visibility"
                   checked={form.active}
                   onCheckedChange={(checked) => updateForm("active", checked)}
                 />

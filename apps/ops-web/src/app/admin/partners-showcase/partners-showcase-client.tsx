@@ -228,6 +228,7 @@ export default function PartnersShowcaseClient() {
                 Display name
               </Label>
               <Input
+                aria-label="Partner display name"
                 placeholder="e.g. Himalayan Airways"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
@@ -238,6 +239,7 @@ export default function PartnersShowcaseClient() {
                 Logo URL (optional)
               </Label>
               <Input
+                aria-label="Partner logo URL"
                 placeholder="https://example.com/logo.png"
                 value={logoUrl}
                 onChange={(event) => setLogoUrl(event.target.value)}
@@ -252,6 +254,7 @@ export default function PartnersShowcaseClient() {
                 Sort order (lower first)
               </Label>
               <Input
+                aria-label="Partner sort order"
                 type="number"
                 min="0"
                 max="9999"
@@ -319,6 +322,7 @@ export default function PartnersShowcaseClient() {
                     </TableCell>
                     <TableCell>
                       <Switch
+                        aria-label={`${item.active ? "Hide" : "Show"} ${item.name} on the homepage`}
                         checked={item.active}
                         disabled={busyId === item.id}
                         onCheckedChange={() => void toggleActive(item)}
@@ -377,6 +381,7 @@ export default function PartnersShowcaseClient() {
                   Display name
                 </Label>
                 <Input
+                  aria-label="Partner display name"
                   value={editing.name}
                   onChange={(event) =>
                     setEditing({ ...editing, name: event.target.value })
@@ -388,6 +393,7 @@ export default function PartnersShowcaseClient() {
                   Logo URL (optional)
                 </Label>
                 <Input
+                  aria-label="Partner logo URL"
                   placeholder="https://example.com/logo.png"
                   value={editing.logoUrl ?? ""}
                   onChange={(event) =>
@@ -403,6 +409,7 @@ export default function PartnersShowcaseClient() {
                   Sort order (lower first)
                 </Label>
                 <Input
+                  aria-label="Partner sort order"
                   type="number"
                   min="0"
                   max="9999"

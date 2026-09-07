@@ -175,7 +175,7 @@ export default function ManualRefundsClient() {
         actions={
           <div className="flex gap-2">
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-44">
+              <SelectTrigger aria-label="Filter refunds by status" className="w-44">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
