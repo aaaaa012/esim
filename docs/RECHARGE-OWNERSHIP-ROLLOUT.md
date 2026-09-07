@@ -10,6 +10,8 @@ The recharge order, hashed email-recovery credential, and encrypted notification
 
 `GET /recharges/:id`, `POST /recharges/:id/payment/initiate`, `/payment/verify`, and `/recover` expose only the individual transaction. `POST /recharges/recovery-link` accepts order number and recovery email, is rate limited, returns a generic response, and rotates links on a match. `GET /recharges/purchases` includes owned orders and transactions initiated by the authenticated purchaser. eSIM inventory access remains beneficiary-only. Recharge orders cannot be claimed to transfer ownership.
 
+Partner API and partner-hosted top-ups use the same purchaser/beneficiary separation. `externalCustomerId` records the partner's purchaser, while the resolved completed order supplies the immutable beneficiary `customerId` and `targetInventoryId`. Cross-channel top-ups are allowed, but they do not grant the partner activation-detail, usage, or lifecycle-management access to an eSIM that the partner did not originally supply.
+
 ## Deployment sequence
 
 1. Back up the hosted PostgreSQL database using the existing operations procedure.

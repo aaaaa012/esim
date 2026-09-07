@@ -481,6 +481,16 @@
 }
 
 @media (max-width: 639px) {
+  .ops-content {
+    overflow-x: clip;
+    padding-inline: 0.75rem;
+  }
+  .ops-content :is(p, dd, li, code, pre, a, span) {
+    overflow-wrap: anywhere;
+  }
+  .ops-content :is(.grid, [class*="grid-cols-"]) > * {
+    min-width: 0;
+  }
   .ops-page-header {
     margin-bottom: 1.25rem;
   }
@@ -500,7 +510,13 @@
   }
   .ops-panel-head > div:last-child {
     width: 100%;
-    overflow-x: auto;
+    overflow: visible;
+  }
+  .ops-panel-head > div:last-child > :is(button, a) {
+    min-height: 2.5rem;
+  }
+  .ops-panel-head > div:last-child > :is(.w-48, .w-56, .w-64) {
+    width: 100%;
   }
   .ops-card > [data-slot="card-content"]:not(:empty) {
     padding-left: 1rem;
@@ -514,6 +530,15 @@
     padding-left: 0.75rem;
     padding-right: 0.75rem;
   }
+  .ops-content [data-slot="table-cell"] :is(.flex, [class*="justify-end"]) {
+    flex-wrap: wrap;
+  }
+  .ops-content [data-slot="table-cell"] .truncate {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
   .ops-content .w-44,
   .ops-content .min-w-52 {
     width: 100%;
@@ -526,6 +551,91 @@
     max-height: calc(100dvh - 1rem);
     overflow-y: auto;
     padding: 1rem;
+  }
+
+  .ops-data-table {
+    overflow: visible;
+  }
+  .ops-data-table table,
+  .ops-data-table tbody,
+  .ops-data-table tr,
+  .ops-data-table td {
+    display: block;
+    width: 100%;
+  }
+  .ops-data-table table {
+    min-width: 0;
+  }
+  .ops-data-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .ops-data-table tr {
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .ops-data-table td {
+    display: grid;
+    grid-template-columns: minmax(6.5rem, 38%) minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.45rem 1rem;
+    white-space: normal;
+    text-align: left;
+  }
+  .ops-data-table td::before {
+    content: attr(data-label);
+    color: var(--muted-foreground);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .responsive-log-table {
+    min-width: 0 !important;
+  }
+  .responsive-log-table thead {
+    display: none;
+  }
+  .responsive-log-table,
+  .responsive-log-table tbody,
+  .responsive-log-table tr,
+  .responsive-log-table td {
+    display: block;
+    width: 100%;
+  }
+  .responsive-log-table tr {
+    margin: 0.75rem;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+  }
+  .responsive-log-table td {
+    padding: 0.7rem 0.85rem;
+    white-space: normal;
+    text-align: left;
+  }
+  .responsive-log-table td + td {
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  .responsive-log-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.35rem;
+    color: var(--muted-foreground);
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .responsive-log-table td:last-child > div {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
 

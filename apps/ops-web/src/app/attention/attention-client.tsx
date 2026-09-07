@@ -1,7 +1,8 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, RefreshCcw } from "lucide-react";
+import { AlertTriangle, Download, RefreshCcw } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
@@ -17,6 +18,8 @@ import {
 } from "@/components/ui/table";
 import { StatusBadge } from "@/components/status-badge";
 import { attentionActionLabel, isAttentionAction } from "@visa-compass/shared";
+import { toast } from "sonner";
+import { useConfirmation } from "@/components/confirmation-provider";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Case = {
@@ -37,6 +40,7 @@ type Case = {
 };
 export default function AttentionClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [items, setItems] = useState<Case[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -64,6 +68,38 @@ export default function AttentionClient() {
     );
   }, [load]);
   const action = async (item: Case, actionName: string) => {
+    if (!isAttentionAction(actionName)) return;
+    const label = attentionActionLabel(actionName);
+    const descriptions: Record<string, string> = {
+      RECHECK_PAYMENT:
+        "Checks the payment provider for the latest result. It does not create a new charge.",
+      RECHECK_INVENTORY:
+        "Reads the eSIM's current network state and may quarantine stock that is not safe to sell.",
+      RECHECK_ORDER_PROVIDER:
+        "Reads Transatel's current eSIM and package state and reconciles the order. It does not submit another activation.",
+      RECONCILE_RESERVATION:
+        "Compares the local stock reservation with provider and order evidence before changing it.",
+      RECONCILE_PROVISIONING:
+        "Recovers this activation from provider evidence without blindly submitting another request.",
+      RECONCILE_ORDER_PROVISIONING:
+        "Finds this order's activation operation and safely reconciles its current provider result.",
+      RETRY_PROVISIONING:
+        "Starts another activation attempt only if the order is in a state where retry is safe.",
+      RETRY_NOTIFICATION:
+        "Queues the stored message again for its original recipient.",
+      REPLAY_WEBHOOK:
+        "Queues the stored provider update for processing again. The original event remains in the audit history.",
+    };
+    if (
+      !(await confirm({
+        title: `${label}?`,
+        description:
+          descriptions[actionName] ??
+          "Open the related operational record and review its current state.",
+        confirmLabel: label,
+      }))
+    )
+      return;
     setBusy(item.id);
     setError("");
     try {
@@ -81,12 +117,19 @@ export default function AttentionClient() {
       const value = await response.json();
       if (!response.ok)
         throw new Error(value.error?.message ?? "Action failed");
+      toast.success(`${label} completed`);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Action failed");
     } finally {
       setBusy("");
     }
+  };
+  const reviewHref = (item: Case, actionName: string) => {
+    if (actionName === "REVIEW_MANUAL_REFUND") return "/manual-refunds";
+    if (actionName === "REVIEW_FINANCIAL_DISPUTE" && item.orderId)
+      return `/orders/${item.orderId}`;
+    return null;
   };
   return (
     <div className="space-y-6">
@@ -104,6 +147,43 @@ export default function AttentionClient() {
       <Panel
         title="Open cases"
         description={`${items.length} case(s) need attention`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `attention-cases-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Created",
+                  "Severity",
+                  "Category",
+                  "Summary",
+                  "Order",
+                  "Status",
+                  "Failure category",
+                  "Retry count",
+                  "Available actions",
+                ],
+                items.map((item) => [
+                  item.createdAt,
+                  item.severity,
+                  item.category,
+                  item.summary,
+                  item.order?.orderNumber,
+                  item.status,
+                  item.failureCategory,
+                  item.retryCount,
+                  item.availableActions.join(" | "),
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
       >
         {loading ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
@@ -169,17 +249,31 @@ export default function AttentionClient() {
                     <div className="flex flex-wrap gap-2">
                       {item.availableActions
                         .filter(isAttentionAction)
-                        .map((name) => (
-                          <Button
-                            key={name}
-                            size="sm"
-                            variant="outline"
-                            disabled={busy === item.id}
-                            onClick={() => void action(item, name)}
-                          >
-                            {attentionActionLabel(name)}
-                          </Button>
-                        ))}
+                        .map((name) => {
+                          const href = reviewHref(item, name);
+                          return href ? (
+                            <Button
+                              key={name}
+                              size="sm"
+                              variant="outline"
+                              asChild
+                            >
+                              <Link href={href}>
+                                {attentionActionLabel(name)}
+                              </Link>
+                            </Button>
+                          ) : (
+                            <Button
+                              key={name}
+                              size="sm"
+                              variant="outline"
+                              disabled={busy === item.id}
+                              onClick={() => void action(item, name)}
+                            >
+                              {attentionActionLabel(name)}
+                            </Button>
+                          );
+                        })}
                     </div>
                   </TableCell>
                 </TableRow>

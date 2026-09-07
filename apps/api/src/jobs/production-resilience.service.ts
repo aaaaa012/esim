@@ -106,6 +106,7 @@ export class ProductionResilienceService {
   }) {
     const limit = Math.min(200, Math.max(1, input.limit ?? 50));
     const offset = Math.max(0, input.offset ?? 0);
+    if (!this.prisma.enabled) return { items: [], total: 0, limit, offset };
     const where: Prisma.AttentionCaseWhereInput = {
       ...(input.status ? { status: input.status } : {}),
       ...(input.category ? { category: input.category } : {}),

@@ -15,7 +15,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { RefreshCcw } from "lucide-react";
+import { Download, RefreshCcw } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { useConfirmation } from "@/components/confirmation-provider";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -79,6 +80,39 @@ export default function IntegrationEventsClient() {
       <Panel
         title="Incoming updates"
         description={`${items.length} updates received from our payment and network providers`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `provider-events-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Received",
+                  "Provider",
+                  "Event ID",
+                  "Signature verified",
+                  "Processed",
+                  "Dead lettered",
+                  "Error",
+                ],
+                items.map((item) => [
+                  item.createdAt,
+                  item.source,
+                  item.eventId,
+                  item.signatureValid,
+                  item.processedAt,
+                  item.deadLetteredAt,
+                  item.errorMessage,
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
         noPadding
       >
         {loading ? (
@@ -149,7 +183,15 @@ export default function IntegrationEventsClient() {
                         variant="outline"
                         disabled={busy === item.id}
                         onClick={async () => {
-                          if (await confirm({ title: "Replay provider update?", description: "Send this update through the system again only when the order did not update automatically.", confirmLabel: "Replay update" })) void replay(item.id);
+                          if (
+                            await confirm({
+                              title: "Replay provider update?",
+                              description:
+                                "Send this update through the system again only when the order did not update automatically.",
+                              confirmLabel: "Replay update",
+                            })
+                          )
+                            void replay(item.id);
                         }}
                       >
                         <RefreshCcw className="size-3.5" /> Replay

@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -9,6 +10,7 @@ import {
   QrCode,
   ShieldCheck,
   Smartphone,
+  Signal,
   Timer,
   Wifi,
   Zap,
@@ -73,7 +75,27 @@ export default function Home() {
             </div>
             <div className="phone-stage">
               <div className="phone">
+                <span className="phone-button phone-button-silent" />
+                <span className="phone-button phone-button-volume-up" />
+                <span className="phone-button phone-button-volume-down" />
+                <span className="phone-button phone-button-power" />
                 <div className="screen">
+                  <div className="iphone-status" aria-hidden="true">
+                    <span>9:41</span>
+                    <span className="iphone-status-icons">
+                      <Signal size={12} strokeWidth={2.5} />
+                      <Wifi size={12} strokeWidth={2.5} />
+                      <i className="iphone-battery" />
+                    </span>
+                  </div>
+                  <Image
+                    className="screen-watermark"
+                    src="/brand/visa-compass-nepal-outline.png"
+                    alt=""
+                    width={933}
+                    height={371}
+                    priority
+                  />
                   <div className="screen-head">
                     <div className="app-ident">
                       <Wifi size={15} />
@@ -101,12 +123,27 @@ export default function Home() {
                       <small>valid</small>
                     </span>
                   </div>
-                  <div className="qr" />
+                  <div className="connection-route" aria-hidden="true">
+                    <span>Kathmandu</span>
+                    <i><Plane size={12} /></i>
+                    <span>Dubai</span>
+                  </div>
+                  <div className="qr">
+                    <span className="qr-scan" aria-hidden="true" />
+                  </div>
                   <div className="qr-caption">Scan to install your eSIM</div>
                   <button className="install-pill" disabled>
                     <QrCode size={15} />
                     Install now
                   </button>
+                  <div className="activation-toast" aria-hidden="true">
+                    <span><CheckCircle2 size={14} /></span>
+                    <div>
+                      <b>Ready before take-off</b>
+                      <small>Your plan activates on arrival</small>
+                    </div>
+                  </div>
+                  <span className="iphone-home-indicator" aria-hidden="true" />
                 </div>
               </div>
               <div className="float-chip float-a">

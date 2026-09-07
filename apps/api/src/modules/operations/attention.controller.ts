@@ -28,6 +28,7 @@ import { NotificationService } from "../notification/notification.service.js";
 import { OrdersService } from "../orders/orders.service.js";
 import { PaymentDisputesService } from "../payments/payment-disputes.service.js";
 import { ManualRefundsService } from "../payments/manual-refunds.service.js";
+import { TransatelOperationsService } from "../integration/transatel-operations.service.js";
 
 @Controller("operations/attention")
 @UseGuards(AuthGuard, AccountGuard)
@@ -44,6 +45,7 @@ export class AttentionController {
     private readonly orders: OrdersService,
     private readonly paymentDisputes: PaymentDisputesService,
     private readonly refunds: ManualRefundsService,
+    private readonly transatel: TransatelOperationsService,
   ) {}
 
   @Get()
@@ -196,10 +198,7 @@ export class AttentionController {
       return this.inventory.reconcileProviderProfile(item.entityId);
     if (action === "RECHECK_ORDER_PROVIDER") {
       if (!item.orderId) throw new BadRequestException("Order is unavailable");
-      const inventory = await this.inventory.inventoryForOrder(item.orderId);
-      if (!inventory?.iccid)
-        throw new BadRequestException("Assigned inventory is unavailable");
-      return this.connectivity.getEsimDetails(inventory.iccid);
+      return this.transatel.reconcile(item.orderId);
     }
     if (action === "RECONCILE_RESERVATION")
       return this.inventory.reconcileReservation(item.entityId);

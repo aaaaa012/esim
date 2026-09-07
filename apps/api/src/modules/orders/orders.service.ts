@@ -859,6 +859,9 @@ export class OrdersService implements OnModuleInit {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
     const replacement = order.documentReviewStatus === "REUPLOAD_REQUIRED";
+    const replacesExistingEvidence = order.documents.some(
+      (document) => document.type === input.type,
+    );
     if (
       ![OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER].includes(
         order.status,
@@ -881,7 +884,18 @@ export class OrdersService implements OnModuleInit {
     order.documents = order.documents
       .filter((d) => d.type !== input.type)
       .concat(document);
-    if (replacement) order.documentReviewStatus = "NOT_STARTED";
+    if (
+      replacement ||
+      replacesExistingEvidence ||
+      ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        order.documentReviewStatus ?? "",
+      )
+    ) {
+      order.documentReviewStatus = "NOT_STARTED";
+      delete order.documentReviewStartedAt;
+      delete order.documentCheckoutReleaseAt;
+      delete order.passportVerification;
+    }
     await this.persistence.save(order);
     return { ...document, upload: signed.upload };
   }
@@ -961,6 +975,17 @@ export class OrdersService implements OnModuleInit {
       }
     }
     await this.ensureDocumentReviewAttention(order);
+    const allRequiredDocumentsConfirmed = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].every((type) =>
+      order.documents.some((item) => item.type === type && item.uploadVerified),
+    );
+    if (
+      allRequiredDocumentsConfirmed &&
+      order.documentReviewStatus === "NOT_STARTED"
+    )
+      await this.verifyPassport(id, ownerId);
     return {
       id: document.id,
       type: document.type,

@@ -1,7 +1,14 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ExternalLink, RefreshCcw, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  RefreshCcw,
+  XCircle,
+} from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
@@ -175,7 +182,10 @@ export default function ManualRefundsClient() {
         actions={
           <div className="flex gap-2">
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-44">
+              <SelectTrigger
+                aria-label="Filter refunds by status"
+                className="w-44"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -274,6 +284,47 @@ export default function ManualRefundsClient() {
       <Panel
         title="Refund register"
         description="Submitting or approving never sends money. Complete the refund in the original payment provider before confirming it here."
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `manual-refunds-${status.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Created",
+                  "Order",
+                  "Provider",
+                  "Reason",
+                  "Explanation",
+                  "Amount NPR",
+                  "Status",
+                  "Requested by",
+                  "Reviewed by",
+                  "Provider reference",
+                  "Review note",
+                ],
+                items.map((item) => [
+                  item.createdAt,
+                  item.order.orderNumber,
+                  item.payment.provider,
+                  item.reason,
+                  item.explanation,
+                  item.amount,
+                  item.status,
+                  item.requestedBy.email,
+                  item.reviewedBy?.email,
+                  item.providerReference,
+                  item.reviewNote,
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
         noPadding
       >
         <Table>
@@ -322,11 +373,14 @@ export default function ManualRefundsClient() {
                           variant="success"
                           disabled={!!busy}
                           onClick={async () => {
-                            if (await confirm({
-                              title: "Approve manual refund?",
-                              description: `This authorizes the refund for completion in ${humane(item.payment.provider)}. The payment is not marked complete until the provider reference is recorded.`,
-                              confirmLabel: "Approve refund",
-                            })) void act(item, "approve");
+                            if (
+                              await confirm({
+                                title: "Approve manual refund?",
+                                description: `This authorizes the refund for completion in ${humane(item.payment.provider)}. The payment is not marked complete until the provider reference is recorded.`,
+                                confirmLabel: "Approve refund",
+                              })
+                            )
+                              void act(item, "approve");
                           }}
                         >
                           <CheckCircle2 className="size-4" />

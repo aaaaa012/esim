@@ -38,7 +38,9 @@ export function Panel({
             )}
           </div>
           {(actions || action) && (
-            <div className="flex items-center gap-2">{actions ?? action}</div>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {actions ?? action}
+            </div>
           )}
         </div>
       )}

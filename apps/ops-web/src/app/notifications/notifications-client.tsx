@@ -2,7 +2,8 @@
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Bell, ExternalLink, RefreshCcw } from "lucide-react";
+import { Bell, Download, ExternalLink, RefreshCcw } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { Panel } from "@/components/panel";
 import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -133,6 +134,37 @@ export default function NotificationsClient() {
           </span>
         }
         description={`${items.length} messages`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `notification-delivery-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Created",
+                  "Sent",
+                  "Order ID",
+                  "Channel",
+                  "Template",
+                  "Status",
+                ],
+                items.map((item) => [
+                  item.createdAt,
+                  item.sentAt,
+                  item.orderId,
+                  item.channel,
+                  item.template,
+                  item.status,
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
         noPadding
       >
         {loading ? (
@@ -190,7 +222,15 @@ export default function NotificationsClient() {
                         size="sm"
                         disabled={busy === item.id}
                         onClick={async () => {
-                          if (await confirm({ title: "Send message again?", description: "The customer will receive another copy of this notification.", confirmLabel: "Send again" })) void retry(item.id);
+                          if (
+                            await confirm({
+                              title: "Send message again?",
+                              description:
+                                "The customer will receive another copy of this notification.",
+                              confirmLabel: "Send again",
+                            })
+                          )
+                            void retry(item.id);
                         }}
                       >
                         {busy === item.id ? (

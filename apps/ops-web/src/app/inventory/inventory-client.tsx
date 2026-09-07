@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Clock,
   FileUp,
+  Download,
   Globe2,
   Link2,
   PackageCheck,
@@ -39,6 +40,7 @@ import ErrorDialog from "@/components/error-dialog";
 import { PaginationBar } from "@/components/pagination-bar";
 import { SearchInput } from "@/components/search-input";
 import { cn } from "@/lib/utils";
+import { downloadCsv } from "@/lib/csv";
 import { useConfirmation } from "@/components/confirmation-provider";
 import { toast } from "sonner";
 import {
@@ -243,6 +245,48 @@ export default function InventoryClient() {
   const [restoring, setRestoring] = useState("");
   const refreshedReconciliationRun = useRef<string | null>(null);
   const PAGE_SIZE = 50;
+
+  const exportProfiles = () => {
+    downloadCsv(
+      `esim-profiles-${profilesStatus.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        "ICCID / SIM serial",
+        "MSISDN",
+        "Status",
+        "Provider status",
+        "eID",
+        "SM-DP+ address",
+        "Provider subscription ID",
+        "Order",
+        "Customer code",
+        "Customer email",
+        "Plan",
+        "Country",
+        "Batch",
+        "Batch status",
+        "Activated at",
+        "Expires at",
+      ],
+      profiles.map((profile) => [
+        profile.iccid,
+        profile.msisdn,
+        profile.status,
+        profile.providerStatus,
+        profile.eid.startsWith("SYNTH-") ? "Not provided" : profile.eid,
+        profile.smDpAddress,
+        profile.providerSubscriptionId,
+        profile.order?.orderNumber,
+        profile.order?.customerCode,
+        profile.order?.customerEmail,
+        profile.order?.planName,
+        profile.order?.planCountryCode,
+        profile.batchReference,
+        profile.batchStatus,
+        profile.activatedAt,
+        profile.expiresAt,
+      ]),
+    );
+  };
 
   const loadProfiles = () => {
     setProfilesLoading(true);
@@ -1346,7 +1390,7 @@ export default function InventoryClient() {
                   identifiers, orders, batches, or customers
                 </p>
               </div>
-              <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(20rem,28rem)_14rem]">
+              <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(16rem,28rem)_minmax(10rem,14rem)_auto]">
                 <SearchInput
                   value={profilesQuery}
                   onChange={setProfilesQuery}
@@ -1372,6 +1416,14 @@ export default function InventoryClient() {
                     ))}
                   </SelectContent>
                 </Select>
+                <Button
+                  variant="outline"
+                  disabled={profilesLoading || profiles.length === 0}
+                  onClick={exportProfiles}
+                >
+                  <Download className="size-4" />
+                  Export visible rows
+                </Button>
               </div>
             </div>
             {profilesLoading ? (

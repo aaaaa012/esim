@@ -452,6 +452,8 @@ partner's order returns HTTP `404` with code `PARTNER_ORDER_NOT_FOUND`.
 
 ### 6.7 `GET /partners/orders/{id}/esim`
 
+Activation details are limited to initial-purchase orders. A cross-channel top-up is a blind add-value operation and never grants the purchasing partner access to the beneficiary eSIM's ICCID, activation code, or lifecycle controls.
+
 **Scope:** `esims:read`  
 **Purpose:** returns the protected activation package only after the order is
 `QR_READY` or `COMPLETED`.
@@ -507,6 +509,8 @@ order. Use it for reconciliation and support diagnostics.
 ```
 
 ### 6.9 `GET /partners/orders/{id}/usage`
+
+Usage access requires that the requesting partner supplied the physical eSIM through an initial-purchase order. Purchasing a top-up alone does not create eSIM management permission.
 
 **Scope:** `usage:read`  
 **Purpose:** requests provider usage for a provisioned eSIM.
@@ -955,19 +959,19 @@ All objects are contained in `data` unless stated otherwise.
 
 ### `UploadSessionBatch`
 
-| Field                                                | JSON type            | Description                                              |
-| ---------------------------------------------------- | -------------------- | -------------------------------------------------------- |
-| `externalOrderId`                                    | string               | Input partner reference.                                 |
-| `documents`                                          | array                | One result per requested document.                       |
-| `documents[].uploadId`                               | UUID string          | Required later in complete order `documents[].uploadId`. |
-| `documents[].type`                                   | `DocumentType`       | Requested type.                                          |
-| `documents[].fileName`                               | string               | Declared original name.                                  |
-| `documents[].expiresAt`                              | ISO date-time        | Upload intent expiration (15 minutes).                   |
-| `documents[].upload.mode`                            | string               | `s3-presigned` or non-production `local-simulator`.       |
-| `documents[].upload.endpoint`                        | URL string, optional | Presigned S3 object URL.                                  |
-| `documents[].upload.method`                          | string, optional     | `PUT` in S3 mode.                                         |
-| `documents[].upload.headers`                         | object, optional     | Headers that must be sent exactly, including content type.|
-| `documents[].upload.expiresInSeconds`                | integer              | Instruction TTL, currently 900.                          |
+| Field                                 | JSON type            | Description                                                |
+| ------------------------------------- | -------------------- | ---------------------------------------------------------- |
+| `externalOrderId`                     | string               | Input partner reference.                                   |
+| `documents`                           | array                | One result per requested document.                         |
+| `documents[].uploadId`                | UUID string          | Required later in complete order `documents[].uploadId`.   |
+| `documents[].type`                    | `DocumentType`       | Requested type.                                            |
+| `documents[].fileName`                | string               | Declared original name.                                    |
+| `documents[].expiresAt`               | ISO date-time        | Upload intent expiration (15 minutes).                     |
+| `documents[].upload.mode`             | string               | `s3-presigned` or non-production `local-simulator`.        |
+| `documents[].upload.endpoint`         | URL string, optional | Presigned S3 object URL.                                   |
+| `documents[].upload.method`           | string, optional     | `PUT` in S3 mode.                                          |
+| `documents[].upload.headers`          | object, optional     | Headers that must be sent exactly, including content type. |
+| `documents[].upload.expiresInSeconds` | integer              | Instruction TTL, currently 900.                            |
 
 Upload the raw file bytes to the returned endpoint with the returned method and
 headers unchanged. The API verifies private asset byte count, content type, and

@@ -494,7 +494,12 @@ export default function AdminWorkspace() {
   const transatelAction = async (action: "sync-catalog") => {
     if (
       action === "sync-catalog" &&
-      !(await confirm({ title: "Sync provider catalogue?", description: "Package data and costs will be refreshed. Existing selling prices, visibility, and popularity are preserved; new plans are created as drafts.", confirmLabel: "Sync catalogue" }))
+      !(await confirm({
+        title: "Sync provider catalogue?",
+        description:
+          "Package data and costs will be refreshed. Existing selling prices, visibility, and popularity are preserved; new plans are created as drafts.",
+        confirmLabel: "Sync catalogue",
+      }))
     )
       return;
     setBusy(`transatel:${action}`);
@@ -632,7 +637,16 @@ export default function AdminWorkspace() {
     status: Partner["status"],
   ) => {
     if (["SUSPENDED", "DISABLED"].includes(status)) {
-      const ok = await confirm({ title: `${status === "SUSPENDED" ? "Suspend" : "Disable"} ${partner.name}?`, description: status === "SUSPENDED" ? "The partner can view details but cannot make changes." : "The partner will immediately lose access.", confirmLabel: status === "SUSPENDED" ? "Suspend partner" : "Disable partner", destructive: true });
+      const ok = await confirm({
+        title: `${status === "SUSPENDED" ? "Suspend" : "Disable"} ${partner.name}?`,
+        description:
+          status === "SUSPENDED"
+            ? "The partner can view details but cannot make changes."
+            : "The partner will immediately lose access.",
+        confirmLabel:
+          status === "SUSPENDED" ? "Suspend partner" : "Disable partner",
+        destructive: true,
+      });
       if (!ok) return;
     }
     setBusy(partner.id);
@@ -699,7 +713,12 @@ export default function AdminWorkspace() {
     }
   };
   const revokePartnerKey = async (partner: Partner, credentialId: string) => {
-    const ok = await confirm({ title: "Revoke partner access key?", description: `${partner.name} will lose access through this key immediately. This cannot be undone.`, confirmLabel: "Revoke key", destructive: true });
+    const ok = await confirm({
+      title: "Revoke partner access key?",
+      description: `${partner.name} will lose access through this key immediately. This cannot be undone.`,
+      confirmLabel: "Revoke key",
+      destructive: true,
+    });
     if (!ok) return;
     setBusy(`revoke-${credentialId}`);
     try {
@@ -849,7 +868,12 @@ export default function AdminWorkspace() {
     }
     const action = adjustType === "credit" ? "add" : "deduct";
     if (
-      !(await confirm({ title: `${action === "add" ? "Credit" : "Debit"} partner balance?`, description: `${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} ${action === "add" ? "to" : "from"} ${adjustFor.name}. This changes available credit.`, confirmLabel: action === "add" ? "Credit balance" : "Debit balance", destructive: action !== "add" }))
+      !(await confirm({
+        title: `${action === "add" ? "Credit" : "Debit"} partner balance?`,
+        description: `${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} ${action === "add" ? "to" : "from"} ${adjustFor.name}. This changes available credit.`,
+        confirmLabel: action === "add" ? "Credit balance" : "Debit balance",
+        destructive: action !== "add",
+      }))
     )
       return;
     setAdjustBusy(true);
@@ -981,6 +1005,7 @@ export default function AdminWorkspace() {
                     Download editable catalog
                   </Button>
                   <Input
+                    aria-label="Choose catalog spreadsheet"
                     type="file"
                     accept=".csv,.xlsx,.xls,text/csv"
                     onChange={(e) =>
@@ -1180,8 +1205,8 @@ export default function AdminWorkspace() {
                           }
                         />
                       </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
+                      <TableCell className="min-w-48 text-right">
+                        <div className="flex flex-wrap justify-end gap-2">
                           {plan.status === "DRAFT" && (
                             <>
                               <Button
@@ -1220,7 +1245,7 @@ export default function AdminWorkspace() {
                             ) : (
                               <Save className="size-4" />
                             )}
-                            Save
+                            Save plan
                           </Button>
                         </div>
                       </TableCell>
@@ -1919,7 +1944,10 @@ export default function AdminWorkspace() {
                             )
                           }
                         >
-                          <SelectTrigger className="w-32" aria-label={`Change ${partner.name} status`}>
+                          <SelectTrigger
+                            className="w-32"
+                            aria-label={`Change ${partner.name} status`}
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -2036,7 +2064,7 @@ export default function AdminWorkspace() {
                     <div className="space-y-4 pt-1">
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">
-                          Partner customer ID
+                          Partner purchaser ID
                         </Label>
                         <Input
                           value={hostedLinkCustomerId}
@@ -2047,8 +2075,9 @@ export default function AdminWorkspace() {
                           maxLength={120}
                         />
                         <p className="text-xs text-muted-foreground">
-                          Reuse this exact ID for every order and top-up from
-                          the same customer.
+                          Use the partner's stable ID for the person buying the
+                          order. A top-up may benefit an eSIM purchased through
+                          another channel; it does not transfer eSIM ownership.
                         </p>
                       </div>
                       <div className="space-y-1.5">
@@ -2758,7 +2787,15 @@ function ConfigPanel({
               className="mt-3"
               disabled={Boolean(busy)}
               onClick={async () => {
-                if (!(await confirm({ title: "Expire abandoned payments?", description: "Every payment past its gateway window will be marked expired, allowing affected customers to start again.", confirmLabel: "Expire payments" }))) return;
+                if (
+                  !(await confirm({
+                    title: "Expire abandoned payments?",
+                    description:
+                      "Every payment past its gateway window will be marked expired, allowing affected customers to start again.",
+                    confirmLabel: "Expire payments",
+                  }))
+                )
+                  return;
                 setBusy("sweep");
                 setError("");
                 request<{ expired: number }>(

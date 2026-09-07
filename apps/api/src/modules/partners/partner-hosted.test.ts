@@ -164,6 +164,76 @@ describe("partner hosted checkout", () => {
     ).toBe(false);
   });
 
+  it("keeps a cross-channel hosted top-up attached to the eSIM owner", async () => {
+    const orderCreate = vi.fn().mockResolvedValue({ id: "topup-order" });
+    const instance = service(
+      {
+        partner: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: "partner-1",
+            code: "DEMO",
+            status: "ACTIVE",
+            integrationType: "CHECKOUT_LINK",
+          }),
+        },
+        plan: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: "00000000-0000-4000-8000-000000000001",
+            name: "Asia 1 GB",
+            sellingPrice: 500,
+            dataAllowance: "1 GB",
+            validityDays: 7,
+            country: { isoCode: "SG" },
+          }),
+        },
+        $transaction: vi.fn((callback) =>
+          callback({
+            order: {
+              findFirst: vi.fn().mockResolvedValue(null),
+              create: orderCreate,
+            },
+            partnerCustomer: {
+              findUnique: vi.fn().mockResolvedValue({
+                id: "partner-purchaser",
+                customerId: "purchaser-customer",
+              }),
+            },
+            partnerHostedCheckoutSession: { create: vi.fn() },
+          }),
+        ),
+      },
+      undefined,
+      {
+        resolveSubscriber: vi.fn().mockResolvedValue({
+          customerId: "beneficiary-owner",
+          inventory: {
+            id: "beneficiary-esim",
+            msisdn: "882470015492842",
+          },
+        }),
+        checkTopUpEligibility: vi.fn().mockResolvedValue({ allowed: true }),
+      },
+    );
+
+    await expect(
+      instance.createHostedCheckoutSession("partner-1", {
+        planId: "00000000-0000-4000-8000-000000000001",
+        externalOrderId: "cross-channel-topup-1",
+        externalCustomerId: "partner-user-91",
+        topUpMobile: "882470015492842",
+      }),
+    ).resolves.toMatchObject({ orderType: "TOPUP" });
+
+    expect(orderCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        customerId: "beneficiary-owner",
+        partnerCustomerId: "partner-purchaser",
+        targetInventoryId: "beneficiary-esim",
+        orderType: "TOPUP",
+      }),
+    });
+  });
+
   it("rejects completion when the passport is not verified", async () => {
     const instance = service({
       partnerHostedCheckoutSession: {
@@ -256,6 +326,68 @@ describe("partner hosted checkout", () => {
       response: { code: "DOCUMENT_UPLOADS_INCOMPLETE" },
     });
     expect(orderUpdate).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a previous hosted verification when evidence is replaced", async () => {
+    const orderUpdate = vi.fn();
+    const documentUpsert = vi.fn().mockResolvedValue({
+      id: "replacement-passport",
+      type: "PASSPORT",
+      status: "PENDING",
+    });
+    const instance = service(
+      {
+        partnerHostedCheckoutSession: {
+          findUnique: vi.fn().mockResolvedValue(session),
+        },
+        order: {
+          findUnique: vi.fn().mockResolvedValue({
+            ...order([]),
+            orderType: "INITIAL_PURCHASE",
+            documentReviewStatus: "VERIFIED",
+            partner: { name: "Test partner", slug: "test", brand: {} },
+          }),
+        },
+        $transaction: vi.fn((callback) =>
+          callback({
+            order: {
+              updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+              update: orderUpdate,
+            },
+            travelerDocument: { upsert: documentUpsert },
+          }),
+        ),
+      },
+      {
+        createDocumentUpload: vi.fn().mockResolvedValue({
+          assetId: "replacement-asset",
+          upload: { mode: "test" },
+        }),
+      },
+    );
+
+    await instance.addHostedDocument("abcdefghijklmnopqrstuvwxyz012345", {
+      type: "PASSPORT",
+      fileName: "replacement-passport.jpg",
+      contentType: "image/jpeg",
+    });
+
+    expect(documentUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          uploadVerified: false,
+          passportVerificationStatus: null,
+        }),
+      }),
+    );
+    expect(orderUpdate).toHaveBeenCalledWith({
+      where: { id: "order-1" },
+      data: {
+        documentReviewStatus: "NOT_STARTED",
+        documentReviewStartedAt: null,
+        documentCheckoutReleaseAt: null,
+      },
+    });
   });
 
   it("repairs a legacy hosted order when every required document is approved", async () => {
@@ -402,7 +534,9 @@ describe("partner hosted checkout", () => {
         }),
       ),
     });
-    vi.spyOn(instance, "hostedCheckout").mockResolvedValue({ linked: true } as never);
+    vi.spyOn(instance, "hostedCheckout").mockResolvedValue({
+      linked: true,
+    } as never);
 
     await expect(
       instance.claimHostedCheckout(
@@ -626,9 +760,9 @@ describe("hosted deposit settlement", () => {
     const tx = ledgerTx();
     const instance = service({
       order: {
-        findUnique: vi.fn().mockResolvedValue(
-          hostedOrder("PROVISIONING_FAILED"),
-        ),
+        findUnique: vi
+          .fn()
+          .mockResolvedValue(hostedOrder("PROVISIONING_FAILED")),
       },
       $transaction: vi.fn((callback) => callback(tx)),
     });
@@ -658,9 +792,9 @@ describe("hosted deposit settlement", () => {
     });
     const instance = service({
       order: {
-        findUnique: vi.fn().mockResolvedValue(
-          hostedOrder("PROVISIONING_FAILED"),
-        ),
+        findUnique: vi
+          .fn()
+          .mockResolvedValue(hostedOrder("PROVISIONING_FAILED")),
       },
       $transaction: vi.fn((callback) => callback(tx)),
     });
