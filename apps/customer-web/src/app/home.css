@@ -702,8 +702,8 @@
 }
 
 .hero {
-  min-height: 680px;
-  padding: 96px 0 110px;
+  min-height: min(760px, calc(100dvh - 72px));
+  padding: clamp(64px, 8vh, 92px) 0 100px;
   overflow: hidden;
   background: var(--hero-bg);
   position: relative;
@@ -737,16 +737,16 @@
 .hero-grid {
   display: grid;
   grid-template-columns: 1.02fr 0.98fr;
-  gap: 40px;
+  gap: clamp(44px, 6vw, 88px);
   align-items: center;
   position: relative;
   z-index: 1;
 }
 
 .hero h1 {
-  font-size: clamp(44px, 5.4vw, 68px);
-  line-height: 1.04;
-  letter-spacing: -0.045em;
+  font-size: clamp(48px, 5.6vw, 74px);
+  line-height: 0.98;
+  letter-spacing: -0.055em;
   margin: 24px 0 20px;
   color: var(--text);
   max-width: 720px;
@@ -806,7 +806,8 @@
   position: relative;
   display: grid;
   place-items: center;
-  padding: 46px 20px;
+  padding: 34px 20px 50px;
+  perspective: 1200px;
 }
 
 .phone-stage:before {
@@ -854,12 +855,14 @@
   width: 320px;
   padding: 15px;
   border-radius: 54px;
-  background: linear-gradient(165deg, #3b435f 0%, #171e36 40%, #0a0f1f 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: linear-gradient(145deg, #89909a 0%, #343a43 12%, #11151b 48%, #3f4650 100%);
   box-shadow:
     0 40px 70px -30px rgba(15, 23, 42, 0.45),
     0 0 0 1px rgba(255, 255, 255, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.09);
-  transform: rotate(3deg);
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 2px rgba(0, 0, 0, 0.7);
+  transform: rotateY(-5deg) rotateZ(2.2deg);
   z-index: 2;
   animation: device-float 6.5s ease-in-out infinite;
 }
@@ -867,35 +870,129 @@
 @keyframes device-float {
   0%,
   100% {
-    transform: rotate(3deg) translateY(0);
+    transform: rotateY(-5deg) rotateZ(2.2deg) translateY(0);
   }
   50% {
-    transform: rotate(1.5deg) translateY(-12px);
+    transform: rotateY(-3deg) rotateZ(1deg) translateY(-10px);
   }
 }
 
 .phone:before {
   content: "";
   position: absolute;
-  top: 20px;
+  top: 21px;
   left: 50%;
   transform: translateX(-50%);
-  width: 86px;
-  height: 26px;
+  width: 92px;
+  height: 27px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #1b2240, #10152b);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+  background: #020305;
+  box-shadow:
+    inset 0 -1px 1px rgba(255, 255, 255, 0.08),
+    0 1px 4px rgba(0, 0, 0, 0.7);
   z-index: 3;
+}
+
+.phone:after {
+  content: "";
+  position: absolute;
+  top: 30px;
+  left: calc(50% + 29px);
+  z-index: 4;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #172235;
+  box-shadow: inset 0 0 2px #4b6388;
+}
+
+.phone-button {
+  position: absolute;
+  z-index: 0;
+  width: 3px;
+  border-radius: 3px 0 0 3px;
+  background: linear-gradient(180deg, #747b85, #262b32);
+  box-shadow: -1px 0 1px rgba(0, 0, 0, 0.35);
+}
+.phone-button-silent { top: 98px; left: -3px; height: 28px; }
+.phone-button-volume-up { top: 145px; left: -3px; height: 52px; }
+.phone-button-volume-down { top: 208px; left: -3px; height: 52px; }
+.phone-button-power {
+  top: 162px;
+  right: -3px;
+  left: auto;
+  height: 82px;
+  border-radius: 0 3px 3px 0;
 }
 
 .screen {
   position: relative;
   min-height: 560px;
   border-radius: 40px;
-  padding: 40px 22px 26px;
-  background: linear-gradient(160deg, #0e2a47 0%, #0b1c33 45%, #060d18 100%);
+  padding: 18px 22px 28px;
+  background:
+    radial-gradient(circle at 72% 16%, rgba(37, 156, 169, 0.34), transparent 34%),
+    radial-gradient(circle at 18% 82%, rgba(17, 80, 128, 0.38), transparent 38%),
+    linear-gradient(160deg, #0d2b3e 0%, #081b2d 48%, #050b14 100%);
   overflow: hidden;
   box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.35);
+}
+
+.iphone-status {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 22px;
+  padding: 0 4px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 10px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.iphone-status-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.iphone-battery {
+  position: relative;
+  width: 18px;
+  height: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 3px;
+}
+.iphone-battery:before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  width: 12px;
+  border-radius: 1px;
+  background: #fff;
+}
+.iphone-battery:after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: -3px;
+  width: 2px;
+  height: 3px;
+  border-radius: 0 1px 1px 0;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.screen-watermark {
+  position: absolute;
+  top: 115px;
+  left: 50%;
+  z-index: 0;
+  width: 88%;
+  height: auto;
+  opacity: 0.055;
+  filter: brightness(0) invert(1);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .screen:after {
@@ -918,6 +1015,18 @@
   align-items: center;
   position: relative;
   z-index: 1;
+}
+
+.iphone-home-indicator {
+  position: absolute;
+  bottom: 9px;
+  left: 50%;
+  z-index: 4;
+  width: 104px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  transform: translateX(-50%);
 }
 
 .app-ident {

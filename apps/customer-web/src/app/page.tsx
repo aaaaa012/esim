@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -9,6 +10,7 @@ import {
   QrCode,
   ShieldCheck,
   Smartphone,
+  Signal,
   Timer,
   Wifi,
   Zap,
@@ -73,7 +75,27 @@ export default function Home() {
             </div>
             <div className="phone-stage">
               <div className="phone">
+                <span className="phone-button phone-button-silent" />
+                <span className="phone-button phone-button-volume-up" />
+                <span className="phone-button phone-button-volume-down" />
+                <span className="phone-button phone-button-power" />
                 <div className="screen">
+                  <div className="iphone-status" aria-hidden="true">
+                    <span>9:41</span>
+                    <span className="iphone-status-icons">
+                      <Signal size={12} strokeWidth={2.5} />
+                      <Wifi size={12} strokeWidth={2.5} />
+                      <i className="iphone-battery" />
+                    </span>
+                  </div>
+                  <Image
+                    className="screen-watermark"
+                    src="/brand/visa-compass-nepal-outline.png"
+                    alt=""
+                    width={933}
+                    height={371}
+                    priority
+                  />
                   <div className="screen-head">
                     <div className="app-ident">
                       <Wifi size={15} />
@@ -107,6 +129,7 @@ export default function Home() {
                     <QrCode size={15} />
                     Install now
                   </button>
+                  <span className="iphone-home-indicator" aria-hidden="true" />
                 </div>
               </div>
               <div className="float-chip float-a">
