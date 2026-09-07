@@ -530,6 +530,15 @@
     padding-left: 0.75rem;
     padding-right: 0.75rem;
   }
+  .ops-content [data-slot="table-cell"] :is(.flex, [class*="justify-end"]) {
+    flex-wrap: wrap;
+  }
+  .ops-content [data-slot="table-cell"] .truncate {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
   .ops-content .w-44,
   .ops-content .min-w-52 {
     width: 100%;

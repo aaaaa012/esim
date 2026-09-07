@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { RefreshCcw } from "lucide-react";
+import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
@@ -44,6 +45,7 @@ export default function ProvisioningOperationsClient() {
   const [items, setItems] = useState<Operation[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const [viewError, setViewError] = useState<string | null>(null);
   const load = async () => {
     const response = await authFetch(
@@ -83,10 +85,23 @@ export default function ProvisioningOperationsClient() {
       const value = await response.json();
       if (!response.ok) throw new Error(value.error?.message ?? "Check failed");
       await load();
+      toast.success(`Network status refreshed for ${item.order.orderNumber}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Check failed");
     } finally {
       setBusy("");
+    }
+  };
+  const refreshList = async () => {
+    setRefreshing(true);
+    setError("");
+    try {
+      await load();
+      toast.success("Pending activations refreshed");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Refresh failed");
+    } finally {
+      setRefreshing(false);
     }
   };
   return (
@@ -95,9 +110,15 @@ export default function ProvisioningOperationsClient() {
         title="Pending activations"
         description="Orders where the network set-up is stuck or uncertain. Use Check again to safely continue without creating a duplicate."
         actions={
-          <Button variant="outline" onClick={() => void load()}>
-            <RefreshCcw className="size-4" />
-            Refresh
+          <Button
+            variant="outline"
+            disabled={refreshing}
+            onClick={() => void refreshList()}
+          >
+            <RefreshCcw
+              className={`size-4 ${refreshing ? "animate-spin" : ""}`}
+            />
+            {refreshing ? "Refreshing…" : "Refresh list"}
           </Button>
         }
       />
@@ -132,7 +153,7 @@ export default function ProvisioningOperationsClient() {
             <TableBody>
               {items.map((item) => (
                 <TableRow key={item.id}>
-                  <TableCell>
+                  <TableCell className="min-w-40">
                     <Link
                       href={`/orders/${item.orderId}`}
                       className="font-medium text-primary hover:underline"
@@ -144,10 +165,10 @@ export default function ProvisioningOperationsClient() {
                       {humane(item.order.status)}
                     </div>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="min-w-32">
                     <StatusBadge label={item.state} />
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="min-w-56">
                     <div className="text-[11px] text-muted-foreground">
                       ICCID / SIM serial
                     </div>
@@ -158,9 +179,9 @@ export default function ProvisioningOperationsClient() {
                       </div>
                     ) : null}
                   </TableCell>
-                  <TableCell className="max-w-56">
+                  <TableCell className="min-w-48 max-w-64">
                     <span
-                      className="truncate text-xs text-muted-foreground"
+                      className="block text-xs leading-relaxed text-muted-foreground"
                       title={shortError(item)}
                     >
                       {shortError(item)}
@@ -168,7 +189,7 @@ export default function ProvisioningOperationsClient() {
                     {item.lastErrorMessage && (
                       <button
                         type="button"
-                        className="ml-2 text-xs font-medium text-primary hover:underline"
+                        className="mt-1 block text-xs font-medium text-primary hover:underline"
                         onClick={() => {
                           const issue = operationalIssue(
                             item.lastErrorMessage,
@@ -183,11 +204,11 @@ export default function ProvisioningOperationsClient() {
                       </button>
                     )}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
+                  <TableCell className="min-w-40 text-xs text-muted-foreground tabular-nums">
                     {new Date(item.updatedAt).toLocaleString()}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
+                  <TableCell className="min-w-56 text-right">
+                    <div className="flex flex-wrap justify-end gap-2">
                       <Button size="sm" variant="ghost" asChild>
                         <Link href={`/orders/${item.orderId}`}>Open order</Link>
                       </Button>
@@ -198,7 +219,9 @@ export default function ProvisioningOperationsClient() {
                         onClick={() => void checkProvider(item)}
                       >
                         <RefreshCcw className="size-3.5" />
-                        Refresh network status
+                        {busy === item.id
+                          ? "Checking…"
+                          : "Check network status"}
                       </Button>
                     </div>
                   </TableCell>

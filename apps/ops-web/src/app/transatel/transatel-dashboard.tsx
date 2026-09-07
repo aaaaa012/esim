@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Boxes,
   Database,
+  Download,
   RefreshCcw,
   RadioTower,
   ShieldAlert,
@@ -23,6 +24,7 @@ import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
+import { downloadCsv } from "@/lib/csv";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -298,7 +300,7 @@ export default function TransatelDashboard() {
           icon: AlertTriangle,
         },
         {
-          label: "Missed notifications",
+          label: "Webhook dead letters",
           value: data.counts.webhookDeadLetters,
           icon: Database,
         },
@@ -315,15 +317,140 @@ export default function TransatelDashboard() {
       const value = await response.json();
       if (!response.ok)
         throw new Error(value.error?.message ?? "Usage sync failed");
-      toast.success(
-        `Usage synchronization complete (${value.data?.synced ?? 0} active subscriptions updated)`,
-      );
-      void load();
+      const synced = Number(value.data?.synced ?? 0);
+      const failed = Number(value.data?.failed ?? 0);
+      if (failed > 0) {
+        toast.warning(
+          `Usage sync finished: ${synced} eSIMs updated, ${failed} need attention`,
+        );
+      } else {
+        toast.success(`Usage sync finished: ${synced} eSIMs updated`);
+      }
+      await load();
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Usage sync failed");
     } finally {
       setBusy("");
     }
+  };
+
+  const refreshDashboard = async () => {
+    setBusy("refresh-dashboard");
+    try {
+      await load();
+      toast.success("Provider dashboard refreshed");
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error ? cause.message : "Dashboard refresh failed",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const exportCurrentView = () => {
+    if (!data) return;
+    const date = new Date().toISOString().slice(0, 10);
+    if (activeTab === "subscribers") {
+      downloadCsv(
+        `transatel-customer-plans-${date}.csv`,
+        [
+          "Customer",
+          "Email",
+          "Order",
+          "ICCID / SIM serial",
+          "MSISDN",
+          "Plan",
+          "Remaining MB",
+          "Used MB",
+          "Total MB",
+          "eSIM status",
+          "Package status",
+          "Subscription ID",
+          "Usage checked at",
+          "Expires at",
+        ],
+        data.subscribers.map((row) => [
+          row.customer,
+          row.email,
+          row.orderNumber,
+          row.iccid,
+          row.msisdn,
+          row.plan,
+          row.remainingMb,
+          row.usedMb,
+          row.totalMb,
+          row.providerStatus,
+          row.status,
+          row.providerSubscriptionId,
+          row.usageLastCheckedAt,
+          row.expiresAt,
+        ]),
+      );
+      return;
+    }
+    if (activeTab === "inventory") {
+      downloadCsv(
+        `transatel-unassigned-esims-${date}.csv`,
+        [
+          "ICCID / SIM serial",
+          "MSISDN",
+          "Batch",
+          "Local status",
+          "Network status",
+          "Last checked",
+          "Issue",
+        ],
+        data.inventory.map((row) => [
+          row.iccid,
+          row.msisdn,
+          row.batchReference,
+          row.status,
+          row.providerStatus,
+          row.lastProviderCheckedAt,
+          row.quarantineReason ?? row.providerCheckError,
+        ]),
+      );
+      return;
+    }
+    if (activeTab === "failures") {
+      downloadCsv(
+        `transatel-network-issues-${date}.csv`,
+        ["Time", "Operation", "HTTP status", "Endpoint", "Error code", "Error"],
+        data.failures.map((row) => [
+          row.createdAt,
+          row.operation,
+          row.status,
+          row.endpoint,
+          row.errorCode,
+          row.errorMessage,
+        ]),
+      );
+      return;
+    }
+    downloadCsv(
+      `transatel-lifecycle-actions-${date}.csv`,
+      [
+        "Time",
+        "Order",
+        "Action",
+        "State",
+        "Actor",
+        "Reason",
+        "Provider reference",
+        "Error",
+      ],
+      data.lifecycleOperations.map((row) => [
+        row.createdAt,
+        row.orderNumber,
+        row.action,
+        row.state,
+        row.actor,
+        row.reason,
+        row.providerTransactionId,
+        row.errorMessage,
+      ]),
+    );
   };
 
   return (
@@ -358,10 +485,26 @@ export default function TransatelDashboard() {
               disabled={busy === "diagnostics"}
               onClick={() => void runDiagnostics()}
             >
-              <Database className="size-4" /> Run diagnostics
+              {busy === "diagnostics" ? (
+                <Spinner />
+              ) : (
+                <Database className="size-4" />
+              )}
+              Check integration health
             </Button>
-            <Button variant="outline" onClick={() => void load()}>
-              <RefreshCcw className="size-4" /> Refresh
+            <Button
+              variant="outline"
+              disabled={busy === "refresh-dashboard"}
+              onClick={() => void refreshDashboard()}
+            >
+              {busy === "refresh-dashboard" ? (
+                <Spinner />
+              ) : (
+                <RefreshCcw className="size-4" />
+              )}
+              {busy === "refresh-dashboard"
+                ? "Refreshing…"
+                : "Refresh dashboard"}
             </Button>
           </div>
         }
@@ -451,6 +594,20 @@ export default function TransatelDashboard() {
             value={activeTab}
             onValueChange={(value) => setActiveTab(value as SearchScope)}
           >
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                Exports contain the currently displayed section and applied
+                search.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!data}
+                onClick={exportCurrentView}
+              >
+                <Download className="size-4" /> Export current section
+              </Button>
+            </div>
             <TabsList>
               <TabsTrigger value="subscribers">Customer plans</TabsTrigger>
               <TabsTrigger value="inventory">Unassigned eSIMs</TabsTrigger>
