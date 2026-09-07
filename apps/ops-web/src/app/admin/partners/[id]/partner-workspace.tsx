@@ -1026,7 +1026,11 @@ export default function PartnerWorkspace({ id }: { id: string }) {
               </Button>
             </div>
           </Panel>
-          <Panel title="API credentials" noPadding>
+          <Panel
+            title="API credentials"
+            description="A partner is created once. Issue separate credentials for each application or environment, rotate by issuing a replacement first, then revoke the old key after deployment. Only the identifying prefix is retained here; the secret is shown once."
+            noPadding
+          >
             {!partner.credentials.length ? (
               <EmptyState title="No credentials issued" />
             ) : (
@@ -1045,13 +1049,13 @@ export default function PartnerWorkspace({ id }: { id: string }) {
                   <TableBody>
                     {partner.credentials.map((item) => (
                       <TableRow key={item.id}>
-                        <TableCell>
+                        <TableCell className="min-w-44">
                           <p className="font-medium">{item.name}</p>
                           <code className="text-xs text-muted-foreground">
                             {item.keyPrefix}
                           </code>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="min-w-56">
                           <div className="flex max-w-md flex-wrap gap-1">
                             {item.scopes.map((scope) => (
                               <Badge key={scope} variant="outline">
@@ -1063,9 +1067,13 @@ export default function PartnerWorkspace({ id }: { id: string }) {
                         <TableCell>
                           <StatusBadge label={item.status} />
                         </TableCell>
-                        <TableCell>{dateTime(item.expiresAt)}</TableCell>
-                        <TableCell>{dateTime(item.lastUsedAt)}</TableCell>
-                        <TableCell>
+                        <TableCell className="min-w-36 tabular-nums">
+                          {dateTime(item.expiresAt)}
+                        </TableCell>
+                        <TableCell className="min-w-36 tabular-nums">
+                          {dateTime(item.lastUsedAt)}
+                        </TableCell>
+                        <TableCell className="text-right">
                           {item.status === "ACTIVE" && (
                             <Button
                               variant="outline"
@@ -1284,7 +1292,15 @@ export default function PartnerWorkspace({ id }: { id: string }) {
                               size="sm"
                               disabled={busy === `replay-${delivery.id}`}
                               onClick={async () => {
-                                if (await requestConfirmation({ title: "Replay partner update?", description: "This sends the same update to the partner endpoint again.", confirmLabel: "Replay update" })) void mutate(
+                                if (
+                                  await requestConfirmation({
+                                    title: "Replay partner update?",
+                                    description:
+                                      "This sends the same update to the partner endpoint again.",
+                                    confirmLabel: "Replay update",
+                                  })
+                                )
+                                  void mutate(
                                     `replay-${delivery.id}`,
                                     `/admin/partners/${id}/webhook-deliveries/${delivery.id}/replay`,
                                     { method: "POST" },

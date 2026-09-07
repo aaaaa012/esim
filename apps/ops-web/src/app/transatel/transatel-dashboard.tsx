@@ -108,7 +108,7 @@ type Dashboard = {
   failures: Failure[];
   lifecycleOperations: LifecycleOperation[];
 };
-type SearchScope = "subscribers" | "inventory" | "failures" | "actions";
+type SearchScope = "subscribers" | "inventory" | "actions";
 const formatDate = (value?: string | null) =>
   value ? new Date(value).toLocaleString() : "Never";
 
@@ -122,7 +122,6 @@ export default function TransatelDashboard() {
   const [searches, setSearches] = useState<Record<SearchScope, string>>({
     subscribers: "",
     inventory: "",
-    failures: "",
     actions: "",
   });
   const [searchRequest, setSearchRequest] = useState<{
@@ -413,21 +412,6 @@ export default function TransatelDashboard() {
       );
       return;
     }
-    if (activeTab === "failures") {
-      downloadCsv(
-        `transatel-network-issues-${date}.csv`,
-        ["Time", "Operation", "HTTP status", "Endpoint", "Error code", "Error"],
-        data.failures.map((row) => [
-          row.createdAt,
-          row.operation,
-          row.status,
-          row.endpoint,
-          row.errorCode,
-          row.errorMessage,
-        ]),
-      );
-      return;
-    }
     downloadCsv(
       `transatel-lifecycle-actions-${date}.csv`,
       [
@@ -611,7 +595,6 @@ export default function TransatelDashboard() {
             <TabsList>
               <TabsTrigger value="subscribers">Customer plans</TabsTrigger>
               <TabsTrigger value="inventory">Unassigned eSIMs</TabsTrigger>
-              <TabsTrigger value="failures">Issues</TabsTrigger>
               <TabsTrigger value="actions">
                 Mobile data pause and eSIM closure history
               </TabsTrigger>
@@ -821,59 +804,6 @@ export default function TransatelDashboard() {
                   <EmptyState
                     title="No unassigned eSIMs found"
                     description="Try another ICCID, EID, MSISDN, provider state, or batch."
-                  />
-                )}
-              </Panel>
-            </TabsContent>
-            <TabsContent value="failures" className="mt-4">
-              <Panel
-                title="Recent network issues"
-                description="Recent requests to the network that did not succeed"
-                actions={searchControl(
-                  "failures",
-                  "Search operation, endpoint or error…",
-                )}
-                noPadding
-              >
-                {data.failures.length ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Time</TableHead>
-                        <TableHead>Operation</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Endpoint</TableHead>
-                        <TableHead>Error</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.failures.map((row) => (
-                        <TableRow key={row.id}>
-                          <TableCell>{formatDate(row.createdAt)}</TableCell>
-                          <TableCell>{row.operation}</TableCell>
-                          <TableCell>
-                            <StatusBadge
-                              label={String(row.status)}
-                              tone="warning"
-                            />
-                          </TableCell>
-                          <TableCell className="max-w-64 truncate font-mono text-xs">
-                            {row.endpoint}
-                          </TableCell>
-                          <TableCell className="max-w-80 truncate text-xs text-destructive">
-                            {
-                              operationalIssue(row.errorMessage, row.errorCode)
-                                .title
-                            }
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <EmptyState
-                    title="No network issues found"
-                    description="Try another operation, endpoint, error code, or correlation ID."
                   />
                 )}
               </Panel>

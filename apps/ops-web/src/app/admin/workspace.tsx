@@ -1205,8 +1205,8 @@ export default function AdminWorkspace() {
                           }
                         />
                       </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
+                      <TableCell className="min-w-48 text-right">
+                        <div className="flex flex-wrap justify-end gap-2">
                           {plan.status === "DRAFT" && (
                             <>
                               <Button
@@ -1245,7 +1245,7 @@ export default function AdminWorkspace() {
                             ) : (
                               <Save className="size-4" />
                             )}
-                            Save
+                            Save plan
                           </Button>
                         </div>
                       </TableCell>
