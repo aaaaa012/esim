@@ -553,7 +553,11 @@ export function WhyCampaign() {
   if (!campaign) return null;
   return (
     <div className="why-campaign">
-      <button type="button" onClick={() => openCampaign(campaign)}>
+      <button
+        type="button"
+        onClick={() => openCampaign(campaign)}
+        aria-label={`Enlarge campaign banner: ${campaign.title}`}
+      >
         <CampaignImage
           campaign={campaign}
           sizes="(max-width: 1180px) 100vw, 1132px"

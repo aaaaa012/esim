@@ -88,6 +88,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
             <Button
               variant="ghost"
               size="sm"
+              aria-label="Sign out"
               onClick={() => void signOut()}
               className="text-muted-foreground"
             >
