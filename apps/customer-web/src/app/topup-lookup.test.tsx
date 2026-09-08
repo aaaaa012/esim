@@ -23,7 +23,7 @@ describe("customer recharge journey", () => {
       jsonResponse({ verificationRequested: true }),
     );
     render(<TopupLookup />);
-    fireEvent.change(screen.getByLabelText("eSIM MSISDN"), {
+    fireEvent.change(screen.getByLabelText("eSIM mobile number"), {
       target: { value: "+9779800000000" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Find recharge plans" }));

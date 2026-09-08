@@ -315,6 +315,34 @@ describe("partner prepaid settlement", () => {
     expect(tx.partnerLedgerEntry.create).not.toHaveBeenCalled();
   });
 
+  it("does not reserve money already held for another order", async () => {
+    const tx = {
+      partnerAccount: {
+        upsert: vi.fn().mockResolvedValue({
+          id: "account-1",
+          balancePaisa: 1000,
+          reservedPaisa: 300,
+          version: 2,
+        }),
+        updateMany: vi.fn(),
+      },
+      partnerLedgerEntry: { create: vi.fn() },
+    };
+    const instance = service({});
+    await expect(
+      (
+        instance as unknown as {
+          reserveAccount(...args: unknown[]): Promise<void>;
+        }
+      ).reserveAccount(tx, "partner-1", "order-2", 800, "external-2"),
+    ).rejects.toMatchObject({
+      status: 402,
+      response: { code: "INSUFFICIENT_PARTNER_BALANCE" },
+    });
+    expect(tx.partnerAccount.updateMany).not.toHaveBeenCalled();
+    expect(tx.partnerLedgerEntry.create).not.toHaveBeenCalled();
+  });
+
   it("creates one order-linked debit using a guarded balance update", async () => {
     const tx = {
       partnerAccount: {
@@ -351,7 +379,7 @@ describe("partner prepaid settlement", () => {
     });
   });
 
-  it("creates an uncharged REVIEW_PENDING order before document finalization", async () => {
+  it("creates a funded REVIEW_PENDING order with an order-linked reservation", async () => {
     const tx = {
       order: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
       partnerDocumentUploadIntent: {
@@ -400,7 +428,15 @@ describe("partner prepaid settlement", () => {
       partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
       partnerEvent: { create: vi.fn() },
       outboxMessage: { create: vi.fn() },
-      partnerAccount: { updateMany: vi.fn() },
+      partnerAccount: {
+        upsert: vi.fn().mockResolvedValue({
+          id: "account-1",
+          balancePaisa: 1000,
+          reservedPaisa: 0,
+          version: 1,
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
       partnerLedgerEntry: { create: vi.fn() },
     };
     const prisma = {
@@ -485,23 +521,41 @@ describe("partner prepaid settlement", () => {
         }),
       }),
     );
-    expect(tx.partnerAccount.updateMany).not.toHaveBeenCalled();
-    expect(tx.partnerLedgerEntry.create).not.toHaveBeenCalled();
+    expect(tx.partnerAccount.updateMany).toHaveBeenCalledWith({
+      where: { id: "account-1", version: 1 },
+      data: {
+        reservedPaisa: { increment: 200 },
+        version: { increment: 1 },
+      },
+    });
+    expect(tx.partnerLedgerEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: "RESERVATION",
+        orderId: expect.any(String),
+        amountPaisa: 200,
+        reference: "reserve:partner-1:external-1",
+      }),
+    });
     expect(tx.outboxMessage.create).not.toHaveBeenCalled();
   });
 
-  it("atomically debits and queues provisioning only when a pending order is finalized", async () => {
+  it("atomically captures reserved funds and queues provisioning when finalized", async () => {
     const tx = {
       order: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       partnerAccount: {
-        upsert: vi.fn().mockResolvedValue({
+        findUnique: vi.fn().mockResolvedValue({
           id: "account-1",
           balancePaisa: 1000,
+          reservedPaisa: 200,
           version: 1,
         }),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
-      partnerLedgerEntry: { create: vi.fn() },
+      partnerLedgerEntry: {
+        findFirst: vi.fn().mockResolvedValue({ id: "reservation-1" }),
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn(),
+      },
       orderEvent: { create: vi.fn() },
       partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
       partnerEvent: { create: vi.fn() },
@@ -544,7 +598,7 @@ describe("partner prepaid settlement", () => {
     expect(tx.partnerLedgerEntry.create).toHaveBeenCalledTimes(1);
     expect(tx.partnerLedgerEntry.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        type: "DEBIT",
+        type: "CAPTURE",
         orderId: "order-1",
         amountPaisa: 200,
       }),

@@ -220,7 +220,6 @@ export class PartnerAdminController {
           .number()
           .int()
           .refine((value) => value !== 0),
-        creditLimitPaisa: z.number().int().min(0).optional(),
         reference: z.string().min(4).max(120),
         reason: z.string().min(4).max(500),
       })

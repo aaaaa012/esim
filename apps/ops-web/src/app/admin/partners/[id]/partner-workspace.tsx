@@ -126,6 +126,8 @@ type Partner = {
 };
 type Summary = {
   currentBalancePaisa: number;
+  reservedBalancePaisa: number;
+  availableBalancePaisa: number;
   ordersCreated: number;
   fulfilledOrders: number;
   failedOrders: number;
@@ -448,7 +450,8 @@ export default function PartnerWorkspace({ id }: { id: string }) {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard
           label="Available balance"
-          value={npr(summary.currentBalancePaisa)}
+          value={npr(summary.availableBalancePaisa)}
+          hint={`${npr(summary.reservedBalancePaisa)} reserved`}
           icon={<Landmark />}
         />
         <StatCard
@@ -676,13 +679,20 @@ export default function PartnerWorkspace({ id }: { id: string }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {["ALL", "CREDIT", "DEBIT", "REFUND", "ADJUSTMENT"].map(
-                  (value) => (
-                    <SelectItem key={value} value={value}>
-                      {value}
-                    </SelectItem>
-                  ),
-                )}
+                {[
+                  "ALL",
+                  "CREDIT",
+                  "DEBIT",
+                  "RESERVATION",
+                  "CAPTURE",
+                  "RELEASE",
+                  "REFUND",
+                  "ADJUSTMENT",
+                ].map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {value}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

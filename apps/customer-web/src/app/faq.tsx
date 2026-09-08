@@ -26,7 +26,7 @@ const ITEMS = [
   },
   {
     q: "What happens if my eSIM runs out of data?",
-    a: "Track your live usage in My eSIM and refresh it anytime. When you need more data, top up using the eSIM MSISDN shown in your delivery email — no need to go through check-in again.",
+    a: "Track your live usage in My eSIM and refresh it anytime. When you need more data, top up using the eSIM mobile number shown in your delivery email — no need to go through check-in again.",
   },
 ];
 

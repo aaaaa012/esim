@@ -46,7 +46,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
         open={mobileNavOpen}
         onClose={() => setMobileNavOpen(false)}
       />
-      <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-0">
+      <div className="ops-main flex min-h-screen min-w-0 flex-1 flex-col">
         <header className="ops-header">
           <div className="flex min-w-0 items-center gap-2">
             <Button

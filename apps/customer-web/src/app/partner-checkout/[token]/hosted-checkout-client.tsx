@@ -1045,7 +1045,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       <p className="form-note">
                         This is a data top-up for your existing eSIM
                         {session!.order.topUpMsisdnMasked
-                          ? ` with MSISDN ${session!.order.topUpMsisdnMasked}`
+                          ? ` with mobile number ${session!.order.topUpMsisdnMasked}`
                           : ""}
                         . No traveller details or new documents are required.
                       </p>

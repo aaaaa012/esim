@@ -24,7 +24,15 @@ describe("LifecycleActions", () => {
         canTerminate
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Pause mobile data" }));
+    fireEvent.keyDown(
+      screen.getByRole("button", {
+        name: "Actions for eSIM 8988247076000000319",
+      }),
+      { key: "Enter" },
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /Pause mobile data/ }),
+    );
     const submit = screen.getByRole("button", { name: "Confirm data pause" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByPlaceholderText("Reason (required)"), {
@@ -43,7 +51,7 @@ describe("LifecycleActions", () => {
     ).toMatchObject({ reason: "Customer reported device theft" });
   });
 
-  it("hides irreversible termination from non-super-admin operators", () => {
+  it("hides irreversible termination from non-super-admin operators", async () => {
     render(
       <LifecycleActions
         orderId="order-1"
@@ -52,8 +60,17 @@ describe("LifecycleActions", () => {
         canTerminate={false}
       />,
     );
+    fireEvent.keyDown(
+      screen.getByRole("button", {
+        name: "Actions for eSIM 8988247076000000319",
+      }),
+      { key: "Enter" },
+    );
     expect(
-      screen.queryByRole("button", { name: "Permanently end eSIM" }),
+      await screen.findByRole("menuitem", { name: /Pause mobile data/ }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: /Permanently end eSIM/ }),
     ).toBeNull();
   });
 });

@@ -26,6 +26,7 @@ import {
   orderPassportOcrJobId,
 } from "./ocr-recovery.config.js";
 import { createHash, randomUUID } from "node:crypto";
+import { PartnerService } from "../modules/partners/partner.service.js";
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -55,6 +56,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly resilience: ProductionResilienceService,
     private readonly refunds: ManualRefundsService,
     private readonly storage: S3StorageService,
+    private readonly partners: PartnerService,
     private readonly metrics?: MetricsService,
     private readonly usageService?: UsageService,
   ) {}
@@ -461,6 +463,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       ["outbox", () => this.resilience.dispatchOutbox()],
       ["webhooks", () => this.requeueUnprocessedWebhooks()],
       ["documents", () => this.reconcileStaleDocumentReviews()],
+      ["partner-balances", () => this.partners.reconcileApiReservations()],
       [
         "notifications",
         async () => {

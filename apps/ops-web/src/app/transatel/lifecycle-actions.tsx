@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PauseCircle, RefreshCcw, Trash2 } from "lucide-react";
+import { MoreHorizontal, PauseCircle, RefreshCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Action = "suspend" | "terminate";
@@ -128,55 +136,65 @@ export function LifecycleActions({
   };
   return (
     <>
-      <div className="grid gap-2 sm:grid-cols-3">
-        <div className="rounded-md border bg-muted/20 p-2">
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
           <Button
-            className="w-full"
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => void reconcile()}
-          >
-            <RefreshCcw className="size-3.5" /> Refresh network status
-          </Button>
-          <p className="mt-1 px-1 text-xs text-muted-foreground">
-            Reads the latest Transatel status. Makes no service change.
-          </p>
-        </div>
-        <div className="rounded-md border bg-muted/20 p-2">
-          <Button
-            className="w-full"
             size="sm"
             variant="outline"
-            disabled={pending || !suspendable}
-            onClick={() => setAction("suspend")}
+            className="h-8 whitespace-nowrap"
+            disabled={busy}
+            aria-label={`Actions for eSIM ${iccid}`}
           >
-            <PauseCircle className="size-3.5" /> Pause mobile data
+            <MoreHorizontal className="size-4" />
+            Actions
           </Button>
-          <p className="mt-1 px-1 text-xs text-muted-foreground">
-            Temporarily stops data. The eSIM can be reconnected later.
-          </p>
-        </div>
-        {canTerminate ? (
-          <div className="rounded-md border border-destructive/25 bg-destructive/5 p-2">
-            <Button
-              className="w-full"
-              size="sm"
-              variant="destructive"
-              disabled={
-                providerStatus === "TERMINATED" ||
-                providerStatus === "TERMINATION_PENDING"
-              }
-              onClick={() => setAction("terminate")}
-            >
-              <Trash2 className="size-3.5" /> Permanently end eSIM
-            </Button>
-            <p className="mt-1 px-1 text-xs text-muted-foreground">
-              Removes it from the network forever. Remaining data is lost.
-            </p>
-          </div>
-        ) : null}
-      </div>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64">
+          <DropdownMenuLabel>Plan actions</DropdownMenuLabel>
+          <DropdownMenuItem onSelect={() => void reconcile()}>
+            <RefreshCcw className="size-4" />
+            <span>
+              Check network status
+              <small className="block text-xs text-muted-foreground">
+                Reads the latest status only
+              </small>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={pending || !suspendable}
+            onSelect={() => setAction("suspend")}
+          >
+            <PauseCircle className="size-4" />
+            <span>
+              Pause mobile data
+              <small className="block text-xs text-muted-foreground">
+                Temporarily stops service
+              </small>
+            </span>
+          </DropdownMenuItem>
+          {canTerminate ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={
+                  providerStatus === "TERMINATED" ||
+                  providerStatus === "TERMINATION_PENDING"
+                }
+                onSelect={() => setAction("terminate")}
+              >
+                <Trash2 className="size-4" />
+                <span>
+                  Permanently end eSIM
+                  <small className="block text-xs text-muted-foreground">
+                    Cannot be undone
+                  </small>
+                </span>
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <Dialog
         open={action !== null}
         onOpenChange={(open) => {
