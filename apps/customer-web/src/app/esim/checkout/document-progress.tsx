@@ -1,4 +1,5 @@
 "use client";
+import VerificationProgressCard from "./verification-progress-card";
 import {
   CheckCircle2,
   Clock3,
@@ -21,6 +22,7 @@ export function DocumentProgress({
   );
   const manual = status === "MANUAL_REVIEW";
   const pending = ["OCR_PENDING", "OCR_BACKGROUND"].includes(status ?? "");
+  if (pending && !busy) return <VerificationProgressCard message={message} />;
   const failed = ["FAILED", "PARTIAL", "REUPLOAD_REQUIRED"].includes(
     status ?? "",
   );

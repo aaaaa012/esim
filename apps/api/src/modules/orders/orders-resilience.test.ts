@@ -1124,3 +1124,59 @@ describe("PaymentsService.reconcilePendingPayments", () => {
     expect(orders.resolvePaymentFailure).not.toHaveBeenCalled();
   });
 });
+
+it("starts OCR after confirming only a replacement passport with a saved ticket", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "passport-only",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: customerTraveler(),
+        documentReviewStatus: "NOT_STARTED",
+        documents: [
+          {
+            id: "new-passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "new-passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: false,
+          },
+          {
+            id: "saved-ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "saved-ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+    { verifyDocument: vi.fn().mockResolvedValue({}) },
+  );
+  await instance.refreshFromPersistence();
+  await instance.confirmDocument("passport-only", "new-passport", "customer-1");
+  expect(add).toHaveBeenCalledWith(
+    expect.any(String),
+    "verify-order-passport",
+    expect.objectContaining({
+      documentId: "new-passport",
+      privateAssetId: "new-passport-asset",
+    }),
+    expect.stringContaining("order-passport-passport-only-new-passport-"),
+    expect.any(Object),
+  );
+  expect(instance.get("passport-only", "customer-1").documentReviewStatus).toBe(
+    "OCR_PENDING",
+  );
+});

@@ -11,7 +11,8 @@ import { QUEUES } from "./queues.js";
 import { ProductionResilienceService } from "./production-resilience.service.js";
 
 type PassportOcrJob =
-  { orderId: string; documentId: string } | { verificationId: string };
+  | { orderId: string; documentId: string; privateAssetId?: string }
+  | { verificationId: string };
 
 class ManualDocumentDecisionWon extends Error {}
 
@@ -68,6 +69,12 @@ export class PassportOcrProcessor implements OnModuleInit {
         document.type === DocumentType.PASSPORT && document.id === documentId,
     );
     if (!passport) return { skipped: true };
+    if (
+      !passport.uploadVerified ||
+      (job.data.privateAssetId &&
+        job.data.privateAssetId !== passport.privateAssetId)
+    )
+      return { skipped: true, supersededUpload: true };
     // A terminal verdict already exists from a previous run; do not overwrite.
     if (
       passport.passportVerificationStatus === "VERIFIED" ||
@@ -124,7 +131,12 @@ export class PassportOcrProcessor implements OnModuleInit {
         if (orderClaim.count === 0) throw new ManualDocumentDecisionWon();
 
         const documentClaim = await tx.travelerDocument.updateMany({
-          where: { id: passport.id, status: { not: "APPROVED" } },
+          where: {
+            id: passport.id,
+            privateAssetId: passport.privateAssetId,
+            uploadVerified: true,
+            status: { not: "APPROVED" },
+          },
           data: {
             status: verified
               ? "APPROVED"

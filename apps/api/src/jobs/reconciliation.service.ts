@@ -20,7 +20,11 @@ import { ProductionResilienceService } from "./production-resilience.service.js"
 import { ManualRefundsService } from "../modules/payments/manual-refunds.service.js";
 import { ApiException } from "../common/api-error.js";
 import { ApiErrorCode } from "@visa-compass/shared";
-import { ocrJobOptions, ocrRecoveryConfig } from "./ocr-recovery.config.js";
+import {
+  ocrJobOptions,
+  ocrRecoveryConfig,
+  orderPassportOcrJobId,
+} from "./ocr-recovery.config.js";
 import { createHash, randomUUID } from "node:crypto";
 
 /**
@@ -217,7 +221,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         documentReviewStartedAt: true,
         documents: {
           where: { type: "PASSPORT" },
-          select: { id: true },
+          select: { id: true, privateAssetId: true },
           take: 1,
         },
       },
@@ -269,8 +273,12 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         await this.queues.add(
           QUEUES.documents,
           "verify-order-passport",
-          { orderId: order.id, documentId: passport.id },
-          `order-passport-${order.id}-${passport.id}`,
+          {
+            orderId: order.id,
+            documentId: passport.id,
+            privateAssetId: passport.privateAssetId,
+          },
+          orderPassportOcrJobId(order.id, passport.id, passport.privateAssetId),
           ocrJobOptions(),
         );
         retried += 1;

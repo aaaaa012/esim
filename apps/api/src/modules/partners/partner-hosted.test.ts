@@ -861,3 +861,97 @@ describe("hosted deposit settlement", () => {
     expect(tx.partnerAccount.updateMany).not.toHaveBeenCalled();
   });
 });
+
+it("queues fresh OCR for a passport-only replacement while retaining the confirmed ticket", async () => {
+  const passport = {
+    id: "passport",
+    type: "PASSPORT",
+    status: "PENDING",
+    fileName: "replacement.png",
+    privateAssetId: "replacement-asset-1",
+    uploadVerified: false,
+    passportVerificationStatus: null,
+  };
+  const ticket = {
+    id: "ticket",
+    type: "TICKET",
+    status: "PENDING",
+    fileName: "ticket.pdf",
+    privateAssetId: "saved-ticket",
+    uploadVerified: true,
+  };
+  const current = {
+    ...order([passport, ticket]),
+    plan: { country: { isoCode: "IN" } },
+    documentReviewStatus: "NOT_STARTED",
+    documentReviewStartedAt: null,
+    traveler: {
+      firstName: "Test",
+      surname: "Traveller",
+      dateOfBirthEncrypted: "1990-01-01",
+      passportNumberEncrypted: "PA1234567",
+      passportExpiryEncrypted: "2030-01-01",
+    },
+  };
+  const add = vi.fn().mockResolvedValue({});
+  const verifyDocument = vi.fn().mockResolvedValue({});
+  const prisma = {
+    partnerHostedCheckoutSession: {
+      findUnique: vi.fn().mockResolvedValue(session),
+    },
+    order: {
+      findUnique: vi.fn().mockResolvedValue(current),
+      update: vi.fn(async ({ data }) => {
+        Object.assign(current, data);
+        return current;
+      }),
+    },
+    travelerDocument: {
+      findFirst: vi.fn().mockResolvedValue(passport),
+      update: vi.fn(async ({ data }) => {
+        Object.assign(passport, data);
+        return passport;
+      }),
+    },
+    platformConfiguration: {
+      upsert: vi.fn().mockResolvedValue({ documentReviewPolicy: "AUTO_OCR" }),
+    },
+  };
+  const instance = new PartnerService(
+    prisma as never,
+    { decrypt: (value: string) => value } as never,
+    { verifyDocument } as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    { add } as never,
+    {} as never,
+  );
+  await instance.confirmHostedDocument(
+    "abcdefghijklmnopqrstuvwxyz012345",
+    passport.id,
+  );
+  expect(add).toHaveBeenCalledTimes(1);
+  expect(add.mock.calls[0]![2]).toMatchObject({
+    documentId: "passport",
+    privateAssetId: "replacement-asset-1",
+  });
+  expect(current.documentReviewStatus).toBe("OCR_PENDING");
+  expect(ticket).toMatchObject({
+    privateAssetId: "saved-ticket",
+    uploadVerified: true,
+  });
+  const firstJob = add.mock.calls[0]![3];
+  passport.privateAssetId = "replacement-asset-2";
+  passport.uploadVerified = false;
+  current.documentReviewStatus = "NOT_STARTED";
+  await instance.confirmHostedDocument(
+    "abcdefghijklmnopqrstuvwxyz012345",
+    passport.id,
+  );
+  expect(add.mock.calls[1]![3]).not.toBe(firstJob);
+  expect(verifyDocument.mock.calls.map(([asset]) => asset)).toEqual([
+    "replacement-asset-1",
+    "replacement-asset-2",
+  ]);
+});

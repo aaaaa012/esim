@@ -481,3 +481,43 @@ it("uses the current order review status instead of an old passport verdict on r
   ).toBeNull();
   expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
 });
+
+it.each([false, true])(
+  "submits only the replacement passport and resumes verification (signed in: %s)",
+  async (signedIn) => {
+    mocks.signedIn = signedIn;
+    const current = session("REUPLOAD_REQUIRED");
+    current.order.documents[0]!.status = "REUPLOAD_REQUIRED";
+    const submitted: string[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/documents")) {
+        submitted.push(JSON.parse(String(init?.body)).type);
+        return ok({ id: "passport", upload: { mode: "local-simulator" } });
+      }
+      if (url.endsWith("/confirm")) {
+        current.order.documentReviewStatus = "OCR_PENDING";
+        current.order.documents[0]!.status = "PENDING";
+        current.order.documents[0]!.passportVerificationStatus = "OCR_PENDING";
+        return ok({});
+      }
+      return ok(current);
+    });
+    render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByRole("heading", { name: "Travel documents" });
+    fireEvent.change(screen.getByLabelText("Passport", { exact: true }), {
+      target: {
+        files: [
+          new File(["passport"], "new-passport.png", { type: "image/png" }),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    await screen.findByRole("dialog", {
+      name: "Your verification is still in progress",
+    });
+    expect(submitted).toEqual(["PASSPORT"]);
+    expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+  },
+);

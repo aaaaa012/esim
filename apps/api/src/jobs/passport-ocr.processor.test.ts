@@ -210,3 +210,39 @@ describe("PassportOcrProcessor partner verification synchronization", () => {
     );
   });
 });
+
+it("ignores an OCR job for a replaced passport asset", async () => {
+  const tx = vi.fn();
+  const instance = processor(
+    {
+      order: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({
+            id: "order",
+            documentReviewStatus: "OCR_PENDING",
+            documents: [
+              {
+                id: "passport",
+                type: "PASSPORT",
+                privateAssetId: "new-asset",
+                uploadVerified: true,
+              },
+            ],
+          }),
+      },
+      $transaction: tx,
+    },
+    {},
+  );
+  await expect(
+    instance.process({
+      data: {
+        orderId: "order",
+        documentId: "passport",
+        privateAssetId: "old-asset",
+      },
+    } as never),
+  ).resolves.toMatchObject({ skipped: true, supersededUpload: true });
+  expect(tx).not.toHaveBeenCalled();
+});

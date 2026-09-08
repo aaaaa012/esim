@@ -32,7 +32,10 @@ import { OrdersPersistenceService } from "./orders-persistence.service.js";
 import { InventoryService } from "../inventory/inventory.service.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
-import { ocrJobOptions } from "../../jobs/ocr-recovery.config.js";
+import {
+  ocrJobOptions,
+  orderPassportOcrJobId,
+} from "../../jobs/ocr-recovery.config.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { QrPdfService } from "../notification/qr-pdf.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
@@ -959,8 +962,12 @@ export class OrdersService implements OnModuleInit {
         await this.queues.add(
           QUEUES.documents,
           "verify-order-passport",
-          { orderId: order.id, documentId: document.id },
-          `order-passport-${order.id}-${document.id}`,
+          {
+            orderId: order.id,
+            documentId: document.id,
+            privateAssetId: document.privateAssetId,
+          },
+          orderPassportOcrJobId(order.id, document.id, document.privateAssetId),
           ocrJobOptions(),
         );
       } catch (error) {
@@ -1121,8 +1128,12 @@ export class OrdersService implements OnModuleInit {
         await this.queues.add(
           QUEUES.documents,
           "verify-order-passport",
-          { orderId: order.id, documentId: passport.id },
-          `order-passport-${order.id}-${passport.id}`,
+          {
+            orderId: order.id,
+            documentId: passport.id,
+            privateAssetId: passport.privateAssetId,
+          },
+          orderPassportOcrJobId(order.id, passport.id, passport.privateAssetId),
           ocrJobOptions(),
         );
       } catch (error) {

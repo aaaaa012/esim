@@ -1858,3 +1858,20 @@
 .checkout-card .form-section h2:focus {
   outline: none;
 }
+
+.verification-progress-dialog {
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.verification-progress-dialog::backdrop {
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(4px);
+}
+.verification-progress-dialog .verify-modal {
+  box-sizing: border-box;
+}

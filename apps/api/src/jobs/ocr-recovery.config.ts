@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type OcrRecoveryConfig = {
   graceMs: number;
   retryDelayMs: number;
@@ -49,3 +51,16 @@ export const ocrJobOptions = () => {
     backoff: { type: "fixed" as const, delay: config.retryDelayMs },
   };
 };
+
+/** Deduplicate retries of one upload, but never deduplicate a replacement. */
+export function orderPassportOcrJobId(
+  orderId: string,
+  documentId: string,
+  privateAssetId: string,
+) {
+  const upload = createHash("sha256")
+    .update(privateAssetId)
+    .digest("hex")
+    .slice(0, 24);
+  return `order-passport-${orderId}-${documentId}-${upload}`;
+}

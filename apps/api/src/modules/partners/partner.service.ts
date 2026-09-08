@@ -37,7 +37,10 @@ import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
-import { ocrJobOptions } from "../../jobs/ocr-recovery.config.js";
+import {
+  ocrJobOptions,
+  orderPassportOcrJobId,
+} from "../../jobs/ocr-recovery.config.js";
 import { OrdersService } from "../orders/orders.service.js";
 import { PaymentsService } from "../payments/payments.service.js";
 
@@ -2730,8 +2733,12 @@ export class PartnerService {
       await this.queues.add(
         QUEUES.documents,
         "verify-order-passport",
-        { orderId: order.id, documentId: passport.id },
-        `order-passport-${order.id}-${passport.id}`,
+        {
+          orderId: order.id,
+          documentId: passport.id,
+          privateAssetId: passport.privateAssetId,
+        },
+        orderPassportOcrJobId(order.id, passport.id, passport.privateAssetId),
         ocrJobOptions(),
       );
       return {
@@ -4128,21 +4135,22 @@ export class PartnerService {
   }
 
   private async enqueuePassportOcr(orderId: string, documentId?: string) {
-    const id =
-      documentId ??
-      (
-        await this.prisma.travelerDocument.findFirst({
-          where: { orderId, type: DocumentType.PASSPORT },
-          select: { id: true },
-        })
-      )?.id;
-    if (!id) return;
+    const document = await this.prisma.travelerDocument.findFirst({
+      where: {
+        orderId,
+        type: DocumentType.PASSPORT,
+        ...(documentId ? { id: documentId } : {}),
+      },
+      select: { id: true, privateAssetId: true },
+    });
+    if (!document) return;
+    const id = document.id;
     try {
       await this.queues.add(
         QUEUES.documents,
         "verify-passport",
-        { orderId, documentId: id },
-        `order-passport-${orderId}-${id}`,
+        { orderId, documentId: id, privateAssetId: document.privateAssetId },
+        orderPassportOcrJobId(orderId, id, document.privateAssetId),
         ocrJobOptions(),
       );
     } catch (error) {
