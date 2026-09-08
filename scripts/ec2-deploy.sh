@@ -82,6 +82,26 @@ build_release() {
   run_with_app_env pnpm build
 }
 
+restore_known_generated_files() {
+  local generated_file="apps/customer-web/next-env.d.ts"
+  local committed_contents
+  local production_contents
+  local working_contents
+
+  git diff --quiet -- "$generated_file" && return 0
+  git diff --cached --quiet -- "$generated_file" || return 0
+  [[ -f "$generated_file" ]] || return 0
+
+  committed_contents="$(git show "HEAD:$generated_file")" || return 0
+  production_contents="${committed_contents/.next-dev\/types\/routes.d.ts/.next\/types\/routes.d.ts}"
+  working_contents="$(<"$generated_file")"
+
+  if [[ "$production_contents" != "$committed_contents" && "$working_contents" == "$production_contents" ]]; then
+    log "Restoring Next-generated $generated_file change"
+    git restore --worktree -- "$generated_file"
+  fi
+}
+
 show_failure_logs() {
   log "Recent service logs"
   sudo journalctl --no-pager --lines=60 \
@@ -162,6 +182,10 @@ flock --nonblock 9 || die "another production deployment is already running"
 
 cd "$APP_DIR"
 [[ -f .env ]] || die "$APP_DIR/.env is missing"
+
+# Next.js rewrites this tracked declaration when switching between the custom
+# development output directory and the production output directory.
+restore_known_generated_files
 
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   die "tracked files on EC2 have local changes; refusing to overwrite them"
