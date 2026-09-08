@@ -537,3 +537,24 @@ it.each([false, true])(
     expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
   },
 );
+
+it.each([false, true])(
+  "opens traveller details directly from document recovery (signed in: %s)",
+  async (signedIn) => {
+    mocks.signedIn = signedIn;
+    const current = session("REUPLOAD_REQUIRED");
+    current.order.documents[0]!.status = "REUPLOAD_REQUIRED";
+    fetchMock.mockImplementation(async (url: string) =>
+      url.endsWith("/payments/providers")
+        ? ok({ providers: ["KHALTI"] })
+        : ok(current),
+    );
+    render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByRole("heading", { name: "Travel documents" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check traveller details" }),
+    );
+    await screen.findByRole("heading", { name: "Traveller information" });
+    expect(window.location.search).toContain("step=2");
+  },
+);

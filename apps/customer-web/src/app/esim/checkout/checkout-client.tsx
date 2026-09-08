@@ -1833,7 +1833,7 @@ export default function CheckoutClient({
                     <button
                       type="button"
                       className="document-tertiary-action"
-                      onClick={() => goBack()}
+                      onClick={() => jumpTo(2)}
                     >
                       Edit traveller details
                     </button>
@@ -1938,7 +1938,7 @@ export default function CheckoutClient({
                               visa: undefined,
                             });
                             setEditingVerifiedDocuments(false);
-                          } else goBack();
+                          } else jumpTo(2);
                         }}
                       >
                         {editingVerifiedDocuments
@@ -2223,7 +2223,7 @@ export default function CheckoutClient({
                           : {})}
                         busy={verifyingPassport}
                         onRecheck={() => void verifyPassport()}
-                        onEdit={() => goBack()}
+                        onEdit={() => jumpTo(2)}
                       />
                     )}
                     {order &&

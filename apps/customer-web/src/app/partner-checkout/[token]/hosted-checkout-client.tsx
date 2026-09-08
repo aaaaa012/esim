@@ -1056,7 +1056,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           status={verification.status}
                           busy={false}
                           onRecheck={() => void verifyPassport()}
-                          onEdit={() => setStep(2)}
+                          onEdit={() => stepJump(2)}
                         />
                       ))}
                     {isTopUp && (
@@ -1541,7 +1541,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         <button
                           type="button"
                           className="document-tertiary-action"
-                          onClick={() => prevStep()}
+                          onClick={() => stepJump(2)}
                         >
                           Edit traveller details
                         </button>
@@ -1621,7 +1621,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                               if (editingVerifiedDocuments) {
                                 setFiles({});
                                 setEditingVerifiedDocuments(false);
-                              } else prevStep();
+                              } else stepJump(2);
                             }}
                           >
                             {editingVerifiedDocuments

@@ -207,6 +207,11 @@ describe("first-purchase document verification", () => {
       fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]!);
       expect(screen.getByLabelText("Travel ticket")).toBeDefined();
       expect(screen.getByLabelText("Passport", { exact: true })).toBeDefined();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Check traveller details" }),
+      );
+      await screen.findByRole("heading", { name: "Traveller information" });
+      expect(window.location.search).toContain("step=2");
     },
   );
 
