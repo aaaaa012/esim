@@ -3231,3 +3231,54 @@
     width: 100%;
   }
 }
+
+.catalog-loading {
+  margin-top: 24px;
+  color: var(--text-2);
+}
+.catalog-loading > span {
+  display: block;
+  margin-bottom: 14px;
+}
+.catalog-placeholder {
+  min-height: 220px;
+  display: grid;
+  align-content: space-between;
+  gap: 24px;
+}
+.catalog-placeholder .skel {
+  height: 20px;
+  width: 75%;
+}
+.catalog-placeholder .skel:last-child {
+  width: 45%;
+  height: 36px;
+}
+.catalog-recovery {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  margin: 20px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.catalog-recovery > div {
+  flex: 1;
+}
+.catalog-recovery p {
+  margin: 6px 0 0;
+  color: var(--text-2);
+}
+@media (max-width: 600px) {
+  .catalog-recovery {
+    flex-wrap: wrap;
+  }
+  .catalog-recovery .button {
+    width: 100%;
+  }
+  .catalog-loading .cards > :not(:first-child) {
+    display: none;
+  }
+}

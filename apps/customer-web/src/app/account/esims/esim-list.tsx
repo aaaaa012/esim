@@ -5,16 +5,16 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock3,
-  LoaderCircle,
   Plus,
   QrCode,
   RefreshCcw,
   Wifi,
 } from "lucide-react";
+import { OrderRowsLoading } from "./order-loading";
 import type { OrderSummary } from "@visa-compass/shared";
 import { apiErrorMessage, orderStatusLabel } from "@visa-compass/shared";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
-import ErrorModal from "../../../components/error-modal";
+
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Order = OrderSummary & {
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
@@ -22,20 +22,36 @@ type Order = OrderSummary & {
 };
 const processing = [
   "PAYMENT_PENDING",
+  "PAYMENT_CONFIRMED",
   "REVIEW_PENDING",
   "APPROVED",
   "PROVISIONING",
 ];
 const ready = ["QR_READY"];
-const action = ["DRAFT", "AWAITING_CUSTOMER", "PAYMENT_FAILED"];
+const action = [
+  "DRAFT",
+  "AWAITING_CUSTOMER",
+  "PAYMENT_FAILED",
+  "PROVISIONING_FAILED",
+  "ACTIVATION_ATTENTION",
+];
 export default function OrderList() {
   const authFetch = useAuthenticatedFetch();
   const [orders, setOrders] = useState<Order[]>([]),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [filter, setFilter] = useState("ALL");
+  const [attempt, setAttempt] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
-    void authFetch(`${API}/recharges/purchases`, { headers: {} })
+    let cancelled = false;
+    const controller = new AbortController();
+    setRefreshing(true);
+    setError("");
+    void authFetch(`${API}/recharges/purchases`, {
+      headers: {},
+      signal: controller.signal,
+    })
       .then(async (response) => {
         const value = await response.json();
         if (!response.ok)
@@ -47,10 +63,36 @@ export default function OrderList() {
           );
         return value.data;
       })
-      .then(setOrders)
-      .catch((cause) => setError(cause.message))
-      .finally(() => setLoading(false));
-  }, []);
+      .then((value) => {
+        if (!cancelled) setOrders(value);
+      })
+      .catch(() => {
+        if (!cancelled)
+          setError(
+            "Your orders could not be refreshed. Check your connection and try again.",
+          );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [authFetch, attempt]);
+  useEffect(() => {
+    if (
+      loading ||
+      refreshing ||
+      !orders.some((order) => processing.includes(order.status))
+    )
+      return;
+    const timer = setTimeout(() => setAttempt((value) => value + 1), 10_000);
+    return () => clearTimeout(timer);
+  }, [orders, loading, refreshing]);
   const counts = useMemo(
     () => ({
       complete: orders.filter((order) => order.status === "COMPLETED").length,
@@ -84,33 +126,55 @@ export default function OrderList() {
               events.
             </p>
           </div>
-          <Link className="button" href="/destinations">
-            <Plus size={17} />
-            Buy a plan
-          </Link>
+          <div className="account-head-actions">
+            <button
+              className="button secondary"
+              disabled={refreshing}
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              <RefreshCcw size={17} className={refreshing ? "spin" : ""} />
+              {refreshing ? "Refreshing…" : "Refresh orders"}
+            </button>
+            <Link className="button" href="/destinations">
+              <Plus size={17} />
+              Buy a plan
+            </Link>
+          </div>
         </div>
         {!loading && orders.length > 0 && (
           <>
             <section className="customer-stats">
-              <button onClick={() => setFilter("COMPLETE")}>
+              <button
+                aria-pressed={filter === "COMPLETE"}
+                onClick={() => setFilter("COMPLETE")}
+              >
                 <CheckCircle2 />
                 <span>
                   <b>{counts.complete}</b>Completed
                 </span>
               </button>
-              <button onClick={() => setFilter("PROCESSING")}>
+              <button
+                aria-pressed={filter === "PROCESSING"}
+                onClick={() => setFilter("PROCESSING")}
+              >
                 <RefreshCcw />
                 <span>
                   <b>{counts.processing}</b>Processing
                 </span>
               </button>
-              <button onClick={() => setFilter("READY")}>
+              <button
+                aria-pressed={filter === "READY"}
+                onClick={() => setFilter("READY")}
+              >
                 <QrCode />
                 <span>
                   <b>{counts.ready}</b>Ready to install
                 </span>
               </button>
-              <button onClick={() => setFilter("ACTION")}>
+              <button
+                aria-pressed={filter === "ACTION"}
+                onClick={() => setFilter("ACTION")}
+              >
                 <Clock3 />
                 <span>
                   <b>{counts.action}</b>Needs action
@@ -123,30 +187,40 @@ export default function OrderList() {
                   <button
                     key={item}
                     className={filter === item ? "selected" : ""}
+                    aria-pressed={filter === item}
                     onClick={() => setFilter(item)}
                   >
                     {item === "ALL"
                       ? "All orders"
-                      : item === "ACTION"
-                        ? "Needs action"
-                        : item === "READY"
-                          ? "Ready to install"
-                          : item[0] + item.slice(1).toLowerCase()}
+                      : item === "COMPLETE"
+                        ? "Completed"
+                        : item === "ACTION"
+                          ? "Needs action"
+                          : item === "READY"
+                            ? "Ready to install"
+                            : item[0] + item.slice(1).toLowerCase()}
                   </button>
                 ),
               )}
             </div>
           </>
         )}
-        {loading ? (
-          <div className="account-empty">
-            <LoaderCircle className="spin" />
-            Loading orders…
+        {loading || (refreshing && orders.length === 0) ? (
+          <OrderRowsLoading />
+        ) : null}
+        {error && (
+          <div className="customer-load-error" role="alert">
+            <p>{error}</p>
+            <button
+              className="button secondary"
+              disabled={refreshing}
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              Try again
+            </button>
           </div>
-        ) : (
-          <ErrorModal error={error} onClose={() => setError("")} />
         )}
-        {orders.length === 0 ? (
+        {!loading && !refreshing && !error && orders.length === 0 ? (
           <div className="account-empty">
             <QrCode size={35} />
             <h2>No orders yet</h2>
@@ -155,12 +229,18 @@ export default function OrderList() {
               Browse plans
             </Link>
           </div>
-        ) : visible.length === 0 ? (
+        ) : !loading && !refreshing && !error && visible.length === 0 ? (
           <div className="account-empty compact">
-            No orders in this category.
+            <p>No orders in this category.</p>
+            <button
+              className="button secondary"
+              onClick={() => setFilter("ALL")}
+            >
+              Show all orders
+            </button>
           </div>
         ) : (
-          <div className="esim-list">
+          <div className="esim-list" aria-busy={refreshing}>
             {visible.map((order) => (
               <Link
                 href={
@@ -186,7 +266,8 @@ export default function OrderList() {
                   </div>
                   <p>
                     {order.plan.countryCode} · {order.plan.dataAllowance} ·{" "}
-                    {order.plan.validityDays} days
+                    {order.plan.validityDays}{" "}
+                    {order.plan.validityDays === 1 ? "day" : "days"}
                   </p>
                 </div>
                 <div className="esim-state">

@@ -28,6 +28,7 @@ import {
 import { createDocumentUploader } from "../../esim/checkout/document-upload";
 import { useDocumentRefresh } from "../../esim/checkout/use-document-refresh";
 import { DocumentFileField as FileField } from "../../esim/checkout/document-file-field";
+import { useCheckoutTransition } from "../../esim/checkout/use-checkout-transition";
 import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
 import {
@@ -743,6 +744,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       await requestPayment();
     });
 
+  const transitionRef = useCheckoutTransition(
+    `${step}:${showAccountChoice}`,
+    Boolean(session) && !busy,
+  );
   if (
     loadFailed ||
     (session && session.order.status !== "DRAFT" && !submitted && !outcome)
@@ -801,7 +806,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           <span style={{ width: `${step * (100 / 4)}%` }} />
         </div>
         <div className="checkout-layout">
-          <section className="checkout-card">
+          <section className="checkout-card" ref={transitionRef}>
             {checkoutAccessMode === "guest" && !outcome && (
               <div className="guest-recovery-card" role="note">
                 <span className="guest-recovery-icon">
@@ -863,6 +868,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       {!submitted && step > value ? (
                         <button
                           type="button"
+                          disabled={busy}
                           onClick={() => stepJump(value)}
                           title={`Go back to ${label}`}
                         >

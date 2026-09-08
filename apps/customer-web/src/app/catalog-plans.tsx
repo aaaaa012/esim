@@ -10,7 +10,6 @@ import {
   MapPin,
 } from "lucide-react";
 import CountryPicker, { flagEmoji } from "./country-picker";
-import ErrorModal from "../components/error-modal";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -86,8 +85,12 @@ export default function CatalogPlans() {
   const [selected, setSelected] = useState<string>("");
   const [popularPlans, setPopularPlans] = useState<Plan[]>([]);
   const [coverage, setCoverage] = useState<Record<string, string>>({});
+  const [attempt, setAttempt] = useState(0);
+  const [countriesBusy, setCountriesBusy] = useState(true);
   const [plansBusy, setPlansBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [countriesError, setCountriesError] = useState<string | null>(null);
+  const [plansError, setPlansError] = useState<string | null>(null);
+  const error = countriesError || plansError;
   const [showAllDestinations, setShowAllDestinations] = useState(false);
   const revealResultsFor = useRef<string | null>(null);
 
@@ -117,6 +120,8 @@ export default function CatalogPlans() {
 
   useEffect(() => {
     let cancelled = false;
+    setCountriesBusy(true);
+    setCountriesError(null);
     fetch(`${API}/public/countries`)
       .then((response) =>
         response.ok
@@ -132,24 +137,29 @@ export default function CatalogPlans() {
             ? current
             : initialCatalogDestination(countriesData.data, targetCountry),
         );
-        setError(null);
+        setCountriesError(null);
       })
       .catch(() => {
         if (cancelled) return;
         setPlans(null);
-        setError(
+        setCountriesError(
           "Live catalog is unavailable right now. Please try again shortly.",
         );
+      })
+      .finally(() => {
+        if (!cancelled) setCountriesBusy(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [targetCountry]);
+  }, [attempt]);
 
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
     setPlansBusy(true);
+    setPlans(null);
+    setPlansError(null);
     fetch(`${API}/public/plans?country=${encodeURIComponent(selected)}`)
       .then((response) =>
         response.ok
@@ -165,12 +175,12 @@ export default function CatalogPlans() {
               ? "Coverage available"
               : "Coverage is unavailable. Please contact Visa Compass for assistance.",
           }));
-          setError(null);
+          setPlansError(null);
         }
       })
       .catch(() => {
         if (!cancelled)
-          setError(
+          setPlansError(
             "Plans for this destination could not be loaded. Please try again.",
           );
       })
@@ -180,14 +190,10 @@ export default function CatalogPlans() {
     return () => {
       cancelled = true;
     };
-  }, [selected]);
+  }, [selected, attempt]);
 
   useEffect(() => {
-    if (
-      plansBusy ||
-      plans === null ||
-      revealResultsFor.current !== selected
-    )
+    if (plansBusy || plans === null || revealResultsFor.current !== selected)
       return;
     revealResultsFor.current = null;
     requestAnimationFrame(() => {
@@ -201,17 +207,6 @@ export default function CatalogPlans() {
       target?.focus({ preventScroll: true });
     });
   }, [plans, plansBusy, selected]);
-
-  useEffect(() => {
-    if (!selected || pathname !== "/destinations") return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("country", selected);
-    params.delete("data");
-    params.delete("days");
-    const next = params.toString();
-    if (next !== searchParams.toString())
-      router.replace(`${pathname}${next ? `?${next}` : ""}`, { scroll: false });
-  }, [pathname, router, searchParams, selected]);
 
   const grouped = new Map<string, Plan[]>();
   for (const plan of plans ?? [])
@@ -247,24 +242,27 @@ export default function CatalogPlans() {
       return;
     }
     revealResultsFor.current = code;
+    if (code === selected && !plansBusy) {
+      const target = document.getElementById("plan-results");
+      target?.scrollIntoView?.({
+        behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+          .matches
+          ? "auto"
+          : "smooth",
+        block: "start",
+      });
+      target?.focus({ preventScroll: true });
+      revealResultsFor.current = null;
+    }
     setSelected(code);
     setShowAllDestinations(false);
+    router.replace(
+      catalogDestinationHref(pathname, searchParams.toString(), code),
+      { scroll: false },
+    );
   };
 
-  const focusPopularPlan = (plan: Plan) => {
-    if (pathname !== "/destinations") {
-      router.push(
-        catalogDestinationHref(
-          pathname,
-          searchParams.toString(),
-          plan.countryCode,
-        ),
-      );
-      return;
-    }
-    revealResultsFor.current = plan.countryCode;
-    setSelected(plan.countryCode);
-  };
+  const focusPopularPlan = (plan: Plan) => selectDestination(plan.countryCode);
 
   return (
     <>
@@ -294,7 +292,8 @@ export default function CatalogPlans() {
                 </div>
                 <h4>{plan.name}</h4>
                 <p>
-                  {plan.dataAllowance} · {plan.validityDays} days
+                  {plan.dataAllowance} · {plan.validityDays}{" "}
+                  {plan.validityDays === 1 ? "day" : "days"}
                 </p>
                 <div className="popular-plan-price">
                   <b>{npr(plan.sellingPriceNpr)}</b>
@@ -365,7 +364,9 @@ export default function CatalogPlans() {
                 >
                   <b>{plan.dataAllowance}</b>
                   <span>
-                    {plan.validityDays} days · {npr(plan.sellingPriceNpr)}
+                    {plan.validityDays}{" "}
+                    {plan.validityDays === 1 ? "day" : "days"} ·{" "}
+                    {npr(plan.sellingPriceNpr)}
                   </span>
                 </button>
               ))}
@@ -421,9 +422,22 @@ export default function CatalogPlans() {
         ) : null}
       </section>
       {error ? (
-        <ErrorModal error={error} onClose={() => setError(null)} />
+        <div className="catalog-recovery" role="alert">
+          <AlertTriangle size={20} />
+          <div>
+            <b>We couldn’t load the catalog</b>
+            <p>{error}</p>
+          </div>
+          <button
+            className="button secondary"
+            disabled={countriesBusy || plansBusy}
+            onClick={() => setAttempt((value) => value + 1)}
+          >
+            Try again
+          </button>
+        </div>
       ) : null}
-      {coverageMessage ? (
+      {coverageMessage && !plansBusy && !error ? (
         <div
           className={`coverage-note ${coverageMessage === "Coverage available" ? "ok" : "warn"}`}
         >
@@ -435,12 +449,27 @@ export default function CatalogPlans() {
           <span>{coverageMessage}</span>
         </div>
       ) : null}
-      {!selected ? (
+      {countriesBusy || plansBusy || (!error && selected && plans === null) ? (
+        <div
+          className="catalog-loading"
+          role="status"
+          aria-label="Loading available plans"
+        >
+          <span>Finding available plans…</span>
+          <div className="cards" aria-hidden="true">
+            {[0, 1, 2].map((index) => (
+              <div className="card catalog-placeholder" key={index}>
+                <div className="skel" />
+                <div className="skel" />
+                <div className="skel" />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : error ? null : !selected ? (
         <p className="catalog-empty">
           Select a destination above to see its available plans.
         </p>
-      ) : plansBusy ? (
-        <p className="catalog-empty">Loading plans for this destination…</p>
       ) : visible.length ? (
         <div
           className="cards"
@@ -456,7 +485,7 @@ export default function CatalogPlans() {
               <p className="plan-meta">
                 <MapPin size={13} style={{ verticalAlign: -2 }} />{" "}
                 {plan.countryName} · <strong>{plan.dataAllowance}</strong> ·{" "}
-                {plan.validityDays} days
+                {plan.validityDays} {plan.validityDays === 1 ? "day" : "days"}
               </p>
               <div className="price">
                 <b>{npr(plan.sellingPriceNpr)}</b>

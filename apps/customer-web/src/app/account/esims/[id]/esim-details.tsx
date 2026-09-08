@@ -1,7 +1,7 @@
 "use client";
 import { useAuthenticatedFetch } from "../../../authenticated-api-provider";
 import ErrorModal from "../../../../components/error-modal";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -15,6 +15,8 @@ import {
   Upload,
 } from "lucide-react";
 import "./recovery.css";
+import { createDocumentUploader } from "../../../esim/checkout/document-upload";
+import { useDocumentRefresh } from "../../../esim/checkout/use-document-refresh";
 import {
   apiErrorMessage,
   documentStatusLabel,
@@ -24,15 +26,6 @@ import {
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
-type DocumentAuthorization = {
-  id: string;
-  upload: {
-    mode: string;
-    endpoint?: string;
-    method?: "PUT";
-    headers?: Record<string, string>;
-  };
-};
 type Order = {
   id: string;
   orderNumber: string;
@@ -64,98 +57,119 @@ export default function EsimDetails({ id }: { id: string }) {
   const [replacements, setReplacements] = useState<
     Record<string, File | undefined>
   >({});
-  const load = () =>
-    authFetch(`${API}/customer/orders/${id}`, { headers }).then(
-      async (response) => {
-        const value = await response.json();
-        if (!response.ok)
-          throw new Error(
-            apiErrorMessage(
-              value.error?.code ?? "",
-              "This eSIM could not be loaded.",
-            ),
-          );
-        if (value.data.purchaseType === "TOPUP") {
-          window.location.replace(
-            `/esim/checkout?order=${encodeURIComponent(id)}&recharge=1`,
-          );
-          return;
-        }
-        setOrder(value.data);
-      },
-    );
+  const [loadError, setLoadError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const load = useCallback(
+    (isCurrent: () => boolean = () => true) =>
+      authFetch(`${API}/customer/orders/${id}`, { headers }).then(
+        async (response) => {
+          const value = await response.json();
+          if (!response.ok)
+            throw new Error(
+              apiErrorMessage(
+                value.error?.code ?? "",
+                "This eSIM could not be loaded.",
+              ),
+            );
+          if (!isCurrent()) return;
+          if (value.data.purchaseType === "TOPUP") {
+            window.location.replace(
+              `/esim/checkout?order=${encodeURIComponent(id)}&recharge=1`,
+            );
+            return;
+          }
+          setOrder(value.data);
+          setLoadError("");
+        },
+      ),
+    [authFetch, id],
+  );
   useEffect(() => {
-    void load().catch((cause) => setError(cause.message));
-  }, [id]);
+    let cancelled = false;
+    setOrder(null);
+    setLoadError("");
+    void load(() => !cancelled).catch(() => {
+      if (!cancelled)
+        setLoadError(
+          "This order could not be loaded. Check your connection and try again.",
+        );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, attempt]);
+  useDocumentRefresh(
+    Boolean(order) &&
+      !busy &&
+      ([
+        "PAYMENT_PENDING",
+        "PAYMENT_CONFIRMED",
+        "REVIEW_PENDING",
+        "APPROVED",
+        "PROVISIONING",
+      ].includes(order?.status ?? "") ||
+        ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
+          order?.documentReviewStatus ?? "",
+        )),
+    async (isCurrent) => {
+      await load(isCurrent);
+    },
+    () =>
+      setLoadError(
+        "Connection interrupted. Your order is saved. We’ll keep trying to refresh its status.",
+      ),
+    order?.documentReviewStatus === "MANUAL_REVIEW",
+  );
+  const uploadDocument = useRef(createDocumentUploader());
   const uploadReplacement = async (document: { id: string; type: string }) => {
     const file = replacements[document.id];
-    if (!file) return setError("Choose a replacement file first");
+    if (!file || busy) return;
     if (file.size > 10 * 1024 * 1024)
       return setError("Document exceeds the 10 MB limit");
+    if (
+      !["application/pdf", "image/jpeg", "image/png"].includes(
+        file.type || "application/pdf",
+      )
+    )
+      return setError("Choose a PDF, JPG or PNG document");
     setBusy(document.id);
     setError("");
     try {
-      const authorizationResponse = await authFetch(
-        `${API}/customer/orders/${id}/documents`,
-        {
-          method: "POST",
-          headers: {
-            ...headers,
-            "content-type": "application/json",
-            "x-idempotency-key": crypto.randomUUID(),
-          },
-          body: JSON.stringify({
-            type: document.type,
-            fileName: file.name,
-            contentType: file.type || "application/pdf",
-          }),
+      await uploadDocument.current({
+        type: document.type,
+        file,
+        basePath: `${API}/customer/orders/${id}/documents`,
+        progress: setNotice,
+        request: async <T,>(path: string, init?: RequestInit): Promise<T> => {
+          const response = await authFetch(path, {
+            ...init,
+            headers: {
+              "content-type": "application/json",
+              "x-idempotency-key": crypto.randomUUID(),
+            },
+          });
+          const value = await response.json();
+          if (!response.ok)
+            throw new Error(
+              apiErrorMessage(
+                value.error?.code ?? "",
+                "Your document could not be saved. Please retry.",
+              ),
+            );
+          return value.data;
         },
-      );
-      const authorizationValue = await authorizationResponse.json();
-      if (!authorizationResponse.ok)
-        throw new Error(
-          apiErrorMessage(
-            authorizationValue.error?.code ?? "",
-            "This eSIM action could not be authorized.",
-          ),
-        );
-      const authorization = authorizationValue.data as DocumentAuthorization;
-      if (
-        authorization.upload.mode !== "s3-presigned" ||
-        !authorization.upload.endpoint
-      )
-        throw new Error("Private document storage is unavailable");
-      const uploaded = await fetch(authorization.upload.endpoint, {
-        method: authorization.upload.method ?? "PUT",
-        ...(authorization.upload.headers
-          ? { headers: authorization.upload.headers }
-          : {}),
-        body: file,
       });
-      if (!uploaded.ok) throw new Error("Replacement upload failed");
-      const confirmation = await authFetch(
-        `${API}/customer/orders/${id}/documents/${authorization.id}/confirm`,
-        {
-          method: "POST",
-          headers: {
-            ...headers,
-            "content-type": "application/json",
-            "x-idempotency-key": crypto.randomUUID(),
-          },
-          body: "{}",
-        },
+      setReplacements((current) => {
+        const next = { ...current };
+        delete next[document.id];
+        return next;
+      });
+      setNotice(
+        "Replacement securely saved. Verification updates will appear here.",
       );
-      const confirmationValue = await confirmation.json();
-      if (!confirmation.ok)
-        throw new Error(
-          apiErrorMessage(
-            confirmationValue.error?.code ?? "",
-            "This eSIM action could not be confirmed.",
-          ),
-        );
-      setReplacements({});
       await load();
     } catch (cause) {
+      setNotice("");
       setError(
         cause instanceof Error ? cause.message : "Replacement upload failed",
       );
@@ -229,15 +243,17 @@ export default function EsimDetails({ id }: { id: string }) {
       setBusy("");
     }
   };
-  if (error && !order)
+  if (loadError && !order)
     return (
       <main className="section">
-        <ErrorModal error={error} onClose={() => setError("")} />
-        <div className="account-empty">
+        <div className="account-empty" role="alert">
           <h1>We could not load this order</h1>
-          <p>Please try again, or return to your orders.</p>
+          <p>{loadError}</p>
           <div className="form-actions">
-            <button className="button" onClick={() => void load()}>
+            <button
+              className="button"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
               Try again
             </button>
             <Link className="button secondary" href="/account/orders">
@@ -249,7 +265,7 @@ export default function EsimDetails({ id }: { id: string }) {
     );
   if (!order)
     return (
-      <main className="account-loading">
+      <main className="account-loading" role="status">
         <LoaderCircle className="spin" />
         Loading secure order…
       </main>
@@ -262,9 +278,11 @@ export default function EsimDetails({ id }: { id: string }) {
   const needsReupload = order.documents.some(
     (document) => document.status === "REUPLOAD_REQUIRED",
   );
-  const documentReviewPending = ["MANUAL_REVIEW", "OCR_BACKGROUND"].includes(
-    order.documentReviewStatus ?? "",
-  );
+  const documentReviewPending = [
+    "OCR_PENDING",
+    "MANUAL_REVIEW",
+    "OCR_BACKGROUND",
+  ].includes(order.documentReviewStatus ?? "");
   const resumeLabel = paymentPending
     ? "Check payment status"
     : order.status === "PAYMENT_FAILED"
@@ -293,8 +311,17 @@ export default function EsimDetails({ id }: { id: string }) {
             <b>NPR {order.totalAmountNpr.toLocaleString()}</b>
           </div>
         </div>
+        {loadError && (
+          <div className="qr-notice" role="status">
+            {loadError}
+          </div>
+        )}
         {error && <ErrorModal error={error} onClose={() => setError("")} />}
-        {notice && <div className="qr-notice ok">{notice}</div>}
+        {notice && (
+          <div className="qr-notice ok" role="status">
+            {notice}
+          </div>
+        )}
         {resumable && (
           <section className="customer-action-banner">
             <AlertCircle />
@@ -306,7 +333,7 @@ export default function EsimDetails({ id }: { id: string }) {
               </b>
               <small>
                 {paymentPending
-                  ? "Your payment returned to us but is still being confirmed. We re-check it automatically."
+                  ? "Your payment is awaiting confirmation. Updates appear here automatically; you can also open checkout to check its status."
                   : "Your saved traveller and document information will be restored."}
               </small>
             </span>
@@ -333,10 +360,15 @@ export default function EsimDetails({ id }: { id: string }) {
           <section className="customer-action-banner">
             <Clock3 />
             <span>
-              <b>Your documents are being reviewed separately</b>
+              <b>
+                {order.documentReviewStatus === "MANUAL_REVIEW"
+                  ? "Documents awaiting review"
+                  : "Checking your documents"}
+              </b>
               <small>
-                Your payment and eSIM activation continue normally. Our team
-                will contact you only if another document is required.
+                {order.payment?.status === "COMPLETED"
+                  ? "Your payment has been received. Document review updates will appear here automatically."
+                  : "Your documents are saved. Payment becomes available after verification succeeds. This page updates automatically."}
               </small>
             </span>
           </section>
@@ -384,6 +416,8 @@ export default function EsimDetails({ id }: { id: string }) {
                     <div className="replacement-control">
                       <input
                         type="file"
+                        disabled={Boolean(busy)}
+                        aria-label={`Replace ${documentTypeLabel(document.type)}`}
                         accept="application/pdf,image/jpeg,image/png"
                         onChange={(event) =>
                           setReplacements((value) => ({
@@ -394,7 +428,7 @@ export default function EsimDetails({ id }: { id: string }) {
                       />
                       <button
                         className="button"
-                        disabled={busy === document.id}
+                        disabled={Boolean(busy) || !replacements[document.id]}
                         onClick={() => uploadReplacement(document)}
                       >
                         {busy === document.id ? (
@@ -419,7 +453,7 @@ export default function EsimDetails({ id }: { id: string }) {
               <>
                 <p>
                   {paymentPending
-                    ? "We re-check the payment with your wallet automatically and will activate the eSIM as soon as it is confirmed."
+                    ? "Your order updates as payment is confirmed. Open checkout to check the latest status with your payment provider."
                     : "Continue checkout to submit traveller documents and complete payment."}
                 </p>
                 <Link

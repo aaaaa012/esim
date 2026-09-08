@@ -33,6 +33,7 @@ import {
 import { createDocumentUploader } from "./document-upload";
 import { useDocumentRefresh } from "./use-document-refresh";
 import { DocumentFileField as FileField } from "./document-file-field";
+import { useCheckoutTransition } from "./use-checkout-transition";
 import DatePicker from "./date-picker";
 import { submitCheckoutDocumentsSequentially } from "./document-submission";
 import { checkoutResumeDisposition } from "./checkout-resume";
@@ -1280,6 +1281,10 @@ export default function CheckoutClient({
     }
   };
 
+  const transitionRef = useCheckoutTransition(
+    `${step}:${showAccountChoice}`,
+    !busy && !resumingOrder,
+  );
   if ((!planId && !orderId) || planLoadFailed)
     return (
       <main className="checkout-page">
@@ -1323,7 +1328,7 @@ export default function CheckoutClient({
           <span style={{ width: `${(isTopUp ? 1 : step * 0.25) * 100}%` }} />
         </div>
         <div className="checkout-layout">
-          <section className="checkout-card">
+          <section className="checkout-card" ref={transitionRef}>
             <div className="step-tabs">
               {(isTopUp
                 ? ["Payment"]
@@ -1349,6 +1354,7 @@ export default function CheckoutClient({
                   {!isTopUp && step > index + 1 ? (
                     <button
                       type="button"
+                      disabled={busy}
                       onClick={() => jumpTo(index + 1)}
                       title={`Go back to ${label}`}
                     >

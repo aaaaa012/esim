@@ -1737,3 +1737,10 @@
     min-height: 44px;
   }
 }
+
+.checkout-card .form-section h2 {
+  scroll-margin-top: 100px;
+}
+.checkout-card .form-section h2:focus {
+  outline: none;
+}

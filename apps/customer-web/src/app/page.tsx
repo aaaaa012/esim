@@ -186,7 +186,7 @@ export default function Home() {
                 </p>
               </div>
             </div>
-            <Suspense fallback={null}>
+            <Suspense fallback={<p className="catalog-empty" role="status">Loading destinations…</p>}>
               <CatalogPlans />
             </Suspense>
           </div>
