@@ -161,61 +161,70 @@ describe("recharge checkout", () => {
 });
 
 describe("first-purchase document verification", () => {
-  it("resumes saved documents, refreshes verification, then allows payment", async () => {
-    mocks.signedIn = true;
-    let reads = 0;
-    mocks.authFetch.mockImplementation(async (url: string) => {
-      if (url.endsWith("/payments/providers"))
-        return ok({ providers: ["KHALTI"] });
-      reads += 1;
-      return ok({
-        id: "first",
-        orderNumber: "VC-FIRST",
-        status: "DRAFT",
-        purchaseType: "NEW",
-        plan,
-        totalAmountNpr: 100,
-        traveler: { firstName: "Traveller" },
-        documentReviewStatus: reads === 1 ? "OCR_PENDING" : "VERIFIED",
-        passportVerification: {
-          status: reads === 1 ? "OCR_PENDING" : "VERIFIED",
-        },
-        documents: [
-          {
-            type: "PASSPORT",
-            status: "UPLOADED",
-            fileName: "passport.png",
-            uploadVerified: true,
+  it.each([false, true])(
+    "uses the same verification journey and compact success state (signed in: %s)",
+    async (signedIn) => {
+      mocks.signedIn = signedIn;
+      let reads = 0;
+      mocks.authFetch.mockImplementation(async (url: string) => {
+        if (url.endsWith("/payments/providers"))
+          return ok({ providers: ["KHALTI"] });
+        reads += 1;
+        return ok({
+          id: "first",
+          orderNumber: "VC-FIRST",
+          status: "DRAFT",
+          purchaseType: "NEW",
+          plan,
+          totalAmountNpr: 100,
+          traveler: { firstName: "Traveller" },
+          documentReviewStatus: reads === 1 ? "OCR_PENDING" : "VERIFIED",
+          passportVerification: {
+            status: reads === 1 ? "OCR_PENDING" : "VERIFIED",
           },
-          {
-            type: "TICKET",
-            status: "UPLOADED",
-            fileName: "ticket.png",
-            uploadVerified: true,
-          },
-        ],
+          documents: [
+            {
+              type: "PASSPORT",
+              status: "UPLOADED",
+              fileName: "passport.png",
+              uploadVerified: true,
+            },
+            {
+              type: "TICKET",
+              status: "UPLOADED",
+              fileName: "ticket.png",
+              uploadVerified: true,
+            },
+          ],
+        });
       });
-    });
-    render(<Checkout planId="plan" orderId="first" />);
-    await screen.findByRole("heading", { name: "Travel documents" });
-    expect(
-      screen.getByRole("list", { name: "Saved documents" }).textContent,
-    ).toContain("ticket.png");
-    expect(
-      screen.queryByRole("heading", { name: "Choose payment method" }),
-    ).toBeNull();
-    fireEvent.click(
-      await screen.findByRole(
+      const { container } = render(<Checkout planId="plan" orderId="first" />);
+      await screen.findByRole("heading", { name: "Travel documents" });
+      expect(
+        screen.getByRole("list", { name: "Saved documents" }).textContent,
+      ).toContain("ticket.png");
+      expect(
+        screen.queryByRole("heading", { name: "Choose payment method" }),
+      ).toBeNull();
+      const next = await screen.findByRole(
         "button",
         { name: "Continue to payment" },
         { timeout: 5000 },
-      ),
-    );
-    await screen.findByRole("heading", { name: "Choose payment method" });
-    expect(
-      mocks.authFetch.mock.calls.some(([url]) =>
-        url.endsWith("/verify-passport"),
-      ),
-    ).toBe(false);
-  });
+      );
+      expect(
+        screen.getByRole("list", { name: "Document summary" }),
+      ).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Change documents" }),
+      ).toBeDefined();
+      expect(container.querySelector('input[type="file"]')).toBeNull();
+      fireEvent.click(next);
+      await screen.findByRole("heading", { name: "Choose payment method" });
+      expect(
+        mocks.authFetch.mock.calls.some(([url]) =>
+          url.endsWith("/verify-passport"),
+        ),
+      ).toBe(false);
+    },
+  );
 });

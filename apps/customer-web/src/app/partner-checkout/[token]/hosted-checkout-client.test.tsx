@@ -378,29 +378,39 @@ describe("hosted checkout payment flow", () => {
 });
 
 describe("hosted document progress", () => {
-  it("refreshes verification automatically and keeps payment behind an explicit continue action", async () => {
-    let reads = 0;
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.endsWith("/payments/providers"))
-        return ok({ providers: ["KHALTI"] });
-      reads += 1;
-      return ok(session(reads === 1 ? "OCR_PENDING" : "VERIFIED"));
-    });
-    render(<HostedCheckoutClient token="private-token" />);
-    await screen.findByText("Checking your passport");
-    expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
-    const next = await screen.findByRole(
-      "button",
-      { name: "Continue to payment" },
-      { timeout: 5000 },
-    );
-    expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(next);
-    await screen.findByRole("heading", { name: "Pay NPR 2" });
-    expect(
-      fetchMock.mock.calls.some(([url]) => url.endsWith("/verify-passport")),
-    ).toBe(false);
-  });
+  it.each([false, true])(
+    "uses the same verification journey and explicit payment action (signed in: %s)",
+    async (signedIn) => {
+      mocks.signedIn = signedIn;
+      let reads = 0;
+      fetchMock.mockImplementation(async (url: string) => {
+        if (url.endsWith("/payments/providers"))
+          return ok({ providers: ["KHALTI"] });
+        reads += 1;
+        return ok(session(reads === 1 ? "OCR_PENDING" : "VERIFIED"));
+      });
+      render(<HostedCheckoutClient token="private-token" />);
+      await screen.findByText("Checking your passport");
+      expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+      const next = await screen.findByRole(
+        "button",
+        { name: "Continue to payment" },
+        { timeout: 5000 },
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(
+        screen.getByRole("list", { name: "Document summary" }),
+      ).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Change documents" }),
+      ).toBeDefined();
+      fireEvent.click(next);
+      await screen.findByRole("heading", { name: "Pay NPR 2" });
+      expect(
+        fetchMock.mock.calls.some(([url]) => url.endsWith("/verify-passport")),
+      ).toBe(false);
+    },
+  );
 
   it("keeps saved files and shows a connection error when checking fails", async () => {
     fetchMock.mockImplementation(async (url: string) => {
