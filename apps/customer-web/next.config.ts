@@ -32,5 +32,16 @@ const config: NextConfig = {
   // lockfile exists on the developer machine or build host.
   outputFileTracingRoot: workspaceRoot,
   images: { remotePatterns: remoteAssetPatterns },
+  webpack(current) {
+    if (process.env.NEXT_PUBLIC_E2E_TEST_MODE === "true") {
+      if (process.env.NODE_ENV === "production")
+        throw new Error("E2E Clerk adapter is forbidden in production");
+      current.resolve.alias["@clerk/nextjs$"] = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "src/test/clerk-client.tsx",
+      );
+    }
+    return current;
+  },
 };
 export default config;

@@ -3,6 +3,7 @@ import { mockPublicCustomerApi } from "../support/customer-api";
 import {
   attachAudit,
   auditInteractiveNames,
+  expectElementsInsideViewport,
   expectNoHorizontalOverflow,
   observeBrowserProblems,
 } from "../support/ui-audit";
@@ -25,7 +26,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const route of publicRoutes) {
-  test(`${route} renders without overflow or unnamed controls`, async ({ page }, testInfo) => {
+  test(`${route} renders without overflow or unnamed controls`, async ({
+    page,
+  }, testInfo) => {
     const problems = observeBrowserProblems(page);
     const response = await page.goto(route, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBeLessThan(400);
@@ -33,7 +36,9 @@ for (const route of publicRoutes) {
     await expectNoHorizontalOverflow(page);
     await auditInteractiveNames(page);
     await attachAudit(testInfo, "browser-problems.json", problems);
-    expect(problems.filter((problem) => problem.kind === "pageerror")).toEqual([]);
+    expect(problems.filter((problem) => problem.kind === "pageerror")).toEqual(
+      [],
+    );
   });
 }
 
@@ -44,15 +49,27 @@ test("destination selection stays on the catalogue route", async ({ page }) => {
   await page.getByRole("option", { name: /Australia/i }).click();
   await expect(page).toHaveURL(/\/destinations\?country=AU$/);
   await expect(page.getByText("Australia Essential 3 GB")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await expectElementsInsideViewport(
+    page,
+    ".supported-destinations, .destination-picker, .cards, .card, .price",
+  );
 });
 
-test("header destinations navigation never falls back to the homepage", async ({ page }) => {
+test("header destinations navigation never falls back to the homepage", async ({
+  page,
+}) => {
   await page.goto("/compatibility");
   const mobileMenu = page.getByRole("button", { name: /navigation menu/i });
   if (await mobileMenu.isVisible()) await mobileMenu.click();
-  await page.getByRole("link", { name: "Destinations" }).first().click();
+  await page
+    .locator("header")
+    .getByRole("link", { name: "Destinations", exact: true })
+    .click();
   await expect(page).toHaveURL(/\/destinations$/);
-  await expect(page.getByRole("heading", { name: /Choose where you need data/i })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Choose where you need data/i }),
+  ).toBeVisible();
 });
 
 test("unknown routes render the application 404", async ({ page }) => {

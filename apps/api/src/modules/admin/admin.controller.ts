@@ -69,7 +69,7 @@ export class AdminController {
       csv?: string;
       content?: string;
       fileName?: string;
-      mode?: "UPDATE_LISTED";
+      mode?: "UPDATE_LISTED" | "FULL_CATALOG";
     },
     @Req() req: AuthenticatedRequest,
   ) {
@@ -86,6 +86,28 @@ export class AdminController {
       req.user!.id,
       body.mode,
     );
+  }
+  @Get("plans/import-batches")
+  @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  catalogImportBatches(@Query("limit") limit?: string) {
+    return this.admin.catalogImportBatches(Number(limit) || 24);
+  }
+  @Get("plans/import-batches/:id")
+  @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  catalogImportBatch(
+    @Param("id") id: string,
+    @Query("change") change?: string,
+  ) {
+    return this.admin.catalogImportBatch(id, change);
+  }
+  @Post("plans/import-batches/:batchId/rows/:rowId/disable")
+  @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  disableMissingCatalogPlan(
+    @Param("batchId") batchId: string,
+    @Param("rowId") rowId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.admin.disableMissingCatalogPlan(batchId, rowId, req.user!.id);
   }
   @Post("plans/:id/approve")
   approvePlan(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
@@ -124,6 +146,11 @@ export class AdminController {
   @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
   exportCatalog(@Body() body: { cos?: string }) {
     return this.admin.exportTransatelCatalog(body?.cos);
+  }
+  @Post("plans/export")
+  @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  exportOperatingCatalog() {
+    return this.admin.exportOperatingCatalog();
   }
   @Post("integrations/transatel/eligibility")
   eligibility(@Body() body: { planId: string; msisdn: string }) {

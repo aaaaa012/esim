@@ -44,6 +44,20 @@ enum PlanStatus {
   ARCHIVED
 }
 
+enum CatalogImportStatus {
+  APPLIED
+  FAILED
+}
+
+enum CatalogImportRowChange {
+  NEW
+  UPDATED
+  UNCHANGED
+  MISSING
+  RETURNED
+  INVALID
+}
+
 enum OrderType {
   INITIAL_PURCHASE
   TOPUP
@@ -421,12 +435,52 @@ model Plan {
   coverage       Json
   popular        Boolean                @default(false)
   status         PlanStatus             @default(DRAFT)
+  lastCatalogSeenAt DateTime?
+  providerMissingSince DateTime?
   orders         Order[]
   partnerPrices  PartnerPriceListItem[]
   partnerQuotes  PartnerQuote[]
   updatedAt      DateTime               @updatedAt
 
   @@unique([countryId, providerPlanId])
+}
+
+model CatalogImportBatch {
+  id             String              @id @default(uuid()) @db.Uuid
+  batchReference String              @unique
+  fileName       String?
+  contentHash    String
+  mode           String
+  status         CatalogImportStatus @default(APPLIED)
+  uploadedById   String?             @db.Uuid
+  totalRows      Int
+  newCount       Int                 @default(0)
+  updatedCount   Int                 @default(0)
+  unchangedCount Int                 @default(0)
+  missingCount   Int                 @default(0)
+  returnedCount  Int                 @default(0)
+  invalidCount   Int                 @default(0)
+  rows           CatalogImportRow[]
+  createdAt      DateTime            @default(now())
+
+  @@index([createdAt])
+}
+
+model CatalogImportRow {
+  id             String                 @id @default(uuid()) @db.Uuid
+  batchId        String                 @db.Uuid
+  batch          CatalogImportBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  planId         String?                @db.Uuid
+  countryIso2    String
+  providerPlanId String
+  change         CatalogImportRowChange
+  previousValue  Json?
+  proposedValue  Json?
+  error          String?
+  createdAt      DateTime               @default(now())
+
+  @@index([batchId, change])
+  @@index([countryIso2, providerPlanId])
 }
 
 model Order {

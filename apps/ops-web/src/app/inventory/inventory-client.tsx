@@ -92,9 +92,40 @@ type InventoryProfile = {
 };
 type ImportResult = {
   imported: number;
+  updated?: number;
+  unchanged?: number;
+  missing?: number;
+  returned?: number;
   skipped: number;
   errors?: string[];
   batch: string | null;
+  batchId?: string | null;
+};
+type CatalogChange =
+  "NEW" | "UPDATED" | "UNCHANGED" | "MISSING" | "RETURNED" | "INVALID";
+type CatalogBatch = {
+  id: string;
+  batchReference: string;
+  fileName?: string | null;
+  mode: "UPDATE_LISTED" | "FULL_CATALOG";
+  totalRows: number;
+  newCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+  missingCount: number;
+  returnedCount: number;
+  invalidCount: number;
+  createdAt: string;
+};
+type CatalogRow = {
+  id: string;
+  planId?: string | null;
+  countryIso2: string;
+  providerPlanId: string;
+  change: CatalogChange;
+  previousValue?: Record<string, unknown> | null;
+  proposedValue?: Record<string, unknown> | null;
+  error?: string | null;
 };
 type ReconciliationRun = {
   id: string;
@@ -229,6 +260,14 @@ export default function InventoryClient() {
 
   const [packageFile, setPackageFile] = useState<File | null>(null);
   const [packageBusy, setPackageBusy] = useState(false);
+  const [catalogBatches, setCatalogBatches] = useState<CatalogBatch[]>([]);
+  const [catalogBatch, setCatalogBatch] = useState<CatalogBatch | null>(null);
+  const [catalogRows, setCatalogRows] = useState<CatalogRow[]>([]);
+  const [catalogFilter, setCatalogFilter] = useState<CatalogChange | "ALL">(
+    "ALL",
+  );
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogAction, setCatalogAction] = useState("");
 
   const [draftPlans, setDraftPlans] = useState<Plan[]>([]);
   const [planDecision, setPlanDecision] = useState("");
@@ -540,23 +579,117 @@ export default function InventoryClient() {
         body: JSON.stringify({
           content,
           fileName: packageFile.name,
-          mode: "UPDATE_LISTED",
+          mode: "FULL_CATALOG",
         }),
       });
       const v = await r.json();
       if (!r.ok) throw new Error(v.error?.message);
       const result = v.data as ImportResult;
       toast.success(
-        `Imported ${result.imported} package(s), skipped ${result.skipped} row(s). They are DRAFT until approved.`,
+        `Catalogue applied: ${result.imported} new, ${result.updated ?? 0} updated, ${result.unchanged ?? 0} unchanged, ${result.returned ?? 0} returned, ${result.missing ?? 0} missing.`,
       );
       if (result.imported > 0) setPackageFile(null);
       loadPlans();
+      await loadCatalogBatches(result.batchId ?? undefined);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Package import failed");
     } finally {
       setPackageBusy(false);
     }
   };
+
+  const loadCatalogBatch = async (
+    id: string,
+    change: CatalogChange | "ALL" = catalogFilter,
+  ) => {
+    setCatalogLoading(true);
+    try {
+      const query = change === "ALL" ? "" : `?change=${change}`;
+      const response = await authFetch(
+        `${API}/admin/plans/import-batches/${id}${query}`,
+        { headers: {} },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Catalogue batch unavailable");
+      const { rows, ...batch } = value.data as CatalogBatch & {
+        rows: CatalogRow[];
+      };
+      setCatalogBatch(batch);
+      setCatalogRows(rows);
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error ? cause.message : "Catalogue batch unavailable",
+      );
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
+
+  const loadCatalogBatches = async (selectId?: string) => {
+    try {
+      const response = await authFetch(
+        `${API}/admin/plans/import-batches?limit=24`,
+        { headers: {} },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Catalogue history unavailable",
+        );
+      const batches = (value.data ?? []) as CatalogBatch[];
+      setCatalogBatches(batches);
+      const id = selectId ?? catalogBatch?.id ?? batches[0]?.id;
+      if (id) await loadCatalogBatch(id);
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : "Catalogue history unavailable",
+      );
+    }
+  };
+
+  const disableMissingPlan = async (row: CatalogRow) => {
+    if (!catalogBatch || !row.planId) return;
+    if (
+      !(await confirm({
+        title: "Disable missing package?",
+        description:
+          "This package was absent from this upload. Disabling it prevents new purchases but keeps orders and history intact.",
+        confirmLabel: "Disable package",
+        destructive: true,
+      }))
+    )
+      return;
+    setCatalogAction(row.id);
+    try {
+      const response = await authFetch(
+        `${API}/admin/plans/import-batches/${catalogBatch.id}/rows/${row.id}/disable`,
+        { method: "POST", headers: {} },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Package could not be disabled",
+        );
+      toast.success("Missing package disabled for new purchases");
+      await loadCatalogBatch(catalogBatch.id);
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : "Package could not be disabled",
+      );
+    } finally {
+      setCatalogAction("");
+    }
+  };
+  useEffect(() => {
+    void loadCatalogBatches();
+    // Catalogue history is refreshed explicitly after every import.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const decide = async (batch: Batch, approve: boolean) => {
     setDecision(batch.id);
@@ -775,7 +908,11 @@ export default function InventoryClient() {
           </TabsTrigger>
           <TabsTrigger value="history" className="gap-1.5">
             <ClipboardList className="size-4" />
-            Batch history
+            Profile history
+          </TabsTrigger>
+          <TabsTrigger value="catalog-history" className="gap-1.5">
+            <Globe2 className="size-4" />
+            Catalogue reviews
           </TabsTrigger>
           <TabsTrigger value="profiles" className="gap-1.5">
             <Boxes className="size-4" />
@@ -1079,11 +1216,13 @@ export default function InventoryClient() {
                   onFileSelected={setPackageFile}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Optional columns: currency, popular, status.
+                  Repeated provider IDs update the existing package. Missing and
+                  returned packages are tracked in Catalogue reviews.
                 </p>
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
-                    Uploaded packages appear under Pending approvals.
+                    Valid rows apply immediately; new or returned rows stay
+                    draft unless the file explicitly permits activation.
                   </p>
                   <Button
                     onClick={() => void submitPackages()}
@@ -1316,6 +1455,192 @@ export default function InventoryClient() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+          </Panel>
+        </TabsContent>
+
+        <TabsContent value="catalog-history" className="mt-4 space-y-4">
+          <Panel
+            title="Monthly catalogue reviews"
+            description="Every upload is retained. Existing products update in place, unchanged products remain traceable, missing products require an explicit decision, and returned products re-enter as drafts."
+          >
+            {catalogBatches.length === 0 ? (
+              <EmptyState
+                title="No catalogue uploads yet"
+                description="Upload the monthly package file to create the first comparison."
+              />
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-[minmax(15rem,0.34fr)_minmax(0,1fr)]">
+                <div className="space-y-2">
+                  {catalogBatches.map((batch) => (
+                    <button
+                      key={batch.id}
+                      type="button"
+                      onClick={() => void loadCatalogBatch(batch.id)}
+                      className={cn(
+                        "w-full rounded-lg border px-3 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        catalogBatch?.id === batch.id &&
+                          "border-primary bg-primary/5",
+                      )}
+                    >
+                      <span className="block truncate text-sm font-semibold">
+                        {batch.fileName || batch.batchReference}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {new Date(batch.createdAt).toLocaleString()}
+                      </span>
+                      <span className="mt-2 block text-xs tabular-nums text-muted-foreground">
+                        {batch.newCount} new Â· {batch.updatedCount} updated Â·{" "}
+                        {batch.missingCount} missing
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <section className="min-w-0 rounded-xl bg-muted/25 p-4 sm:p-5">
+                  {catalogBatch ? (
+                    <>
+                      <div className="flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold">
+                            {catalogBatch.fileName ||
+                              catalogBatch.batchReference}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {catalogBatch.totalRows} recorded comparison rows
+                          </p>
+                        </div>
+                        <Select
+                          value={catalogFilter}
+                          onValueChange={(value) => {
+                            const next = value as CatalogChange | "ALL";
+                            setCatalogFilter(next);
+                            void loadCatalogBatch(catalogBatch.id, next);
+                          }}
+                        >
+                          <SelectTrigger className="w-full sm:w-48">
+                            <SelectValue placeholder="Filter changes" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="ALL">All changes</SelectItem>
+                            {[
+                              "NEW",
+                              "UPDATED",
+                              "UNCHANGED",
+                              "MISSING",
+                              "RETURNED",
+                              "INVALID",
+                            ].map((change) => (
+                              <SelectItem key={change} value={change}>
+                                {humane(change)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                        {[
+                          ["New", catalogBatch.newCount],
+                          ["Updated", catalogBatch.updatedCount],
+                          ["Unchanged", catalogBatch.unchangedCount],
+                          ["Missing", catalogBatch.missingCount],
+                          ["Returned", catalogBatch.returnedCount],
+                          ["Invalid", catalogBatch.invalidCount],
+                        ].map(([label, value]) => (
+                          <div
+                            key={String(label)}
+                            className="rounded-lg bg-background px-3 py-2"
+                          >
+                            <p className="text-[11px] text-muted-foreground">
+                              {label}
+                            </p>
+                            <p className="text-lg font-semibold tabular-nums">
+                              {value}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-4 space-y-2">
+                        {catalogLoading ? (
+                          <div className="grid min-h-32 place-items-center">
+                            <Spinner />
+                          </div>
+                        ) : catalogRows.length === 0 ? (
+                          <EmptyState
+                            title="No rows in this filter"
+                            description="Choose another comparison type."
+                          />
+                        ) : (
+                          catalogRows.map((row) => (
+                            <article
+                              key={row.id}
+                              className="grid min-w-0 gap-3 rounded-lg border bg-background p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant="outline">
+                                    {humane(row.change)}
+                                  </Badge>
+                                  <span className="text-xs font-semibold">
+                                    {row.countryIso2}
+                                  </span>
+                                  <span className="break-all font-mono text-xs text-muted-foreground">
+                                    {row.providerPlanId}
+                                  </span>
+                                </div>
+                                {row.error ? (
+                                  <p className="mt-2 text-xs text-destructive">
+                                    {row.error}
+                                  </p>
+                                ) : row.change === "UPDATED" ||
+                                  row.change === "RETURNED" ? (
+                                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                    {Object.keys(row.proposedValue ?? {})
+                                      .filter(
+                                        (key) =>
+                                          JSON.stringify(
+                                            row.previousValue?.[key],
+                                          ) !==
+                                          JSON.stringify(
+                                            row.proposedValue?.[key],
+                                          ),
+                                      )
+                                      .map((key) => humane(key))
+                                      .join(" Â· ") || "Presence restored"}
+                                  </p>
+                                ) : null}
+                              </div>
+                              {row.change === "MISSING" && row.planId ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full text-destructive sm:w-auto"
+                                  disabled={catalogAction === row.id}
+                                  onClick={() => void disableMissingPlan(row)}
+                                >
+                                  {catalogAction === row.id ? (
+                                    <Spinner />
+                                  ) : (
+                                    <XCircle className="size-4" />
+                                  )}
+                                  Disable package
+                                </Button>
+                              ) : null}
+                            </article>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <EmptyState
+                      title="Select an upload"
+                      description="Choose a monthly upload to review its package comparison."
+                    />
+                  )}
+                </section>
+              </div>
             )}
           </Panel>
         </TabsContent>
