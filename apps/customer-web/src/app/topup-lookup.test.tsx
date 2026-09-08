@@ -27,7 +27,7 @@ describe("customer recharge journey", () => {
       target: { value: "+9779800000000" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Find recharge plans" }));
-    expect(await screen.findByText(/check your original purchase email/i)).toBeTruthy();
+    expect(await screen.findByText(/check the original purchase email if the number matched/i)).toBeTruthy();
     expect(screen.queryByText(/eligible for recharge/i)).toBeNull();
     expect(request).toHaveBeenCalledWith(
       expect.stringContaining("/guest/orders/topup-lookup"),
