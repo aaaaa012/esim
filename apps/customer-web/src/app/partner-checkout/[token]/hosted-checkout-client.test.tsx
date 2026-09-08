@@ -42,9 +42,17 @@ const session = (verification = "VERIFIED", status = "DRAFT") => ({
         id: "passport",
         type: "PASSPORT",
         status: "UPLOADED",
+        fileName: "passport.png",
+        uploadVerified: true,
         passportVerificationStatus: verification,
       },
-      { id: "ticket", type: "TICKET", status: "UPLOADED" },
+      {
+        id: "ticket",
+        type: "TICKET",
+        status: "UPLOADED",
+        fileName: "ticket.png",
+        uploadVerified: true,
+      },
     ],
   },
 });
@@ -253,14 +261,10 @@ describe("hosted checkout payment flow", () => {
           : ok(session(status)),
       );
       render(<HostedCheckoutClient token="private-token" />);
-      await screen.findByRole("heading", { name: "Pay NPR 2" });
+      await screen.findByRole("heading", { name: "Travel documents" });
       expect(
-        (
-          screen.getByRole("button", {
-            name: "Continue to Khalti",
-          }) as HTMLButtonElement
-        ).disabled,
-      ).toBe(true);
+        screen.queryByRole("button", { name: "Continue to Khalti" }),
+      ).toBeNull();
       expect(
         fetchMock.mock.calls.some(
           ([url]) => url.endsWith("/complete") || url.endsWith("/payment"),
@@ -334,8 +338,9 @@ describe("hosted checkout payment flow", () => {
         });
       });
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
-    await screen.findByRole("dialog");
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Continue to payment" }),
+    );
     await screen.findByRole("heading", { name: "Pay NPR 2" });
     expect(window.location.search).toBe("?step=4");
     expect(
@@ -373,4 +378,106 @@ describe("hosted checkout payment flow", () => {
       fetchMock.mock.calls.filter(([url]) => url.endsWith("/complete")),
     ).toHaveLength(1);
   });
+});
+
+describe("hosted document progress", () => {
+  it("refreshes verification automatically and keeps payment behind an explicit continue action", async () => {
+    let reads = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      reads += 1;
+      return ok(session(reads === 1 ? "OCR_PENDING" : "VERIFIED"));
+    });
+    render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByText("Checking your passport");
+    expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+    const next = await screen.findByRole(
+      "button",
+      { name: "Continue to payment" },
+      { timeout: 5000 },
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(next);
+    await screen.findByRole("heading", { name: "Pay NPR 2" });
+    expect(
+      fetchMock.mock.calls.some(([url]) => url.endsWith("/verify-passport")),
+    ).toBe(false);
+  });
+
+  it("keeps saved files and shows a connection error when checking fails", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/verify-passport")) throw new Error("Disconnected");
+      return ok(session("NOT_STARTED"));
+    });
+    render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByRole("heading", { name: "Travel documents" });
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    await screen.findByText(/Check your connection and try again/);
+    expect(
+      screen.getByRole("list", { name: "Saved documents" }).textContent,
+    ).toContain("passport.png");
+    expect(screen.queryByText(/doesn.t match/)).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([url]) => url.endsWith("/documents")),
+    ).toBe(false);
+    expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+  });
+});
+
+it("retries a failed ticket without uploading the confirmed passport again", async () => {
+  const current = session("NOT_STARTED");
+  current.order.documents = [];
+  let failTicket = true;
+  const authorized: string[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/payments/providers"))
+      return ok({ providers: ["KHALTI"] });
+    if (url.endsWith("/documents")) {
+      const type = JSON.parse(String(init?.body)).type;
+      authorized.push(type);
+      if (type === "TICKET" && failTicket) {
+        failTicket = false;
+        throw new Error("Disconnected");
+      }
+      return ok({ id: type, upload: { mode: "local-simulator" } });
+    }
+    if (url.endsWith("/confirm")) return ok({});
+    if (url.endsWith("/verify-passport")) return ok({ status: "VERIFIED" });
+    return ok(current);
+  });
+  render(<HostedCheckoutClient token="private-token" />);
+  await screen.findByRole("heading", { name: "Travel documents" });
+  for (const label of ["Passport", "Travel ticket"])
+    fireEvent.change(screen.getByLabelText(label, { exact: true }), {
+      target: {
+        files: [new File(["document"], `${label}.png`, { type: "image/png" })],
+      },
+    });
+  fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+  await screen.findByText(/Check your connection and try again/);
+  expect(
+    screen.getByRole("list", { name: "Saved documents" }).textContent,
+  ).toContain("Passport.png");
+  fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+  await screen.findByRole("button", { name: "Continue to payment" });
+  expect(authorized).toEqual(["PASSPORT", "TICKET", "TICKET"]);
+});
+
+it("uses the current order review status instead of an old passport verdict on resume", async () => {
+  const replaced = session("NOT_STARTED");
+  replaced.order.documents[0]!.passportVerificationStatus = "VERIFIED";
+  fetchMock.mockImplementation(async (url: string) =>
+    url.endsWith("/payments/providers")
+      ? ok({ providers: ["KHALTI"] })
+      : ok(replaced),
+  );
+  render(<HostedCheckoutClient token="private-token" />);
+  await screen.findByRole("heading", { name: "Travel documents" });
+  expect(
+    screen.queryByRole("button", { name: "Continue to payment" }),
+  ).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
 });

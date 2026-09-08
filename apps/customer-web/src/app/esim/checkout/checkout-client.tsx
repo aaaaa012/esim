@@ -25,11 +25,18 @@ import {
   UserRound,
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
+import {
+  DocumentProgress,
+  SavedDocuments,
+  hasSavedDocument,
+} from "./document-progress";
+import { createDocumentUploader } from "./document-upload";
+import { useDocumentRefresh } from "./use-document-refresh";
+import { DocumentFileField as FileField } from "./document-file-field";
 import DatePicker from "./date-picker";
 import { submitCheckoutDocumentsSequentially } from "./document-submission";
 import { checkoutResumeDisposition } from "./checkout-resume";
 import {
-  DocumentType,
   PaymentProvider,
   apiErrorMessage,
   type PlanSummary,
@@ -46,7 +53,12 @@ type Order = {
   plan: PlanSummary;
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   traveler?: Partial<Traveler>;
-  documents?: { type: string; status: string }[];
+  documents?: {
+    type: string;
+    status: string;
+    fileName?: string;
+    uploadVerified?: boolean;
+  }[];
   payment?: { reference: string; status: string };
   passportVerification?: {
     status: string;
@@ -82,15 +94,6 @@ type Payment = {
     packageName?: string;
     intentScheme: string;
   }[];
-};
-type DocumentAuthorization = {
-  id: string;
-  upload: {
-    mode: string;
-    endpoint?: string;
-    method?: "PUT";
-    headers?: Record<string, string>;
-  };
 };
 type Traveler = {
   title: "MR" | "MS" | "MRS";
@@ -441,7 +444,6 @@ export default function CheckoutClient({
   }, [orderId]);
   const verifyRunToken = useRef(0);
   const passportRetryNoBefore = useRef(0);
-  const passportRecoveryNoBefore = useRef(0);
   const resendQrEmail = async () => {
     if (!order || uxResending) return;
     setUxResending(true);
@@ -579,8 +581,8 @@ export default function CheckoutClient({
           return;
         }
         const hasRequiredDocs = Boolean(
-          value.documents?.some((document) => document.type === "PASSPORT") &&
-          value.documents?.some((document) => document.type === "TICKET"),
+          hasSavedDocument(value.documents, "PASSPORT") &&
+          hasSavedDocument(value.documents, "TICKET"),
         );
         if (value.status === "PAYMENT_PENDING" && value.payment) {
           setPayment({
@@ -594,7 +596,13 @@ export default function CheckoutClient({
           setPayment(null);
           setStep(4);
         } else if (!value.traveler) setStep(2);
-        else if (!hasRequiredDocs) setStep(3);
+        else if (
+          !hasRequiredDocs ||
+          !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+            value.documentReviewStatus ?? "",
+          )
+        )
+          setStep(3);
         else setStep(4);
       })
       .catch((cause) =>
@@ -729,7 +737,13 @@ export default function CheckoutClient({
   };
   const verifyPassport = async (): Promise<Order | null> => {
     if (!order || verifyingPassport) return order;
-    passportRecoveryNoBefore.current = Date.now() + 30_000;
+    if (Date.now() < passportRetryNoBefore.current) {
+      setDocumentError(
+        "Please wait a minute before checking again. Your documents are saved.",
+      );
+      return null;
+    }
+    setDocumentMessage("Checking your passport…");
     setVerifyingPassport(true);
     setError("");
     try {
@@ -742,14 +756,18 @@ export default function CheckoutClient({
     } catch (e) {
       if ((e as { code?: string }).code === "RATE_LIMITED")
         passportRetryNoBefore.current = Date.now() + 60_000;
-      setError(
-        e instanceof Error ? e.message : "We could not verify your passport",
+      setDocumentError(
+        "Could not connect to verification. Your saved files are safe. Try checking again.",
       );
       return null;
     } finally {
       setVerifyingPassport(false);
+      setDocumentMessage("");
     }
   };
+  const [documentMessage, setDocumentMessage] = useState("");
+  const [documentError, setDocumentError] = useState("");
+  const uploadDocument = useRef(createDocumentUploader());
   const passportGatePassed = (target: Order | null) =>
     !target ||
     isTopUp ||
@@ -757,44 +775,46 @@ export default function CheckoutClient({
       target.documentReviewStatus ?? "",
     );
   useEffect(() => {
-    if (step !== 4 || isTopUp) return;
+    if (![3, 4].includes(step) || isTopUp || busy) return;
     if (!order || order.passportVerification) return;
-    if (!order.documents?.some((document) => document.type === "PASSPORT"))
-      return;
-    void verifyPassport();
-  }, [step, order?.id, isTopUp]);
-  useEffect(() => {
-    if (step !== 4 || isTopUp || verifyingPassport) return;
     if (
-      !order ||
-      !["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
-        order.documentReviewStatus ?? "",
+      !["PASSPORT", "TICKET"].every((type) =>
+        hasSavedDocument(order.documents, type),
       )
     )
       return;
-    if (Date.now() < passportRetryNoBefore.current) return;
+    void verifyPassport();
+  }, [step, order?.id, isTopUp]);
+  useDocumentRefresh(
+    [3, 4].includes(step) &&
+      !isTopUp &&
+      !busy &&
+      !verifyingPassport &&
+      ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
+        order?.documentReviewStatus ?? "",
+      ),
+    async (isCurrent) => {
+      if (!order) return;
+      const refreshed = await api<Order>(`/customer/orders/${order.id}`);
+      if (!isCurrent()) return;
+      setOrder(refreshed);
+      setDocumentError("");
+    },
+    () =>
+      setDocumentError(
+        "Connection interrupted. Your files are saved. We’ll keep trying to refresh verification.",
+      ),
+    order?.documentReviewStatus === "MANUAL_REVIEW",
+  );
+  useEffect(() => {
     if (
-      order.documentReviewStatus !== "MANUAL_REVIEW" &&
-      Date.now() >= passportRecoveryNoBefore.current
-    ) {
-      void verifyPassport();
-      return;
-    }
-    // OCR is asynchronous. Polling the order is deliberately read-only so a
-    // slow worker never receives duplicate verification submissions.
-    const timer = setTimeout(() => {
-      void api<Order>(`/customer/orders/${order.id}`)
-        .then(setOrder)
-        .catch((cause) =>
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "We could not refresh passport verification",
-          ),
-        );
-    }, 3_000);
-    return () => clearTimeout(timer);
-  }, [step, order, isTopUp, verifyingPassport]);
+      order?.status === "DRAFT" &&
+      step === 4 &&
+      !isTopUp &&
+      (!passportGatePassed(order) || Object.values(files).some(Boolean))
+    )
+      setStep(3);
+  }, [step, order, isTopUp, files]);
   useEffect(() => {
     if (
       verifying ||
@@ -1121,58 +1141,64 @@ export default function CheckoutClient({
     });
   const saveDocuments = () =>
     run(async () => {
-      if (!order || !files.passport || !files.ticket)
-        throw new Error("Passport and travel ticket are required");
-      await submitCheckoutDocumentsSequentially(
-        files,
-        async ({ file, type }) => {
-          if (file.size > 10 * 1024 * 1024)
-            throw new Error(`${file.name} exceeds the 10 MB limit`);
-          if (
-            !["application/pdf", "image/jpeg", "image/png"].includes(
-              file.type || "application/pdf",
-            )
+      setDocumentError("");
+      try {
+        if (
+          !order ||
+          ["PASSPORT", "TICKET"].some(
+            (type) =>
+              !files[type.toLowerCase() as "passport" | "ticket"] &&
+              !hasSavedDocument(order.documents, type),
           )
-            throw new Error(`${file.name} must be a PDF, JPG or PNG`);
-          const authorization = await api<DocumentAuthorization>(
-            `/customer/orders/${order.id}/documents`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                type,
-                fileName: file.name,
-                contentType: file.type || "application/pdf",
-              }),
-            },
-          );
-          if (authorization.upload.mode === "local-simulator") {
-            await api(
-              `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
-              { method: "POST", body: "{}" },
+        )
+          throw new Error("Passport and travel ticket are required");
+        await submitCheckoutDocumentsSequentially(
+          files,
+          async ({ key, file, type }) => {
+            const saved = await uploadDocument.current({
+              type,
+              file,
+              basePath: `/customer/orders/${order.id}/documents`,
+              request: api,
+              progress: setDocumentMessage,
+            });
+            setOrder((current) =>
+              current
+                ? {
+                    ...current,
+                    documentReviewStatus: "NOT_STARTED",
+                    passportVerification: { status: "NOT_STARTED" },
+                    documents: [
+                      ...(current.documents ?? []).filter(
+                        (doc) => doc.type !== type,
+                      ),
+                      saved,
+                    ],
+                  }
+                : current,
             );
-            return;
-          }
-          if (
-            authorization.upload.mode !== "s3-presigned" ||
-            !authorization.upload.endpoint
-          )
-            throw new Error("Private document storage is unavailable");
-          const uploaded = await fetch(authorization.upload.endpoint, {
-            method: authorization.upload.method ?? "PUT",
-            ...(authorization.upload.headers
-              ? { headers: authorization.upload.headers }
-              : {}),
-            body: file,
-          });
-          if (!uploaded.ok) throw new Error(`Upload failed for ${file.name}`);
-          await api(
-            `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
-            { method: "POST", body: "{}" },
-          );
-        },
-      );
-      setOrder(await api<Order>(`/customer/orders/${order.id}`));
-      advance(4);
+            setFiles((current) => ({
+              ...current,
+              [key]: current[key] === file ? undefined : current[key],
+            }));
+          },
+        );
+        const refreshed = await api<Order>(`/customer/orders/${order.id}`);
+        setOrder(refreshed);
+        if (
+          !refreshed.documentReviewStatus ||
+          refreshed.documentReviewStatus === "NOT_STARTED"
+        )
+          await verifyPassport();
+      } catch (cause) {
+        setDocumentError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not save your documents. Retry to continue.",
+        );
+      } finally {
+        setDocumentMessage("");
+      }
     });
   const initiate = (orderArg?: Order) =>
     run(async () => {
@@ -1735,31 +1761,99 @@ export default function CheckoutClient({
                   <FileCheck2 />
                 </span>
                 <h2>Travel documents</h2>
-                <p>
-                  PDF, JPG or PNG. Upload authorization is private and
-                  short-lived.
-                </p>
-                <div className="upload-list">
+                <DocumentProgress
+                  status={
+                    Object.values(files).some(Boolean)
+                      ? "NOT_STARTED"
+                      : order?.documentReviewStatus
+                  }
+                  busy={busy || verifyingPassport}
+                  message={documentError || documentMessage}
+                />
+                <SavedDocuments documents={order?.documents} />
+                <fieldset
+                  className="upload-list document-fields"
+                  disabled={busy}
+                >
                   <FileField
                     label="Passport"
                     file={files.passport}
+                    savedName={
+                      order?.documents?.find(
+                        (doc) => doc.type === "PASSPORT" && doc.uploadVerified,
+                      )?.fileName
+                    }
                     onChange={(v) => setFiles((f) => ({ ...f, passport: v }))}
                     capture
                   />
                   <FileField
                     label="Travel ticket"
                     file={files.ticket}
+                    savedName={
+                      order?.documents?.find(
+                        (doc) => doc.type === "TICKET" && doc.uploadVerified,
+                      )?.fileName
+                    }
                     onChange={(v) => setFiles((f) => ({ ...f, ticket: v }))}
                     capture
                   />
                   <FileField
                     label="Visa (optional)"
                     file={files.visa}
+                    savedName={
+                      order?.documents?.find(
+                        (doc) => doc.type === "VISA" && doc.uploadVerified,
+                      )?.fileName
+                    }
                     onChange={(v) => setFiles((f) => ({ ...f, visa: v }))}
                     capture
                   />
+                </fieldset>
+                <div className="form-actions">
+                  <button
+                    className="button secondary"
+                    disabled={busy || verifyingPassport}
+                    onClick={() => goBack()}
+                  >
+                    Edit traveller details
+                  </button>
+                  {passportGatePassed(order) &&
+                  !Object.values(files).some(Boolean) ? (
+                    <button
+                      className="button primary"
+                      onClick={() => advance(4)}
+                    >
+                      Continue to payment
+                    </button>
+                  ) : (
+                    <button
+                      className="button primary"
+                      disabled={
+                        busy ||
+                        verifyingPassport ||
+                        (!Object.values(files).some(Boolean) &&
+                          [
+                            "OCR_PENDING",
+                            "OCR_BACKGROUND",
+                            "MANUAL_REVIEW",
+                          ].includes(order?.documentReviewStatus ?? ""))
+                      }
+                      onClick={() => void saveDocuments()}
+                    >
+                      {busy
+                        ? "Saving documents…"
+                        : !Object.values(files).some(Boolean) &&
+                            order?.documentReviewStatus === "MANUAL_REVIEW"
+                          ? "Awaiting approval"
+                          : !Object.values(files).some(Boolean) &&
+                              ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+                                order?.documentReviewStatus ?? "",
+                              )
+                            ? "Verification in progress"
+                            : "Save and continue"}
+                    </button>
+                  )}
                 </div>
-                <Nav back={() => goBack()} busy={busy} next={saveDocuments} />
               </div>
             )}
             {!showAccountChoice && !resumingOrder && step === 4 && (
@@ -2565,56 +2659,6 @@ function Nav({
       <Action busy={busy} onClick={next}>
         Save and continue
       </Action>
-    </div>
-  );
-}
-function FileField({
-  label,
-  file,
-  onChange,
-  capture,
-}: {
-  label: string;
-  file: File | undefined;
-  onChange: (file: File | undefined) => void;
-  capture?: boolean;
-}) {
-  const captureRef = useRef<HTMLInputElement>(null);
-  return (
-    <div className="file-field">
-      <label className="file-input">
-        <input
-          type="file"
-          accept="application/pdf,image/jpeg,image/png"
-          onChange={(e) => onChange(e.target.files?.[0])}
-        />
-        <span>
-          <b>{file?.name ?? label}</b>
-          <small>
-            {file ? `${Math.ceil(file.size / 1024)} KB` : "PDF, JPG or PNG"}
-          </small>
-        </span>
-        <em>{file ? "Replace" : "Choose file"}</em>
-      </label>
-      {capture && (
-        <>
-          <input
-            ref={captureRef}
-            type="file"
-            accept="image/jpeg,image/png"
-            capture="environment"
-            style={{ display: "none" }}
-            onChange={(e) => onChange(e.target.files?.[0])}
-          />
-          <button
-            type="button"
-            className="button secondary"
-            onClick={() => captureRef.current?.click()}
-          >
-            Take photo
-          </button>
-        </>
-      )}
     </div>
   );
 }

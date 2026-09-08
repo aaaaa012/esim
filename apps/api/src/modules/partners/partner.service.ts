@@ -2270,6 +2270,7 @@ export class PartnerService {
             type: true,
             status: true,
             fileName: true,
+            uploadVerified: true,
             passportVerificationStatus: true,
           },
         },
@@ -2334,6 +2335,7 @@ export class PartnerService {
                   type: true,
                   status: true,
                   fileName: true,
+                  uploadVerified: true,
                   passportVerificationStatus: true,
                 },
               },
@@ -2463,6 +2465,7 @@ export class PartnerService {
         type: true,
         status: true,
         fileName: true,
+        uploadVerified: true,
         passportVerificationStatus: true,
       },
     });

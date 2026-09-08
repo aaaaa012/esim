@@ -51,6 +51,14 @@ export async function submitCheckoutDocumentsSequentially(
   for (const document of documents) {
     if (document.file.size > MAX_DOCUMENT_SIZE_BYTES)
       throw new Error(`${document.file.name} exceeds the 10 MB limit`);
+    if (
+      !["application/pdf", "image/jpeg", "image/png"].includes(
+        document.file.type || "application/pdf",
+      )
+    )
+      throw new Error(`${document.file.name} must be a PDF, JPG or PNG`);
+  }
+  for (const document of documents) {
     await submit(document);
   }
 }

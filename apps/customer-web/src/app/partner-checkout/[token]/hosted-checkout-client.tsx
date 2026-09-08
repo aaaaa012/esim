@@ -19,11 +19,15 @@ import {
   Link2,
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
+import { apiErrorMessage, PaymentProvider } from "@visa-compass/shared";
 import {
-  apiErrorMessage,
-  DocumentType,
-  PaymentProvider,
-} from "@visa-compass/shared";
+  DocumentProgress,
+  SavedDocuments,
+  hasSavedDocument,
+} from "../../esim/checkout/document-progress";
+import { createDocumentUploader } from "../../esim/checkout/document-upload";
+import { useDocumentRefresh } from "../../esim/checkout/use-document-refresh";
+import { DocumentFileField as FileField } from "../../esim/checkout/document-file-field";
 import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
 import {
@@ -64,6 +68,7 @@ type Session = {
       type: string;
       status: string;
       fileName: string;
+      uploadVerified?: boolean;
       passportVerificationStatus?: string | null;
     }[];
     requiredDocuments: string[];
@@ -187,9 +192,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [copiedCheckoutLink, setCopiedCheckoutLink] = useState(false);
   const [busy, setBusy] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [verifyingDoc, setVerifyingDoc] = useState<
-    "in-progress" | "waiting" | "done" | "failed" | null
-  >(null);
+  const [documentMessage, setDocumentMessage] = useState("");
+  const [documentError, setDocumentError] = useState("");
+  const uploadDocument = useRef(createDocumentUploader());
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [orderNumber, setOrderNumber] = useState("");
@@ -219,17 +224,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   }, []);
 
   useEffect(() => {
-    if (!verifyingDoc || verifyingDoc === "in-progress") return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (verifyingDoc === "failed") setStep(3);
-      setVerifyingDoc(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [verifyingDoc]);
-
-  useEffect(() => {
     let cancelled = false;
     api<Session>(`/partner-checkout/${token}`)
       .then((value) => {
@@ -253,7 +247,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           return;
         }
         const uploaded = value.order.requiredDocuments.filter((type) =>
-          value.order.documents.some((doc) => doc.type === type),
+          hasSavedDocument(value.order.documents, type),
         );
         const allUploaded =
           value.order.requiredDocuments.length > 0 &&
@@ -261,14 +255,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         const passport = value.order.documents.find(
           (doc) => doc.type === "PASSPORT",
         );
-        if (
-          ["MANUALLY_APPROVED", "SKIPPED"].includes(
-            value.order.documentReviewStatus ?? "",
-          )
-        ) {
+        if (value.order.documentReviewStatus) {
           setVerification({
-            status: value.order.documentReviewStatus!,
-            method: "manual",
+            status: value.order.documentReviewStatus,
           });
         } else if (passport?.passportVerificationStatus) {
           setVerification({
@@ -276,11 +265,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             method: "tesseract-ocr",
           });
         }
-        const resumeStep = allUploaded
-          ? 4
-          : uploaded.length > 0 || value.order.travelerComplete
-            ? 3
-            : 2;
+        const resumeStep =
+          allUploaded &&
+          ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+            value.order.documentReviewStatus ?? "",
+          )
+            ? 4
+            : uploaded.length > 0 || value.order.travelerComplete
+              ? 3
+              : 2;
         setResumeAfterConsent(resumeStep);
         let accepted = false;
         try {
@@ -462,6 +455,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     });
 
   const runVerification = async (): Promise<boolean> => {
+    setDocumentMessage("Checking your passport…");
     const result = await api<Verification>(
       `/partner-checkout/${token}/verify-passport`,
       { method: "POST", body: "{}" },
@@ -470,16 +464,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     const ok = ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
       result.status,
     );
-    const waiting = ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
-      result.status,
-    );
-    setVerifyingDoc(ok ? "done" : waiting ? "waiting" : "failed");
     setSession((s) =>
       s
         ? {
             ...s,
             order: {
               ...s.order,
+              documentReviewStatus: result.status,
               documents: s.order.documents.map((d) =>
                 d.type === "PASSPORT"
                   ? { ...d, passportVerificationStatus: result.status }
@@ -495,11 +486,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const verifyPassport = () =>
     run(async () => {
       setVerifying(true);
-      setVerifyingDoc("in-progress");
+      setDocumentError("");
       try {
-        if (await runVerification()) stepPush(4);
+        await runVerification();
       } catch {
-        setVerifyingDoc("failed");
+        setDocumentError(
+          "Could not connect to verification. Your saved files are safe. Try checking again.",
+        );
       } finally {
         setVerifying(false);
       }
@@ -507,83 +500,108 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
 
   const saveDocuments = () =>
     run(async () => {
-      setVerifyingDoc("in-progress");
+      setDocumentError("");
       try {
         const required = session?.order.requiredDocuments ?? [
           "PASSPORT",
           "TICKET",
         ];
-        const missing = required.filter((type) => !files[type]);
+        const missing = required.filter(
+          (type) =>
+            !files[type] && !hasSavedDocument(session?.order.documents, type),
+        );
         if (missing.length)
           throw new Error(
-            `Upload your ${missing
-              .map((type) =>
-                type === "PASSPORT" ? "passport" : type.toLowerCase(),
-              )
-              .join(" and ")} to continue`,
+            `Upload your ${missing.map((type) => type.toLowerCase()).join(" and ")} to continue`,
           );
         for (const type of required) {
           const file = files[type];
           if (!file) continue;
           if (file.size > 10 * 1024 * 1024)
             throw new Error(`${file.name} exceeds the 10 MB limit`);
-          const authorization = await api<{
-            id: string;
-            type: string;
-            status: string;
-            upload: Record<string, unknown>;
-          }>(`/partner-checkout/${token}/documents`, {
-            method: "POST",
-            body: JSON.stringify({
-              type,
-              fileName: file.name,
-              contentType: file.type || "application/pdf",
-            }),
-          });
-          const upload = authorization.upload as {
-            mode: string;
-            endpoint?: string;
-            method?: "PUT";
-            headers?: Record<string, string>;
-          };
-          if (upload.mode === "local-simulator") {
-            await api(
-              `/partner-checkout/${token}/documents/${authorization.id}/confirm`,
-              { method: "POST", body: "{}" },
-            );
-            continue;
-          }
-          if (upload.mode !== "s3-presigned" || !upload.endpoint)
-            throw new Error("Private document storage is unavailable");
-          const uploaded = await fetch(upload.endpoint, {
-            method: upload.method ?? "PUT",
-            ...(upload.headers ? { headers: upload.headers } : {}),
-            body: file,
-          });
-          if (!uploaded.ok) {
-            let bodyText = "";
-            try {
-              bodyText = ((await uploaded.text()) ?? "").slice(0, 200);
-            } catch {
-              /* ignore */
-            }
-            throw new Error(
-              bodyText
-                ? `Upload failed for ${file.name}: ${bodyText}`
-                : `Upload failed for ${file.name}`,
-            );
-          }
-          await api(
-            `/partner-checkout/${token}/documents/${authorization.id}/confirm`,
-            { method: "POST", body: "{}" },
-          );
+          if (
+            !["application/pdf", "image/jpeg", "image/png"].includes(
+              file.type || "application/pdf",
+            )
+          )
+            throw new Error(`${file.name} must be a PDF, JPG or PNG`);
         }
-        if (await runVerification()) stepPush(4);
-      } catch (e) {
-        setVerifyingDoc(null);
-        throw e;
+        setVerification(null);
+        for (const type of required) {
+          const file = files[type];
+          if (!file) continue;
+          const saved = await uploadDocument.current({
+            type,
+            file,
+            basePath: `/partner-checkout/${token}/documents`,
+            request: api,
+            progress: setDocumentMessage,
+          });
+          setSession((current) =>
+            current
+              ? {
+                  ...current,
+                  order: {
+                    ...current.order,
+                    documentReviewStatus: "NOT_STARTED",
+                    documents: [
+                      ...current.order.documents.filter(
+                        (doc) => doc.type !== type,
+                      ),
+                      saved,
+                    ],
+                  },
+                }
+              : current,
+          );
+          setFiles((current) => ({
+            ...current,
+            [type]: current[type] === file ? undefined : current[type],
+          }));
+        }
+        const refreshed = await api<Session>(`/partner-checkout/${token}`);
+        setSession(refreshed);
+        setVerification({
+          status: refreshed.order.documentReviewStatus ?? "NOT_STARTED",
+        });
+        if (
+          !refreshed.order.documentReviewStatus ||
+          refreshed.order.documentReviewStatus === "NOT_STARTED"
+        )
+          await runVerification();
+      } catch (cause) {
+        setDocumentError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not save your documents. Retry to continue.",
+        );
+      } finally {
+        setDocumentMessage("");
       }
     });
+
+  useDocumentRefresh(
+    step === 3 &&
+      !busy &&
+      !verifying &&
+      ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
+        verification?.status ?? "",
+      ),
+    async (isCurrent) => {
+      const refreshed = await api<Session>(`/partner-checkout/${token}`);
+      if (!isCurrent()) return;
+      setSession(refreshed);
+      setVerification({
+        status: refreshed.order.documentReviewStatus ?? "NOT_STARTED",
+      });
+      setDocumentError("");
+    },
+    () =>
+      setDocumentError(
+        "Connection interrupted. Your files are saved. We’ll keep trying to refresh verification.",
+      ),
+    verification?.status === "MANUAL_REVIEW",
+  );
 
   const gatePassed =
     !session ||
@@ -591,6 +609,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     verification?.status === "VERIFIED" ||
     verification?.status === "MANUALLY_APPROVED" ||
     verification?.status === "SKIPPED";
+
+  useEffect(() => {
+    if (
+      session?.order.status === "DRAFT" &&
+      step === 4 &&
+      !submitted &&
+      (!gatePassed || Object.values(files).some(Boolean))
+    )
+      stepJump(3);
+  }, [step, gatePassed, session?.order.status, submitted, files]);
 
   const PAID_STATUSES = new Set([
     "PAYMENT_CONFIRMED",
@@ -1454,11 +1482,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       <FileCheck2 />
                     </span>
                     <h2>Travel documents</h2>
-                    <p>
-                      PDF, JPG or PNG. Your documents are kept private and
-                      verified securely.
-                    </p>
-                    <div className="upload-list">
+                    <DocumentProgress
+                      status={
+                        Object.values(files).some(Boolean)
+                          ? "NOT_STARTED"
+                          : verification?.status
+                      }
+                      busy={busy || verifying}
+                      message={documentError || documentMessage}
+                    />
+                    <SavedDocuments documents={session?.order.documents} />
+                    <fieldset
+                      className="upload-list document-fields"
+                      disabled={busy}
+                    >
                       {session!.order.requiredDocuments.map((type) => (
                         <FileField
                           key={type}
@@ -1470,17 +1507,61 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 : "Visa"
                           }
                           file={files[type]}
+                          savedName={
+                            session?.order.documents.find(
+                              (doc) => doc.type === type && doc.uploadVerified,
+                            )?.fileName
+                          }
                           onChange={(v) =>
                             setFiles((f) => ({ ...f, [type]: v }))
                           }
                         />
                       ))}
+                    </fieldset>
+                    <div className="form-actions">
+                      <button
+                        className="button secondary"
+                        disabled={busy || verifying}
+                        onClick={() => prevStep()}
+                      >
+                        Edit traveller details
+                      </button>
+                      {gatePassed && !Object.values(files).some(Boolean) ? (
+                        <button
+                          className="button primary"
+                          onClick={() => stepPush(4)}
+                        >
+                          Continue to payment
+                        </button>
+                      ) : (
+                        <button
+                          className="button primary"
+                          disabled={
+                            busy ||
+                            verifying ||
+                            (!Object.values(files).some(Boolean) &&
+                              [
+                                "OCR_PENDING",
+                                "OCR_BACKGROUND",
+                                "MANUAL_REVIEW",
+                              ].includes(verification?.status ?? ""))
+                          }
+                          onClick={() => void saveDocuments()}
+                        >
+                          {busy
+                            ? "Saving documents…"
+                            : !Object.values(files).some(Boolean) &&
+                                verification?.status === "MANUAL_REVIEW"
+                              ? "Awaiting approval"
+                              : !Object.values(files).some(Boolean) &&
+                                  ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+                                    verification?.status ?? "",
+                                  )
+                                ? "Verification in progress"
+                                : "Save and continue"}
+                        </button>
+                      )}
                     </div>
-                    <Nav
-                      back={() => prevStep()}
-                      busy={busy}
-                      next={saveDocuments}
-                    />
                   </div>
                 )}
               </>
@@ -1526,130 +1607,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           </aside>
         </div>
       </div>
-      {verifyingDoc && (
-        <div
-          className="verify-modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="verify-modal-title"
-          onClick={(event) => {
-            if (verifyingDoc === "in-progress") return;
-            if (event.target !== event.currentTarget) return;
-            if (verifyingDoc === "failed") setStep(2);
-            setVerifyingDoc(null);
-          }}
-        >
-          <div
-            className={`verify-modal ${verifyingDoc === "in-progress" || verifyingDoc === "waiting" ? "checking" : verifyingDoc === "done" ? "done" : "failed"}`}
-          >
-            {verifyingDoc === "in-progress" ? (
-              <>
-                <LoaderCircle className="spin verify-modal-icon" size={38} />
-                <b id="verify-modal-title">Verifying your passport</b>
-                <p>
-                  We are uploading your documents securely and checking your
-                  passport against the traveller details you entered. This
-                  usually takes a few seconds…
-                </p>
-              </>
-            ) : verifyingDoc === "waiting" ? (
-              <>
-                <LoaderCircle className="spin verify-modal-icon" size={38} />
-                <b id="verify-modal-title">
-                  Your verification is still in progress
-                </b>
-                <p>
-                  This can take a few minutes. Keep this page open and try again
-                  shortly. If it still has not completed, contact{" "}
-                  {session?.partner?.name ?? "your travel partner"} with your
-                  order number.
-                </p>
-              </>
-            ) : verifyingDoc === "done" ? (
-              <>
-                <CheckCircle2 className="verify-modal-icon" size={38} />
-                <b id="verify-modal-title">
-                  {verification?.status === "SKIPPED"
-                    ? "Verification skipped"
-                    : verification?.status === "MANUALLY_APPROVED"
-                      ? "Documents approved"
-                      : "Passport verified"}
-                </b>
-                <p>
-                  {verification?.status === "SKIPPED"
-                    ? "Document verification is disabled in this environment."
-                    : verification?.status === "MANUALLY_APPROVED"
-                      ? "Your documents were reviewed and approved. You can now choose a payment method and pay."
-                      : verification?.status === "VERIFIED"
-                        ? "Your passport matches the details you provided. You can now choose a payment method and pay."
-                        : "Your passport matched your traveller details."}
-                </p>
-              </>
-            ) : (
-              <>
-                <AlertTriangle className="verify-modal-icon" size={38} />
-                <b id="verify-modal-title">We could not verify your passport</b>
-                <p>
-                  Your passport doesn&apos;t match the traveller details you
-                  entered. Review your details first, or try a clearer photo of
-                  your passport.
-                </p>
-              </>
-            )}
-            {verifyingDoc !== "in-progress" && (
-              <div className="form-actions">
-                {verifyingDoc === "waiting" ? (
-                  <>
-                    <button
-                      className="button secondary"
-                      autoFocus
-                      onClick={() => setVerifyingDoc(null)}
-                    >
-                      Keep waiting
-                    </button>
-                    <button
-                      className="button primary"
-                      onClick={() => void verifyPassport()}
-                    >
-                      Check again
-                    </button>
-                  </>
-                ) : verifyingDoc === "failed" ? (
-                  <>
-                    <button
-                      className="button secondary"
-                      autoFocus
-                      onClick={() => {
-                        setStep(2);
-                        setVerifyingDoc(null);
-                      }}
-                    >
-                      Edit traveller details
-                    </button>
-                    <button
-                      className="button primary"
-                      onClick={() => {
-                        setStep(3);
-                        setVerifyingDoc(null);
-                      }}
-                    >
-                      Back to documents
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="button primary"
-                    autoFocus
-                    onClick={() => setVerifyingDoc(null)}
-                  >
-                    Continue
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </main>
   );
 }
@@ -1874,50 +1831,6 @@ function PassportCheck({
       </span>
       <button className="button secondary" onClick={onRecheck}>
         Run check
-      </button>
-    </div>
-  );
-}
-function FileField({
-  label,
-  file,
-  onChange,
-}: {
-  label: string;
-  file: File | undefined;
-  onChange: (file: File | undefined) => void;
-}) {
-  const captureRef = useRef<HTMLInputElement>(null);
-  return (
-    <div className="file-field">
-      <label className="file-input">
-        <input
-          type="file"
-          accept="application/pdf,image/jpeg,image/png"
-          onChange={(e) => onChange(e.target.files?.[0])}
-        />
-        <span>
-          <b>{file?.name ?? label}</b>
-          <small>
-            {file ? `${Math.ceil(file.size / 1024)} KB` : "PDF, JPG or PNG"}
-          </small>
-        </span>
-        <em>{file ? "Replace" : "Choose file"}</em>
-      </label>
-      <input
-        ref={captureRef}
-        type="file"
-        accept="image/jpeg,image/png"
-        capture="environment"
-        style={{ display: "none" }}
-        onChange={(e) => onChange(e.target.files?.[0])}
-      />
-      <button
-        type="button"
-        className="button secondary"
-        onClick={() => captureRef.current?.click()}
-      >
-        Take photo
       </button>
     </div>
   );
