@@ -9,6 +9,7 @@ import { verifyToken } from "@clerk/backend";
 import { UserRole } from "@visa-compass/shared";
 import { UserRoleName, UserStatus } from "@prisma/client";
 import { Reflector } from "@nestjs/core";
+import { timingSafeEqual } from "node:crypto";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 import { ClerkSyncService } from "../modules/identity/clerk-sync.service.js";
 
@@ -50,6 +51,49 @@ export type AuthenticatedRequest = {
 const authError = (status: number, code: string, message: string) =>
   new HttpException({ code, message }, status);
 
+const e2eRoles = new Set<UserRoleName>([
+  UserRoleName.CUSTOMER,
+  UserRoleName.OPERATIONS,
+  UserRoleName.SUPER_ADMIN,
+]);
+
+export function localE2eUser(token: string): AuthenticatedUser | null {
+  if (
+    process.env.NODE_ENV !== "test" ||
+    process.env.E2E_AUTH_ENABLED !== "true"
+  )
+    return null;
+  const secret = process.env.E2E_AUTH_SECRET;
+  if (!secret || secret.length < 32) return null;
+  const separator = token.lastIndexOf(":");
+  if (separator < 1) return null;
+  const suppliedSecret = token.slice(0, separator);
+  const role = token.slice(separator + 1) as UserRoleName;
+  const expected = Buffer.from(secret);
+  const supplied = Buffer.from(suppliedSecret);
+  if (
+    expected.length !== supplied.length ||
+    !timingSafeEqual(expected, supplied) ||
+    !e2eRoles.has(role)
+  )
+    return null;
+  const slug = role.toLowerCase().replaceAll("_", "-");
+  return {
+    id: `e2e-clerk-${slug}`,
+    localUserId: `e2e-local-${slug}`,
+    email: `${slug}@e2e.visacompass.invalid`,
+    accountType: role,
+    roles:
+      role === UserRoleName.SUPER_ADMIN
+        ? [UserRole.SUPER_ADMIN, UserRole.OPERATIONS]
+        : [role as UserRole],
+    capabilities: capabilitiesFor(role),
+    status: UserStatus.ACTIVE,
+    mfaVerified: true,
+    mustChangePassword: false,
+  };
+}
+
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
@@ -59,6 +103,13 @@ export class AuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = request.headers.authorization;
+    if (authorization?.startsWith("Bearer ")) {
+      const testUser = localE2eUser(authorization.slice(7));
+      if (testUser) {
+        request.user = testUser;
+        return true;
+      }
+    }
     if (!authorization?.startsWith("Bearer ") || !process.env.CLERK_SECRET_KEY)
       throw authError(
         401,

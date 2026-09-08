@@ -16,6 +16,8 @@
 }
 
 .checkout-shell {
+  width: 100%;
+  min-width: 0;
   max-width: 1080px;
   margin: auto;
 }
@@ -113,6 +115,10 @@
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 24px;
   align-items: start;
+}
+
+.checkout-layout > * {
+  min-width: 0;
 }
 
 .checkout-card,
@@ -240,6 +246,32 @@
 .guest-recovery-actions .button {
   min-height: 44px;
 }
+.draft-recovery-option {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+}
+.draft-recovery-option summary {
+  width: fit-content;
+  padding-top: 16px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.draft-recovery-option > div {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 88%, var(--primary-soft));
+}
+.draft-recovery-option p {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.55;
+}
 .sr-only {
   position: absolute;
   width: 1px;
@@ -341,7 +373,8 @@
   z-index: 30;
   top: calc(100% + 8px);
   left: 0;
-  width: min(330px, calc(100vw - 48px));
+  width: min(330px, 100%);
+  max-width: calc(100vw - 56px);
   padding: 14px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1458,6 +1491,10 @@
 
   .order-summary {
     position: static;
+    grid-row: 2;
+  }
+
+  .checkout-card {
     grid-row: 1;
   }
 
@@ -1636,13 +1673,90 @@
 
 @media (max-width: 540px) {
   .checkout-page {
-    padding: 32px 14px 68px;
+    padding: 26px 12px 60px;
+    overflow-x: clip;
+  }
+  .checkout-heading {
+    margin-bottom: 20px;
+  }
+  .checkout-heading::before {
+    min-height: 25px;
+    font-size: 10px;
+  }
+  .checkout-heading h1 {
+    margin-top: 14px;
+    font-size: clamp(30px, 9.5vw, 38px);
+    line-height: 1.08;
+  }
+  .checkout-layout {
+    gap: 14px;
+  }
+  .checkout-card,
+  .order-summary {
+    border-radius: 18px;
+  }
+  .step-tabs {
+    padding: 14px 10px;
+  }
+  .step-tabs div {
+    gap: 4px;
+  }
+  .step-tabs i {
+    width: 26px;
+    height: 26px;
   }
   .form-section {
-    padding: 24px 18px;
+    padding: 24px 16px;
   }
   .checkout-page .form-section h1 {
     font-size: 27px;
+  }
+  .form-grid {
+    gap: 15px;
+  }
+  .form-grid label,
+  .form-grid input,
+  .form-grid select,
+  .date-picker,
+  .date-picker-trigger {
+    min-width: 0;
+  }
+  .date-picker-popover {
+    position: fixed;
+    inset: auto 12px 12px;
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    border-radius: 18px;
+  }
+  .date-picker-nav > div {
+    grid-template-columns: minmax(0, 1fr) minmax(72px, 86px);
+  }
+  .confirm-box {
+    gap: 11px;
+    padding: 15px 13px;
+  }
+  .confirm-box input {
+    flex: 0 0 auto;
+  }
+  .form-actions {
+    margin-top: 24px;
+  }
+  .form-actions .button,
+  .form-actions .wide {
+    width: 100%;
+  }
+  .order-summary {
+    padding: 20px 16px;
+  }
+  .summary-plan {
+    gap: 11px;
+    padding: 13px;
+  }
+  .summary-plan-info b {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .recharge-recovery-card {
     border-radius: var(--radius-lg);

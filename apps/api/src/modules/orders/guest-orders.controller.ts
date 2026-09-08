@@ -21,6 +21,7 @@ import {
   travelerSchema,
 } from "@visa-compass/shared";
 import { GuestLookupRateLimitGuard } from "../../common/guest-lookup.rate-limit.guard.js";
+import { normalizeMsisdn } from "../../common/msisdn.util.js";
 import { PassportVerificationRateLimitGuard } from "../../common/passport-verification.rate-limit.guard.js";
 import { clientIp } from "../../common/client-ip.js";
 import { PaymentsService } from "../payments/payments.service.js";
@@ -281,8 +282,14 @@ export class GuestOrdersController {
   async topUpLookup(@Body() body: { mobile: string }) {
     const startedAt = Date.now();
     try {
-      if (!body.mobile?.trim())
-        throw new BadRequestException("mobile is required");
+      const normalizedMobile = normalizeMsisdn(body.mobile ?? "");
+      if (
+        !/^[+0-9][0-9\s()./-]*$/.test((body.mobile ?? "").trim()) ||
+        !/^[0-9]{6,15}$/.test(normalizedMobile)
+      )
+        throw new BadRequestException(
+          "Enter a valid eSIM mobile number (MSISDN) with 6 to 15 digits",
+        );
       const subscriber = await this.orders.resolveSubscriber(body.mobile);
       if (subscriber) {
         if (!subscriber.inventory)

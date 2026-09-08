@@ -21,6 +21,36 @@ export type CatalogPlan = {
   coverage: string[];
   popular: boolean;
 };
+const localE2ePlans: CatalogPlan[] = [
+  {
+    id: "11111111-1111-4111-8111-111111111111",
+    countryCode: "IN",
+    countryName: "India",
+    name: "India Essential 1 GB",
+    dataAllowance: "1 GB",
+    allowanceMb: 1024,
+    validityDays: 7,
+    sellingPriceNpr: 999,
+    coverage: ["IN"],
+    popular: true,
+  },
+  {
+    id: "22222222-2222-4222-8222-222222222222",
+    countryCode: "AU",
+    countryName: "Australia",
+    name: "Australia Essential 3 GB",
+    dataAllowance: "3 GB",
+    allowanceMb: 3072,
+    validityDays: 15,
+    sellingPriceNpr: 2499,
+    coverage: ["AU"],
+    popular: false,
+  },
+];
+const useLocalE2eCatalog = () =>
+  process.env.NODE_ENV === "test" &&
+  process.env.E2E_AUTH_ENABLED === "true" &&
+  process.env.PERSISTENCE_MODE === "memory";
 
 export function parseDataAllowanceMb(value: string): number | null {
   const normalized = value.trim().replace(/,/g, "");
@@ -75,7 +105,13 @@ export class CatalogService {
     country?: string,
     options: { popularOnly?: boolean; limit?: number } = {},
   ) {
-    if (!this.prisma.enabled) return [];
+    if (!this.prisma.enabled) {
+      if (!useLocalE2eCatalog()) return [];
+      return localE2ePlans
+        .filter((plan) => !country || plan.countryCode === country.toUpperCase())
+        .filter((plan) => !options.popularOnly || plan.popular)
+        .slice(0, options.limit);
+    }
     const rows = await this.prisma.plan.findMany({
       where: {
         status: "ACTIVE",
@@ -89,7 +125,10 @@ export class CatalogService {
     return rows.map((plan) => this.summary(plan));
   }
   async findActive(id: string) {
-    if (!this.prisma.enabled) return undefined;
+    if (!this.prisma.enabled)
+      return useLocalE2eCatalog()
+        ? localE2ePlans.find((plan) => plan.id === id)
+        : undefined;
     const plan = await this.prisma.plan.findFirst({
       where: {
         id,
@@ -101,7 +140,22 @@ export class CatalogService {
     return plan ? this.summary(plan) : undefined;
   }
   async countries() {
-    if (!this.prisma.enabled) return [];
+    if (!this.prisma.enabled) {
+      if (!useLocalE2eCatalog()) return [];
+      return [...new Map(
+        localE2ePlans.map((plan) => [
+          plan.countryCode,
+          {
+            code: plan.countryCode,
+            name: plan.countryName,
+            popular: localE2ePlans.some(
+              (candidate) =>
+                candidate.countryCode === plan.countryCode && candidate.popular,
+            ),
+          },
+        ]),
+      ).values()].sort((a, b) => a.name.localeCompare(b.name));
+    }
     const countries = await this.prisma.country.findMany({
       where: {
         active: true,

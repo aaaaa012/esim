@@ -1316,7 +1316,6 @@ export default function CheckoutClient({
             <LockKeyhole size={13} />
             Secure checkout
           </span>
-          <Link href="/recharge/recover">Lost a recharge tracking link?</Link>
           <h1>{isTopUp ? "Top up your eSIM" : "Your travel eSIM"}</h1>
           <p>
             {isTopUp
@@ -1441,7 +1440,7 @@ export default function CheckoutClient({
                 </button>
               </div>
             )}
-            {!showAccountChoice && (guest || isTopUp) && order && recovery && (
+            {!showAccountChoice && isTopUp && order && recovery && (
               <div className="guest-recovery-card" role="note">
                 <span className="guest-recovery-icon">
                   <Link2 />
@@ -1450,13 +1449,12 @@ export default function CheckoutClient({
                   <b>Keep your private order link</b>
                   <p>
                     Save this link before closing the tab. It restores order{" "}
-                    {order.orderNumber} and its verification status for 30 days.
+                    {order.orderNumber} and its verification status for 24 hours.
                     Anyone with the link can access this order.
                   </p>
                   <small>
-                    {isTopUp
-                      ? "A tracking link is queued for the original purchase email. You can also copy it here."
-                      : "After you save traveller details, we’ll also email a recovery link to the address provided."}
+                    A tracking link is queued for the original purchase email.
+                    You can also copy it here.
                   </small>
                   <div className="guest-recovery-actions">
                     <button
@@ -1467,28 +1465,6 @@ export default function CheckoutClient({
                       <Copy size={16} />{" "}
                       {copiedRecovery ? "Link copied" : "Copy private link"}
                     </button>
-                    {!isTopUp &&
-                      (isSignedIn === true ? (
-                        <button
-                          className="button secondary"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void claimGuestOrder()}
-                        >
-                          Save to My eSIMs
-                        </button>
-                      ) : (
-                        <SignInButton mode="modal">
-                          <button
-                            className="button secondary"
-                            type="button"
-                            disabled={busy}
-                            onClick={() => setClaimIntent(true)}
-                          >
-                            Sign in and save to My eSIMs
-                          </button>
-                        </SignInButton>
-                      ))}
                   </div>
                   <span className="sr-only" aria-live="polite">
                     {copiedRecovery ? "Private recovery link copied" : ""}
@@ -1759,6 +1735,53 @@ export default function CheckoutClient({
                   <option value="KR">South Korea</option>
                 </datalist>
                 <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
+                {guest && order && recovery ? (
+                  <details className="draft-recovery-option">
+                    <summary>Need to finish this order later?</summary>
+                    <div>
+                      <p>
+                        Copy a private draft link before closing this tab. It
+                        expires in 24 hours and anyone with it can continue this
+                        order. After you save these details, recovery access is
+                        sent to the email above.
+                      </p>
+                      <div className="guest-recovery-actions">
+                        <button
+                          className="button secondary"
+                          type="button"
+                          onClick={() => void copyRecoveryLink()}
+                        >
+                          <Copy size={16} />
+                          {copiedRecovery ? "Link copied" : "Copy draft link"}
+                        </button>
+                        {isSignedIn === true ? (
+                          <button
+                            className="button secondary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void claimGuestOrder()}
+                          >
+                            Save to My eSIMs
+                          </button>
+                        ) : (
+                          <SignInButton mode="modal">
+                            <button
+                              className="button secondary"
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setClaimIntent(true)}
+                            >
+                              Sign in instead
+                            </button>
+                          </SignInButton>
+                        )}
+                      </div>
+                      <span className="sr-only" aria-live="polite">
+                        {copiedRecovery ? "Private draft link copied" : ""}
+                      </span>
+                    </div>
+                  </details>
+                ) : null}
               </div>
             )}
             {!showAccountChoice && !resumingOrder && step === 3 && (

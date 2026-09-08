@@ -1,11 +1,5 @@
 "use client";
-import {
-  ArrowLeft,
-  CheckCircle2,
-  LoaderCircle,
-  Mail,
-  ReceiptText,
-} from "lucide-react";
+import { ArrowLeft, LoaderCircle, Mail, ReceiptText } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import ErrorModal from "../../../components/error-modal";
@@ -49,7 +43,7 @@ export default function RecoverRecharge() {
                   "We could not process this request. Please try again shortly.",
                 );
               setMessage(
-                "If these details match a recharge, a private tracking link will be sent to its recovery email.",
+                "If the order number and original purchase email match a recharge, we will send a private tracking link. For privacy, this screen cannot confirm whether a match exists.",
               );
             } catch (error) {
               setFailed(true);
@@ -70,9 +64,14 @@ export default function RecoverRecharge() {
               <input
                 id="recovery-order"
                 required
-                maxLength={100}
+                minLength={16}
+                maxLength={16}
+                pattern="VC-[0-9]{4}-[A-Za-z0-9]{8}"
+                title="Enter an order number like VC-2026-520DD926"
                 value={orderNumber}
-                onChange={(event) => setOrderNumber(event.target.value)}
+                onChange={(event) =>
+                  setOrderNumber(event.target.value.toUpperCase())
+                }
                 autoComplete="off"
                 placeholder="e.g. VC-2026-520DD926"
               />
@@ -106,16 +105,6 @@ export default function RecoverRecharge() {
             )}
           </button>
         </form>
-        {message && !failed ? (
-          <div
-            className="recovery-feedback success"
-            role="status"
-            aria-live="polite"
-          >
-            <CheckCircle2 size={20} />
-            <span>{message}</span>
-          </div>
-        ) : null}
         <p className="recovery-privacy-note">
           For privacy, the confirmation is the same whether or not an order
           matches.
@@ -128,6 +117,14 @@ export default function RecoverRecharge() {
             setFailed(false);
             setMessage("");
           }}
+        />
+      ) : null}
+      {!failed && message ? (
+        <ErrorModal
+          tone="success"
+          title="Request received"
+          error={message}
+          onClose={() => setMessage("")}
         />
       ) : null}
     </main>

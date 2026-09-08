@@ -4,7 +4,11 @@ import { authRouteDecision } from "@visa-compass/shared";
 const isProtected = createRouteMatcher(["/account(.*)"]);
 const isTerminal = createRouteMatcher(["/unauthorized", "/account-unavailable", "/service-unavailable"]);
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-export default clerkMiddleware(async (auth, request) => {
+const e2eMode = process.env.NEXT_PUBLIC_E2E_TEST_MODE === "true";
+if (e2eMode && process.env.NODE_ENV === "production") {
+  throw new Error("E2E middleware bypass is forbidden in production");
+}
+const productionMiddleware = clerkMiddleware(async (auth, request) => {
   if (isTerminal(request)) return;
   if (!isProtected(request)) return;
   const destination = request.nextUrl.pathname + request.nextUrl.search;
@@ -33,6 +37,11 @@ export default clerkMiddleware(async (auth, request) => {
     return redirect("/service-unavailable");
   }
 });
+export default e2eMode
+  ? function localE2eMiddleware() {
+      return NextResponse.next();
+    }
+  : productionMiddleware;
 export const config = {
   matcher: [
     "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",

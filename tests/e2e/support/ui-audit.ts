@@ -1,7 +1,7 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
 export type BrowserProblem = {
-  kind: "console" | "pageerror" | "requestfailed";
+  kind: "console" | "pageerror" | "requestfailed" | "http";
   detail: string;
 };
 
@@ -23,6 +23,14 @@ export function observeBrowserProblems(page: Page) {
       });
     }
   });
+  page.on("response", (response) => {
+    if (response.status() >= 500 && response.url().includes("/api/")) {
+      problems.push({
+        kind: "http",
+        detail: `${response.request().method()} ${response.url()}: HTTP ${response.status()}`,
+      });
+    }
+  });
   return problems;
 }
 
@@ -36,13 +44,50 @@ export async function expectNoHorizontalOverflow(page: Page) {
   );
 }
 
+export async function expectElementsInsideViewport(
+  page: Page,
+  selector: string,
+) {
+  const violations = await page.locator(selector).evaluateAll((elements) => {
+    const viewportWidth = document.documentElement.clientWidth;
+    return elements.flatMap((element) => {
+      const html = element as HTMLElement;
+      const style = getComputedStyle(html);
+      if (style.display === "none" || style.visibility === "hidden") return [];
+      const rect = html.getBoundingClientRect();
+      const innerOverflow = html.scrollWidth > html.clientWidth + 1;
+      const outsideViewport = rect.left < -1 || rect.right > viewportWidth + 1;
+      return innerOverflow || outsideViewport
+        ? [
+            {
+              element: html.outerHTML.slice(0, 180),
+              left: Math.round(rect.left),
+              right: Math.round(rect.right),
+              clientWidth: html.clientWidth,
+              scrollWidth: html.scrollWidth,
+              viewportWidth,
+            },
+          ]
+        : [];
+    });
+  });
+  expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
+}
+
 export async function auditInteractiveNames(page: Page) {
   const unnamed = await page
     .locator("button, a[href], input, select, textarea")
     .evaluateAll((elements) =>
       elements.flatMap((element, index) => {
         const html = element as HTMLElement;
-        const text = html.innerText?.trim();
+        if (
+          element.getAttribute("aria-hidden") === "true" ||
+          (element instanceof HTMLInputElement && element.type === "hidden") ||
+          html.hidden ||
+          getComputedStyle(html).display === "none"
+        )
+          return [];
+        const text = (html.innerText || html.textContent)?.trim();
         const aria = element.getAttribute("aria-label")?.trim();
         const labelledBy = element.getAttribute("aria-labelledby")?.trim();
         const title = element.getAttribute("title")?.trim();
@@ -50,9 +95,12 @@ export async function auditInteractiveNames(page: Page) {
         const label = input.id
           ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`)
           : null;
-        return text || aria || labelledBy || title || label
+        const wrappingLabel = element.closest("label")?.textContent?.trim();
+        return text || aria || labelledBy || title || label || wrappingLabel
           ? []
-          : [`${element.tagName.toLowerCase()}[${index}] ${element.outerHTML.slice(0, 180)}`];
+          : [
+              `${element.tagName.toLowerCase()}[${index}] ${element.outerHTML.slice(0, 180)}`,
+            ];
       }),
     );
   expect(unnamed, unnamed.join("\n")).toEqual([]);

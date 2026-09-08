@@ -75,7 +75,18 @@ export class RechargesController {
   requestRecovery(@Body() body: unknown) {
     const input = z
       .object({
-        orderNumber: z.string().trim().min(1).max(100),
+        orderNumber: z
+          .string()
+          .trim()
+          .transform((value) => value.toUpperCase())
+          .pipe(
+            z
+              .string()
+              .regex(
+                /^VC-\d{4}-[A-Z0-9]{8}$/,
+                "Enter an order number like VC-2026-520DD926",
+              ),
+          ),
         email: z.string().trim().email().max(254),
       })
       .parse(body);

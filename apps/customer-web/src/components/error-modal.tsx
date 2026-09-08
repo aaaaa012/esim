@@ -1,15 +1,17 @@
 "use client";
 
-import { AlertCircle, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, X } from "lucide-react";
 import { useEffect, useId, useRef } from "react";
 
 export default function ErrorModal({
   error,
   title = "We couldn't complete that",
+  tone = "error",
   onClose,
 }: {
   error: string | null;
   title?: string;
+  tone?: "error" | "success";
   onClose: () => void;
 }) {
   const titleId = useId();
@@ -57,7 +59,7 @@ export default function ErrorModal({
       <div
         ref={dialogRef}
         className="error-modal"
-        role="alertdialog"
+        role={tone === "error" ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={messageId}
@@ -70,8 +72,12 @@ export default function ErrorModal({
         >
           <X size={18} />
         </button>
-        <span className="error-modal-icon">
-          <AlertCircle size={22} />
+        <span className={`error-modal-icon ${tone}`}>
+          {tone === "success" ? (
+            <CheckCircle2 size={22} />
+          ) : (
+            <AlertCircle size={22} />
+          )}
         </span>
         <div>
           <h2 id={titleId}>{title}</h2>

@@ -100,6 +100,8 @@ const baseSchema = z.object({
   CLERK_PUBLISHABLE_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),
   CLERK_WEBHOOK_SECRET: z.string().optional(),
+  E2E_AUTH_ENABLED: z.enum(["true", "false"]).optional(),
+  E2E_AUTH_SECRET: z.string().min(32).optional(),
   ORDER_WORKFLOW_MODE: z.enum(["single-instance", "database-first"]).optional(),
   PAYMENT_VERIFY_ATTEMPTS: z.coerce.number().int().positive().optional(),
   INVENTORY_PROVIDER_FRESHNESS_HOURS: z.coerce
@@ -179,6 +181,9 @@ export function validateEnv(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   if (config.NODE_ENV === "production") {
+    if (config.E2E_AUTH_ENABLED === "true" || config.E2E_AUTH_SECRET) {
+      throw new Error("Local E2E authentication is forbidden in production");
+    }
     const productionResult = productionSchema.safeParse(config);
     if (!productionResult.success) return failWith(productionResult);
     assertFonepayConfiguration(config);
@@ -187,6 +192,13 @@ export function validateEnv(
   const result = baseSchema.safeParse(config);
   if (!result.success) return failWith(result);
   assertFonepayConfiguration(config);
+
+  if (config.E2E_AUTH_ENABLED === "true") {
+    if (config.NODE_ENV !== "test")
+      throw new Error("E2E_AUTH_ENABLED=true requires NODE_ENV=test");
+    if (typeof config.E2E_AUTH_SECRET !== "string" || config.E2E_AUTH_SECRET.length < 32)
+      throw new Error("E2E_AUTH_ENABLED=true requires E2E_AUTH_SECRET of at least 32 characters");
+  }
 
   // Even outside production, if an encryption key or persistence is configured
   // it must be valid; never silently degrade to development-only fallbacks.

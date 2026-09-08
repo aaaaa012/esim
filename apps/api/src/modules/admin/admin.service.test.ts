@@ -156,12 +156,10 @@ describe("AdminService.correctCustomerEmail", () => {
         updateUser: vi.fn().mockResolvedValue({}),
       },
       emailAddresses: {
-        createEmailAddress: vi
-          .fn()
-          .mockResolvedValue({
-            id: "email-new",
-            emailAddress: "new@example.com",
-          }),
+        createEmailAddress: vi.fn().mockResolvedValue({
+          id: "email-new",
+          emailAddress: "new@example.com",
+        }),
         deleteEmailAddress: vi.fn().mockResolvedValue({}),
       },
       sessions: {
@@ -339,7 +337,7 @@ describe("AdminService.importPlansFromTabular role-based default status", () => 
     );
   });
 
-  it("imports as ACTIVE when the actor is a SUPER_ADMIN", async () => {
+  it("imports as DRAFT when a SUPER_ADMIN does not explicitly request ACTIVE", async () => {
     const prisma = prismaStub();
     prisma.user.findUnique = vi
       .fn()
@@ -348,7 +346,7 @@ describe("AdminService.importPlansFromTabular role-based default status", () => 
     await admin.importPlansFromTabular(csv("7"), undefined, "clerk-1");
     expect(prisma.plan.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ status: "ACTIVE" }),
+        data: expect.objectContaining({ status: "DRAFT" }),
       }),
     );
   });
@@ -420,7 +418,103 @@ describe("AdminService.importPlansFromTabular role-based default status", () => 
   });
 });
 
-describe("AdminService.exportTransatelCatalog", () => {
+describe("AdminService monthly catalogue reconciliation", () => {
+  const plan = (
+    id: string,
+    providerPlanId: string,
+    overrides: Record<string, unknown> = {},
+  ) => ({
+    id,
+    countryId: "country-1",
+    country: { id: "country-1", isoCode: "IN", name: "India" },
+    providerPlanId,
+    name: `${providerPlanId} package`,
+    dataAllowance: "1024 MB",
+    validityDays: 7,
+    costPrice: 700,
+    sellingPrice: 999,
+    currency: "NPR",
+    coverage: ["India"],
+    popular: false,
+    status: "ACTIVE",
+    providerMissingSince: null,
+    lastCatalogSeenAt: null,
+    ...overrides,
+  });
+
+  it("records unchanged, updated, missing and returned rows without duplicating plans", async () => {
+    const prisma = prismaStub() as unknown as Record<string, any>;
+    const same = plan("same", "SAME");
+    const changed = plan("changed", "CHANGED");
+    const returned = plan("returned", "RETURNED", {
+      providerMissingSince: new Date("2026-08-01T00:00:00Z"),
+      status: "DISABLED",
+    });
+    const missing = plan("missing", "MISSING");
+    prisma.country.upsert.mockResolvedValue({ id: "country-1", name: "India" });
+    prisma.plan.findMany.mockResolvedValue([same, changed, returned, missing]);
+    prisma.plan.update.mockImplementation(
+      ({ where }: { where: { id: string } }) =>
+        Promise.resolve({ id: where.id }),
+    );
+    prisma.catalogImportBatch = {
+      create: vi.fn().mockResolvedValue({ id: "catalog-batch-1" }),
+    };
+    const input = [
+      headers[0],
+      "IN,SAME package,SAME,1024 MB,7,700,999",
+      "IN,CHANGED package,CHANGED,1024 MB,7,750,1099",
+      "IN,RETURNED package,RETURNED,1024 MB,7,700,999",
+    ].join("\n");
+
+    const result = await new AdminService(
+      prisma as unknown as PrismaService,
+      connectivityStub(),
+    ).importPlansFromTabular(
+      input,
+      "september.csv",
+      undefined,
+      "FULL_CATALOG",
+    );
+
+    expect(result).toMatchObject({
+      imported: 0,
+      updated: 1,
+      unchanged: 1,
+      missing: 1,
+      returned: 1,
+      batchId: "catalog-batch-1",
+    });
+    expect(prisma.plan.create).not.toHaveBeenCalled();
+    expect(prisma.plan.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "returned" },
+        data: expect.objectContaining({
+          status: "DRAFT",
+          providerMissingSince: null,
+        }),
+      }),
+    );
+    expect(prisma.plan.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "missing" },
+        data: expect.objectContaining({
+          providerMissingSince: expect.any(Date),
+        }),
+      }),
+    );
+    const rows = prisma.catalogImportBatch.create.mock.calls[0][0].data.rows
+      .create as Array<{ change: string }>;
+    expect(rows.map((row) => row.change).sort()).toEqual([
+      "MISSING",
+      "RETURNED",
+      "UNCHANGED",
+      "UPDATED",
+    ]);
+  });
+});
+
+describe("AdminService.exportOperatingCatalog", () => {
   const envKeys = [
     "TRANSATEL_BASE_URL",
     "TRANSATEL_CLIENT_ID",
@@ -460,7 +554,7 @@ describe("AdminService.exportTransatelCatalog", () => {
       },
     ] as never);
     const admin = new AdminService(prisma, connectivityStub());
-    const result = await admin.exportTransatelCatalog();
+    const result = await admin.exportOperatingCatalog();
     expect(result.count).toBe(1);
     expect(result.skipped).toBe(0);
     expect(result.csv).toContain(
@@ -471,6 +565,42 @@ describe("AdminService.exportTransatelCatalog", () => {
     );
     expect(result.fileName).toMatch(
       /^visa-compass-catalog-\d{4}-\d{2}-\d{2}\.csv$/,
+    );
+  });
+
+  it("downloads a fresh Transatel snapshot without reading or changing plans", async () => {
+    const prisma = prismaStub();
+    const connectivity = connectivityStub() as unknown as {
+      catalogReport: ReturnType<typeof vi.fn>;
+    };
+    connectivity.catalogReport.mockResolvedValue({
+      rows: [
+        {
+          countryiso2: "IN",
+          countryname: "India",
+          name: "Provider 1GB",
+          providerplanid: "TSL-1GB",
+          dataallowance: "1024 MB",
+          validitydays: 7,
+          costprice: 700,
+          sellingprice: 700,
+          currency: "NPR",
+          coveragecountries: "IND",
+          status: "",
+        },
+      ],
+      skipped: ["INVALID-PRODUCT"],
+    });
+    const result = await new AdminService(
+      prisma,
+      connectivity as unknown as ConnectivityService,
+    ).exportTransatelCatalog();
+    expect(connectivity.catalogReport).toHaveBeenCalledOnce();
+    expect(prisma.plan.findMany).not.toHaveBeenCalled();
+    expect(prisma.plan.update).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ count: 1, skipped: 1 });
+    expect(result.csv).toContain(
+      "IN,India,Provider 1GB,TSL-1GB,1024 MB,7,700,700,NPR,IND,false",
     );
   });
 });

@@ -414,19 +414,17 @@ export class AdminService {
     content: string,
     fileName?: string,
     actorClerkId?: string,
-    mode: "UPDATE_LISTED" = "UPDATE_LISTED",
+    mode: "UPDATE_LISTED" | "FULL_CATALOG" = "UPDATE_LISTED",
   ) {
-    if (mode !== "UPDATE_LISTED")
+    if (!["UPDATE_LISTED", "FULL_CATALOG"].includes(mode))
       throw new BadRequestException("Unsupported plan import mode");
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
     const actor = actorClerkId ? await this.actor(actorClerkId) : null;
-    // Super admins import straight to ACTIVE (final); operators land as DRAFT
-    // for review and approval by a super admin.
-    const roleDefaultStatus: PlanStatus =
-      actor?.accountType === UserRoleName.SUPER_ADMIN
-        ? PlanStatus.ACTIVE
-        : PlanStatus.DRAFT;
+    // New products are conservative by default. Existing active products can
+    // receive monthly price/provider updates immediately; a new product only
+    // becomes active when a Super Admin explicitly supplies ACTIVE.
+    const roleDefaultStatus = PlanStatus.DRAFT;
     const { records, errors } = await tabularToRecords(
       content,
       [
@@ -442,6 +440,36 @@ export class AdminService {
     );
     if (errors.length) throw new BadRequestException(errors.join("; "));
     const rowErrors: string[] = [];
+    const importedAt = new Date();
+    const fileKeys = new Set<string>();
+    const seenKeys = new Set<string>();
+    const historyRows: Array<{
+      planId?: string;
+      countryIso2: string;
+      providerPlanId: string;
+      change:
+        "NEW" | "UPDATED" | "UNCHANGED" | "MISSING" | "RETURNED" | "INVALID";
+      previousValue?: Prisma.InputJsonValue;
+      proposedValue?: Prisma.InputJsonValue;
+      error?: string;
+    }> = [];
+    const existingPlans = await this.prisma.plan.findMany({
+      include: { country: true },
+    });
+    const existingByKey = new Map(
+      existingPlans.map((plan) => [
+        `${plan.country.isoCode.toUpperCase()}::${plan.providerPlanId}`,
+        plan,
+      ]),
+    );
+    const counts = {
+      NEW: 0,
+      UPDATED: 0,
+      UNCHANGED: 0,
+      MISSING: 0,
+      RETURNED: 0,
+      INVALID: 0,
+    };
     let imported = 0;
     let updated = 0;
     for (const [index, row] of records.entries()) {
@@ -449,6 +477,8 @@ export class AdminService {
       const countryIso2 = (row.countryiso2 ?? "").trim().toUpperCase();
       const name = (row.name ?? "").trim();
       const providerPlanId = (row.providerplanid ?? "").trim();
+      const key = `${countryIso2}::${providerPlanId}`;
+      if (countryIso2 && providerPlanId) fileKeys.add(key);
       const dataAllowance = (row.dataallowance ?? "").trim();
       const validityDays = this.parseValidityToDays(row.validitydays);
       const sellingPrice = Number(row.sellingprice);
@@ -474,38 +504,50 @@ export class AdminService {
         .split(/[|;]/)
         .map((value) => value.trim())
         .filter(Boolean);
-      if (!/^[A-Z]{2}$/.test(countryIso2)) {
-        rowErrors.push(
-          `Line ${line}: invalid countryIso2 '${countryIso2 || "(empty)"}'`,
+      const invalid = (message: string) => {
+        rowErrors.push(`Line ${line}: ${message}`);
+        counts.INVALID += 1;
+        historyRows.push({
+          countryIso2: countryIso2 || "(empty)",
+          providerPlanId: providerPlanId || "(empty)",
+          change: "INVALID",
+          error: message,
+          proposedValue: row,
+        });
+      };
+      if (seenKeys.has(key)) {
+        invalid(
+          `duplicate package ${countryIso2}/${providerPlanId} within the file`,
         );
+        continue;
+      }
+      seenKeys.add(key);
+      if (!/^[A-Z]{2}$/.test(countryIso2)) {
+        invalid(`invalid countryIso2 '${countryIso2 || "(empty)"}'`);
         continue;
       }
       if (statusRaw && !requestedStatus) {
-        rowErrors.push(
-          `Line ${line}: status must be ACTIVE, DRAFT, DISABLED, or ARCHIVED`,
-        );
+        invalid("status must be ACTIVE, DRAFT, DISABLED, or ARCHIVED");
         continue;
       }
       if (popularRaw && !["true", "false", "1", "0"].includes(popularRaw)) {
-        rowErrors.push(`Line ${line}: popular must be true, false, 1, or 0`);
+        invalid("popular must be true, false, 1, or 0");
         continue;
       }
       if (isRestrictedPlanCountry(countryIso2)) {
-        rowErrors.push(
-          `Line ${line}: destination country '${countryIso2}' is not supported`,
-        );
+        invalid(`destination country '${countryIso2}' is not supported`);
         continue;
       }
       if (!name) {
-        rowErrors.push(`Line ${line}: name is required`);
+        invalid("name is required");
         continue;
       }
       if (!providerPlanId) {
-        rowErrors.push(`Line ${line}: providerPlanId is required`);
+        invalid("providerPlanId is required");
         continue;
       }
       if (!dataAllowance) {
-        rowErrors.push(`Line ${line}: dataAllowance is required`);
+        invalid("dataAllowance is required");
         continue;
       }
       if (
@@ -514,9 +556,7 @@ export class AdminService {
         validityDays < 1 ||
         validityDays > 3650
       ) {
-        rowErrors.push(
-          `Line ${line}: validityDays must be a whole number between 1 and 3650`,
-        );
+        invalid("validityDays must be a whole number between 1 and 3650");
         continue;
       }
       if (
@@ -524,7 +564,7 @@ export class AdminService {
         costPrice < 0 ||
         costPrice > 9999999999.99
       ) {
-        rowErrors.push(`Line ${line}: costPrice must be a non-negative number`);
+        invalid("costPrice must be a non-negative number");
         continue;
       }
       if (
@@ -532,9 +572,7 @@ export class AdminService {
         sellingPrice < 0 ||
         sellingPrice > 9999999999.99
       ) {
-        rowErrors.push(
-          `Line ${line}: sellingPrice must be a non-negative number`,
-        );
+        invalid("sellingPrice must be a non-negative number");
         continue;
       }
       try {
@@ -550,14 +588,16 @@ export class AdminService {
             active: true,
           },
         });
-        const existing = await this.prisma.plan.findUnique({
-          where: {
-            countryId_providerPlanId: {
-              countryId: country.id,
-              providerPlanId,
+        const existing =
+          existingByKey.get(key) ??
+          (await this.prisma.plan.findUnique({
+            where: {
+              countryId_providerPlanId: {
+                countryId: country.id,
+                providerPlanId,
+              },
             },
-          },
-        });
+          }));
         const coverage = coverageCountries.length
           ? coverageCountries
           : [country.name];
@@ -579,20 +619,76 @@ export class AdminService {
             existing.status !== PlanStatus.ACTIVE
               ? existing.status
               : (requestedStatus ?? existing.status);
-          await this.prisma.plan.update({
+          const returning = Boolean(existing.providerMissingSince);
+          const nextStatus = returning ? PlanStatus.DRAFT : effectiveStatus;
+          const proposed = {
+            ...data,
+            status: nextStatus,
+            popular: popular ?? existing.popular,
+          };
+          const previous = {
+            name: existing.name,
+            dataAllowance: existing.dataAllowance,
+            validityDays: existing.validityDays,
+            costPrice: Number(existing.costPrice),
+            sellingPrice: Number(existing.sellingPrice),
+            currency: existing.currency,
+            coverage: existing.coverage,
+            popular: existing.popular,
+            status: existing.status,
+          };
+          const changed = Object.keys(proposed).some(
+            (field) =>
+              JSON.stringify(previous[field as keyof typeof previous]) !==
+              JSON.stringify(proposed[field as keyof typeof proposed]),
+          );
+          const persisted = await this.prisma.plan.update({
             where: { id: existing.id },
             data: {
               ...data,
-              status: effectiveStatus,
+              status: nextStatus,
               ...(popular !== undefined ? { popular } : {}),
+              lastCatalogSeenAt: importedAt,
+              providerMissingSince: null,
             },
           });
-          updated++;
+          const change = returning
+            ? "RETURNED"
+            : changed
+              ? "UPDATED"
+              : "UNCHANGED";
+          counts[change] += 1;
+          historyRows.push({
+            planId: persisted.id,
+            countryIso2,
+            providerPlanId,
+            change,
+            previousValue: previous,
+            proposedValue: proposed,
+          });
+          if (change === "UPDATED") updated++;
         } else {
-          await this.prisma.plan.create({
+          const persisted = await this.prisma.plan.create({
             data: {
               countryId: country.id,
               providerPlanId,
+              ...data,
+              popular: popular ?? false,
+              status:
+                requestedStatus === PlanStatus.ACTIVE &&
+                actor?.accountType !== UserRoleName.SUPER_ADMIN
+                  ? PlanStatus.DRAFT
+                  : (requestedStatus ?? roleDefaultStatus),
+              lastCatalogSeenAt: importedAt,
+            },
+          });
+          counts.NEW += 1;
+          historyRows.push({
+            planId: persisted.id,
+            countryIso2,
+            providerPlanId,
+            change: "NEW",
+            proposedValue: {
               ...data,
               popular: popular ?? false,
               status:
@@ -605,17 +701,63 @@ export class AdminService {
           imported++;
         }
       } catch (error) {
-        rowErrors.push(
-          `Line ${line}: ${error instanceof Error ? error.message : "failed to persist"}`,
-        );
+        invalid(error instanceof Error ? error.message : "failed to persist");
       }
+    }
+    for (const plan of mode === "FULL_CATALOG" ? existingPlans : []) {
+      const key = `${plan.country.isoCode.toUpperCase()}::${plan.providerPlanId}`;
+      if (fileKeys.has(key)) continue;
+      const missingSince = plan.providerMissingSince ?? importedAt;
+      await this.prisma.plan.update({
+        where: { id: plan.id },
+        data: { providerMissingSince: missingSince },
+      });
+      counts.MISSING += 1;
+      historyRows.push({
+        planId: plan.id,
+        countryIso2: plan.country.isoCode,
+        providerPlanId: plan.providerPlanId,
+        change: "MISSING",
+        previousValue: {
+          name: plan.name,
+          sellingPrice: Number(plan.sellingPrice),
+          status: plan.status,
+          missingSince: plan.providerMissingSince?.toISOString() ?? null,
+        },
+      });
+    }
+    let catalogBatchId: string | null = null;
+    const catalogDelegate = this.prisma.catalogImportBatch;
+    if (catalogDelegate) {
+      const created = await catalogDelegate.create({
+        data: {
+          batchReference: `CAT-${importedAt.toISOString().replace(/[:.]/g, "-")}`,
+          fileName: fileName ?? null,
+          contentHash: createHash("sha256").update(content).digest("hex"),
+          mode,
+          uploadedById: actor?.id ?? null,
+          totalRows: historyRows.length,
+          newCount: counts.NEW,
+          updatedCount: counts.UPDATED,
+          unchangedCount: counts.UNCHANGED,
+          missingCount: counts.MISSING,
+          returnedCount: counts.RETURNED,
+          invalidCount: counts.INVALID,
+          rows: { create: historyRows },
+        },
+      });
+      catalogBatchId = created.id;
     }
     const summary = {
       mode,
       imported,
       updated,
+      unchanged: counts.UNCHANGED,
+      missing: counts.MISSING,
+      returned: counts.RETURNED,
       skipped: rowErrors.length,
       errors: rowErrors.slice(0, 100),
+      batchId: catalogBatchId,
     };
     if (this.prisma.enabled && actorClerkId) {
       await this.prisma.auditLog.create({
@@ -824,7 +966,7 @@ export class AdminService {
   }
 
   /** Exports the current operating catalogue as a lossless import template. */
-  async exportTransatelCatalog(_cos?: string) {
+  async exportOperatingCatalog() {
     if (!this.prisma.enabled)
       throw new BadRequestException("Database persistence is required");
     const plans = await this.prisma.plan.findMany({
@@ -875,6 +1017,133 @@ export class AdminService {
       skippedIds: [],
       csv,
     };
+  }
+
+  /** Fetches a fresh provider snapshot without changing the operating catalogue. */
+  async exportTransatelCatalog(cos?: string) {
+    this.requireTransatel();
+    const report = await this.connectivity.catalogReport(cos);
+    const columns = [
+      "countryiso2",
+      "countryname",
+      "name",
+      "providerplanid",
+      "dataallowance",
+      "validitydays",
+      "costprice",
+      "sellingprice",
+      "currency",
+      "coveragecountries",
+      "popular",
+      "status",
+    ] as const;
+    const csv = [
+      columns.join(","),
+      ...report.rows.map((row) =>
+        columns
+          .map((column) =>
+            this.csvCell(
+              column === "popular"
+                ? false
+                : (row as unknown as Record<string, unknown>)[column],
+            ),
+          )
+          .join(","),
+      ),
+    ].join("\n");
+    return {
+      fileName: `transatel-catalog-${new Date().toISOString().slice(0, 10)}.csv`,
+      count: report.rows.length,
+      skipped: report.skipped.length,
+      skippedIds: report.skipped,
+      csv,
+    };
+  }
+
+  async catalogImportBatches(limit = 24) {
+    if (!this.prisma.enabled) return [];
+    return this.prisma.catalogImportBatch.findMany({
+      orderBy: { createdAt: "desc" },
+      take: Math.min(100, Math.max(1, limit)),
+    });
+  }
+
+  async catalogImportBatch(id: string, change?: string) {
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    const allowed = [
+      "NEW",
+      "UPDATED",
+      "UNCHANGED",
+      "MISSING",
+      "RETURNED",
+      "INVALID",
+    ];
+    if (change && !allowed.includes(change))
+      throw new BadRequestException("Unknown catalogue change filter");
+    const batch = await this.prisma.catalogImportBatch.findUnique({
+      where: { id },
+      include: {
+        rows: {
+          ...(change
+            ? {
+                where: {
+                  change: change as
+                    | "NEW"
+                    | "UPDATED"
+                    | "UNCHANGED"
+                    | "MISSING"
+                    | "RETURNED"
+                    | "INVALID",
+                },
+              }
+            : {}),
+          orderBy: [{ countryIso2: "asc" }, { providerPlanId: "asc" }],
+        },
+      },
+    });
+    if (!batch) throw new NotFoundException("Catalogue import batch not found");
+    return batch;
+  }
+
+  async disableMissingCatalogPlan(
+    batchId: string,
+    rowId: string,
+    actorClerkId: string,
+  ) {
+    if (!this.prisma.enabled)
+      throw new BadRequestException("Database persistence is required");
+    const row = await this.prisma.catalogImportRow.findFirst({
+      where: { id: rowId, batchId, change: "MISSING" },
+    });
+    if (!row?.planId)
+      throw new BadRequestException("This row is not a missing package");
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: row.planId },
+    });
+    if (!plan) throw new NotFoundException("Package not found");
+    const actor = await this.actor(actorClerkId);
+    await this.prisma.$transaction([
+      this.prisma.plan.update({
+        where: { id: plan.id },
+        data: { status: PlanStatus.DISABLED },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          module: "PLAN_ADMIN",
+          entity: "Plan",
+          entityId: plan.id,
+          action: "MISSING_PLAN_DISABLED",
+          ...(actor ? { performedById: actor.id } : {}),
+          previousValue: { status: plan.status },
+          newValue: {
+            status: PlanStatus.DISABLED,
+            catalogImportBatchId: batchId,
+          },
+        },
+      }),
+    ]);
+    return { id: plan.id, status: PlanStatus.DISABLED };
   }
 
   private csvCell(value: unknown): string {

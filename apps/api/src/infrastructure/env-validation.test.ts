@@ -128,4 +128,18 @@ describe("validateEnv production gate", () => {
     ).not.toThrow();
   });
 
+  it("permits local E2E authentication only in the test environment", () => {
+    const e2e = {
+      E2E_AUTH_ENABLED: "true",
+      E2E_AUTH_SECRET: "local-e2e-secret-with-at-least-32-characters",
+    };
+    expect(() => validateEnv({ NODE_ENV: "test", ...e2e })).not.toThrow();
+    expect(() => validateEnv({ NODE_ENV: "development", ...e2e })).toThrow(
+      /NODE_ENV=test/,
+    );
+    expect(() => validateEnv({ ...validProductionEnv, ...e2e })).toThrow(
+      /forbidden in production/,
+    );
+  });
+
 });

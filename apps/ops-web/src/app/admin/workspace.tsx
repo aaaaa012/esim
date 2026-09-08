@@ -446,7 +446,7 @@ export default function AdminWorkspace() {
       setPlanCsvBusy(false);
     }
   };
-  const downloadCatalog = async () => {
+  const downloadCatalog = async (source: "provider" | "operating") => {
     setCatalogBusy(true);
     try {
       const result = await request<{
@@ -454,7 +454,12 @@ export default function AdminWorkspace() {
         csv: string;
         count: number;
         skipped: number;
-      }>("/admin/integrations/transatel/catalog-export", { method: "POST" });
+      }>(
+        source === "provider"
+          ? "/admin/integrations/transatel/catalog-export"
+          : "/admin/plans/export",
+        { method: "POST" },
+      );
       const blob = new Blob(["\uFEFF" + result.csv], {
         type: "text/csv;charset=utf-8",
       });
@@ -467,7 +472,7 @@ export default function AdminWorkspace() {
       link.remove();
       URL.revokeObjectURL(url);
       toast.success(
-        `Downloaded ${result.count} catalog row(s)${result.skipped ? ` (${result.skipped} skipped)` : ""}`,
+        `Downloaded ${result.count} ${source === "provider" ? "latest Transatel" : "Visa Compass"} catalogue row(s)${result.skipped ? ` (${result.skipped} skipped)` : ""}`,
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Catalog download failed");
@@ -991,10 +996,10 @@ export default function AdminWorkspace() {
               title="Plan catalogue"
               description="Update-listed mode: only plans present in the uploaded file change; omitted plans remain untouched. Download the current catalogue, edit sellingprice, status, or popular, then upload it."
               actions={
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
-                    onClick={() => void downloadCatalog()}
+                    onClick={() => void downloadCatalog("provider")}
                     disabled={catalogBusy}
                   >
                     {catalogBusy ? (
@@ -1002,7 +1007,15 @@ export default function AdminWorkspace() {
                     ) : (
                       <Download className="size-4" />
                     )}
-                    Download editable catalog
+                    Download latest Transatel catalogue
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void downloadCatalog("operating")}
+                    disabled={catalogBusy}
+                  >
+                    <Download className="size-4" />
+                    Export current Visa Compass catalogue
                   </Button>
                   <Input
                     aria-label="Choose catalog spreadsheet"
@@ -1011,7 +1024,7 @@ export default function AdminWorkspace() {
                     onChange={(e) =>
                       setPlanCsvFile(e.target.files?.[0] ?? null)
                     }
-                    className="h-9 w-64 text-xs"
+                    className="h-9 w-full text-xs sm:w-64"
                   />
                   <Button
                     onClick={() => void importPlanCsv()}
