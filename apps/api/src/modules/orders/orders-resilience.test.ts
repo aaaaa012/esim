@@ -228,6 +228,61 @@ describe("OrdersService document evidence invalidation", () => {
     expect(updated.documents[0]).not.toHaveProperty("uploadVerified");
     expect(saved).toHaveBeenCalled();
   });
+
+  it("keeps a successful passport verdict when the optional visa is replaced", async () => {
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: "visa-order",
+          ownerId: "customer-1",
+          status: OrderStatus.DRAFT,
+          documentReviewStatus: "VERIFIED",
+          documentReviewStartedAt: new Date().toISOString(),
+          passportVerification: {
+            status: "VERIFIED",
+            matchedFields: ["passportNumber"],
+            checkedAt: new Date().toISOString(),
+            method: "tesseract-ocr",
+          },
+          documents: [
+            {
+              id: "old-visa",
+              type: DocumentType.VISA,
+              fileName: "old-visa.jpg",
+              privateAssetId: "old-visa-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      undefined,
+      {
+        createDocumentUpload: vi.fn().mockResolvedValue({
+          assetId: "new-visa-asset",
+          upload: { mode: "test" },
+        }),
+      },
+    );
+    await instance.refreshFromPersistence();
+
+    await instance.addDocument("visa-order", "customer-1", {
+      type: DocumentType.VISA,
+      fileName: "new-visa.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const updated = instance.get("visa-order", "customer-1");
+    expect(updated.documentReviewStatus).toBe("VERIFIED");
+    expect(updated.documentReviewStartedAt).toBeDefined();
+    expect(updated.passportVerification?.status).toBe("VERIFIED");
+  });
 });
 
 describe("OrdersService guest ownership claims", () => {

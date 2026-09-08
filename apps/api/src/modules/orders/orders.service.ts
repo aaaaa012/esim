@@ -887,12 +887,16 @@ export class OrdersService implements OnModuleInit {
     order.documents = order.documents
       .filter((d) => d.type !== input.type)
       .concat(document);
+    // The aggregate review verdict belongs to passport verification. Optional
+    // visa uploads (and ticket replacements) must not invalidate a successful
+    // passport OCR result or make the outcome depend on upload order.
     if (
-      replacement ||
-      replacesExistingEvidence ||
-      ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
-        order.documentReviewStatus ?? "",
-      )
+      input.type === DocumentType.PASSPORT &&
+      (replacement ||
+        replacesExistingEvidence ||
+        ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+          order.documentReviewStatus ?? "",
+        ))
     ) {
       order.documentReviewStatus = "NOT_STARTED";
       delete order.documentReviewStartedAt;

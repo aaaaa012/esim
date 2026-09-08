@@ -2029,14 +2029,15 @@ export class PartnerService {
           privateAssetId: signed.assetId,
         },
       });
-      await tx.order.update({
-        where: { id: order.id },
-        data: {
-          documentReviewStatus: "NOT_STARTED",
-          documentReviewStartedAt: null,
-          documentCheckoutReleaseAt: null,
-        },
-      });
+      if (input.type === DocumentType.PASSPORT)
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            documentReviewStatus: "NOT_STARTED",
+            documentReviewStartedAt: null,
+            documentCheckoutReleaseAt: null,
+          },
+        });
       return saved;
     });
     return {
@@ -2561,14 +2562,17 @@ export class PartnerService {
           privateAssetId: signed.assetId,
         },
       });
-      await tx.order.update({
-        where: { id: order.id },
-        data: {
-          documentReviewStatus: "NOT_STARTED",
-          documentReviewStartedAt: null,
-          documentCheckoutReleaseAt: null,
-        },
-      });
+      // Passport OCR owns the aggregate review status. An optional visa must
+      // never reset a verified passport or requeue an already-consumed OCR job.
+      if (input.type === DocumentType.PASSPORT)
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            documentReviewStatus: "NOT_STARTED",
+            documentReviewStartedAt: null,
+            documentCheckoutReleaseAt: null,
+          },
+        });
       return saved;
     });
     return {

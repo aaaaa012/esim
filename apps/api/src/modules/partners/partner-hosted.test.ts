@@ -390,6 +390,54 @@ describe("partner hosted checkout", () => {
     });
   });
 
+  it("does not invalidate hosted passport verification when the optional visa is replaced", async () => {
+    const orderUpdate = vi.fn();
+    const instance = service(
+      {
+        partnerHostedCheckoutSession: {
+          findUnique: vi.fn().mockResolvedValue(session),
+        },
+        order: {
+          findUnique: vi.fn().mockResolvedValue({
+            ...order([]),
+            orderType: "INITIAL_PURCHASE",
+            documentReviewStatus: "VERIFIED",
+            partner: { name: "Test partner", slug: "test", brand: {} },
+          }),
+        },
+        $transaction: vi.fn((callback) =>
+          callback({
+            order: {
+              updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+              update: orderUpdate,
+            },
+            travelerDocument: {
+              upsert: vi.fn().mockResolvedValue({
+                id: "replacement-visa",
+                type: "VISA",
+                status: "PENDING",
+              }),
+            },
+          }),
+        ),
+      },
+      {
+        createDocumentUpload: vi.fn().mockResolvedValue({
+          assetId: "replacement-visa-asset",
+          upload: { mode: "test" },
+        }),
+      },
+    );
+
+    await instance.addHostedDocument("abcdefghijklmnopqrstuvwxyz012345", {
+      type: "VISA",
+      fileName: "replacement-visa.jpg",
+      contentType: "image/jpeg",
+    });
+
+    expect(orderUpdate).not.toHaveBeenCalled();
+  });
+
   it("repairs a legacy hosted order when every required document is approved", async () => {
     const updateMany = vi.fn().mockResolvedValue({ count: 1 });
     const instance = service({
