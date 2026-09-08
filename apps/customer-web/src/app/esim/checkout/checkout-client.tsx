@@ -315,9 +315,13 @@ export default function CheckoutClient({
     return payload.data;
   };
 
-  // A payment-provider return already has an order to resume.  Start at payment
-  // so the compatibility screen never flashes while that order is loaded.
-  const [step, setStep] = useState(() => (orderId ? 4 : 1)),
+  // A top-up or payment-provider return starts at payment immediately so the
+  // new-purchase compatibility form never flashes before effects run.
+  const isTopUpIntent =
+    Boolean((mobile && lookupToken) || targetEsimId) && !orderId;
+  const [step, setStep] = useState(() =>
+      orderId || isTopUpIntent ? 4 : 1,
+    ),
     [compatible, setCompatible] = useState(false),
     [legalAccepted, setLegalAccepted] = useState(false),
     [traveler, setTraveler] = useState(initial);
@@ -332,8 +336,6 @@ export default function CheckoutClient({
   // normal purchase form never flashes while the plan preview is loading.
   // The API independently verifies that the selected plan is valid for this
   // eSIM before it creates the order.
-  const isTopUpIntent =
-    Boolean((mobile && lookupToken) || targetEsimId) && !orderId;
   useEffect(() => {
     if (!planId || orderId) return;
     let cancelled = false;

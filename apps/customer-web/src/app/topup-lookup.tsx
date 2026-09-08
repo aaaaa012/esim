@@ -123,9 +123,7 @@ export default function TopupLookup() {
       digits.length < 6 ||
       digits.length > 15
     ) {
-      setError(
-        "Enter a valid eSIM mobile number (MSISDN) with 6 to 15 digits.",
-      );
+      setError("Enter a valid eSIM mobile number with 6 to 15 digits.");
       return;
     }
     setOpen(true);
@@ -278,8 +276,8 @@ export default function TopupLookup() {
               <h2 id="recharge-title">Add data to your existing eSIM</h2>
               <p className="recharge-description">
                 Keep the eSIM already installed on your phone. Enter its mobile
-                number (MSISDN) from your delivery email. We will email a secure
-                link before showing any eSIM or plan details.
+                number from your delivery email. We will email a secure link
+                before showing any eSIM or plan details.
               </p>
               <form
                 className="recharge-form"
@@ -288,7 +286,7 @@ export default function TopupLookup() {
                   void lookup();
                 }}
               >
-                <label htmlFor="recharge-mobile">eSIM MSISDN</label>
+                <label htmlFor="recharge-mobile">eSIM mobile number</label>
                 <div className="recharge-control">
                   <span className="recharge-input-icon" aria-hidden="true">
                     <Smartphone size={18} />
@@ -324,8 +322,7 @@ export default function TopupLookup() {
                 </button>
               </form>
               <p className="recharge-help" id="recharge-help">
-                Usually 12–15 digits. Spaces and a leading + are accepted. This
-                is not the ICCID or SIM serial number.
+                Usually 12–15 digits. Spaces and a leading + are accepted.
               </p>
               {error && !open ? (
                 <div
@@ -516,8 +513,8 @@ export default function TopupLookup() {
                   </>
                 ) : (
                   <p className="topup-note warn">
-                    No prior Visa Compass eSIM was found for this MSISDN. Please
-                    choose a destination to buy a new eSIM.
+                    We could not find a Visa Compass eSIM for this mobile
+                    number. Please choose a destination to buy a new eSIM.
                   </p>
                 )}
               </div>
@@ -532,15 +529,18 @@ export default function TopupLookup() {
                   <MailCheck size={24} />
                 </span>
                 <div>
-                  <strong>Check the original purchase email if the number matched</strong>
+                  <strong>
+                    Check the original purchase email if the number matched
+                  </strong>
                   <p>
-                    We send a secure link only when the MSISDN belongs to an
-                    eligible Visa Compass eSIM. The link expires in 15 minutes.
+                    We send a secure link only when the mobile number belongs to
+                    an eligible Visa Compass eSIM. The link expires in 15
+                    minutes.
                   </p>
                 </div>
                 <p className="recharge-help">
                   If you do not see it, check spam or confirm that you entered
-                  the mobile number—not the ICCID/SIM serial.
+                  the mobile number from your original delivery email.
                 </p>
               </div>
             ) : null}
