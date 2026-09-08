@@ -1144,6 +1144,13 @@ export class PartnerService {
           events: { create: { fromStatus: null, toStatus: status } },
         },
       });
+      await this.reserveAccount(
+        tx,
+        partnerId,
+        orderId,
+        amountPaisa,
+        input.externalOrderId,
+      );
       await tx.customerConsent.createMany({
         data: ["COMPATIBILITY", "TERMS", "PRIVACY"].map((type) => ({
           customerId: partnerCustomer.customerId,
@@ -1306,7 +1313,7 @@ export class PartnerService {
           message: "Order changed while finalizing; reload and retry",
           status: 409,
         });
-      await this.debitAccount(
+      await this.captureOrDebitAccount(
         tx,
         partnerId,
         order.id,
@@ -1766,7 +1773,12 @@ export class PartnerService {
     return {
       currency: "NPR",
       balancePaisa: account.balancePaisa,
-      availableBalancePaisa: account.balancePaisa,
+      reservedPaisa: account.reservedPaisa,
+      creditLimitPaisa: 0,
+      availableBalancePaisa: Math.max(
+        0,
+        account.balancePaisa - account.reservedPaisa,
+      ),
       totalDebitsPaisa: debits._sum.amountPaisa ?? 0,
       totalCreditsPaisa: credits._sum.amountPaisa ?? 0,
       totalRefundedPaisa: refunds._sum.amountPaisa ?? 0,
@@ -1793,7 +1805,15 @@ export class PartnerService {
       externalOrderId?: string | undefined;
       orderNumber?: string | undefined;
       reference?: string | undefined;
-      type?: "CREDIT" | "DEBIT" | "REFUND" | "ADJUSTMENT" | undefined;
+      type?:
+        | "CREDIT"
+        | "DEBIT"
+        | "RESERVATION"
+        | "CAPTURE"
+        | "RELEASE"
+        | "REFUND"
+        | "ADJUSTMENT"
+        | undefined;
       limit?: number | undefined;
     },
   ) {
@@ -3096,6 +3116,64 @@ export class PartnerService {
     return { captured, released, skipped };
   }
 
+  /** Releases prepaid funds left behind when an API order becomes terminal. */
+  async reconcileApiReservations(): Promise<{
+    released: number;
+    skipped: number;
+  }> {
+    const reservations = await this.prisma.partnerLedgerEntry.findMany({
+      where: {
+        type: PartnerLedgerEntryType.RESERVATION,
+        order: {
+          channel: OrderChannel.PARTNER_API,
+          status: OrderStatus.CANCELLED,
+          partnerLedgerEntries: {
+            none: {
+              type: {
+                in: [
+                  PartnerLedgerEntryType.CAPTURE,
+                  PartnerLedgerEntryType.RELEASE,
+                ],
+              },
+            },
+          },
+        },
+      },
+      select: {
+        partnerId: true,
+        orderId: true,
+        amountPaisa: true,
+      },
+      take: 100,
+    });
+    let released = 0;
+    let skipped = 0;
+    for (const reservation of reservations) {
+      if (!reservation.orderId) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const result = await this.prisma.$transaction((tx) =>
+          this.releaseReservation(
+            tx,
+            reservation.partnerId,
+            reservation.orderId!,
+            reservation.amountPaisa,
+          ),
+        );
+        if (result.applied) released += 1;
+        else skipped += 1;
+      } catch (error) {
+        this.logger.warn(
+          `API partner reservation release failed for ${reservation.orderId}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+        skipped += 1;
+      }
+    }
+    return { released, skipped };
+  }
+
   /**
    * Releases deposits for hosted checkout sessions that expired before the
    * customer paid, cancelling their still-unpaid orders. Safe by construction:
@@ -3224,7 +3302,7 @@ export class PartnerService {
             order.partnerQuote.wholesaleAmountPaisa,
           );
         else
-          await this.refundDirectDebit(
+          await this.releaseOrRefundAccount(
             tx,
             partnerId,
             orderId,
@@ -3808,6 +3886,7 @@ export class PartnerService {
   private async reserveAccount(
     tx: Prisma.TransactionClient,
     partnerId: string,
+    orderId: string,
     amountPaisa: number,
     externalOrderId: string,
   ) {
@@ -3816,13 +3895,13 @@ export class PartnerService {
       update: {},
       create: { partnerId },
     });
-    const available =
-      account.balancePaisa + account.creditLimitPaisa - account.reservedPaisa;
+    const reservedPaisa = account.reservedPaisa ?? 0;
+    const available = account.balancePaisa - reservedPaisa;
     if (available < amountPaisa)
       throw new ApiException({
         code: "INSUFFICIENT_PARTNER_BALANCE",
-        message: "Partner prepaid balance is insufficient",
-        status: 400,
+        message: `Partner balance is insufficient. Required NPR ${(amountPaisa / 100).toFixed(2)}; available NPR ${(Math.max(0, available) / 100).toFixed(2)}.`,
+        status: 402,
       });
     const updated = await tx.partnerAccount.updateMany({
       where: { id: account.id, version: account.version },
@@ -3840,10 +3919,12 @@ export class PartnerService {
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
+        orderId,
         type: PartnerLedgerEntryType.RESERVATION,
         amountPaisa,
         balanceAfterPaisa: account.balancePaisa,
         reference: `reserve:${partnerId}:${externalOrderId}`,
+        metadata: { settlement: "PARTNER_ACCOUNT", channel: "PARTNER_API" },
       },
     });
   }
@@ -3860,17 +3941,20 @@ export class PartnerService {
       update: {},
       create: { partnerId },
     });
-    if (account.balancePaisa < amountPaisa)
-      throw new BadRequestException({
+    const reservedPaisa = account.reservedPaisa ?? 0;
+    const available = account.balancePaisa - reservedPaisa;
+    if (available < amountPaisa)
+      throw new ApiException({
         code: "INSUFFICIENT_PARTNER_BALANCE",
-        message: "Partner prepaid balance is insufficient",
+        message: `Partner balance is insufficient. Required NPR ${(amountPaisa / 100).toFixed(2)}; available NPR ${(Math.max(0, available) / 100).toFixed(2)}.`,
+        status: 402,
       });
     const balanceAfterPaisa = account.balancePaisa - amountPaisa;
     const updated = await tx.partnerAccount.updateMany({
       where: {
         id: account.id,
         version: account.version,
-        balancePaisa: { gte: amountPaisa },
+        balancePaisa: { gte: amountPaisa + reservedPaisa },
       },
       data: {
         balancePaisa: balanceAfterPaisa,
@@ -3946,10 +4030,37 @@ export class PartnerService {
         amountPaisa,
         balanceAfterPaisa,
         reference,
-        metadata: { settlement: "PARTNER_ACCOUNT", channel: "PARTNER_HOSTED" },
+        metadata: { settlement: "PARTNER_ACCOUNT" },
       },
     });
     return { applied: true };
+  }
+
+  private async captureOrDebitAccount(
+    tx: Prisma.TransactionClient,
+    partnerId: string,
+    orderId: string,
+    amountPaisa: number,
+    externalOrderId: string,
+  ) {
+    const reservation = await tx.partnerLedgerEntry.findFirst({
+      where: {
+        partnerId,
+        orderId,
+        type: PartnerLedgerEntryType.RESERVATION,
+      },
+      select: { id: true },
+    });
+    if (reservation)
+      return this.captureAccount(tx, partnerId, orderId, amountPaisa);
+    await this.debitAccount(
+      tx,
+      partnerId,
+      orderId,
+      amountPaisa,
+      externalOrderId,
+    );
+    return { applied: true, legacyDirectDebit: true };
   }
 
   private travelerData(traveler: TravelerInput) {
@@ -4061,12 +4172,20 @@ export class PartnerService {
     if (!account) return { applied: false, reason: "NO_ACCOUNT" };
     if (account.reservedPaisa <= 0)
       return { applied: false, reason: "NO_RESERVATION" };
+    if (account.reservedPaisa < amountPaisa)
+      throw new ApiException({
+        code: "PARTNER_BALANCE_CONFLICT",
+        message: "The reserved balance no longer covers this order",
+        status: 409,
+      });
     const updated = await tx.partnerAccount.updateMany({
-      where: { id: account.id, version: account.version },
+      where: {
+        id: account.id,
+        version: account.version,
+        reservedPaisa: { gte: amountPaisa },
+      },
       data: {
-        reservedPaisa: {
-          decrement: Math.min(account.reservedPaisa, amountPaisa),
-        },
+        reservedPaisa: { decrement: amountPaisa },
         version: { increment: 1 },
       },
     });
@@ -4084,10 +4203,31 @@ export class PartnerService {
         amountPaisa,
         balanceAfterPaisa: account.balancePaisa,
         reference,
-        metadata: { settlement: "PARTNER_ACCOUNT", channel: "PARTNER_HOSTED" },
+        metadata: { settlement: "PARTNER_ACCOUNT" },
       },
     });
     return { applied: true };
+  }
+
+  private async releaseOrRefundAccount(
+    tx: Prisma.TransactionClient,
+    partnerId: string,
+    orderId: string,
+    amountPaisa: number,
+    reason: string,
+  ) {
+    const reservation = await tx.partnerLedgerEntry.findFirst({
+      where: {
+        partnerId,
+        orderId,
+        type: PartnerLedgerEntryType.RESERVATION,
+      },
+      select: { id: true },
+    });
+    if (reservation)
+      return this.releaseReservation(tx, partnerId, orderId, amountPaisa);
+    await this.refundDirectDebit(tx, partnerId, orderId, amountPaisa, reason);
+    return { applied: true, legacyDirectDebit: true };
   }
 
   private async refundDirectDebit(

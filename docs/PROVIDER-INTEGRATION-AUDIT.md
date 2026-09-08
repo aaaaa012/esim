@@ -113,6 +113,17 @@ aggregate usage, documents, other orders or lifecycle controls. Management and
 usage access require that the partner supplied the physical eSIM through an
 initial-purchase order.
 
+Partner settlement is prepaid-only. A Partner API initial purchase reserves the
+retail amount in the same transaction that creates the order, captures that
+reservation when the verified order is finalized, and releases it on
+cancellation or verification expiry. Partner API top-ups debit immediately.
+Customer-funded hosted checkout remains independent of the partner balance and
+continues to require an authoritative Khalti or Fonepay payment confirmation.
+Spendable balance is `balancePaisa - reservedPaisa`; partner credit limits are
+disabled. Ops adjustments cannot reduce cash below the reserved total or reset
+financial state, and the reconciliation worker releases any reservation left on
+a terminal API order.
+
 ## Credential-backed release gates
 
 1. Confirm Transatel OAuth scopes for catalog read, inventory read, product

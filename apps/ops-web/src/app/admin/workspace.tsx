@@ -889,7 +889,6 @@ export default function AdminWorkspace() {
         method: "POST",
         body: JSON.stringify({
           amountPaisa,
-          creditLimitPaisa: 0,
           reference: adjustReference || `portal-adjustment-${Date.now()}`,
           reason: `Balance ${adjustType} via portal`,
         }),
@@ -1892,7 +1891,7 @@ export default function AdminWorkspace() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Partner</TableHead>
-                    <TableHead>Settlement account</TableHead>
+                    <TableHead>Cash balance</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Activity</TableHead>
                     <TableHead className="text-right">Workspace</TableHead>

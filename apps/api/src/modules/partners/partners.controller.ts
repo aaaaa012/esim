@@ -182,7 +182,17 @@ export const ledgerSchema = z.object({
   externalOrderId: z.string().max(120).optional(),
   orderNumber: z.string().max(40).optional(),
   reference: z.string().max(120).optional(),
-  type: z.enum(["CREDIT", "DEBIT", "REFUND", "ADJUSTMENT"]).optional(),
+  type: z
+    .enum([
+      "CREDIT",
+      "DEBIT",
+      "RESERVATION",
+      "CAPTURE",
+      "RELEASE",
+      "REFUND",
+      "ADJUSTMENT",
+    ])
+    .optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 

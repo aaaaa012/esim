@@ -322,7 +322,6 @@ export class PartnerAdminService {
     partnerId: string,
     input: {
       amountPaisa: number;
-      creditLimitPaisa?: number | undefined;
       reference: string;
       reason: string;
     },
@@ -339,16 +338,15 @@ export class PartnerAdminService {
         create: { partnerId },
       });
       const balance = account.balancePaisa + input.amountPaisa;
-      if (balance < 0)
+      const reservedPaisa = account.reservedPaisa ?? 0;
+      if (balance < reservedPaisa)
         throw new BadRequestException(
-          "Adjustment would make the prepaid partner balance negative",
+          "Adjustment would use funds reserved for pending partner orders",
         );
       const updated = await tx.partnerAccount.updateMany({
         where: { id: account.id, version: account.version },
         data: {
           balancePaisa: balance,
-          creditLimitPaisa: 0,
-          reservedPaisa: 0,
           version: { increment: 1 },
         },
       });
@@ -534,6 +532,11 @@ export class PartnerAdminService {
     return {
       currency: "NPR",
       currentBalancePaisa: account?.balancePaisa ?? 0,
+      reservedBalancePaisa: account?.reservedPaisa ?? 0,
+      availableBalancePaisa: Math.max(
+        0,
+        (account?.balancePaisa ?? 0) - (account?.reservedPaisa ?? 0),
+      ),
       ordersCreated: orders.length,
       ordersByStatus: byStatus,
       ordersByChannel: byChannel,
@@ -544,7 +547,10 @@ export class PartnerAdminService {
         ? Math.round(totalOrderValuePaisa / orders.length)
         : 0,
       totalCreditedPaisa: sum([PartnerLedgerEntryType.CREDIT]),
-      totalDebitedPaisa: sum([PartnerLedgerEntryType.DEBIT]),
+      totalDebitedPaisa: sum([
+        PartnerLedgerEntryType.DEBIT,
+        PartnerLedgerEntryType.CAPTURE,
+      ]),
       totalRefundedPaisa: sum([PartnerLedgerEntryType.REFUND]),
       totalAdjustedPaisa: sum([PartnerLedgerEntryType.ADJUSTMENT]),
       from: from ?? null,

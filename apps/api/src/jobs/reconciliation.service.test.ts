@@ -53,6 +53,7 @@ describe("ReconciliationService provisioning-operation recovery", () => {
       { attention } as never,
       {} as never,
       {} as never,
+      { reconcileApiReservations: vi.fn() } as never,
     );
 
     const result = await (
@@ -142,6 +143,7 @@ describe("ReconciliationService provisioning-operation recovery", () => {
       {} as never,
       {} as never,
       {} as never,
+      { reconcileApiReservations: vi.fn() } as never,
       {} as never,
       {} as never,
       {} as never,

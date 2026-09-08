@@ -167,6 +167,7 @@
   }
   html {
     @apply scroll-smooth;
+    scrollbar-gutter: stable;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -266,7 +267,7 @@
 }
 @media (min-width: 1024px) {
   .ops-sidebar {
-    position: sticky;
+    position: fixed;
     z-index: 10;
     width: 16.5rem;
     height: 100vh;
@@ -274,6 +275,9 @@
     box-shadow: none;
     border-right: 1px solid rgb(255 255 255 / 0.07);
     border-bottom: 0;
+  }
+  .ops-main {
+    margin-left: 16.5rem;
   }
   .ops-sidebar-backdrop,
   .ops-sidebar-close {
