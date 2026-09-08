@@ -60,6 +60,19 @@ describe("GuestOrderAccessService", () => {
     );
   });
 
+  it("limits displayed draft links to 24 hours but keeps emailed recovery for 30 days", async () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const service = createService();
+    const draft = await service.issue("order-a", "DISPLAY");
+    const email = await service.issue("order-b", "EMAIL", "a@example.com");
+
+    expect(new Date(draft!.expiresAt).getTime() - now).toBe(24 * 60 * 60_000);
+    expect(new Date(email!.expiresAt).getTime() - now).toBe(
+      30 * 24 * 60 * 60_000,
+    );
+  });
+
   it("deduplicates recovery email for the same recipient and rotates on change", async () => {
     const service = createService();
     const first = await service.issue("order-a", "EMAIL", "A@Example.com");

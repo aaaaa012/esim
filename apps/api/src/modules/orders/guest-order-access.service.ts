@@ -8,7 +8,8 @@ import {
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 
 const SESSION_TTL_MS = 24 * 60 * 60_000;
-const RECOVERY_TTL_MS = 30 * 24 * 60 * 60_000;
+const DRAFT_RECOVERY_TTL_MS = 24 * 60 * 60_000;
+const EMAIL_RECOVERY_TTL_MS = 30 * 24 * 60 * 60_000;
 
 type MemoryAccess = {
   orderId: string;
@@ -156,7 +157,12 @@ export class GuestOrderAccessService {
     }
     const token = randomBytes(32).toString("base64url");
     const tokenHash = this.hash(token);
-    const expiresAt = new Date(Date.now() + RECOVERY_TTL_MS);
+    const expiresAt = new Date(
+      Date.now() +
+        (purpose === "DISPLAY"
+          ? DRAFT_RECOVERY_TTL_MS
+          : EMAIL_RECOVERY_TTL_MS),
+    );
     if (this.prisma.enabled)
       await this.prisma.guestOrderAccessToken.create({
         data: {

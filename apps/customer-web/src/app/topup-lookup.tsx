@@ -115,8 +115,17 @@ export default function TopupLookup() {
   };
 
   const lookup = async () => {
-    if (!mobile.trim()) {
-      setError("Enter the eSIM mobile number from your delivery email.");
+    const entered = mobile.trim();
+    const rawDigits = entered.replace(/[^0-9]/g, "");
+    const digits = entered.startsWith("00") ? rawDigits.slice(2) : rawDigits;
+    if (
+      !/^[+0-9][0-9\s()./-]*$/.test(entered) ||
+      digits.length < 6 ||
+      digits.length > 15
+    ) {
+      setError(
+        "Enter a valid eSIM mobile number (MSISDN) with 6 to 15 digits.",
+      );
       return;
     }
     setOpen(true);
@@ -296,6 +305,9 @@ export default function TopupLookup() {
                     aria-errormessage={
                       error && !open ? "recharge-error" : undefined
                     }
+                    minLength={6}
+                    maxLength={24}
+                    pattern="[+]?[0-9 ()./-]{6,24}"
                   />
                 </div>
                 <button
@@ -373,12 +385,12 @@ export default function TopupLookup() {
               <div>
                 <h2 id="topup-dialog-title">
                   {verificationRequested
-                    ? "Check your email"
+                    ? "Request received"
                     : "Your recharge options"}
                 </h2>
                 <p>
                   {verificationRequested
-                    ? "For your privacy, we verify ownership before showing eSIM details."
+                    ? "For privacy, this confirmation does not reveal whether the number exists."
                     : "Review the eSIM and choose a compatible plan."}
                 </p>
               </div>
@@ -520,10 +532,10 @@ export default function TopupLookup() {
                   <MailCheck size={24} />
                 </span>
                 <div>
-                  <strong>Check your original purchase email</strong>
+                  <strong>Check the original purchase email if the number matched</strong>
                   <p>
-                    It goes to the original purchase email and expires in 15
-                    minutes.
+                    We send a secure link only when the MSISDN belongs to an
+                    eligible Visa Compass eSIM. The link expires in 15 minutes.
                   </p>
                 </div>
                 <p className="recharge-help">

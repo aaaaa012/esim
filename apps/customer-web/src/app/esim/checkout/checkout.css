@@ -246,6 +246,32 @@
 .guest-recovery-actions .button {
   min-height: 44px;
 }
+.draft-recovery-option {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+}
+.draft-recovery-option summary {
+  width: fit-content;
+  padding-top: 16px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.draft-recovery-option > div {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 88%, var(--primary-soft));
+}
+.draft-recovery-option p {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.55;
+}
 .sr-only {
   position: absolute;
   width: 1px;

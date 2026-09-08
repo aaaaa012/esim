@@ -730,6 +730,10 @@ button {
   color: var(--danger);
   background: var(--danger-soft);
 }
+.error-modal-icon.success {
+  color: var(--success-strong);
+  background: var(--success-soft);
+}
 
 .error-modal h2 {
   margin: 0;

@@ -26,6 +26,36 @@ test("recharge recovery enforces required fields before any request", async ({
   await expectNoHorizontalOverflow(page);
 });
 
+test("recharge recovery rejects a malformed order number before any request", async ({
+  page,
+}) => {
+  let submitted = false;
+  await page.route("**/api/v1/recharges/recovery-link", (route) => {
+    submitted = true;
+    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.goto("/recharge/recover");
+  await page.getByLabel("Recharge order number").fill("520DD926");
+  await page.getByLabel("Original purchase email").fill("traveller@example.com");
+  await page.getByRole("button", { name: /send private tracking link/i }).click();
+  await expect(page.locator("#recovery-order:invalid")).toBeVisible();
+  expect(submitted).toBe(false);
+});
+
+test("recharge recovery uses a privacy-safe confirmation dialog", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/recharges/recovery-link", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+  );
+  await page.goto("/recharge/recover");
+  await page.getByLabel("Recharge order number").fill("vc-2026-520dd926");
+  await page.getByLabel("Original purchase email").fill("traveller@example.com");
+  await page.getByRole("button", { name: /send private tracking link/i }).click();
+  const dialog = page.getByRole("dialog", { name: "Request received" });
+  await expect(dialog).toContainText(/cannot confirm whether a match exists/i);
+});
+
 test("recharge recovery API failure is presented in a dialog", async ({
   page,
 }) => {
