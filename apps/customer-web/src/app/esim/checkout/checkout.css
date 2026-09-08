@@ -1875,3 +1875,317 @@
 .verification-progress-dialog .verify-modal {
   box-sizing: border-box;
 }
+
+/* ---------- Document verification journey ---------- */
+.verification-inline {
+  display: block;
+  padding: 18px;
+  overflow: hidden;
+}
+.verification-journey {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+}
+.verification-journey.compact {
+  grid-template-columns: auto 1fr;
+  justify-items: stretch;
+  align-items: center;
+  gap: 12px 16px;
+}
+.verification-scan {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border-radius: 18px;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+}
+.verification-journey.compact .verification-scan {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+}
+.verification-scan > span {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 72%, transparent);
+  animation: passport-scan 2.2s ease-in-out infinite;
+}
+.verification-milestones {
+  width: 100%;
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+.verification-milestones > span {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-3);
+}
+.verification-milestones i {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.verification-milestones b {
+  color: inherit;
+  font-size: 13px;
+}
+.verification-milestones .complete {
+  color: var(--success-strong);
+}
+.verification-milestones .complete i {
+  color: var(--success-strong);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  background: var(--success-soft);
+}
+.verification-milestones .active {
+  color: var(--text);
+}
+.verification-milestones .active i {
+  border: 6px solid color-mix(in srgb, var(--primary) 22%, var(--surface));
+  background: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+  animation: verification-pulse 1.6s ease-in-out infinite;
+}
+.verification-progress-track {
+  position: relative;
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface-2));
+}
+.verification-progress-track > span {
+  position: absolute;
+  inset-block: 0;
+  width: 44%;
+  border-radius: inherit;
+  background: var(--gradient-brand);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--primary) 42%, transparent);
+  animation: verification-progress 1.8s ease-in-out infinite;
+}
+.verification-journey.compact .verification-progress-track {
+  grid-column: 1 / -1;
+}
+.verification-detail {
+  max-width: 340px;
+  margin: -2px 0 0 !important;
+  color: var(--text-2) !important;
+  font-size: 13px !important;
+  text-align: center;
+}
+.verification-refresh-note {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
+}
+.verification-modal-card {
+  align-items: stretch;
+}
+.verification-modal-card > b,
+.verification-modal-card > p {
+  text-align: center;
+}
+.verification-modal-card .verification-journey {
+  margin-top: 6px;
+  padding: 18px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--primary-soft) 45%, var(--surface));
+  box-sizing: border-box;
+}
+.verification-animation-paused *,
+.verification-animation-paused *::before,
+.verification-animation-paused *::after {
+  animation-play-state: paused !important;
+}
+
+.document-progress.verified {
+  animation: verification-success-in 220ms ease-out both;
+}
+.document-progress.verified b:focus {
+  outline: none;
+}
+.verified-documents-summary {
+  list-style: none;
+  display: grid;
+  gap: 0;
+  margin: 18px 0 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.verified-documents-summary li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.verified-documents-summary li:last-child {
+  border-bottom: 0;
+}
+.verified-document-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--text-3);
+  background: var(--surface-2);
+}
+.verified-document-icon.saved {
+  color: var(--success-strong);
+  background: var(--success-soft);
+}
+.verified-documents-summary li > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.verified-documents-summary b {
+  color: var(--text);
+  font-size: 14px;
+}
+.verified-documents-summary small {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.verified-documents-summary strong {
+  color: var(--success-strong);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.verified-document-actions {
+  margin-top: 20px;
+}
+.document-tertiary-action {
+  display: block;
+  margin: 14px 0 0;
+  padding: 4px 0;
+  border: 0;
+  color: var(--text-2);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.document-change-warning {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border));
+  border-radius: 12px;
+  color: var(--text-2);
+  background: var(--warning-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@keyframes passport-scan {
+  0%,
+  100% {
+    transform: translateY(-17px);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translateY(17px);
+    opacity: 1;
+  }
+}
+@keyframes verification-pulse {
+  0%,
+  100% {
+    transform: scale(0.92);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+@keyframes verification-progress {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(330%);
+  }
+}
+@keyframes verification-success-in {
+  from {
+    opacity: 0.65;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 600px) {
+  .verification-modal-card {
+    padding: 24px 18px;
+  }
+  .verification-modal-card .verification-journey {
+    padding: 15px;
+  }
+  .verification-journey.compact {
+    grid-template-columns: 1fr;
+  }
+  .verification-journey.compact .verification-scan {
+    display: none;
+  }
+  .verified-document-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+  .verified-document-actions .button {
+    width: 100%;
+  }
+  .verified-documents-summary li {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .verified-documents-summary strong {
+    grid-column: 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verification-scan > span,
+  .verification-milestones .active i,
+  .verification-progress-track > span,
+  .document-progress.verified {
+    animation: none;
+  }
+  .verification-progress-track > span {
+    left: 0;
+    width: 58%;
+  }
+}

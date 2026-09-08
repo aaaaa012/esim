@@ -326,18 +326,15 @@ describe("hosted checkout payment flow", () => {
       <HostedCheckoutClient token="private-token" />,
     );
     await screen.findByRole("heading", { name: "Travel documents" });
-    container
-      .querySelectorAll('input[type="file"]:not([capture])')
-      .forEach((input) => {
-        fireEvent.change(input, {
-          target: {
-            files: [
-              new File(["document"], "document.png", { type: "image/png" }),
-            ],
-          },
-        });
-      });
-    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    expect(
+      screen.getByRole("list", { name: "Document summary" }),
+    ).toBeDefined();
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Change documents" }));
+    expect(container.querySelector('input[type="file"]')).not.toBeNull();
+    expect(screen.getByText(/Replacing your passport/)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel changes" }));
+    expect(container.querySelector('input[type="file"]')).toBeNull();
     fireEvent.click(
       await screen.findByRole("button", { name: "Continue to payment" }),
     );
@@ -414,7 +411,7 @@ describe("hosted document progress", () => {
     });
     render(<HostedCheckoutClient token="private-token" />);
     await screen.findByRole("heading", { name: "Travel documents" });
-    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
     await screen.findByText(/Check your connection and try again/);
     expect(
       screen.getByRole("list", { name: "Saved documents" }).textContent,
@@ -456,12 +453,12 @@ it("retries a failed ticket without uploading the confirmed passport again", asy
         files: [new File(["document"], `${label}.png`, { type: "image/png" })],
       },
     });
-  fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
   await screen.findByText(/Check your connection and try again/);
   expect(
     screen.getByRole("list", { name: "Saved documents" }).textContent,
   ).toContain("Passport.png");
-  fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
   await screen.findByRole("button", { name: "Continue to payment" });
   expect(authorized).toEqual(["PASSPORT", "TICKET", "TICKET"]);
 });
@@ -513,7 +510,7 @@ it.each([false, true])(
         ],
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
     await screen.findByRole("dialog", {
       name: "Your verification is still in progress",
     });

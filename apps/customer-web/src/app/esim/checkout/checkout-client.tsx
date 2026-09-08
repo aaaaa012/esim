@@ -28,6 +28,7 @@ import { flagEmoji } from "../../country-picker";
 import {
   DocumentProgress,
   SavedDocuments,
+  VerifiedDocumentsSummary,
   hasSavedDocument,
 } from "./document-progress";
 import { createDocumentUploader } from "./document-upload";
@@ -319,9 +320,7 @@ export default function CheckoutClient({
   // new-purchase compatibility form never flashes before effects run.
   const isTopUpIntent =
     Boolean((mobile && lookupToken) || targetEsimId) && !orderId;
-  const [step, setStep] = useState(() =>
-      orderId || isTopUpIntent ? 4 : 1,
-    ),
+  const [step, setStep] = useState(() => (orderId || isTopUpIntent ? 4 : 1)),
     [compatible, setCompatible] = useState(false),
     [legalAccepted, setLegalAccepted] = useState(false),
     [traveler, setTraveler] = useState(initial);
@@ -360,6 +359,8 @@ export default function CheckoutClient({
     ticket: File | undefined;
     visa: File | undefined;
   }>({ passport: undefined, ticket: undefined, visa: undefined });
+  const [editingVerifiedDocuments, setEditingVerifiedDocuments] =
+    useState(false);
   const [order, setOrder] = useState<Order | null>(null),
     [payment, setPayment] = useState<Payment | null>(null),
     [uxResending, setUxResending] = useState(false);
@@ -1169,8 +1170,12 @@ export default function CheckoutClient({
               current
                 ? {
                     ...current,
-                    documentReviewStatus: "NOT_STARTED",
-                    passportVerification: { status: "NOT_STARTED" },
+                    ...(type === "PASSPORT"
+                      ? {
+                          documentReviewStatus: "NOT_STARTED" as const,
+                          passportVerification: { status: "NOT_STARTED" },
+                        }
+                      : {}),
                     documents: [
                       ...(current.documents ?? []).filter(
                         (doc) => doc.type !== type,
@@ -1188,6 +1193,7 @@ export default function CheckoutClient({
         );
         const refreshed = await api<Order>(`/customer/orders/${order.id}`);
         setOrder(refreshed);
+        setEditingVerifiedDocuments(false);
         if (
           !refreshed.documentReviewStatus ||
           refreshed.documentReviewStatus === "NOT_STARTED"
@@ -1451,8 +1457,8 @@ export default function CheckoutClient({
                   <b>Keep your private order link</b>
                   <p>
                     Save this link before closing the tab. It restores order{" "}
-                    {order.orderNumber} and its verification status for 24 hours.
-                    Anyone with the link can access this order.
+                    {order.orderNumber} and its verification status for 24
+                    hours. Anyone with the link can access this order.
                   </p>
                   <small>
                     A tracking link is queued for the original purchase email.
@@ -1801,90 +1807,155 @@ export default function CheckoutClient({
                   busy={busy || verifyingPassport}
                   message={documentError || documentMessage}
                 />
-                <SavedDocuments documents={order?.documents} />
-                <fieldset
-                  className="upload-list document-fields"
-                  disabled={busy}
-                >
-                  <FileField
-                    label="Passport"
-                    file={files.passport}
-                    savedName={
-                      order?.documents?.find(
-                        (doc) => doc.type === "PASSPORT" && doc.uploadVerified,
-                      )?.fileName
-                    }
-                    onChange={(v) => setFiles((f) => ({ ...f, passport: v }))}
-                    capture
-                  />
-                  <FileField
-                    label="Travel ticket"
-                    file={files.ticket}
-                    savedName={
-                      order?.documents?.find(
-                        (doc) => doc.type === "TICKET" && doc.uploadVerified,
-                      )?.fileName
-                    }
-                    onChange={(v) => setFiles((f) => ({ ...f, ticket: v }))}
-                    capture
-                  />
-                  <FileField
-                    label="Visa (optional)"
-                    file={files.visa}
-                    savedName={
-                      order?.documents?.find(
-                        (doc) => doc.type === "VISA" && doc.uploadVerified,
-                      )?.fileName
-                    }
-                    onChange={(v) => setFiles((f) => ({ ...f, visa: v }))}
-                    capture
-                  />
-                </fieldset>
-                <div className="form-actions">
-                  <button
-                    className="button secondary"
-                    disabled={busy || verifyingPassport}
-                    onClick={() => goBack()}
-                  >
-                    Edit traveller details
-                  </button>
-                  {passportGatePassed(order) &&
-                  !Object.values(files).some(Boolean) ? (
+                {passportGatePassed(order) && !editingVerifiedDocuments ? (
+                  <>
+                    <VerifiedDocumentsSummary
+                      documents={order?.documents}
+                      reviewStatus={order?.documentReviewStatus}
+                    />
+                    <div className="form-actions verified-document-actions">
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => setEditingVerifiedDocuments(true)}
+                      >
+                        Change documents
+                      </button>
+                      <button
+                        type="button"
+                        className="button primary"
+                        onClick={() => advance(4)}
+                      >
+                        Continue to payment
+                      </button>
+                    </div>
                     <button
-                      className="button primary"
-                      onClick={() => advance(4)}
+                      type="button"
+                      className="document-tertiary-action"
+                      onClick={() => goBack()}
                     >
-                      Continue to payment
+                      Edit traveller details
                     </button>
-                  ) : (
-                    <button
-                      className="button primary"
-                      disabled={
-                        busy ||
-                        verifyingPassport ||
-                        (!Object.values(files).some(Boolean) &&
-                          [
-                            "OCR_PENDING",
-                            "OCR_BACKGROUND",
-                            "MANUAL_REVIEW",
-                          ].includes(order?.documentReviewStatus ?? ""))
-                      }
-                      onClick={() => void saveDocuments()}
-                    >
-                      {busy
-                        ? "Saving documents…"
-                        : !Object.values(files).some(Boolean) &&
-                            order?.documentReviewStatus === "MANUAL_REVIEW"
-                          ? "Awaiting approval"
-                          : !Object.values(files).some(Boolean) &&
-                              ["OCR_PENDING", "OCR_BACKGROUND"].includes(
-                                order?.documentReviewStatus ?? "",
-                              )
-                            ? "Verification in progress"
-                            : "Save and continue"}
-                    </button>
-                  )}
-                </div>
+                  </>
+                ) : (
+                  <>
+                    <SavedDocuments documents={order?.documents} />
+                    {![
+                      "OCR_PENDING",
+                      "OCR_BACKGROUND",
+                      "MANUAL_REVIEW",
+                    ].includes(order?.documentReviewStatus ?? "") && (
+                      <>
+                        {editingVerifiedDocuments && (
+                          <p className="document-change-warning">
+                            Replacing your passport starts verification again.
+                            Changing the optional visa does not affect your
+                            passport result.
+                          </p>
+                        )}
+                        <fieldset
+                          className="upload-list document-fields"
+                          disabled={busy}
+                        >
+                          <FileField
+                            label="Passport"
+                            file={files.passport}
+                            savedName={
+                              order?.documents?.find(
+                                (doc) =>
+                                  doc.type === "PASSPORT" && doc.uploadVerified,
+                              )?.fileName
+                            }
+                            onChange={(v) =>
+                              setFiles((f) => ({ ...f, passport: v }))
+                            }
+                            capture
+                          />
+                          <FileField
+                            label="Travel ticket"
+                            file={files.ticket}
+                            savedName={
+                              order?.documents?.find(
+                                (doc) =>
+                                  doc.type === "TICKET" && doc.uploadVerified,
+                              )?.fileName
+                            }
+                            onChange={(v) =>
+                              setFiles((f) => ({ ...f, ticket: v }))
+                            }
+                            capture
+                          />
+                          <FileField
+                            label="Visa (optional)"
+                            file={files.visa}
+                            savedName={
+                              order?.documents?.find(
+                                (doc) =>
+                                  doc.type === "VISA" && doc.uploadVerified,
+                              )?.fileName
+                            }
+                            onChange={(v) =>
+                              setFiles((f) => ({ ...f, visa: v }))
+                            }
+                            capture
+                          />
+                        </fieldset>
+                      </>
+                    )}
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="button secondary"
+                        disabled={busy || verifyingPassport}
+                        onClick={() => {
+                          if (editingVerifiedDocuments) {
+                            setFiles({
+                              passport: undefined,
+                              ticket: undefined,
+                              visa: undefined,
+                            });
+                            setEditingVerifiedDocuments(false);
+                          } else goBack();
+                        }}
+                      >
+                        {editingVerifiedDocuments
+                          ? "Cancel changes"
+                          : "Edit traveller details"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button primary"
+                        disabled={
+                          busy ||
+                          verifyingPassport ||
+                          (editingVerifiedDocuments &&
+                            !Object.values(files).some(Boolean)) ||
+                          (!Object.values(files).some(Boolean) &&
+                            [
+                              "OCR_PENDING",
+                              "OCR_BACKGROUND",
+                              "MANUAL_REVIEW",
+                            ].includes(order?.documentReviewStatus ?? ""))
+                        }
+                        onClick={() => void saveDocuments()}
+                      >
+                        {busy
+                          ? "Saving documents…"
+                          : editingVerifiedDocuments
+                            ? "Save changes"
+                            : !Object.values(files).some(Boolean) &&
+                                order?.documentReviewStatus === "MANUAL_REVIEW"
+                              ? "Awaiting approval"
+                              : !Object.values(files).some(Boolean) &&
+                                  ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+                                    order?.documentReviewStatus ?? "",
+                                  )
+                                ? "Verification in progress"
+                                : "Save documents"}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
             {!showAccountChoice && !resumingOrder && step === 4 && (
