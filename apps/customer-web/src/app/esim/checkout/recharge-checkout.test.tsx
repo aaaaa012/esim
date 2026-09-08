@@ -162,6 +162,55 @@ describe("recharge checkout", () => {
 
 describe("first-purchase document verification", () => {
   it.each([false, true])(
+    "focuses recovery on traveller details and passport while keeping other documents changeable (signed in: %s)",
+    async (signedIn) => {
+      mocks.signedIn = signedIn;
+      mocks.authFetch.mockImplementation(async (url: string) => {
+        if (url.endsWith("/payments/providers"))
+          return ok({ providers: ["KHALTI"] });
+        return ok({
+          id: "recovery",
+          orderNumber: "VC-RECOVERY",
+          status: "DRAFT",
+          purchaseType: "NEW",
+          plan,
+          totalAmountNpr: 100,
+          traveler: { firstName: "Traveller" },
+          documentReviewStatus: "REUPLOAD_REQUIRED",
+          passportVerification: { status: "FAILED" },
+          documents: [
+            {
+              type: "PASSPORT",
+              status: "REUPLOAD_REQUIRED",
+              fileName: "old-passport.png",
+              uploadVerified: true,
+            },
+            {
+              type: "TICKET",
+              status: "UPLOADED",
+              fileName: "ticket.png",
+              uploadVerified: true,
+            },
+          ],
+        });
+      });
+      render(<Checkout planId="plan" orderId="recovery" />);
+      await screen.findByRole("heading", { name: "Travel documents" });
+      expect(
+        screen.getByText("Passport and traveller details need checking"),
+      ).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Check traveller details" }),
+      ).toBeDefined();
+      expect(screen.getByText("ticket.png")).toBeDefined();
+      expect(screen.queryByLabelText("Travel ticket")).toBeNull();
+      fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]!);
+      expect(screen.getByLabelText("Travel ticket")).toBeDefined();
+      expect(screen.getByLabelText("Passport", { exact: true })).toBeDefined();
+    },
+  );
+
+  it.each([false, true])(
     "uses the same verification journey and compact success state (signed in: %s)",
     async (signedIn) => {
       mocks.signedIn = signedIn;

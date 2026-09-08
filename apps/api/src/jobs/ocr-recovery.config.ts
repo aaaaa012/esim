@@ -57,9 +57,10 @@ export function orderPassportOcrJobId(
   orderId: string,
   documentId: string,
   privateAssetId: string,
+  attemptKey = "initial",
 ) {
   const upload = createHash("sha256")
-    .update(privateAssetId)
+    .update(`${privateAssetId}:${attemptKey}`)
     .digest("hex")
     .slice(0, 24);
   return `order-passport-${orderId}-${documentId}-${upload}`;

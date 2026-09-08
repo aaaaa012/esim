@@ -850,7 +850,19 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id, ownerId ?? undefined);
     if (order.status !== OrderStatus.DRAFT)
       throw new BadRequestException("Submitted order is immutable");
+    const retryExistingPassport =
+      order.documentReviewStatus === "REUPLOAD_REQUIRED";
     order.traveler = traveler;
+    if (retryExistingPassport) {
+      order.documentReviewStatus = "NOT_STARTED";
+      delete order.documentReviewStartedAt;
+      delete order.documentCheckoutReleaseAt;
+      delete order.passportVerification;
+      const passport = order.documents.find(
+        (document) => document.type === DocumentType.PASSPORT,
+      );
+      if (passport) passport.status = DocumentStatus.PENDING;
+    }
     await this.persistence.save(order);
     return this.redact(order);
   }
@@ -1137,7 +1149,12 @@ export class OrdersService implements OnModuleInit {
             documentId: passport.id,
             privateAssetId: passport.privateAssetId,
           },
-          orderPassportOcrJobId(order.id, passport.id, passport.privateAssetId),
+          orderPassportOcrJobId(
+            order.id,
+            passport.id,
+            passport.privateAssetId,
+            order.documentReviewStartedAt,
+          ),
           ocrJobOptions(),
         );
       } catch (error) {

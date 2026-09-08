@@ -7,12 +7,14 @@ export function DocumentFileField({
   onChange,
   capture = true,
   savedName,
+  replacementRequired = false,
 }: {
   label: string;
   file: File | undefined;
   onChange: (file: File | undefined) => void;
   capture?: boolean;
   savedName?: string | undefined;
+  replacementRequired?: boolean;
 }) {
   const captureRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState("");
@@ -46,16 +48,28 @@ export function DocumentFileField({
           }}
         />
         <span>
-          <b>{file?.name ?? savedName ?? label}</b>
+          <b>
+            {file?.name ??
+              savedName ??
+              (replacementRequired ? "Choose a new file" : label)}
+          </b>
           <small>
             {file
               ? `${Math.ceil(file.size / 1024)} KB · Ready to upload`
               : savedName
                 ? `${label} · Securely saved`
-                : "PDF, JPG or PNG · Up to 10 MB"}
+                : replacementRequired
+                  ? "The previous file could not be confirmed"
+                  : "PDF, JPG or PNG · Up to 10 MB"}
           </small>
         </span>
-        <em>{file || savedName ? "Replace" : "Choose file"}</em>
+        <em>
+          {file || savedName
+            ? "Replace"
+            : replacementRequired
+              ? "Choose replacement"
+              : "Choose file"}
+        </em>
       </label>
       {capture && (
         <>

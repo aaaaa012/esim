@@ -556,6 +556,79 @@ describe("partner hosted checkout", () => {
     });
   });
 
+  it("retries the existing passport after corrected hosted traveller details", async () => {
+    const orderUpdate = vi.fn().mockResolvedValue({ id: "order-1" });
+    const passportUpdate = vi.fn().mockResolvedValue({ count: 1 });
+    const instance = service({
+      partnerHostedCheckoutSession: {
+        findUnique: vi.fn().mockResolvedValue(session),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...order([
+            {
+              id: "passport-1",
+              type: "PASSPORT",
+              status: "REUPLOAD_REQUIRED",
+              uploadVerified: true,
+            },
+          ]),
+          documentReviewStatus: "REUPLOAD_REQUIRED",
+          partnerCustomerId: null,
+          orderType: "INITIAL_PURCHASE",
+          partner: { name: "Test partner", slug: "test", brand: {} },
+        }),
+      },
+      $transaction: vi.fn((callback) =>
+        callback({
+          order: {
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            update: orderUpdate,
+          },
+          travelerDocument: { updateMany: passportUpdate },
+          traveler: { upsert: vi.fn().mockResolvedValue({ id: "traveler-1" }) },
+          customer: {
+            findUnique: vi.fn().mockResolvedValue(null),
+            update: vi.fn().mockResolvedValue({ id: "customer-1" }),
+          },
+        }),
+      ),
+    });
+    (instance as unknown as { crypto: Record<string, unknown> }).crypto = {
+      encrypt: vi.fn((value: string) => `encrypted:${value}`),
+      blindIndex: vi.fn((value: string) => `hash:${value}`),
+    };
+    vi.spyOn(instance, "hostedCheckout").mockResolvedValue({
+      ok: true,
+    } as never);
+
+    await instance.setHostedTraveler("abcdefghijklmnopqrstuvwxyz012345", {
+      title: "MR",
+      firstName: "Corrected",
+      surname: "Traveller",
+      dateOfBirth: "1995-01-01",
+      nationality: "NP",
+      city: "Kathmandu",
+      countryOfResidence: "NP",
+      email: "customer@example.com",
+      mobile: "+9779800000000",
+      passportNumber: "PA1234567",
+      passportExpiryDate: "2030-01-01",
+    });
+
+    expect(orderUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ documentReviewStatus: "NOT_STARTED" }),
+      }),
+    );
+    expect(passportUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ type: "PASSPORT" }),
+        data: expect.objectContaining({ status: "PENDING" }),
+      }),
+    );
+  });
+
   it("claims a draft hosted checkout without changing partner attribution", async () => {
     const updateMany = vi.fn().mockResolvedValue({ count: 1 });
     const auditCreate = vi.fn().mockResolvedValue({ id: "audit-1" });

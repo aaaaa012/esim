@@ -30,10 +30,12 @@ import {
   SavedDocuments,
   VerifiedDocumentsSummary,
   hasSavedDocument,
+  hasUploadedDocument,
 } from "./document-progress";
 import { createDocumentUploader } from "./document-upload";
 import { useDocumentRefresh } from "./use-document-refresh";
 import { DocumentFileField as FileField } from "./document-file-field";
+import { DocumentRecoveryFields } from "./document-recovery";
 import { useCheckoutTransition } from "./use-checkout-transition";
 import DatePicker from "./date-picker";
 import { submitCheckoutDocumentsSequentially } from "./document-submission";
@@ -1131,16 +1133,14 @@ export default function CheckoutClient({
       const body = Object.fromEntries(
         Object.entries(traveler).filter(([, v]) => v !== ""),
       );
-      await api(`/customer/orders/${order.id}/traveler`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      });
-      setOrder((o) =>
-        o &&
-        ["FAILED", "PARTIAL"].includes(o.passportVerification?.status ?? "")
-          ? (({ passportVerification: _drop, ...rest }) => rest)(o)
-          : o,
+      const updated = await api<Order>(
+        `/customer/orders/${order.id}/traveler`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        },
       );
+      setOrder(updated);
       advance(3);
     });
   const saveDocuments = () =>
@@ -1152,7 +1152,7 @@ export default function CheckoutClient({
           ["PASSPORT", "TICKET"].some(
             (type) =>
               !files[type.toLowerCase() as "passport" | "ticket"] &&
-              !hasSavedDocument(order.documents, type),
+              !hasUploadedDocument(order.documents, type),
           )
         )
           throw new Error("Passport and travel ticket are required");
@@ -1800,7 +1800,8 @@ export default function CheckoutClient({
                 <h2>Travel documents</h2>
                 <DocumentProgress
                   status={
-                    Object.values(files).some(Boolean)
+                    Object.values(files).some(Boolean) &&
+                    order?.documentReviewStatus !== "REUPLOAD_REQUIRED"
                       ? "NOT_STARTED"
                       : order?.documentReviewStatus
                   }
@@ -1839,7 +1840,9 @@ export default function CheckoutClient({
                   </>
                 ) : (
                   <>
-                    <SavedDocuments documents={order?.documents} />
+                    {order?.documentReviewStatus !== "REUPLOAD_REQUIRED" && (
+                      <SavedDocuments documents={order?.documents} />
+                    )}
                     {![
                       "OCR_PENDING",
                       "OCR_BACKGROUND",
@@ -1853,53 +1856,73 @@ export default function CheckoutClient({
                             passport result.
                           </p>
                         )}
-                        <fieldset
-                          className="upload-list document-fields"
-                          disabled={busy}
-                        >
-                          <FileField
-                            label="Passport"
-                            file={files.passport}
-                            savedName={
-                              order?.documents?.find(
-                                (doc) =>
-                                  doc.type === "PASSPORT" && doc.uploadVerified,
-                              )?.fileName
+                        {order?.documentReviewStatus === "REUPLOAD_REQUIRED" ? (
+                          <DocumentRecoveryFields
+                            documents={order.documents}
+                            types={["PASSPORT", "TICKET", "VISA"]}
+                            files={{
+                              PASSPORT: files.passport,
+                              TICKET: files.ticket,
+                              VISA: files.visa,
+                            }}
+                            onChange={(type, file) =>
+                              setFiles((current) => ({
+                                ...current,
+                                [type.toLowerCase()]: file,
+                              }))
                             }
-                            onChange={(v) =>
-                              setFiles((f) => ({ ...f, passport: v }))
-                            }
-                            capture
+                            disabled={busy}
                           />
-                          <FileField
-                            label="Travel ticket"
-                            file={files.ticket}
-                            savedName={
-                              order?.documents?.find(
-                                (doc) =>
-                                  doc.type === "TICKET" && doc.uploadVerified,
-                              )?.fileName
-                            }
-                            onChange={(v) =>
-                              setFiles((f) => ({ ...f, ticket: v }))
-                            }
-                            capture
-                          />
-                          <FileField
-                            label="Visa (optional)"
-                            file={files.visa}
-                            savedName={
-                              order?.documents?.find(
-                                (doc) =>
-                                  doc.type === "VISA" && doc.uploadVerified,
-                              )?.fileName
-                            }
-                            onChange={(v) =>
-                              setFiles((f) => ({ ...f, visa: v }))
-                            }
-                            capture
-                          />
-                        </fieldset>
+                        ) : (
+                          <fieldset
+                            className="upload-list document-fields"
+                            disabled={busy}
+                          >
+                            <FileField
+                              label="Passport"
+                              file={files.passport}
+                              savedName={
+                                order?.documents?.find(
+                                  (doc) =>
+                                    doc.type === "PASSPORT" &&
+                                    doc.uploadVerified,
+                                )?.fileName
+                              }
+                              onChange={(v) =>
+                                setFiles((f) => ({ ...f, passport: v }))
+                              }
+                              capture
+                            />
+                            <FileField
+                              label="Travel ticket"
+                              file={files.ticket}
+                              savedName={
+                                order?.documents?.find(
+                                  (doc) =>
+                                    doc.type === "TICKET" && doc.uploadVerified,
+                                )?.fileName
+                              }
+                              onChange={(v) =>
+                                setFiles((f) => ({ ...f, ticket: v }))
+                              }
+                              capture
+                            />
+                            <FileField
+                              label="Visa (optional)"
+                              file={files.visa}
+                              savedName={
+                                order?.documents?.find(
+                                  (doc) =>
+                                    doc.type === "VISA" && doc.uploadVerified,
+                                )?.fileName
+                              }
+                              onChange={(v) =>
+                                setFiles((f) => ({ ...f, visa: v }))
+                              }
+                              capture
+                            />
+                          </fieldset>
+                        )}
                       </>
                     )}
                     <div className="form-actions">
@@ -1920,7 +1943,9 @@ export default function CheckoutClient({
                       >
                         {editingVerifiedDocuments
                           ? "Cancel changes"
-                          : "Edit traveller details"}
+                          : order?.documentReviewStatus === "REUPLOAD_REQUIRED"
+                            ? "Check traveller details"
+                            : "Edit traveller details"}
                       </button>
                       <button
                         type="button"
@@ -1935,7 +1960,9 @@ export default function CheckoutClient({
                               "OCR_PENDING",
                               "OCR_BACKGROUND",
                               "MANUAL_REVIEW",
-                            ].includes(order?.documentReviewStatus ?? ""))
+                            ].includes(order?.documentReviewStatus ?? "")) ||
+                          (!Object.values(files).some(Boolean) &&
+                            order?.documentReviewStatus === "REUPLOAD_REQUIRED")
                         }
                         onClick={() => void saveDocuments()}
                       >
@@ -1951,7 +1978,14 @@ export default function CheckoutClient({
                                     order?.documentReviewStatus ?? "",
                                   )
                                 ? "Verification in progress"
-                                : "Save documents"}
+                                : order?.documentReviewStatus ===
+                                    "REUPLOAD_REQUIRED"
+                                  ? files.passport
+                                    ? "Check new passport"
+                                    : Object.values(files).some(Boolean)
+                                      ? "Save document changes"
+                                      : "Choose a passport or change details"
+                                  : "Save documents"}
                       </button>
                     </div>
                   </>

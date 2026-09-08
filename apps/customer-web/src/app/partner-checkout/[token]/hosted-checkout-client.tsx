@@ -25,10 +25,12 @@ import {
   SavedDocuments,
   VerifiedDocumentsSummary,
   hasSavedDocument,
+  hasUploadedDocument,
 } from "../../esim/checkout/document-progress";
 import { createDocumentUploader } from "../../esim/checkout/document-upload";
 import { useDocumentRefresh } from "../../esim/checkout/use-document-refresh";
 import { DocumentFileField as FileField } from "../../esim/checkout/document-file-field";
+import { DocumentRecoveryFields } from "../../esim/checkout/document-recovery";
 import { useCheckoutTransition } from "../../esim/checkout/use-checkout-transition";
 import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
@@ -451,11 +453,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       const body = Object.fromEntries(
         Object.entries(traveler).filter(([, v]) => v !== ""),
       );
-      await api(`/partner-checkout/${token}/traveler`, {
-        method: "POST",
-        body: JSON.stringify(body),
+      const refreshed = await api<Session>(
+        `/partner-checkout/${token}/traveler`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+        },
+      );
+      setSession(refreshed);
+      setVerification({
+        status: refreshed.order.documentReviewStatus ?? "NOT_STARTED",
       });
       nextStep();
+      if (refreshed.order.documentReviewStatus === "NOT_STARTED")
+        await runVerification();
     });
 
   const runVerification = async (): Promise<boolean> => {
@@ -512,7 +523,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         ];
         const missing = required.filter(
           (type) =>
-            !files[type] && !hasSavedDocument(session?.order.documents, type),
+            !files[type] &&
+            !hasUploadedDocument(session?.order.documents, type),
         );
         if (missing.length)
           throw new Error(
@@ -1496,7 +1508,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     <h2>Travel documents</h2>
                     <DocumentProgress
                       status={
-                        Object.values(files).some(Boolean)
+                        Object.values(files).some(Boolean) &&
+                        verification?.status !== "REUPLOAD_REQUIRED"
                           ? "NOT_STARTED"
                           : verification?.status
                       }
@@ -1535,7 +1548,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       </>
                     ) : (
                       <>
-                        <SavedDocuments documents={session?.order.documents} />
+                        {verification?.status !== "REUPLOAD_REQUIRED" && (
+                          <SavedDocuments
+                            documents={session?.order.documents}
+                          />
+                        )}
                         {![
                           "OCR_PENDING",
                           "OCR_BACKGROUND",
@@ -1548,33 +1565,51 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 again.
                               </p>
                             )}
-                            <fieldset
-                              className="upload-list document-fields"
-                              disabled={busy}
-                            >
-                              {session!.order.requiredDocuments.map((type) => (
-                                <FileField
-                                  key={type}
-                                  label={
-                                    type === "PASSPORT"
-                                      ? "Passport"
-                                      : type === "TICKET"
-                                        ? "Travel ticket"
-                                        : "Visa"
-                                  }
-                                  file={files[type]}
-                                  savedName={
-                                    session?.order.documents.find(
-                                      (doc) =>
-                                        doc.type === type && doc.uploadVerified,
-                                    )?.fileName
-                                  }
-                                  onChange={(v) =>
-                                    setFiles((f) => ({ ...f, [type]: v }))
-                                  }
-                                />
-                              ))}
-                            </fieldset>
+                            {verification?.status === "REUPLOAD_REQUIRED" ? (
+                              <DocumentRecoveryFields
+                                documents={session?.order.documents}
+                                types={session!.order.requiredDocuments}
+                                files={files}
+                                onChange={(type, file) =>
+                                  setFiles((current) => ({
+                                    ...current,
+                                    [type]: file,
+                                  }))
+                                }
+                                disabled={busy}
+                              />
+                            ) : (
+                              <fieldset
+                                className="upload-list document-fields"
+                                disabled={busy}
+                              >
+                                {session!.order.requiredDocuments.map(
+                                  (type) => (
+                                    <FileField
+                                      key={type}
+                                      label={
+                                        type === "PASSPORT"
+                                          ? "Passport"
+                                          : type === "TICKET"
+                                            ? "Travel ticket"
+                                            : "Visa"
+                                      }
+                                      file={files[type]}
+                                      savedName={
+                                        session?.order.documents.find(
+                                          (doc) =>
+                                            doc.type === type &&
+                                            doc.uploadVerified,
+                                        )?.fileName
+                                      }
+                                      onChange={(v) =>
+                                        setFiles((f) => ({ ...f, [type]: v }))
+                                      }
+                                    />
+                                  ),
+                                )}
+                              </fieldset>
+                            )}
                           </>
                         )}
                         <div className="form-actions">
@@ -1591,7 +1626,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           >
                             {editingVerifiedDocuments
                               ? "Cancel changes"
-                              : "Edit traveller details"}
+                              : verification?.status === "REUPLOAD_REQUIRED"
+                                ? "Check traveller details"
+                                : "Edit traveller details"}
                           </button>
                           <button
                             type="button"
@@ -1606,7 +1643,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                   "OCR_PENDING",
                                   "OCR_BACKGROUND",
                                   "MANUAL_REVIEW",
-                                ].includes(verification?.status ?? ""))
+                                ].includes(verification?.status ?? "")) ||
+                              (!Object.values(files).some(Boolean) &&
+                                verification?.status === "REUPLOAD_REQUIRED")
                             }
                             onClick={() => void saveDocuments()}
                           >
@@ -1623,7 +1662,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                         "OCR_BACKGROUND",
                                       ].includes(verification?.status ?? "")
                                     ? "Verification in progress"
-                                    : "Save documents"}
+                                    : verification?.status ===
+                                        "REUPLOAD_REQUIRED"
+                                      ? files.PASSPORT
+                                        ? "Check new passport"
+                                        : Object.values(files).some(Boolean)
+                                          ? "Save document changes"
+                                          : "Choose a passport or change details"
+                                      : "Save documents"}
                           </button>
                         </div>
                       </>

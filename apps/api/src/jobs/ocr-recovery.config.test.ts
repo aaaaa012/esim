@@ -61,4 +61,12 @@ it("deduplicates retries of the same upload but not a replacement in the same ro
   expect(
     orderPassportOcrJobId("order", "passport", "replacement-upload"),
   ).not.toBe(first);
+  expect(
+    orderPassportOcrJobId(
+      "order",
+      "passport",
+      "original-upload",
+      "corrected-traveller-details",
+    ),
+  ).not.toBe(first);
 });

@@ -513,6 +513,15 @@ it.each([false, true])(
     });
     render(<HostedCheckoutClient token="private-token" />);
     await screen.findByRole("heading", { name: "Travel documents" });
+    expect(
+      screen.getByText("Passport and traveller details need checking"),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Check traveller details" }),
+    ).toBeDefined();
+    expect(screen.getByText("ticket.png")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Change" })).toBeDefined();
+    expect(screen.queryByLabelText("Travel ticket")).toBeNull();
     fireEvent.change(screen.getByLabelText("Passport", { exact: true }), {
       target: {
         files: [
@@ -520,7 +529,7 @@ it.each([false, true])(
         ],
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check new passport" }));
     await screen.findByRole("dialog", {
       name: "Your verification is still in progress",
     });

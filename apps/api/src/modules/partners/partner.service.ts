@@ -2498,8 +2498,31 @@ export class PartnerService {
 
   async setHostedTraveler(token: string, traveler: TravelerInput) {
     const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    const retryExistingPassport =
+      order.documentReviewStatus === "REUPLOAD_REQUIRED";
     await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
+      if (retryExistingPassport) {
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            documentReviewStatus: "NOT_STARTED",
+            documentReviewStartedAt: null,
+            documentCheckoutReleaseAt: null,
+          },
+        });
+        await tx.travelerDocument.updateMany({
+          where: { orderId: order.id, type: DocumentType.PASSPORT },
+          data: {
+            status: DocumentStatus.PENDING,
+            passportVerificationStatus: null,
+            passportVerificationMethod: null,
+            passportMatchedFields: Prisma.DbNull,
+            passportConfidence: null,
+            passportVerifiedAt: null,
+          },
+        });
+      }
       await tx.traveler.upsert({
         where: { orderId: order.id },
         update: this.travelerData(traveler),
@@ -2762,7 +2785,12 @@ export class PartnerService {
           documentId: passport.id,
           privateAssetId: passport.privateAssetId,
         },
-        orderPassportOcrJobId(order.id, passport.id, passport.privateAssetId),
+        orderPassportOcrJobId(
+          order.id,
+          passport.id,
+          passport.privateAssetId,
+          now.toISOString(),
+        ),
         ocrJobOptions(),
       );
       return {

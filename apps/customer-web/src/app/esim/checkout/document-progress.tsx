@@ -91,7 +91,7 @@ export function DocumentProgress({
                 : pending
                   ? "Checking your passport"
                   : failed
-                    ? "Your documents need attention"
+                    ? "Passport and traveller details need checking"
                     : "Upload your travel documents"}
         </b>
         <small>
@@ -105,7 +105,7 @@ export function DocumentProgress({
                   : pending
                     ? "Your documents are saved. We’re checking them against your traveller details. This page updates automatically."
                     : failed
-                      ? "Review your traveller details and the document status below. Replace any unclear or incomplete files, then check again."
+                      ? "We couldn’t confirm that your passport matches your traveller details. Check the details you entered or upload a clearer passport information page."
                       : "PDF, JPG or PNG, up to 10 MB per file. Payment becomes available after verification.")}
         </small>
       </span>
@@ -132,6 +132,29 @@ export function hasSavedDocument(
         document.status !== "REUPLOAD_REQUIRED",
     ) ?? false
   );
+}
+
+export function hasUploadedDocument(
+  documents: SavedDocument[] | undefined,
+  type: string,
+) {
+  return (
+    documents?.some(
+      (document) => document.type === type && document.uploadVerified === true,
+    ) ?? false
+  );
+}
+
+export function savedDocumentName(
+  documents: SavedDocument[] | undefined,
+  type: string,
+) {
+  return documents?.find(
+    (document) =>
+      document.type === type &&
+      document.uploadVerified === true &&
+      document.status !== "REUPLOAD_REQUIRED",
+  )?.fileName;
 }
 
 export function SavedDocuments({

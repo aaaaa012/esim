@@ -2109,6 +2109,98 @@
   font-size: 13px;
   line-height: 1.5;
 }
+.document-recovery-fields {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+}
+.document-recovery-fields:disabled {
+  opacity: 0.72;
+}
+.document-recovery-editor,
+.document-recovery-saved {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.document-recovery-editor {
+  padding: 14px;
+}
+.document-recovery-editor.needs-attention {
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--border));
+  background: color-mix(in srgb, var(--warning-soft) 32%, var(--surface));
+}
+.document-recovery-editor-heading,
+.document-recovery-saved {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.document-recovery-editor-heading {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.document-recovery-editor-heading > span,
+.document-recovery-saved > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.document-recovery-editor-heading b,
+.document-recovery-saved b {
+  color: var(--text);
+  font-size: 14px;
+}
+.document-recovery-editor-heading small,
+.document-recovery-saved small {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.document-recovery-saved {
+  min-height: 64px;
+  padding: 10px 14px;
+}
+.document-recovery-saved > span:first-child {
+  display: grid;
+  flex: 0 0 34px;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--text-3);
+  background: var(--surface-2);
+}
+.document-recovery-saved > span:first-child.saved {
+  color: var(--success-strong);
+  background: var(--success-soft);
+}
+.document-recovery-saved > span:nth-child(2) {
+  flex: 1;
+}
+.document-inline-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 44px;
+  padding: 0 6px;
+  border: 0;
+  color: var(--primary);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.document-recovery-editor .file-field {
+  margin-top: 0;
+}
 
 @keyframes passport-scan {
   0%,
@@ -2174,6 +2266,15 @@
   }
   .verified-documents-summary strong {
     grid-column: 2;
+  }
+  .document-recovery-editor .file-field {
+    flex-wrap: wrap;
+  }
+  .document-recovery-editor .file-input {
+    flex-basis: 100%;
+  }
+  .document-recovery-editor .file-field > .button {
+    min-height: 44px;
   }
 }
 

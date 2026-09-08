@@ -39,7 +39,9 @@ it("does not show automated verification for manual review or re-upload requests
   expect(screen.queryByRole("dialog")).toBeNull();
   view.rerender(<DocumentProgress status="REUPLOAD_REQUIRED" />);
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByText("Your documents need attention")).toBeDefined();
+  expect(
+    screen.getByText("Passport and traveller details need checking"),
+  ).toBeDefined();
 });
 it("uses accurate labels for each accepted review outcome", () => {
   const view = render(<DocumentProgress status="VERIFIED" />);
