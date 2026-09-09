@@ -289,15 +289,6 @@ export function CampaignProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function PoweredByBar() {
-  return (
-    <div className="powered-by-bar" aria-label="Connectivity partner">
-      <span>Travel eSIM connectivity</span>
-      <b>powered by Ubigi</b>
-    </div>
-  );
-}
-
 export function FeaturedCampaign() {
   const { groups, openCampaign } = useCampaigns();
   const campaign = groups.FEATURED_BANNER[0];

@@ -31,6 +31,8 @@ export function isCustomerNavActive(
   pathname: string,
   activeHash: string,
 ) {
+  if (href === "/help")
+    return pathname === "/help" || pathname.startsWith("/compatibility");
   if (href === "/") return pathname === "/" && !activeHash;
   if (href.startsWith("/#"))
     return pathname === "/" && activeHash === href.slice(1);
@@ -100,7 +102,7 @@ export default function CustomerHeader() {
           {navLink("/destinations", "Destinations")}
           {navLink("/#recharge", "Recharge")}
           {navLink("/#how", "How it works")}
-          {navLink("/compatibility", "Compatibility")}
+          {navLink("/help", "Help")}
           <span className="nav-user">
             <ThemeToggle />
             <SignedOut>
@@ -180,9 +182,9 @@ export default function CustomerHeader() {
           <Smartphone size={20} /><span>My eSIM</span>
         </Link>
         <Link
-          href="/compatibility"
-          className={path.startsWith("/compatibility") ? "nav-active" : ""}
-          aria-current={path.startsWith("/compatibility") ? "page" : undefined}
+          href="/help"
+          className={isCustomerNavActive("/help", path, activeHash) ? "nav-active" : ""}
+          aria-current={isCustomerNavActive("/help", path, activeHash) ? "page" : undefined}
         >
           <CircleHelp size={20} /><span>Help</span>
         </Link>

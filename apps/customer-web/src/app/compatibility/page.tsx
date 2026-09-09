@@ -81,8 +81,8 @@ export default function Compatibility() {
           <Link href="/destinations" className="button">
             Browse plans <ArrowRight size={17} />
           </Link>
-          <Link href="/" className="button secondary">
-            Back to home
+          <Link href="/help" className="button secondary">
+            Back to Help
           </Link>
         </div>
       </div>

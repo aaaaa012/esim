@@ -23,7 +23,6 @@ import {
   FeaturedCampaign,
   GuideCampaign,
   OfferGallery,
-  PoweredByBar,
   WhyCampaign,
 } from "./homepage-campaigns";
 import {
@@ -38,7 +37,6 @@ export default function Home() {
     <CampaignProvider>
       <HomepageExplorerProvider>
         <main>
-          <PoweredByBar />
           <section className="hero">
           <div className="shell hero-grid">
             <div>
@@ -53,6 +51,11 @@ export default function Home() {
                 Buy a travel eSIM in Nepali rupees, install it before takeoff,
                 and connect when you arrive.
               </p>
+              <div className="hero-partner-trust" aria-label="Connectivity partner">
+                <Wifi size={14} aria-hidden="true" />
+                <span>Global connectivity</span>
+                <b>powered by Ubigi</b>
+              </div>
               <HeroDestinationSearch />
             </div>
             <div className="phone-stage">

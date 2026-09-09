@@ -1,0 +1,349 @@
+.help-page {
+  min-height: calc(100dvh - 72px);
+  padding: 72px 0 96px;
+  background:
+    radial-gradient(circle at 92% 5%, color-mix(in srgb, var(--accent-soft) 65%, transparent), transparent 30%),
+    radial-gradient(circle at 5% 42%, color-mix(in srgb, var(--route-soft) 55%, transparent), transparent 28%),
+    var(--bg);
+}
+
+.help-shell {
+  display: grid;
+  gap: 32px;
+}
+
+.help-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.42fr);
+  align-items: end;
+  gap: 48px;
+}
+
+.help-hero h1 {
+  max-width: 700px;
+  margin: 18px 0 14px;
+  font-size: clamp(44px, 6vw, 72px);
+  line-height: 0.98;
+  letter-spacing: -0.055em;
+  text-wrap: balance;
+}
+
+.help-hero p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.help-contact-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--navy-panel);
+  color: var(--navy-panel-text);
+  box-shadow: var(--shadow-md);
+}
+
+.help-contact-summary > svg {
+  flex: none;
+  color: #67e8f9;
+}
+
+.help-contact-summary div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.help-contact-summary span {
+  color: var(--navy-panel-sub);
+  font-size: 12px;
+}
+
+.help-contact-summary a {
+  overflow-wrap: anywhere;
+  font-weight: 750;
+}
+
+.help-payment-alert {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 24px 26px;
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--warning-soft) 80%, var(--surface));
+}
+
+.help-payment-alert > svg {
+  color: var(--warning);
+}
+
+.help-payment-alert h2,
+.help-payment-alert p {
+  margin: 0;
+}
+
+.help-payment-alert h2 {
+  font-size: 19px;
+  letter-spacing: -0.02em;
+}
+
+.help-payment-alert p {
+  max-width: 680px;
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.help-alert-actions {
+  display: grid;
+  gap: 7px;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.help-alert-actions a:first-child {
+  color: var(--primary);
+}
+
+.help-alert-actions a:last-child {
+  color: var(--text-2);
+}
+
+.help-section-heading > span,
+.help-contact-copy > span {
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.help-section-heading h2,
+.help-contact h2 {
+  margin: 7px 0 0;
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.help-topic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.help-topic-card {
+  display: grid;
+  min-height: 250px;
+  align-content: start;
+  padding: 25px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.help-topic-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.help-topic-icon svg {
+  width: 21px;
+}
+
+.help-topic-card h3 {
+  margin: 18px 0 8px;
+  font-size: 20px;
+  letter-spacing: -0.025em;
+}
+
+.help-topic-card p {
+  max-width: 58ch;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.help-topic-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: auto;
+  padding-top: 22px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.help-topic-actions a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 6px;
+}
+
+.help-topic-actions a:first-child {
+  color: var(--primary);
+}
+
+.help-topic-actions a:last-child {
+  color: var(--text-3);
+}
+
+.help-topic-actions svg {
+  width: 15px;
+}
+
+.help-contact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.55fr);
+  align-items: center;
+  gap: 48px;
+  padding: 34px;
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.help-contact-copy > p {
+  max-width: 620px;
+  margin: 13px 0 0;
+  color: var(--text-2);
+}
+
+.help-privacy-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 680px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.help-privacy-note svg {
+  flex: none;
+  color: var(--warning);
+}
+
+.help-contact-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.help-contact-actions .button {
+  min-height: 50px;
+}
+
+.help-phone-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+@media (max-width: 800px) {
+  .help-page {
+    padding: 44px 0 72px;
+  }
+
+  .help-hero,
+  .help-contact {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
+  .help-hero {
+    align-items: start;
+  }
+
+  .help-payment-alert {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .help-alert-actions {
+    grid-column: 2;
+    text-align: left;
+  }
+}
+
+@media (max-width: 540px) {
+  .help-page {
+    padding: 34px 0 46px;
+  }
+
+  .help-shell {
+    gap: 26px;
+    padding-inline: 16px;
+  }
+
+  .help-hero h1 {
+    margin-top: 15px;
+    font-size: clamp(39px, 12vw, 52px);
+  }
+
+  .help-hero p {
+    font-size: 16px;
+  }
+
+  .help-contact-summary,
+  .help-payment-alert,
+  .help-topic-card,
+  .help-contact {
+    padding: 20px;
+  }
+
+  .help-payment-alert {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .help-alert-actions {
+    grid-column: 1;
+  }
+
+  .help-alert-actions a {
+    display: flex;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .help-topic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .help-topic-card {
+    min-height: 0;
+  }
+
+  .help-topic-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .help-contact-actions .button {
+    width: 100%;
+  }
+}

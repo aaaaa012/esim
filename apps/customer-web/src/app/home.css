@@ -2,23 +2,6 @@
 
 /* ---------- Homepage campaigns ---------- */
 
-.powered-by-bar {
-  min-height: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 20px;
-  border-bottom: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border));
-  background: color-mix(in srgb, var(--primary-soft) 62%, var(--surface));
-  color: var(--text-2);
-  font-size: 12px;
-  letter-spacing: 0.01em;
-}
-.powered-by-bar b {
-  color: var(--primary);
-  font-weight: 800;
-}
 .campaign-featured,
 .campaign-gallery-section {
   padding: 76px 0 0;
@@ -769,6 +752,26 @@
   line-height: 1.68;
   color: var(--text-2);
   max-width: 540px;
+}
+
+.hero-partner-trust {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 5px;
+  margin-top: 13px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.hero-partner-trust svg {
+  color: var(--accent-strong);
+}
+
+.hero-partner-trust b {
+  color: var(--text-2);
+  font-weight: 750;
 }
 
 .hero-discovery {
@@ -3208,6 +3211,10 @@
     margin: auto;
   }
 
+  .hero-partner-trust {
+    margin-inline: auto;
+  }
+
   .actions {
     justify-content: center;
   }
@@ -3296,6 +3303,9 @@
   }
   .hero p {
     margin: 0;
+  }
+  .hero-partner-trust {
+    margin-inline: 0;
   }
   .hero h1 {
     max-width: 11ch;

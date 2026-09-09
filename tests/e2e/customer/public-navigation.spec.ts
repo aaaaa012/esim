@@ -12,6 +12,7 @@ const publicRoutes = [
   "/",
   "/destinations",
   "/compatibility",
+  "/help",
   "/terms",
   "/privacy",
   "/refund-policy",
@@ -23,6 +24,36 @@ const publicRoutes = [
 
 test.beforeEach(async ({ page }) => {
   await mockPublicCustomerApi(page);
+});
+
+test("public Help offers safe recovery and direct support paths", async ({ page }) => {
+  await page.goto("/help");
+  await expect(page.getByRole("heading", { name: "How can we help?" })).toBeVisible();
+  await expect(page.getByText(/do not pay again/i)).toBeVisible();
+  await expect(page.getByRole("link", { name: /Find my recharge/i })).toHaveAttribute(
+    "href",
+    "/recharge/recover",
+  );
+  await expect(page.getByRole("link", { name: /Check my phone/i })).toHaveAttribute(
+    "href",
+    "/compatibility",
+  );
+  await expect(page.locator('a[href^="mailto:support@visacompassnepal.com"]')).not.toHaveCount(0);
+  await expect(page.getByText(/Never send passport files/i)).toBeVisible();
+});
+
+test("compatibility remains a Help topic", async ({ page }) => {
+  await page.goto("/compatibility");
+  await expect(page.getByRole("link", { name: "Back to Help" })).toHaveAttribute(
+    "href",
+    "/help",
+  );
+  const mobileHelp = page.getByRole("navigation", {
+    name: "Primary mobile navigation",
+  }).getByRole("link", { name: "Help" });
+  if (await mobileHelp.isVisible()) {
+    await expect(mobileHelp).toHaveAttribute("aria-current", "page");
+  }
 });
 
 for (const route of publicRoutes) {

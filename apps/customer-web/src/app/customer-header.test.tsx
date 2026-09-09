@@ -67,4 +67,10 @@ describe("customer header active navigation", () => {
     expect(isCustomerNavActive("/account/esims", "/account/esims/one", "")).toBe(true);
     expect(isCustomerNavActive("/compatibility", "/destinations", "")).toBe(false);
   });
+
+  it("treats compatibility as part of Help", () => {
+    expect(isCustomerNavActive("/help", "/help", "")).toBe(true);
+    expect(isCustomerNavActive("/help", "/compatibility", "")).toBe(true);
+    expect(isCustomerNavActive("/help", "/destinations", "")).toBe(false);
+  });
 });

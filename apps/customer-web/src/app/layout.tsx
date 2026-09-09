@@ -4,7 +4,7 @@ import "./globals.css";
 import CustomerHeader from "./customer-header";
 import { ClerkProvider } from "@clerk/nextjs";
 import Link from "next/link";
-import { ExternalLink, MapPin, MessageCircle, Phone } from "lucide-react";
+import { ExternalLink, Mail, MapPin, MessageCircle, Phone } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Visa Compass eSIM",
@@ -46,6 +46,10 @@ export default function RootLayout({
               />
               <address className="footer-contact">
                 <b>Visit or contact us</b>
+                <a href="mailto:support@visacompassnepal.com">
+                  <Mail size={16} aria-hidden="true" />
+                  <span>support@visacompassnepal.com</span>
+                </a>
                 <a
                   href="https://maps.app.goo.gl/wE3iigygzFDKuyib7"
                   target="_blank"
@@ -89,7 +93,7 @@ export default function RootLayout({
                   compatibility required
                 </span>
                 <b>Travel eSIM connectivity powered by Ubigi.</b>
-                <span><Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link> · <Link href="/refund-policy">Refund policy</Link></span>
+                <span><Link href="/help">Help</Link> · <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link> · <Link href="/refund-policy">Refund policy</Link></span>
               </div>
             </div>
           </footer>
