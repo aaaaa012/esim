@@ -1086,7 +1086,7 @@ body {
 }
 
 .ops-content
-  :where(h1, h2, h3, h4, p, li, dd, dt, a, button, label, small, strong, code) {
+  :where(h1, h2, h3, h4, p, li, dd, dt, a, label, small, strong, code) {
   overflow-wrap: anywhere;
 }
 
@@ -1095,7 +1095,7 @@ body {
 }
 
 .ops-content button {
-  white-space: normal;
+  overflow-wrap: normal;
 }
 
 [data-slot="dialog-content"] {
@@ -1119,6 +1119,18 @@ body {
   max-width: 24rem;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ops-data-table td:has(button),
+[data-slot="table-cell"]:has(> button) {
+  width: 1%;
+  min-width: max-content;
+  white-space: nowrap;
+}
+
+[data-slot="table"] button {
+  min-width: max-content;
+  white-space: nowrap;
 }
 
 @media (max-width: 639px) {

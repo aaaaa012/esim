@@ -139,7 +139,10 @@ describe("recharge checkout", () => {
     first.unmount();
     mocks.authFetch.mockClear();
     render(<Checkout {...props} />);
-    fireEvent.click(await screen.findByRole("checkbox"));
+    const restoredConsent = (await screen.findByRole(
+      "checkbox",
+    )) as HTMLInputElement;
+    expect(restoredConsent.checked).toBe(true);
     fireEvent.click(
       screen.getByRole("button", { name: "Continue to payment" }),
     );
@@ -281,4 +284,73 @@ describe("first-purchase document verification", () => {
       ).toBe(false);
     },
   );
+
+  it("describes an order refresh neutrally before its saved stage is known", async () => {
+    mocks.signedIn = true;
+    mocks.authFetch.mockImplementation(
+      () => new Promise<Response>(() => undefined),
+    );
+
+    render(<Checkout planId="plan" orderId="first" />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Restoring your order" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/verifying your khalti payment/i)).toBeNull();
+  });
+
+  it("restores accepted checkout consent within the active tab", async () => {
+    sessionStorage.setItem("vc_checkout_consent:v1:plan", "accepted");
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      return ok(plan);
+    });
+
+    render(<Checkout planId="plan" orderId="" />);
+
+    const confirmations = await screen.findAllByRole("checkbox");
+    expect(confirmations).toHaveLength(2);
+    expect(
+      confirmations.every((checkbox) => (checkbox as HTMLInputElement).checked),
+    ).toBe(true);
+  });
+
+  it("moves backward one valid step and keeps prior consent selected", async () => {
+    mocks.signedIn = true;
+    const savedDraft = {
+      id: "first",
+      orderNumber: "VC-FIRST",
+      status: "DRAFT",
+      purchaseType: "INITIAL_PURCHASE",
+      plan,
+      totalAmountNpr: 100,
+      traveler: { firstName: "Samira" },
+      documentReviewStatus: "NOT_STARTED",
+      documents: [],
+    };
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI", "FONEPAY"] });
+      return ok(savedDraft);
+    });
+
+    render(<Checkout planId="plan" orderId="first" />);
+
+    await screen.findByRole("heading", { name: "Travel documents" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit traveller details" }),
+    );
+    await screen.findByRole("heading", { name: "Traveller information" });
+    expect(new URLSearchParams(window.location.search).get("step")).toBe("2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await screen.findByRole("heading", { name: "Confirm your device" });
+    expect(
+      screen
+        .getAllByRole("checkbox")
+        .every((checkbox) => (checkbox as HTMLInputElement).checked),
+    ).toBe(true);
+    expect(new URLSearchParams(window.location.search).get("step")).toBe("1");
+  });
 });

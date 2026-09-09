@@ -39,7 +39,11 @@ import { DocumentRecoveryFields } from "./document-recovery";
 import { useCheckoutTransition } from "./use-checkout-transition";
 import DatePicker from "./date-picker";
 import { submitCheckoutDocumentsSequentially } from "./document-submission";
-import { checkoutResumeDisposition } from "./checkout-resume";
+import {
+  checkoutResumeDisposition,
+  checkoutResumeStep,
+  paymentStatusHeading,
+} from "./checkout-resume";
 import {
   PaymentProvider,
   apiErrorMessage,
@@ -63,7 +67,11 @@ type Order = {
     fileName?: string;
     uploadVerified?: boolean;
   }[];
-  payment?: { reference: string; status: string };
+  payment?: {
+    provider?: PaymentProvider;
+    reference: string;
+    status: string;
+  };
   passportVerification?: {
     status: string;
     matchedFields?: string[];
@@ -201,6 +209,7 @@ export default function CheckoutClient({
   } | null>(null);
   const [recoveryReady, setRecoveryReady] = useState(!orderId);
   const recoveryKey = (id: string) => `vc_guest_recovery_${id}`;
+  const consentKey = `vc_checkout_consent:v1:${orderId || planId || "checkout"}`;
   const storeRecovery = (id: string, token: string, expiresAt: string) => {
     const value = { token, expiresAt };
     setRecovery(value);
@@ -322,9 +331,23 @@ export default function CheckoutClient({
   // new-purchase compatibility form never flashes before effects run.
   const isTopUpIntent =
     Boolean((mobile && lookupToken) || targetEsimId) && !orderId;
-  const [step, setStep] = useState(() => (orderId || isTopUpIntent ? 4 : 1)),
-    [compatible, setCompatible] = useState(false),
-    [legalAccepted, setLegalAccepted] = useState(false),
+  const [step, setStep] = useState(() =>
+      orderId || isTopUpIntent ? 4 : 1,
+    ),
+    [compatible, setCompatible] = useState(() => {
+      try {
+        return sessionStorage.getItem(consentKey) === "accepted";
+      } catch {
+        return false;
+      }
+    }),
+    [legalAccepted, setLegalAccepted] = useState(() => {
+      try {
+        return sessionStorage.getItem(consentKey) === "accepted";
+      } catch {
+        return false;
+      }
+    }),
     [traveler, setTraveler] = useState(initial);
   const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
@@ -367,6 +390,15 @@ export default function CheckoutClient({
     [payment, setPayment] = useState<Payment | null>(null),
     [uxResending, setUxResending] = useState(false);
   const [resumingOrder, setResumingOrder] = useState(Boolean(orderId));
+  useEffect(() => {
+    try {
+      if (compatible && legalAccepted)
+        sessionStorage.setItem(consentKey, "accepted");
+      else sessionStorage.removeItem(consentKey);
+    } catch {
+      /* sessionStorage unavailable */
+    }
+  }, [compatible, legalAccepted, consentKey]);
   useEffect(() => {
     if (!orderId) {
       setRecoveryReady(true);
@@ -475,45 +507,41 @@ export default function CheckoutClient({
     );
     return Number.isInteger(value) && value >= 1 && value <= 4 ? value : 1;
   };
-  const advance = (next: number) => {
+  const navigateStep = (next: number, mode: "push" | "replace") => {
+    const normalized = Math.min(4, Math.max(1, next));
     if (typeof window === "undefined") {
-      setStep(next);
+      setStep(normalized);
       return;
     }
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("step", String(next));
-      window.history.pushState({ step: next }, "", url.toString());
+      url.searchParams.set("step", String(normalized));
+      window.history[mode === "push" ? "pushState" : "replaceState"](
+        { ...window.history.state, checkout: true, step: normalized },
+        "",
+        url.toString(),
+      );
     } catch {
       /* history unavailable */
     }
-    setStep(next);
+    setStep(normalized);
   };
-  const goBack = () => {
-    if (typeof window !== "undefined" && window.history.state?.step) {
-      window.history.back();
-    } else {
-      setStep((current) => Math.max(1, current - 1));
-    }
-  };
-  // Jump back to an already-completed step: replaces the current entry so the
-  // back-stack stays intact (no forward clutter from navigation backwards).
-  const jumpTo = (next: number) => {
-    if (typeof window !== "undefined") {
-      try {
-        const url = new URL(window.location.href);
-        url.searchParams.set("step", String(next));
-        window.history.replaceState({ step: next }, "", url.toString());
-      } catch {
-        /* history unavailable */
-      }
-    }
-    setStep(next);
-  };
+  const advance = (next: number) => navigateStep(next, "push");
+  const goBack = () => navigateStep(step - 1, "replace");
+  // Backward navigation replaces the current entry so browser Back cannot
+  // immediately send the user forward in the checkout again.
+  const jumpTo = (next: number) => navigateStep(next, "replace");
   useEffect(() => {
-    const onPop = () => setStep(Math.min(4, Math.max(1, stepFromUrl())));
+    const onPop = () => {
+      const requested = Math.min(4, Math.max(1, stepFromUrl()));
+      const furthest = order ? checkoutResumeStep(order) : step;
+      setStep(Math.min(requested, furthest));
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
+  }, [order, step]);
+  useEffect(() => {
+    navigateStep(step, "replace");
   }, []);
   useEffect(() => {
     const hasUnsavedCheckoutProgress = step > 1 && step < 4 && !resumingOrder;
@@ -569,13 +597,13 @@ export default function CheckoutClient({
           throw new Error("This order can no longer be resumed from checkout");
         setOrder(value);
         setCompatible(true);
+        setLegalAccepted(true);
+        if (value.payment?.provider) setProvider(value.payment.provider);
         if (value.traveler) setTraveler({ ...initial, ...value.traveler });
-        if (disposition === "POST_PAYMENT") {
-          setStep(4);
-          return;
-        }
+        const resumeStep = checkoutResumeStep(value);
+        navigateStep(resumeStep, "replace");
+        if (disposition === "POST_PAYMENT") return;
         if (value.purchaseType === "TOPUP") {
-          setStep(4);
           if (value.status === "PAYMENT_PENDING" && value.payment) {
             setPayment({
               reference: value.payment.reference,
@@ -586,30 +614,16 @@ export default function CheckoutClient({
           }
           return;
         }
-        const hasRequiredDocs = Boolean(
-          hasSavedDocument(value.documents, "PASSPORT") &&
-          hasSavedDocument(value.documents, "TICKET"),
-        );
         if (value.status === "PAYMENT_PENDING" && value.payment) {
           setPayment({
             reference: value.payment.reference,
             redirectUrl: "",
             expiresAt: "",
           });
-          setStep(4);
           void verifyPayment(value);
         } else if (value.status === "PAYMENT_FAILED") {
           setPayment(null);
-          setStep(4);
-        } else if (!value.traveler) setStep(2);
-        else if (
-          !hasRequiredDocs ||
-          !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
-            value.documentReviewStatus ?? "",
-          )
-        )
-          setStep(3);
-        else setStep(4);
+        }
       })
       .catch((cause) =>
         setError(
@@ -1516,10 +1530,10 @@ export default function CheckoutClient({
                 <span className="form-icon">
                   <LoaderCircle className="spin" />
                 </span>
-                <h2>Verifying your Khalti payment</h2>
+                <h2>Restoring your order</h2>
                 <p>
-                  We are securely checking your payment and restoring your
-                  order. Please do not refresh or pay again.
+                  We are securely loading your saved checkout and will return
+                  you to the correct step.
                 </p>
               </div>
             )}
@@ -2204,7 +2218,9 @@ export default function CheckoutClient({
                 ) : verifying ? (
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
-                    <b>Checking payment status</b>
+                    <b>
+                      {paymentStatusHeading(order?.payment?.provider ?? provider)}
+                    </b>
                     <span>{order?.orderNumber}</span>
                     <p>
                       We are checking with your payment provider. Your order
