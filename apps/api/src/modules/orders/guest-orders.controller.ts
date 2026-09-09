@@ -488,6 +488,6 @@ export class GuestOrdersController {
     ).replace(/\/$/, "");
     // Keep the bearer token in the URL fragment. Fragments are not sent in
     // HTTP requests, access logs, or referrer headers.
-    return `${base}/#topup=${encodeURIComponent(token)}`;
+    return `${base}/recharge#topup=${encodeURIComponent(token)}`;
   }
 }

@@ -97,7 +97,7 @@ describe("homepage destination discovery", () => {
   it("keeps recharge and compatibility as tertiary paths", async () => {
     renderExplorer();
     expect((await screen.findByRole("link", { name: "Recharge" })).getAttribute("href"))
-      .toBe("/#recharge");
+      .toBe("/recharge");
     expect(screen.getByRole("link", { name: "Check compatibility" }).getAttribute("href"))
       .toBe("/compatibility");
   });

@@ -150,7 +150,7 @@ export function HeroDestinationSearch() {
       </Link>
       <div className="hero-utility-links">
         <span>
-          Already have an eSIM? <Link href="/#recharge">Recharge</Link>
+          Already have an eSIM? <Link href="/recharge">Recharge</Link>
         </span>
         <span>
           <Smartphone size={14} /> Not sure about your phone?{" "}

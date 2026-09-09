@@ -257,6 +257,32 @@ describe("automatic recharge target discovery", () => {
   });
 });
 
+describe("recharge purchase history", () => {
+  it("labels a recharge paid for another customer without exposing their identity", async () => {
+    const { service, prisma, orders } = setup(
+      makeOrder({ id: "friend-recharge", ownerId: "friend-owner" }),
+    );
+    prisma.order.findMany.mockResolvedValue([
+      {
+        id: "friend-recharge",
+        orderType: "TOPUP",
+        customer: { user: { clerkId: "friend-owner" } },
+        targetInventory: { iccid: "8944000000009876" },
+      },
+    ]);
+
+    const result = await service.purchases(user("payer-clerk", "payer"));
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        rechargeFor: "OTHER",
+        targetSuffix: "9876",
+      }),
+    ]);
+    expect(orders.refreshOne).toHaveBeenCalledWith("friend-recharge", true);
+  });
+});
+
 describe("recharge ownership and privacy", () => {
   it("uses only an unambiguous initial purchase; missing or multiple origins require review", () => {
     expect(
@@ -415,6 +441,16 @@ describe("recharge creation and retries", () => {
       ).not.toThrow();
       await expect(
         service.create({ ...input, planId: "different" }, purchaser),
+      ).rejects.toThrow(/different purchase/);
+      await expect(
+        service.create(
+          {
+            ...input,
+            planId: "different",
+            checkoutAttemptKey: "b".repeat(32),
+          },
+          purchaser,
+        ),
       ).rejects.toThrow(/different purchase/);
     },
   );

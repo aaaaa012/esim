@@ -248,6 +248,12 @@ export class RechargesService {
       : await this.target(input.targetEsimId!);
     if (!input.lookupToken && (!user || target.ownerId !== user.id))
       throw new NotFoundException("eSIM not found");
+    // A verified email link authorizes one recharge checkout. Deriving the
+    // attempt key from the bearer token makes retries idempotent while stopping
+    // the same forwarded link from creating a second order with a new client key.
+    const checkoutAttemptKey = input.lookupToken
+      ? createHash("sha256").update(`recharge:${input.lookupToken}`).digest("hex")
+      : input.checkoutAttemptKey;
     const hash = createHash("sha256")
       .update(
         JSON.stringify({
@@ -261,7 +267,7 @@ export class RechargesService {
       )
       .digest("hex");
     let stored = await this.prisma.order.findUnique({
-      where: { checkoutAttemptKey: input.checkoutAttemptKey },
+      where: { checkoutAttemptKey },
     });
     if (!stored) {
       try {
@@ -294,7 +300,7 @@ export class RechargesService {
               customerId: target.customerId,
               inventoryId: target.inventoryId,
               purchasedByUserId: user?.localUserId,
-              checkoutAttemptKey: input.checkoutAttemptKey,
+              checkoutAttemptKey,
               checkoutRequestHash: hash,
             },
           },
@@ -305,7 +311,7 @@ export class RechargesService {
       } catch (error) {
         if ((error as { code?: string }).code !== "P2002") throw error;
         stored = await this.prisma.order.findUnique({
-          where: { checkoutAttemptKey: input.checkoutAttemptKey },
+          where: { checkoutAttemptKey },
         });
         if (!stored) throw error;
       }
@@ -529,13 +535,24 @@ export class RechargesService {
       },
       orderBy: { createdAt: "desc" },
       take: 200,
+      include: {
+        customer: { include: { user: true } },
+        targetInventory: { select: { iccid: true } },
+      },
     });
     return Promise.all(
       rows.map(async (row) => {
         await this.orders.refreshOne(row.id, true);
         const order = this.orders.get(row.id);
         return row.orderType === "TOPUP"
-          ? rechargeView(order)
+          ? {
+              ...rechargeView(order),
+              rechargeFor:
+                row.customer.user?.clerkId === user.id
+                  ? ("OWN" as const)
+                  : ("OTHER" as const),
+              targetSuffix: row.targetInventory?.iccid.slice(-4),
+            }
           : this.orders.view(row.id, user.id);
       }),
     );

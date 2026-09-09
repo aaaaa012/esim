@@ -20,6 +20,8 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Order = OrderSummary & {
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   purchaseContext?: "TOPUP" | "NEW_DESTINATION" | "FIRST_PURCHASE";
+  rechargeFor?: "OWN" | "OTHER";
+  targetSuffix?: string;
 };
 const processing = [
   "PAYMENT_PENDING",
@@ -261,7 +263,9 @@ export default function OrderList() {
                     <span>
                       {order.orderNumber} ·{" "}
                       {order.purchaseType === "TOPUP"
-                        ? "Top-up"
+                        ? order.rechargeFor === "OTHER"
+                          ? `Recharge for another eSIM${order.targetSuffix ? ` · ending ${order.targetSuffix}` : ""}`
+                          : "Recharge"
                         : "Plan purchase"}
                     </span>
                   </div>

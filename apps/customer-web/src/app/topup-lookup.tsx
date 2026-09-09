@@ -43,7 +43,7 @@ type LookupResult = {
 
 const npr = (amount: number) => `NPR ${amount.toLocaleString("en-NP")}`;
 
-export default function TopupLookup() {
+export default function TopupLookup({ friendMode = false }: { friendMode?: boolean }) {
   const router = useRouter();
   const [mobile, setMobile] = useState("");
   const [busy, setBusy] = useState(false);
@@ -273,12 +273,16 @@ export default function TopupLookup() {
               <span className="recharge-icon" aria-hidden="true">
                 <RefreshCcw size={21} />
               </span>
-              <p className="recharge-kicker">For returning travellers</p>
-              <h2 id="recharge-title">Add data to your existing eSIM</h2>
+              <p className="recharge-kicker">
+                {friendMode ? "Recharge for someone else" : "For returning travellers"}
+              </p>
+              <h2 id="recharge-title">
+                {friendMode ? "Help a friend stay connected" : "Add data to your existing eSIM"}
+              </h2>
               <p className="recharge-description">
-                Keep the eSIM already installed on your phone. Enter its mobile
-                number from your delivery email. We will email a secure link
-                before showing any eSIM or plan details.
+                {friendMode
+                  ? "Enter their eSIM mobile number. We send the private verification link only to the original purchase email. Ask the owner to forward it to you, then open it while signed in so the recharge appears in your purchases."
+                  : "Keep the eSIM already installed on your phone. Enter its mobile number from the delivery email. We will email a secure link before showing any eSIM or plan details."}
               </p>
               <form
                 className="recharge-form"
@@ -535,8 +539,11 @@ export default function TopupLookup() {
                   </strong>
                   <p>
                     We send a secure link only when the mobile number belongs to
-                    an eligible Visa Compass eSIM. The link expires in 15
-                    minutes.
+                    an eligible Visa Compass eSIM. The private, single-use link
+                    expires in 15 minutes.
+                    {friendMode
+                      ? " Ask the owner to forward it to you, then open it while signed in to keep the order in your account."
+                      : ""}
                   </p>
                 </div>
                 <p className="recharge-help">

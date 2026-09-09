@@ -14,7 +14,7 @@ export default function RecoverRecharge() {
   return (
     <main className="checkout-page recharge-recovery-page">
       <section className="checkout-card form-section recharge-recovery-card">
-        <Link className="recovery-back-link" href="/#recharge">
+        <Link className="recovery-back-link" href="/recharge">
           <ArrowLeft size={16} /> Back to recharge
         </Link>
         <span className="form-icon" aria-hidden="true">

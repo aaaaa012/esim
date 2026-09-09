@@ -46,6 +46,10 @@ export default function CustomerHeader() {
   useEffect(() => {
     const syncHash = () => setActiveHash(window.location.hash);
     syncHash();
+    if (path === "/" && window.location.hash.startsWith("#topup=")) {
+      window.location.replace(`/recharge${window.location.hash}`);
+      return;
+    }
     window.addEventListener("hashchange", syncHash);
     return () => window.removeEventListener("hashchange", syncHash);
   }, []);
@@ -100,7 +104,7 @@ export default function CustomerHeader() {
         <nav className="navlinks">
           {navLink("/", "Home")}
           {navLink("/destinations", "Destinations")}
-          {navLink("/#recharge", "Recharge")}
+          {navLink("/recharge", "Recharge")}
           {navLink("/#how", "How it works")}
           {navLink("/help", "Help")}
           <span className="nav-user">
@@ -164,13 +168,9 @@ export default function CustomerHeader() {
           <Globe2 size={20} /><span>Explore</span>
         </Link>
         <Link
-          href="/#recharge"
-          className={path === "/" && activeHash === "#recharge" ? "nav-active" : ""}
-          aria-current={path === "/" && activeHash === "#recharge" ? "page" : undefined}
-          onClick={(event) => {
-            if (scrollToHomeSection("/#recharge", path)) event.preventDefault();
-            setActiveHash("#recharge");
-          }}
+          href="/recharge"
+          className={path.startsWith("/recharge") ? "nav-active" : ""}
+          aria-current={path.startsWith("/recharge") ? "page" : undefined}
         >
           <RefreshCw size={20} /><span>Recharge</span>
         </Link>

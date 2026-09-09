@@ -64,6 +64,7 @@ describe("customer header active navigation", () => {
 
   it("matches standalone routes and their child pages", () => {
     expect(isCustomerNavActive("/destinations", "/destinations", "")).toBe(true);
+    expect(isCustomerNavActive("/recharge", "/recharge/recover", "")).toBe(true);
     expect(isCustomerNavActive("/account/esims", "/account/esims/one", "")).toBe(true);
     expect(isCustomerNavActive("/compatibility", "/destinations", "")).toBe(false);
   });

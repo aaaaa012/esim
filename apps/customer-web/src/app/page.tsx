@@ -15,7 +15,6 @@ import {
   Zap,
 } from "lucide-react";
 import CatalogPlans from "./catalog-plans";
-import TopupLookup from "./topup-lookup";
 import Faq from "./faq";
 import PartnersShowcase from "./partners-showcase";
 import {
@@ -178,7 +177,44 @@ export default function Home() {
           </div>
         </section>
 
-        <TopupLookup />
+        <section
+          className="recharge-section recharge-teaser"
+          id="recharge"
+          aria-labelledby="recharge-title"
+        >
+          <div className="shell">
+            <div className="recharge-panel">
+              <div className="recharge-marker" aria-hidden="true">
+                <span>02</span><i /><small>Recharge</small>
+              </div>
+              <div className="recharge-content">
+                <span className="recharge-icon" aria-hidden="true">
+                  <QrCode size={21} />
+                </span>
+                <p className="recharge-kicker">Keep your eSIM installed</p>
+                <h2 id="recharge-title">Ready for your next trip?</h2>
+                <p className="recharge-description">
+                  Signed-in customers can choose their eSIM and go straight to
+                  plans. You can also securely recharge an eSIM for a friend.
+                </p>
+                <Link className="button recharge-teaser-action" href="/recharge">
+                  Recharge an eSIM <span aria-hidden="true">→</span>
+                </Link>
+                <Link className="recharge-recovery-link" href="/recharge/recover">
+                  Already paid? Track an existing recharge
+                </Link>
+              </div>
+              <aside className="recharge-note" aria-label="How recharge works">
+                <span>No reinstall</span>
+                <strong>Your existing eSIM stays on your phone.</strong>
+                <p>
+                  Choose a new data plan, pay securely in NPR, and keep
+                  travelling.
+                </p>
+              </aside>
+            </div>
+          </div>
+        </section>
 
         <section className="section" id="how">
           <div className="shell">

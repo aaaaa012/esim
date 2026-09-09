@@ -36,7 +36,7 @@ describe("customer recharge journey", () => {
   });
 
   it("verifies the signed email link before revealing and selecting a recharge plan", async () => {
-    window.history.replaceState({}, "", "/#topup=signed-token");
+    window.history.replaceState({}, "", "/recharge#topup=signed-token");
     const request = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({
         found: true,
