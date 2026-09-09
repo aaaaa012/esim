@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Globe2, Search } from "lucide-react";
 
 const ALPHA3_TO_ALPHA2: Record<string, string> = {
@@ -93,11 +93,17 @@ export default function CountryPicker({
   value,
   onChange,
   disabled = false,
+  label = "Choose your destination",
+  placeholder = "Select a destination…",
+  searchPlaceholder = "Search countries…",
 }: {
   countries: Country[];
   value: string;
   onChange: (code: string) => void;
   disabled?: boolean;
+  label?: string;
+  placeholder?: string;
+  searchPlaceholder?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -105,8 +111,9 @@ export default function CountryPicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputId = useId();
 
-  const label = useMemo(
+  const selectedLabel = useMemo(
     () => countries.find((country) => country.code === value)?.name ?? "",
     [countries, value],
   );
@@ -175,7 +182,7 @@ export default function CountryPicker({
 
   return (
     <div className="country-picker" ref={rootRef}>
-      <label htmlFor="country-picker-input">Choose your destination</label>
+      <label htmlFor={inputId}>{label}</label>
       <button
         type="button"
         className="country-picker-trigger"
@@ -188,12 +195,12 @@ export default function CountryPicker({
           {value ? (
             <>
               <span className="cp-flag">{flagEmoji(value)}</span>
-              <span className="cp-selected-name">{label || value}</span>
+              <span className="cp-selected-name">{selectedLabel || value}</span>
             </>
           ) : (
             <>
               <Globe2 size={18} />
-              <span>Select a destination…</span>
+              <span>{placeholder}</span>
             </>
           )}
         </span>
@@ -211,10 +218,10 @@ export default function CountryPicker({
           <div className="country-picker-search">
             <Search size={16} />
             <input
-              id="country-picker-input"
+              id={inputId}
               ref={inputRef}
               value={query}
-              placeholder="Search countries…"
+              placeholder={searchPlaceholder}
               onChange={(event) => {
                 setQuery(event.target.value);
                 setActive(0);

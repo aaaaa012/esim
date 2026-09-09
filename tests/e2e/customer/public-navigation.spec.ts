@@ -60,16 +60,36 @@ test("header destinations navigation never falls back to the homepage", async ({
   page,
 }) => {
   await page.goto("/compatibility");
-  const mobileMenu = page.getByRole("button", { name: /navigation menu/i });
-  if (await mobileMenu.isVisible()) await mobileMenu.click();
-  await page
-    .locator("header")
-    .getByRole("link", { name: "Destinations", exact: true })
-    .click();
+  const mobileExplore = page.getByRole("navigation", { name: "Primary mobile navigation" })
+    .getByRole("link", { name: "Explore" });
+  if (await mobileExplore.isVisible()) {
+    await mobileExplore.click();
+  } else {
+    await page.locator("header").getByRole("link", { name: "Destinations", exact: true }).click();
+  }
   await expect(page).toHaveURL(/\/destinations$/);
   await expect(
     page.getByRole("heading", { name: /Choose where you need data/i }),
   ).toBeVisible();
+});
+
+test("homepage prioritizes destination discovery on mobile", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /Your data lands before you do/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Search destination/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Explore eSIM plans/i })).toHaveAttribute("href", "/destinations");
+
+  const isMobileNavigation = await page.getByRole("navigation", {
+    name: "Primary mobile navigation",
+  }).isVisible();
+  if (isMobileNavigation) {
+    await expect(page.locator(".phone-stage")).toBeHidden();
+    await expect(page.getByRole("button", { name: /navigation menu/i })).toBeHidden();
+    await expect(page.getByRole("link", { name: "Recharge", exact: true }).last()).toBeVisible();
+    await expect(page.getByRole("link", { name: "My eSIM", exact: true })).toBeVisible();
+  } else {
+    await expect(page.locator(".phone-stage")).toBeVisible();
+  }
 });
 
 test("unknown routes render the application 404", async ({ page }) => {

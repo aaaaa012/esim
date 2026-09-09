@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import {
-  ArrowRight,
   CheckCircle2,
   Globe2,
   Headset,
@@ -27,14 +26,20 @@ import {
   PoweredByBar,
   WhyCampaign,
 } from "./homepage-campaigns";
+import {
+  HeroDestinationSearch,
+  HomepageExplorerProvider,
+  PopularRightNow,
+} from "./homepage-explorer";
 import "./home.css";
 
 export default function Home() {
   return (
     <CampaignProvider>
-      <main>
-        <PoweredByBar />
-        <section className="hero">
+      <HomepageExplorerProvider>
+        <main>
+          <PoweredByBar />
+          <section className="hero">
           <div className="shell hero-grid">
             <div>
               <span className="eyebrow">
@@ -42,36 +47,13 @@ export default function Home() {
                 Built for Nepali travellers
               </span>
               <h1>
-                Land connected.
-                <br />
-                Travel <em>freely.</em>
+                Your data lands <em>before you do.</em>
               </h1>
               <p>
-                Get secure travel data before you fly. No airport queues, no
-                physical SIM swaps—just scan your Visa Compass eSIM and go.
+                Buy a travel eSIM in Nepali rupees, install it before takeoff,
+                and connect when you arrive.
               </p>
-              <div className="actions">
-                <Link className="button" href="#plans">
-                  Find your plan <ArrowRight size={17} />
-                </Link>
-                <Link className="button secondary" href="#how">
-                  How it works
-                </Link>
-              </div>
-              <div
-                className="hero-proof"
-                aria-label="Why travellers choose Visa Compass"
-              >
-                <span>
-                  <CheckCircle2 size={16} /> Keep your number
-                </span>
-                <span>
-                  <CheckCircle2 size={16} /> Install before you fly
-                </span>
-                <span>
-                  <CheckCircle2 size={16} /> Support when you need it
-                </span>
-              </div>
+              <HeroDestinationSearch />
             </div>
             <div className="phone-stage">
               <div className="phone">
@@ -166,10 +148,11 @@ export default function Home() {
               </div>
             </div>
           </div>
-        </section>
+          </section>
 
-        <FeaturedCampaign />
-        <OfferGallery />
+          <PopularRightNow />
+          <FeaturedCampaign />
+          <OfferGallery />
 
         <section className="section" id="plans">
           <div className="shell">
@@ -378,7 +361,8 @@ export default function Home() {
             </div>
           </div>
         </section>
-      </main>
+        </main>
+      </HomepageExplorerProvider>
     </CampaignProvider>
   );
 }

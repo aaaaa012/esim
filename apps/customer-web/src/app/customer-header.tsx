@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Menu, X } from "lucide-react";
+import { Bell, CircleHelp, Globe2, RefreshCw, Smartphone } from "lucide-react";
 import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import ThemeToggle from "./theme-toggle";
 
@@ -28,7 +28,6 @@ export function scrollToHomeSection(href: string, pathname: string) {
 
 export default function CustomerHeader() {
   const path = usePathname();
-  const [open, setOpen] = useState(false);
   const [activeHash, setActiveHash] = useState("");
 
   useEffect(() => {
@@ -38,23 +37,6 @@ export default function CustomerHeader() {
     return () => window.removeEventListener("hashchange", syncHash);
   }, []);
 
-  useEffect(() => {
-    setOpen(false);
-  }, [path]);
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    document.body.classList.add("menu-open");
-    return () => {
-      document.removeEventListener("keydown", closeOnEscape);
-      document.body.classList.remove("menu-open");
-    };
-  }, [open]);
-
   const navLink = (href: string, label: string) => (
     <Link
       href={href}
@@ -62,7 +44,6 @@ export default function CustomerHeader() {
       onClick={(event) => {
         if (scrollToHomeSection(href, path)) event.preventDefault();
         setActiveHash(window.location.hash);
-        setOpen(false);
       }}
     >
       {label}
@@ -141,40 +122,50 @@ export default function CustomerHeader() {
             </SignedIn>
           </span>
         </nav>
-        <button
-          className="nav-toggle"
-          onClick={() => setOpen((value) => !value)}
-          aria-label={open ? "Close navigation menu" : "Open navigation menu"}
-          aria-expanded={open}
-          aria-controls="customer-navigation-menu"
-        >
-          {open ? <X size={20} /> : <Menu size={20} />}
-        </button>
-      </div>
-      {open && (
-        <div className="nav-menu" id="customer-navigation-menu">
-          <div className="shell nav-menu-inner">
-            {navLink("/destinations", "Destinations")}
-            {navLink("/#recharge", "Recharge")}
-            {navLink("/#how", "How it works")}
-            {navLink("/compatibility", "Compatibility")}
-            <div className="nav-menu-divider" />
-            <ThemeToggle />
-            <SignedOut>
-              <Link className="nav-menu-item" href="/sign-in" onClick={() => setOpen(false)}>Sign in</Link>
-            </SignedOut>
-            <SignedIn>
-              {navLink("/account/esims", "My eSIMs")}
-              {navLink("/account/orders", "Orders")}
-              {navLink("/account/notifications", "Notifications")}
-              <div className="nav-menu-account">
-                <span>Account</span>
-                <UserButton />
-              </div>
-            </SignedIn>
-          </div>
+        <div className="mobile-header-actions">
+          <ThemeToggle />
+          <SignedOut>
+            <Link className="mobile-sign-in" href="/sign-in">Sign in</Link>
+          </SignedOut>
+          <SignedIn>
+            <UserButton />
+          </SignedIn>
         </div>
-      )}
+      </div>
+      <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
+        <Link
+          href="/destinations"
+          className={path.startsWith("/destinations") ? "nav-active" : ""}
+          aria-current={path.startsWith("/destinations") ? "page" : undefined}
+        >
+          <Globe2 size={20} /><span>Explore</span>
+        </Link>
+        <Link
+          href="/#recharge"
+          className={path === "/" && activeHash === "#recharge" ? "nav-active" : ""}
+          aria-current={path === "/" && activeHash === "#recharge" ? "page" : undefined}
+          onClick={(event) => {
+            if (scrollToHomeSection("/#recharge", path)) event.preventDefault();
+            setActiveHash("#recharge");
+          }}
+        >
+          <RefreshCw size={20} /><span>Recharge</span>
+        </Link>
+        <Link
+          href="/account/esims"
+          className={path.startsWith("/account/esims") ? "nav-active" : ""}
+          aria-current={path.startsWith("/account/esims") ? "page" : undefined}
+        >
+          <Smartphone size={20} /><span>My eSIM</span>
+        </Link>
+        <Link
+          href="/compatibility"
+          className={path.startsWith("/compatibility") ? "nav-active" : ""}
+          aria-current={path.startsWith("/compatibility") ? "page" : undefined}
+        >
+          <CircleHelp size={20} /><span>Help</span>
+        </Link>
+      </nav>
     </header>
   );
 }

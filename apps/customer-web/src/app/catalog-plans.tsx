@@ -83,7 +83,6 @@ export default function CatalogPlans() {
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [countries, setCountries] = useState<Country[]>([]);
   const [selected, setSelected] = useState<string>("");
-  const [popularPlans, setPopularPlans] = useState<Plan[]>([]);
   const [coverage, setCoverage] = useState<Record<string, string>>({});
   const [attempt, setAttempt] = useState(0);
   const [countriesBusy, setCountriesBusy] = useState(true);
@@ -97,26 +96,6 @@ export default function CatalogPlans() {
   useEffect(() => {
     if (targetCountry) setSelected(targetCountry.toUpperCase());
   }, [targetCountry]);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${API}/public/plans?popular=true&limit=6`)
-      .then((response) =>
-        response.ok ? response.json() : Promise.reject(new Error()),
-      )
-      .then((value: Envelope<Plan[]>) => {
-        if (!cancelled)
-          setPopularPlans(
-            value.data.filter((plan) => plan.popular).slice(0, 6),
-          );
-      })
-      .catch(() => {
-        if (!cancelled) setPopularPlans([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -266,46 +245,6 @@ export default function CatalogPlans() {
 
   return (
     <>
-      {popularPlans.length ? (
-        <section
-          className="popular-plan-showcase"
-          aria-labelledby="popular-plans-title"
-        >
-          <div className="popular-plan-heading">
-            <div>
-              <span className="destination-eyebrow">Customer favourites</span>
-              <h3 id="popular-plans-title">Popular eSIM plans</h3>
-            </div>
-            <p>Quick picks curated by Visa Compass.</p>
-          </div>
-          <div className="popular-plan-grid">
-            {popularPlans.map((plan) => (
-              <article className="popular-plan-card" key={plan.id}>
-                <div className="popular-plan-country">
-                  <span className="destination-flag">
-                    {flagEmoji(plan.countryCode)}
-                  </span>
-                  <span>
-                    <b>{plan.countryName}</b>
-                    <small>Popular package</small>
-                  </span>
-                </div>
-                <h4>{plan.name}</h4>
-                <p>
-                  {plan.dataAllowance} · {plan.validityDays}{" "}
-                  {plan.validityDays === 1 ? "day" : "days"}
-                </p>
-                <div className="popular-plan-price">
-                  <b>{npr(plan.sellingPriceNpr)}</b>
-                  <button type="button" onClick={() => focusPopularPlan(plan)}>
-                    View plan
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
       <section
         className="supported-destinations"
         aria-labelledby="supported-destinations-title"
