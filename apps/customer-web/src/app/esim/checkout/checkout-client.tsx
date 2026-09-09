@@ -5,6 +5,7 @@ import { SignInButton, useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import ErrorModal from "../../../components/error-modal";
+import { formatPlanDataText } from "../../../lib/format-data";
 import { filterFonepayBanks, fonepayBankIntentUrl } from "./payment-intent";
 import { paymentActionDisabled } from "./payment-gates";
 import Link from "next/link";
@@ -2512,7 +2513,7 @@ export default function CheckoutClient({
                 <b>{summaryPlan?.name ?? "Selected eSIM plan"}</b>
                 <small>
                   {summaryPlan
-                    ? `${summaryPlan.countryCode} · ${summaryPlan.dataAllowance}`
+                    ? `${summaryPlan.countryCode} · ${formatPlanDataText(summaryPlan.dataAllowance)}`
                     : "Loaded securely"}
                 </small>
               </span>
@@ -2525,7 +2526,7 @@ export default function CheckoutClient({
               <small>Data & validity</small>
               <b>
                 {summaryPlan
-                  ? `${summaryPlan.dataAllowance} · ${summaryPlan.validityDays} days`
+                  ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
                   : "Loaded securely"}
               </b>
             </div>

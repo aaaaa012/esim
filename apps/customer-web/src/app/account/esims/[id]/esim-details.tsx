@@ -1,6 +1,7 @@
 "use client";
 import { useAuthenticatedFetch } from "../../../authenticated-api-provider";
 import ErrorModal from "../../../../components/error-modal";
+import { formatDataMb } from "../../../../lib/format-data";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
@@ -592,16 +593,15 @@ export default function EsimDetails({ id }: { id: string }) {
                       />
                     </div>
                     <p>
-                      <b>{order.usage.usedMb.toLocaleString()} MB</b> of{" "}
-                      {order.usage.totalMb.toLocaleString()} MB used
+                      <b>{formatDataMb(order.usage.usedMb)}</b> of{" "}
+                      {formatDataMb(order.usage.totalMb)} used
                     </p>
                     <small>
                       Remaining:{" "}
-                      {Math.max(
+                      {formatDataMb(Math.max(
                         0,
                         order.usage.totalMb - order.usage.usedMb,
-                      ).toLocaleString()}{" "}
-                      MB · last checked{" "}
+                      ))} · last checked{" "}
                       {order.usage.lastCheckedAt
                         ? new Date(order.usage.lastCheckedAt).toLocaleString()
                         : "—"}

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { formatPlanDataText } from "../../../lib/format-data";
 import {
   ArrowRight,
   CheckCircle2,
@@ -265,7 +266,7 @@ export default function OrderList() {
                     </span>
                   </div>
                   <p>
-                    {order.plan.countryCode} · {order.plan.dataAllowance} ·{" "}
+                    {order.plan.countryCode} · {formatPlanDataText(order.plan.dataAllowance)} ·{" "}
                     {order.plan.validityDays}{" "}
                     {order.plan.validityDays === 1 ? "day" : "days"}
                   </p>

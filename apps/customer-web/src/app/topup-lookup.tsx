@@ -10,6 +10,7 @@ import {
   Smartphone,
   X,
 } from "lucide-react";
+import { formatDataMb, formatPlanDataText } from "../lib/format-data";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -406,13 +407,13 @@ export default function TopupLookup() {
                     <div className="topup-subscriber">
                       <b>{plan.name}</b>
                       <span>
-                        {plan.countryName} · {plan.dataAllowance} ·{" "}
+                        {plan.countryName} · {formatPlanDataText(plan.dataAllowance)} ·{" "}
                         {plan.validityDays} days
                       </span>
                       {result.subscriber.usage ? (
                         <small>
-                          Used {result.subscriber.usage.usedMb} /{" "}
-                          {result.subscriber.usage.totalMb} MB
+                          Used {formatDataMb(result.subscriber.usage.usedMb)} /{" "}
+                          {formatDataMb(result.subscriber.usage.totalMb)}
                           {result.subscriber.expiresAt
                             ? ` · valid until ${new Date(result.subscriber.expiresAt).toLocaleDateString()}`
                             : ""}
@@ -480,7 +481,7 @@ export default function TopupLookup() {
                                   <span>
                                     <b>{item.name}</b>
                                     <small>
-                                      {item.dataAllowance} · {item.validityDays}{" "}
+                                      {formatPlanDataText(item.dataAllowance)} · {item.validityDays}{" "}
                                       days · {npr(item.sellingPriceNpr)}
                                     </small>
                                   </span>

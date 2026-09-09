@@ -34,6 +34,7 @@ import { DocumentRecoveryFields } from "../../esim/checkout/document-recovery";
 import { useCheckoutTransition } from "../../esim/checkout/use-checkout-transition";
 import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
+import { formatPlanDataText } from "../../../lib/format-data";
 import {
   filterFonepayBanks,
   fonepayBankIntentUrl,
@@ -1688,7 +1689,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                 <span className="summary-label">Order summary</span>
                 <b>{plan.name}</b>
                 <small>
-                  {plan.countryCode} · {plan.dataAllowance}
+                  {plan.countryCode} · {formatPlanDataText(plan.dataAllowance)}
                 </small>
               </span>
             </div>
@@ -1699,7 +1700,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             <div>
               <small>Data &amp; validity</small>
               <b>
-                {plan.dataAllowance} · {plan.validityDays} days
+                {formatPlanDataText(plan.dataAllowance)} · {plan.validityDays} days
               </b>
             </div>
             <div className="summary-total">

@@ -20,6 +20,7 @@ import {
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import InstallGuide from "./install-guide";
 import ErrorModal from "../../../components/error-modal";
+import { formatDataMb, formatPlanDataText } from "../../../lib/format-data";
 import { orderStatusLabel } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -77,10 +78,7 @@ type Esim = {
   qrOrderId?: string;
 };
 
-const formatData = (mb: number) =>
-  mb >= 1024
-    ? `${Number((mb / 1024).toFixed(2))} GB`
-    : `${Math.round(mb).toLocaleString()} MB`;
+const formatData = formatDataMb;
 const formatStatus = (esim: Esim) => {
   const active = esim.subscriptions.some((item) => item.status === "ACTIVE");
   const pending = esim.subscriptions.some((item) => item.status === "PENDING");
@@ -454,7 +452,7 @@ function CurrentPlans({ plans }: { plans: Subscription[] }) {
               <div className="plan-copy">
                 <b>{plan.plan.name}</b>
                 <span>
-                  {plan.plan.countryName} · {plan.plan.dataAllowance} ·{" "}
+                  {plan.plan.countryName} · {formatPlanDataText(plan.plan.dataAllowance)} ·{" "}
                   {plan.plan.validityDays} days
                 </span>
                 <small>

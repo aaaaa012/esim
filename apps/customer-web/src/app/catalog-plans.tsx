@@ -10,6 +10,7 @@ import {
   MapPin,
 } from "lucide-react";
 import CountryPicker, { flagEmoji } from "./country-picker";
+import { formatPlanDataText } from "../lib/format-data";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
@@ -395,7 +396,7 @@ export default function CatalogPlans() {
               <h3>{plan.name}</h3>
               <p className="plan-meta">
                 <MapPin size={13} style={{ verticalAlign: -2 }} />{" "}
-                {plan.countryName} · <strong>{plan.dataAllowance}</strong> ·{" "}
+                {plan.countryName} · <strong>{formatPlanDataText(plan.dataAllowance)}</strong> ·{" "}
                 {plan.validityDays} {plan.validityDays === 1 ? "day" : "days"}
               </p>
               <div className="price">

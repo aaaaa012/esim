@@ -26,6 +26,7 @@ const order = {
   timeline: [],
   documentReviewStatus: "OCR_PENDING",
 };
+const displayedPlanName = order.plan.name;
 beforeEach(() => {
   mocks.fetch.mockReset();
 });
@@ -44,7 +45,7 @@ it("recovers an order-list failure without showing a false empty state", async (
   await screen.findByRole("alert");
   expect(screen.queryByText("No orders yet")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-  await screen.findByRole("heading", { name: order.plan.name });
+  await screen.findByRole("heading", { name: displayedPlanName });
   expect(screen.queryByRole("alert")).toBeNull();
 });
 it("includes provisioning failures in Needs action and offers an exit from empty filters", async () => {
@@ -52,12 +53,12 @@ it("includes provisioning failures in Needs action and offers an exit from empty
     ok([{ ...order, status: "PROVISIONING_FAILED" }]),
   );
   render(<OrderList />);
-  await screen.findByRole("heading", { name: order.plan.name });
+  await screen.findByRole("heading", { name: displayedPlanName });
   fireEvent.click(screen.getByRole("button", { name: "Needs action" }));
-  expect(screen.getByRole("heading", { name: order.plan.name })).toBeDefined();
+  expect(screen.getByRole("heading", { name: displayedPlanName })).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Completed" }));
   fireEvent.click(screen.getByRole("button", { name: "Show all orders" }));
-  expect(screen.getByRole("heading", { name: order.plan.name })).toBeDefined();
+  expect(screen.getByRole("heading", { name: displayedPlanName })).toBeDefined();
 });
 it("keeps a failed order-detail load recoverable through repeated retries", async () => {
   mocks.fetch
@@ -67,7 +68,7 @@ it("keeps a failed order-detail load recoverable through repeated retries", asyn
   render(<Details id="order" />);
   fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
   fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
-  await screen.findByRole("heading", { name: order.plan.name });
+  await screen.findByRole("heading", { name: displayedPlanName });
   expect(
     screen.getByText(/Payment becomes available after verification succeeds/),
   ).toBeDefined();
@@ -105,7 +106,7 @@ it("confirms a replacement upload without clearing another selected document", a
     return ok(existing);
   });
   const { container } = render(<Details id="order" />);
-  await screen.findByRole("heading", { name: order.plan.name });
+  await screen.findByRole("heading", { name: displayedPlanName });
   const inputs = container.querySelectorAll('input[type="file"]');
   for (const input of inputs)
     fireEvent.change(input, {

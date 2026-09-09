@@ -64,6 +64,8 @@ it("retries a failed catalog request inline", async () => {
   await screen.findByRole("alert");
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   await screen.findByRole("link", { name: "Choose" });
+  expect(screen.getByRole("heading", { name: "India 500 MB" })).toBeDefined();
+  expect(screen.getByText("500 MB")).toBeDefined();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });

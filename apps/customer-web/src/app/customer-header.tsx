@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, CircleHelp, Globe2, RefreshCw, Smartphone } from "lucide-react";
+import { Bell, CircleHelp, Globe2, Home, RefreshCw, Smartphone } from "lucide-react";
 import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import ThemeToggle from "./theme-toggle";
 
@@ -40,7 +40,7 @@ export default function CustomerHeader() {
   const navLink = (href: string, label: string) => (
     <Link
       href={href}
-      className={path === href || path.startsWith(href) || (href.startsWith("/#") && path === "/" && activeHash === href.slice(1)) ? "nav-active" : ""}
+      className={path === href || (href !== "/" && path.startsWith(href)) || (href.startsWith("/#") && path === "/" && activeHash === href.slice(1)) ? "nav-active" : ""}
       onClick={(event) => {
         if (scrollToHomeSection(href, path)) event.preventDefault();
         setActiveHash(window.location.hash);
@@ -85,6 +85,7 @@ export default function CustomerHeader() {
           />
         </Link>
         <nav className="navlinks">
+          {navLink("/", "Home")}
           {navLink("/destinations", "Destinations")}
           {navLink("/#recharge", "Recharge")}
           {navLink("/#how", "How it works")}
@@ -135,6 +136,13 @@ export default function CustomerHeader() {
         </div>
       </header>
       <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
+        <Link
+          href="/"
+          className={path === "/" && !activeHash ? "nav-active" : ""}
+          aria-current={path === "/" && !activeHash ? "page" : undefined}
+        >
+          <Home size={20} /><span>Home</span>
+        </Link>
         <Link
           href="/destinations"
           className={path.startsWith("/destinations") ? "nav-active" : ""}
