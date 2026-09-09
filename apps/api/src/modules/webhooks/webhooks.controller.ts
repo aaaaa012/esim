@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Logger,
   Param,
   Post,
   Query,
@@ -38,6 +39,7 @@ import { ClerkSyncService } from "../identity/clerk-sync.service.js";
 @Controller("webhooks")
 export class WebhooksController {
   private readonly accepted = new Set<string>();
+  private readonly logger = new Logger(WebhooksController.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly queues: QueueService,
@@ -203,13 +205,49 @@ export class WebhooksController {
       await this.persistWebhook(source, eventId, body, Boolean(signature));
     // Re-enqueue persisted-but-unprocessed duplicates. This closes the failure
     // window where the database insert succeeds but Redis is temporarily down.
-    await this.queues.add(
-      QUEUES.providerCallbacks,
-      "connectivity-callback",
-      { provider: source, eventId },
-      key,
-      INBOUND_WEBHOOK_JOB_OPTIONS,
-    );
+    try {
+      await this.queues.add(
+        QUEUES.providerCallbacks,
+        "connectivity-callback",
+        { provider: source, eventId },
+        key,
+        INBOUND_WEBHOOK_JOB_OPTIONS,
+      );
+    } catch (error) {
+      if (!this.prisma.enabled) throw error;
+      // The inbox row is durable. Reconciliation will dispatch it after Redis
+      // recovers, so acknowledge receipt instead of suspending the stream.
+      const message = error instanceof Error ? error.message : "unknown";
+      this.logger.error(
+        `Transatel event ${eventId} was persisted but not queued: ${message}`,
+      );
+      if (this.prisma.enabled)
+        await this.prisma.webhookEvent
+          .update({
+            where: { source_eventId: { source, eventId } },
+            data: {
+              errorMessage: `Queue dispatch pending: ${message}`.slice(0, 2000),
+              nextAttemptAt: new Date(),
+            },
+          })
+          .catch((stateError) =>
+            this.logger.error(
+              `Could not mark Transatel event ${eventId} for queue recovery: ${stateError instanceof Error ? stateError.message : "unknown"}`,
+            ),
+          );
+      return { accepted: true, persisted: true, queued: false };
+    }
+    if (this.prisma.enabled)
+      await this.prisma.webhookEvent
+        .update({
+          where: { source_eventId: { source, eventId } },
+          data: { errorMessage: null, nextAttemptAt: null },
+        })
+        .catch((stateError) =>
+          this.logger.warn(
+            `Queued Transatel event ${eventId}, but could not clear its recovery state: ${stateError instanceof Error ? stateError.message : "unknown"}`,
+          ),
+        );
     this.remember(key);
     return { accepted: true, queued: true };
   }
@@ -472,6 +510,8 @@ export class OperationsLogsController {
     @Query("q") query = "",
     @Query("page") pageInput = "1",
     @Query("pageSize") pageSizeInput = "25",
+    @Query("from") fromInput = "",
+    @Query("to") toInput = "",
   ) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     const allowedGroups = new Set([
@@ -488,6 +528,21 @@ export class OperationsLogsController {
       100,
       Math.max(1, Number.parseInt(pageSizeInput, 10) || 25),
     );
+    const parseBoundary = (value: string, label: string) => {
+      if (!value) return undefined;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime()))
+        throw new BadRequestException(`Invalid ${label} date`);
+      return date;
+    };
+    const from = parseBoundary(fromInput, "from");
+    const to = parseBoundary(toInput, "to");
+    if (from && to && from >= to)
+      throw new BadRequestException("The from date must be before the to date");
+    const timestampRange =
+      from || to
+        ? { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) }
+        : undefined;
     if (!this.prisma.enabled) return { items: [], total: 0, page, pageSize };
 
     // Pull only enough records to serve the requested page from each source,
@@ -588,13 +643,21 @@ export class OperationsLogsController {
       integrationRows = await safeQuery(
         () =>
           this.prisma.integrationLog.findMany({
+            ...(timestampRange
+              ? { where: { createdAt: timestampRange } }
+              : {}),
             orderBy: { createdAt: "desc" },
             take,
           }),
         [],
       );
       integrationTotal = await safeQuery(
-        () => this.prisma.integrationLog.count(),
+        () =>
+          timestampRange
+            ? this.prisma.integrationLog.count({
+                where: { createdAt: timestampRange },
+              })
+            : this.prisma.integrationLog.count(),
         integrationRows.length,
       );
     }
@@ -602,7 +665,10 @@ export class OperationsLogsController {
       webhookRows = await safeQuery(
         () =>
           this.prisma.webhookEvent.findMany({
-            where: { NOT: { source: { startsWith: "idempotency:" } } },
+            where: {
+              NOT: { source: { startsWith: "idempotency:" } },
+              ...(timestampRange ? { createdAt: timestampRange } : {}),
+            },
             orderBy: { createdAt: "desc" },
             take,
           }),
@@ -611,7 +677,10 @@ export class OperationsLogsController {
       webhookTotal = await safeQuery(
         () =>
           this.prisma.webhookEvent.count({
-            where: { NOT: { source: { startsWith: "idempotency:" } } },
+            where: {
+              NOT: { source: { startsWith: "idempotency:" } },
+              ...(timestampRange ? { createdAt: timestampRange } : {}),
+            },
           }),
         webhookRows.length,
       );
@@ -620,6 +689,9 @@ export class OperationsLogsController {
       auditRows = await safeQuery(
         () =>
           this.prisma.auditLog.findMany({
+            ...(timestampRange
+              ? { where: { createdAt: timestampRange } }
+              : {}),
             orderBy: { createdAt: "desc" },
             take,
             include: { performedBy: { select: { email: true } } },
@@ -627,7 +699,12 @@ export class OperationsLogsController {
         [],
       );
       auditTotal = await safeQuery(
-        () => this.prisma.auditLog.count(),
+        () =>
+          timestampRange
+            ? this.prisma.auditLog.count({
+                where: { createdAt: timestampRange },
+              })
+            : this.prisma.auditLog.count(),
         auditRows.length,
       );
     }
@@ -635,6 +712,9 @@ export class OperationsLogsController {
       orderRows = await safeQuery(
         () =>
           this.prisma.order.findMany({
+            ...(timestampRange
+              ? { where: { createdAt: timestampRange } }
+              : {}),
             select: {
               id: true,
               orderNumber: true,
@@ -649,12 +729,20 @@ export class OperationsLogsController {
         [],
       );
       orderTotal = await safeQuery(
-        () => this.prisma.order.count(),
+        () =>
+          timestampRange
+            ? this.prisma.order.count({
+                where: { createdAt: timestampRange },
+              })
+            : this.prisma.order.count(),
         orderRows.length,
       );
       provisioningAttemptRows = await safeQuery(
         () =>
           this.prisma.provisioningAttempt.findMany({
+            ...(timestampRange
+              ? { where: { createdAt: timestampRange } }
+              : {}),
             orderBy: { createdAt: "desc" },
             take,
           }),
@@ -663,6 +751,9 @@ export class OperationsLogsController {
       provisioningOperationRows = await safeQuery(
         () =>
           this.prisma.provisioningOperation.findMany({
+            ...(timestampRange
+              ? { where: { updatedAt: timestampRange } }
+              : {}),
             orderBy: { updatedAt: "desc" },
             take,
             select: {
@@ -679,11 +770,21 @@ export class OperationsLogsController {
         [],
       );
       provisioningAttemptTotal = await safeQuery(
-        () => this.prisma.provisioningAttempt.count(),
+        () =>
+          timestampRange
+            ? this.prisma.provisioningAttempt.count({
+                where: { createdAt: timestampRange },
+              })
+            : this.prisma.provisioningAttempt.count(),
         provisioningAttemptRows.length,
       );
       provisioningOperationTotal = await safeQuery(
-        () => this.prisma.provisioningOperation.count(),
+        () =>
+          timestampRange
+            ? this.prisma.provisioningOperation.count({
+                where: { updatedAt: timestampRange },
+              })
+            : this.prisma.provisioningOperation.count(),
         provisioningOperationRows.length,
       );
     }
@@ -726,7 +827,9 @@ export class OperationsLogsController {
             ? "FAILED"
             : row.processedAt
               ? "PROCESSED"
-              : "QUEUED",
+              : row.errorMessage?.startsWith("Queue dispatch pending:")
+                ? "RETRY_PENDING"
+                : "QUEUED",
         createdAt: row.createdAt,
         error: sanitizeLogText(row.errorMessage),
         requestBody: sanitizeOperationsLog(row.payload),

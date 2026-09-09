@@ -1103,6 +1103,37 @@ describe("TransatelProvider", () => {
     expect(prisma.esimInventory.findUnique).not.toHaveBeenCalled();
   });
 
+  it("ignores infrastructure walled-garden lifecycle events before resolving an order", async () => {
+    const prisma = prismaStub();
+    const provider = new TransatelProvider(prisma);
+
+    const result = await provider.handleWebhook({
+      header: {
+        eventId: "evt-walled-garden",
+        eventType: "OCS/PRODUCT/ACTIVATED",
+      },
+      body: {
+        iccid: "8988247000140073207",
+        msisdn: "882470015492823",
+        productSubscription: {
+          subscriptionId: "59d44a86-1896-4415-b2da-d0311f8f52fd",
+          productDefinition: {
+            productId: "WW_901O_STACK_RBRP_WALLEDGARDEN",
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      handled: false,
+      reason:
+        "Webhook event OCS/PRODUCT/ACTIVATED belongs to Transatel's infrastructure walled-garden product",
+    });
+    expect(prisma.order.findUnique).not.toHaveBeenCalled();
+    expect(prisma.order.findFirst).not.toHaveBeenCalled();
+    expect(prisma.esimInventory.findUnique).not.toHaveBeenCalled();
+  });
+
   it("resolves the ICCID and dates from a real OCS webhook envelope", async () => {
     const prisma = prismaStub();
     prisma.order.findUnique = vi.fn().mockResolvedValue({ id: "order-1" });

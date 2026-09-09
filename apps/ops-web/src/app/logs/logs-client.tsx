@@ -22,6 +22,7 @@ import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import ErrorDialog from "@/components/error-dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -50,6 +51,12 @@ import { toast } from "sonner";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
+
+function localDayBoundary(value: string, nextDay = false) {
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return "";
+  return new Date(year, month - 1, day + (nextDay ? 1 : 0)).toISOString();
+}
 
 type Group = "all" | "provider" | "incoming" | "orders" | "staff";
 
@@ -214,6 +221,8 @@ export default function LogsClient() {
   const [resultFilter, setResultFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [inspectEntry, setInspectEntry] = useState<LogEntry | null>(null);
@@ -229,6 +238,8 @@ export default function LogsClient() {
     const initialResult = params.get("result");
     if (initialResult === "failed" || initialResult === "succeeded")
       setResultFilter(initialResult);
+    setDateFrom(params.get("from") ?? "");
+    setDateTo(params.get("to") ?? "");
   }, []);
 
   useEffect(() => {
@@ -243,6 +254,8 @@ export default function LogsClient() {
       const params = new URLSearchParams();
       if (group !== "all") params.set("group", group);
       if (search) params.set("q", search);
+      if (dateFrom) params.set("from", localDayBoundary(dateFrom));
+      if (dateTo) params.set("to", localDayBoundary(dateTo, true));
       params.set("page", String(page));
       params.set("pageSize", String(pageSize));
       return authFetch(`${API}/operations/logs?${params.toString()}`, {
@@ -263,7 +276,7 @@ export default function LogsClient() {
           setRefreshing(false);
         });
     },
-    [authFetch, group, search, page],
+    [authFetch, group, search, page, dateFrom, dateTo],
   );
 
   useEffect(() => {
@@ -277,6 +290,14 @@ export default function LogsClient() {
   const changeQuery = (next: string) => {
     setPage(1);
     setQuery(next);
+  };
+  const changeDateFrom = (next: string) => {
+    setPage(1);
+    setDateFrom(next);
+  };
+  const changeDateTo = (next: string) => {
+    setPage(1);
+    setDateTo(next);
   };
 
   const filteredItems = useMemo(() => {
@@ -572,6 +593,45 @@ export default function LogsClient() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="logs-date-from" className="text-xs font-medium">
+                From
+              </label>
+              <Input
+                id="logs-date-from"
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={(event) => changeDateFrom(event.target.value)}
+                className="h-9 w-36"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="logs-date-to" className="text-xs font-medium">
+                To
+              </label>
+              <Input
+                id="logs-date-to"
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(event) => changeDateTo(event.target.value)}
+                className="h-9 w-36"
+              />
+            </div>
+            {(dateFrom || dateTo) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setPage(1);
+                  setDateFrom("");
+                  setDateTo("");
+                }}
+              >
+                Clear dates
+              </Button>
+            )}
             <SearchInput
               placeholder="Search logs…"
               value={query}

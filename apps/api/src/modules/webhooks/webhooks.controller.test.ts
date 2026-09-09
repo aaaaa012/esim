@@ -73,8 +73,19 @@ describe("OperationsLogsController", () => {
             createdAt,
             payload: { msisdn: "9779800000000" },
           },
+          {
+            id: "webhook-retry-1",
+            source: "transatel",
+            eventId: "event-retry-1",
+            processedAt: null,
+            deadLetteredAt: null,
+            signatureValid: true,
+            errorMessage: "Queue dispatch pending: Redis unavailable",
+            createdAt,
+            payload: { event: "retry" },
+          },
         ]),
-        count: vi.fn().mockResolvedValue(1),
+        count: vi.fn().mockResolvedValue(2),
       },
       auditLog: {
         findMany: vi.fn().mockResolvedValue([
@@ -153,10 +164,18 @@ describe("OperationsLogsController", () => {
       },
     };
 
-    const result = await new OperationsLogsController(prisma).list(request);
+    const result = await new OperationsLogsController(prisma).list(
+      request,
+      "all",
+      "",
+      "1",
+      "25",
+      "2026-08-22T18:15:00.000Z",
+      "2026-08-23T18:15:00.000Z",
+    );
 
-    expect(result.total).toBe(6);
-    expect(result.items).toHaveLength(6);
+    expect(result.total).toBe(7);
+    expect(result.items).toHaveLength(7);
     expect(result.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -169,6 +188,10 @@ describe("OperationsLogsController", () => {
           id: "webhook-1",
           statusLabel: "FAILED",
         }),
+        expect.objectContaining({
+          id: "webhook-retry-1",
+          statusLabel: "RETRY_PENDING",
+        }),
         expect.objectContaining({ id: "attempt-attempt-1" }),
         expect.objectContaining({ id: "operation-operation-1" }),
         expect.objectContaining({
@@ -178,6 +201,25 @@ describe("OperationsLogsController", () => {
           ),
         }),
       ]),
+    );
+    const expectedCreatedAtRange = {
+      createdAt: {
+        gte: new Date("2026-08-22T18:15:00.000Z"),
+        lt: new Date("2026-08-23T18:15:00.000Z"),
+      },
+    };
+    expect(prisma.integrationLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expectedCreatedAtRange }),
+    );
+    expect(prisma.webhookEvent.count).toHaveBeenCalledWith({
+      where: expect.objectContaining(expectedCreatedAtRange),
+    });
+    expect(prisma.provisioningOperation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          updatedAt: expectedCreatedAtRange.createdAt,
+        },
+      }),
     );
   });
 });
@@ -238,6 +280,7 @@ function controller(processedAt: Date | null = null) {
     webhookEvent: {
       findUnique: vi.fn().mockResolvedValue({ processedAt }),
       upsert: vi.fn().mockResolvedValue({}),
+      update: vi.fn().mockResolvedValue({}),
     },
   } as unknown as PrismaService;
   const queues = {
@@ -296,5 +339,31 @@ describe("WebhooksController connectivity inbox", () => {
     );
     expect(result).toEqual({ accepted: true, duplicate: true });
     expect(queues.add).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges a durably persisted event when queue dispatch is temporarily unavailable", async () => {
+    const { value, prisma, queues } = controller(null);
+    vi.mocked(queues.add).mockRejectedValueOnce(new Error("Redis unavailable"));
+
+    const result = await value.connectivity(
+      "transatel",
+      { eventId: "event-12345" },
+      {},
+      {} as RawBodyRequest<Request>,
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      persisted: true,
+      queued: false,
+    });
+    expect(prisma.webhookEvent.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          errorMessage: expect.stringContaining("Redis unavailable"),
+          nextAttemptAt: expect.any(Date),
+        }),
+      }),
+    );
   });
 });

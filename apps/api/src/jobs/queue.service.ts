@@ -6,11 +6,17 @@ import {
 } from "@nestjs/common";
 import { Queue, Worker, type Job } from "bullmq";
 import { Redis } from "ioredis";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DEFAULT_JOB_OPTIONS, QUEUES } from "./queues.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
+
+/** BullMQ reserves `:` in custom IDs and rejects IDs made only of digits. */
+export function bullJobId(jobId: string) {
+  if (!jobId.includes(":") && !/^\d+$/.test(jobId)) return jobId;
+  return `job-${createHash("sha256").update(jobId).digest("hex")}`;
+}
 
 @Injectable()
 export class QueueService implements OnModuleInit, OnModuleDestroy {
@@ -77,9 +83,11 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       return { id: jobId, simulated: true };
     }
     const queue = this.getQueue(name);
-    const effectiveJobId = options?.allowDuplicate
-      ? `${jobId}#${randomUUID().slice(0, 8)}`
-      : jobId;
+    const effectiveJobId = bullJobId(
+      options?.allowDuplicate
+        ? `${jobId}#${randomUUID().slice(0, 8)}`
+        : jobId,
+    );
     const { allowDuplicate: _allowDuplicate, ...jobOptions } = options ?? {};
     const job = await queue.add(jobName, payload, {
       ...DEFAULT_JOB_OPTIONS,
@@ -266,7 +274,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
 
   async hasJob(name: QueueName, jobId: string) {
     if (!this.enabled) return false;
-    const job = await this.getQueue(name).getJob(jobId);
+    const job = await this.getQueue(name).getJob(bullJobId(jobId));
     if (!job) return false;
     return ["waiting", "active", "delayed", "prioritized", "waiting-children"].includes(
       await job.getState(),

@@ -1607,6 +1607,16 @@ export class TransatelProvider implements ConnectivityProvider {
         handled: false,
         reason: `Webhook event ${eventType} is not supported by the lifecycle mapper`,
       };
+    if (
+      envelope.productId
+        ?.toUpperCase()
+        .replace(/[^A-Z0-9]/g, "")
+        .includes("WALLEDGARDEN")
+    )
+      return {
+        handled: false,
+        reason: `Webhook event ${eventType} belongs to Transatel's infrastructure walled-garden product`,
+      };
 
     const iccid = envelope.iccid;
     if (!iccid)
@@ -1724,6 +1734,7 @@ export class TransatelProvider implements ConnectivityProvider {
     iccid?: string;
     msisdn?: string;
     subscriptionId?: string;
+    productId?: string;
     externalReference?: string;
     activatedAt?: string;
     expiresAt?: string;
@@ -1761,6 +1772,15 @@ export class TransatelProvider implements ConnectivityProvider {
       typeof productSubscription.subscriptionId === "string"
         ? productSubscription.subscriptionId
         : undefined;
+    const productDefinition =
+      typeof productSubscription.productDefinition === "object" &&
+      productSubscription.productDefinition !== null
+        ? (productSubscription.productDefinition as Record<string, unknown>)
+        : {};
+    const productId =
+      typeof productDefinition.productId === "string"
+        ? productDefinition.productId
+        : undefined;
     const activatedAt =
       typeof productSubscription.activationDate === "string"
         ? productSubscription.activationDate
@@ -1775,6 +1795,7 @@ export class TransatelProvider implements ConnectivityProvider {
       ...(iccid ? { iccid } : {}),
       ...(msisdn ? { msisdn } : {}),
       ...(subscriptionId ? { subscriptionId } : {}),
+      ...(productId ? { productId } : {}),
       ...(externalReference ? { externalReference } : {}),
       ...(activatedAt ? { activatedAt } : {}),
       ...(expiresAt ? { expiresAt } : {}),
