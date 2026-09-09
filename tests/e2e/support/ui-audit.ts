@@ -74,6 +74,43 @@ export async function expectElementsInsideViewport(
   expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
 }
 
+export async function expectNoCollapsedText(page: Page) {
+  const violations = await page
+    .locator(
+      "main button, main a[href], main p, main h1, main h2, main h3, main h4, main [role='status'], main [role='note']",
+    )
+    .evaluateAll((elements) =>
+      elements.flatMap((element) => {
+        const html = element as HTMLElement;
+        const style = getComputedStyle(html);
+        const text = (html.innerText || html.textContent || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        const rect = html.getBoundingClientRect();
+        const lineHeight = Number.parseFloat(style.lineHeight);
+        if (
+          !text ||
+          text.length < 16 ||
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          rect.width >= 64 ||
+          !Number.isFinite(lineHeight) ||
+          rect.height / lineHeight < 4
+        )
+          return [];
+        return [
+          {
+            element: html.outerHTML.slice(0, 180),
+            text: text.slice(0, 100),
+            width: Math.round(rect.width),
+            lines: Math.round(rect.height / lineHeight),
+          },
+        ];
+      }),
+    );
+  expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
+}
+
 export async function auditInteractiveNames(page: Page) {
   const unnamed = await page
     .locator("button, a[href], input, select, textarea")

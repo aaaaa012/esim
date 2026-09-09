@@ -4,6 +4,7 @@ import {
   attachAudit,
   auditInteractiveNames,
   expectElementsInsideViewport,
+  expectNoCollapsedText,
   expectNoHorizontalOverflow,
   observeBrowserProblems,
 } from "../support/ui-audit";
@@ -16,6 +17,7 @@ const publicRoutes = [
   "/terms",
   "/privacy",
   "/refund-policy",
+  "/recharge",
   "/recharge/recover",
   "/service-unavailable",
   "/unauthorized",
@@ -65,6 +67,7 @@ for (const route of publicRoutes) {
     expect(response?.status()).toBeLessThan(400);
     await expect(page.locator("body")).toBeVisible();
     await expectNoHorizontalOverflow(page);
+    await expectNoCollapsedText(page);
     await auditInteractiveNames(page);
     await attachAudit(testInfo, "browser-problems.json", problems);
     expect(problems.filter((problem) => problem.kind === "pageerror")).toEqual(

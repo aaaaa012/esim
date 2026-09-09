@@ -215,6 +215,17 @@
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--primary-soft) 45%, var(--surface));
 }
+.guest-recovery-card > * {
+  min-width: 0;
+}
+.guest-recovery-card.recharge-status-card {
+  grid-template-columns: minmax(0, 1fr);
+}
+.recharge-status-card .button {
+  width: auto;
+  max-width: 100%;
+  white-space: normal;
+}
 .guest-recovery-icon {
   display: grid;
   place-items: center;

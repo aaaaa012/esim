@@ -96,6 +96,9 @@ describe("recharge checkout", () => {
       expect(
         screen.getByRole("button", { name: "Copy private link" }),
       ).toBeDefined();
+      expect(screen.getByRole("status").classList).toContain(
+        "recharge-status-card",
+      );
       const request = mocks.authFetch.mock.calls.find(([url]) =>
         String(url).endsWith("/recharges"),
       )!;

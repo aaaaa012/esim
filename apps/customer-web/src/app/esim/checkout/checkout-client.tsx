@@ -1498,11 +1498,14 @@ export default function CheckoutClient({
               </div>
             )}
             {isTopUp && order && (
-              <div className="guest-recovery-card" role="status">
+              <div
+                className="guest-recovery-card recharge-status-card"
+                role="status"
+              >
                 <div>
                   <b>{order.orderNumber}</b>
                   <p>
-                    Payment: {order.payment?.status ?? "Not started"} ·
+                    Payment: {order.payment?.status ?? "Not started"} ·{" "}
                     Recharge: {orderStatusLabel(order.status)}
                   </p>
                   {order.refundStatus && (
@@ -1519,10 +1522,10 @@ export default function CheckoutClient({
                       type="button"
                       onClick={() => {
                         localStorage.removeItem("vc_recharge_checkout_attempt");
-                        window.location.assign("/");
+                        window.location.assign("/recharge");
                       }}
                     >
-                      Start another purchase
+                      Start another recharge
                     </button>
                   )}
                 </div>
