@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { Button } from "@/components/ui/button";
+import ErrorDialog from "@/components/error-dialog";
 import {
   Dialog,
   DialogContent,
@@ -95,6 +96,7 @@ export function ManualRefundCard({
 
   return (
     <div className="space-y-2">
+      <ErrorDialog error={error} onClose={() => setError("")} />
       {refund ? (
         <div className="rounded-lg border p-3 text-sm">
           <div className="flex items-center justify-between">
@@ -159,7 +161,6 @@ export function ManualRefundCard({
                 autoComplete="off"
               />
             </div>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>

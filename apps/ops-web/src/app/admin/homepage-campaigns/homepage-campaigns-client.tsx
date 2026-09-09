@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useConfirmation } from "@/components/confirmation-provider";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { EmptyState } from "@/components/empty-state";
 import { FileUploader } from "@/components/file-uploader";
@@ -222,6 +223,7 @@ function Artwork({ campaign }: { campaign: Campaign }) {
 }
 
 export default function HomepageCampaignsClient() {
+  const confirm = useConfirmation();
   const authFetch = useAuthenticatedFetch();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loadError, setLoadError] = useState("");
@@ -408,7 +410,12 @@ export default function HomepageCampaignsClient() {
   };
 
   const remove = async (campaign: Campaign) => {
-    if (!confirm(`Delete “${campaign.title}”? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: "Delete homepage campaign?",
+      description: `Delete ${campaign.title}? This cannot be undone.`,
+      confirmLabel: "Delete",
+      destructive: true,
+    }))) return;
     try {
       await request(`/admin/homepage-campaigns/${campaign.id}`, {
         method: "DELETE",

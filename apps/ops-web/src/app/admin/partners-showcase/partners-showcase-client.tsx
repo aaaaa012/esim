@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/spinner";
 import { EmptyState } from "@/components/empty-state";
 import { toast } from "sonner";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Dialog,
   DialogContent,
@@ -68,6 +69,7 @@ function Logo({ item, className }: { item: ShowcaseItem; className?: string }) {
 
 export default function PartnersShowcaseClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const request = useCallback(
     async <T,>(path: string, init?: RequestInit) => {
       const r = await authFetch(`${API}${path}`, {
@@ -184,7 +186,12 @@ export default function PartnersShowcaseClient() {
   };
 
   const remove = async (item: ShowcaseItem) => {
-    if (!confirm(`Remove ${item.name} from the homepage showcase?`)) return;
+    if (!(await confirm({
+      title: "Remove showcased partner?",
+      description: `Remove ${item.name} from the homepage showcase?`,
+      confirmLabel: "Remove",
+      destructive: true,
+    }))) return;
     setBusyId(item.id);
     try {
       await request(`/admin/partner-showcase/${item.id}`, { method: "DELETE" });

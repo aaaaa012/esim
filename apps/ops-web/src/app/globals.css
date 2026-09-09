@@ -1148,4 +1148,17 @@ body {
     transform: translateX(-50%);
     border-radius: 0.9rem;
   }
+
+  [data-slot="button"],
+  [data-slot="input"],
+  [data-slot="select-trigger"],
+  .ops-content button,
+  .ops-auth-link,
+  .ops-auth-field input {
+    min-height: 44px;
+  }
+
+  [data-slot="button"][class*="size-"] {
+    min-width: 44px;
+  }
 }
