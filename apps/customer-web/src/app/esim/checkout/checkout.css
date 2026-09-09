@@ -680,6 +680,126 @@
   text-underline-offset: 2px;
 }
 
+.confirmation-choice {
+  margin: 16px 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent-soft));
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+.confirmation-choice:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+}
+.confirmation-choice.selected {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.confirmation-choice.invalid {
+  border-color: color-mix(in srgb, var(--danger) 64%, var(--border));
+  background: color-mix(in srgb, var(--danger-soft) 38%, var(--surface));
+}
+.confirmation-choice-main {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  min-height: 72px;
+  padding: 16px 17px;
+  cursor: pointer;
+}
+.confirmation-choice-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.confirmation-choice-check {
+  display: grid;
+  flex: 0 0 22px;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border: 1.5px solid color-mix(in srgb, var(--text-3) 68%, var(--border));
+  border-radius: 7px;
+  color: transparent;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.confirmation-choice.selected .confirmation-choice-check {
+  border-color: var(--accent);
+  color: var(--surface);
+  background: var(--accent);
+}
+.confirmation-choice-input:focus-visible + .confirmation-choice-check {
+  outline: 3px solid var(--primary-ring);
+  outline-offset: 3px;
+}
+.confirmation-choice-input:disabled ~ * {
+  opacity: 0.58;
+}
+.confirmation-choice:has(.confirmation-choice-input:disabled) {
+  cursor: not-allowed;
+  background: var(--surface-2);
+}
+.confirmation-choice-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.confirmation-choice-copy b {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+.confirmation-choice-copy small {
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.confirmation-choice-copy a,
+.confirmation-choice-help a {
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.confirmation-choice-help {
+  margin: -5px 17px 14px 52px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.confirmation-choice-help a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.confirmation-choice.compact {
+  margin-block: 14px;
+}
+.confirmation-choice.compact .confirmation-choice-main {
+  min-height: 58px;
+  padding: 12px 14px;
+}
+.confirmation-choice.compact .confirmation-choice-copy b {
+  font-size: 13px;
+}
+.confirmation-choice.compact .confirmation-choice-copy small {
+  font-size: 11.5px;
+}
+
 /* Shared form polish for direct, guest, and partner-hosted checkout. */
 .form-grid input:hover,
 .form-grid select:hover {
@@ -1740,6 +1860,13 @@
   .confirm-box input {
     flex: 0 0 auto;
   }
+  .confirmation-choice-main {
+    min-height: 68px;
+    padding: 14px;
+  }
+  .confirmation-choice-help {
+    margin: -3px 14px 13px 49px;
+  }
   .form-actions {
     margin-top: 24px;
   }
@@ -2279,6 +2406,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .confirmation-choice,
+  .confirmation-choice-check,
   .verification-scan > span,
   .verification-milestones .active i,
   .verification-progress-track > span,

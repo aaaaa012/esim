@@ -110,12 +110,14 @@ describe("hosted checkout payment flow", () => {
       fireEvent.click(
         screen.getByRole("checkbox", { name: /I confirm my device/ }),
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: "Save and continue" }),
-      );
-      await screen.findByRole("alertdialog");
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Save and continue",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
       expect(mocks.authFetch).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "Dismiss message" }));
       fireEvent.click(
         screen.getByRole("checkbox", { name: /I agree to the purchase terms/ }),
       );

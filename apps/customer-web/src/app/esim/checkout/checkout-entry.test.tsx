@@ -172,7 +172,7 @@ describe("checkout entry routing", () => {
     await screen.findByRole("button", { name: "Continue" });
     expect(
       screen.getByRole("checkbox", {
-        name: /I confirm my device is compatible/,
+        name: /I confirm my device is eSIM compatible/,
       }),
     ).toBeDefined();
   });

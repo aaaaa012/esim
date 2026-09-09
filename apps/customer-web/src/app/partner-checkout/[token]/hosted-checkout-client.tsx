@@ -31,6 +31,10 @@ import { createDocumentUploader } from "../../esim/checkout/document-upload";
 import { useDocumentRefresh } from "../../esim/checkout/use-document-refresh";
 import { DocumentFileField as FileField } from "../../esim/checkout/document-file-field";
 import { DocumentRecoveryFields } from "../../esim/checkout/document-recovery";
+import {
+  CompatibilityConfirmation,
+  PurchaseConsent,
+} from "../../esim/checkout/checkout-confirmation";
 import { useCheckoutTransition } from "../../esim/checkout/use-checkout-transition";
 import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
@@ -1074,6 +1078,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         checked={legalConsent}
                         onChange={setLegalConsent}
                         recharge
+                        compact
                       />
                     )}
                   </>
@@ -1276,23 +1281,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     </p>
                     {!isTopUp && (
                       <>
-                        <label className="confirm-box">
-                          <input
-                            type="checkbox"
-                            checked={compatibilityConsent}
-                            onChange={(e) => {
-                              setCompatibilityConsent(e.target.checked);
-                              clearSavedConsent();
-                            }}
-                          />
-                          <span>
-                            <b>I confirm my device is eSIM compatible</b>
-                            <small>
-                              Incompatible devices are not eligible for a
-                              refund.
-                            </small>
-                          </span>
-                        </label>
+                        <CompatibilityConfirmation
+                          checked={compatibilityConsent}
+                          onChange={(checked) => {
+                            setCompatibilityConsent(checked);
+                            clearSavedConsent();
+                          }}
+                        />
                         <PurchaseConsent
                           checked={legalConsent}
                           onChange={(accepted) => {
@@ -1306,6 +1301,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       back={() => {}}
                       backHidden
                       busy={busy}
+                      disabled={
+                        !isTopUp && (!compatibilityConsent || !legalConsent)
+                      }
                       next={() =>
                         run(async () => {
                           if (
@@ -1700,7 +1698,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             <div>
               <small>Data &amp; validity</small>
               <b>
-                {formatPlanDataText(plan.dataAllowance)} · {plan.validityDays} days
+                {formatPlanDataText(plan.dataAllowance)} · {plan.validityDays}{" "}
+                days
               </b>
             </div>
             <div className="summary-total">
@@ -1721,48 +1720,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         </div>
       </div>
     </main>
-  );
-}
-
-function PurchaseConsent({
-  checked,
-  onChange,
-  recharge = false,
-}: {
-  checked: boolean;
-  onChange: (accepted: boolean) => void;
-  recharge?: boolean;
-}) {
-  return (
-    <label className="confirm-box legal-consent">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <span>
-        <b>
-          {recharge
-            ? "I approve this eSIM recharge"
-            : "I agree to the purchase terms"}
-        </b>
-        <small>
-          I have read the{" "}
-          <a href="/terms" target="_blank">
-            Terms
-          </a>
-          ,{" "}
-          <a href="/privacy" target="_blank">
-            Privacy Policy
-          </a>{" "}
-          and{" "}
-          <a href="/refund-policy" target="_blank">
-            Refund Policy
-          </a>
-          .
-        </small>
-      </span>
-    </label>
   );
 }
 
@@ -1794,7 +1751,7 @@ function Action({
   busy: boolean;
   onClick: () => void;
   children: React.ReactNode;
-  disabled?: boolean;
+  disabled?: boolean | undefined;
 }) {
   return (
     <button
@@ -1818,11 +1775,13 @@ function Nav({
   busy,
   next,
   backHidden,
+  disabled,
 }: {
   back: () => void;
   busy: boolean;
   next: () => void;
   backHidden?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <div className="form-actions">
@@ -1831,7 +1790,7 @@ function Nav({
           Back
         </button>
       )}
-      <Action busy={busy} onClick={next}>
+      <Action busy={busy} disabled={disabled} onClick={next}>
         Save and continue
       </Action>
     </div>

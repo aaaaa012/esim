@@ -37,6 +37,10 @@ import { createDocumentUploader } from "./document-upload";
 import { useDocumentRefresh } from "./use-document-refresh";
 import { DocumentFileField as FileField } from "./document-file-field";
 import { DocumentRecoveryFields } from "./document-recovery";
+import {
+  CompatibilityConfirmation,
+  PurchaseConsent,
+} from "./checkout-confirmation";
 import { useCheckoutTransition } from "./use-checkout-transition";
 import DatePicker from "./date-picker";
 import { submitCheckoutDocumentsSequentially } from "./document-submission";
@@ -332,9 +336,7 @@ export default function CheckoutClient({
   // new-purchase compatibility form never flashes before effects run.
   const isTopUpIntent =
     Boolean((mobile && lookupToken) || targetEsimId) && !orderId;
-  const [step, setStep] = useState(() =>
-      orderId || isTopUpIntent ? 4 : 1,
-    ),
+  const [step, setStep] = useState(() => (orderId || isTopUpIntent ? 4 : 1)),
     [compatible, setCompatible] = useState(() => {
       try {
         return sessionStorage.getItem(consentKey) === "accepted";
@@ -1548,57 +1550,42 @@ export default function CheckoutClient({
                   Your phone must support eSIM and be carrier-unlocked. Coverage
                   starts after first connection at your destination.
                 </p>
-                <label className="confirm-box">
-                  <input
-                    type="checkbox"
-                    checked={compatible}
-                    onChange={(e) => {
-                      setCompatible(e.target.checked);
-                      if (e.target.checked) setCompatibilityError("");
-                    }}
-                  />
-                  <span>
-                    <b>I confirm my device is compatible</b>
-                    <small>
-                      I understand incompatible devices are not eligible for a
-                      refund.
-                    </small>
-                  </span>
-                </label>
-                <label className="confirm-box legal-consent">
-                  <input
-                    type="checkbox"
-                    checked={legalAccepted}
-                    onChange={(e) => {
-                      setLegalAccepted(e.target.checked);
-                      if (e.target.checked) setCompatibilityError("");
-                    }}
-                  />
-                  <span>
-                    <b>I agree to the purchase terms</b>
-                    <small>
-                      I have read the{" "}
-                      <a href="/terms" target="_blank">
-                        Terms
-                      </a>
-                      ,{" "}
-                      <a href="/privacy" target="_blank">
-                        Privacy Policy
-                      </a>{" "}
-                      and{" "}
-                      <a href="/refund-policy" target="_blank">
-                        Refund Policy
-                      </a>
-                      .
-                    </small>
-                  </span>
-                </label>
+                <CompatibilityConfirmation
+                  checked={compatible}
+                  invalid={Boolean(compatibilityError) && !compatible}
+                  errorId={
+                    compatibilityError ? "compatibility-error" : undefined
+                  }
+                  onChange={(checked) => {
+                    setCompatible(checked);
+                    if (checked) setCompatibilityError("");
+                  }}
+                />
+                <PurchaseConsent
+                  checked={legalAccepted}
+                  invalid={Boolean(compatibilityError) && !legalAccepted}
+                  errorId={
+                    compatibilityError ? "compatibility-error" : undefined
+                  }
+                  onChange={(checked) => {
+                    setLegalAccepted(checked);
+                    if (checked) setCompatibilityError("");
+                  }}
+                />
                 {compatibilityError ? (
-                  <p className="field-error" role="alert">
+                  <p
+                    id="compatibility-error"
+                    className="field-error"
+                    role="alert"
+                  >
                     {compatibilityError}
                   </p>
                 ) : null}
-                <Action busy={busy} onClick={begin}>
+                <Action
+                  busy={busy}
+                  disabled={!compatible || !legalAccepted}
+                  onClick={begin}
+                >
                   Continue
                 </Action>
               </div>
@@ -2220,7 +2207,9 @@ export default function CheckoutClient({
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
                     <b>
-                      {paymentStatusHeading(order?.payment?.provider ?? provider)}
+                      {paymentStatusHeading(
+                        order?.payment?.provider ?? provider,
+                      )}
                     </b>
                     <span>{order?.orderNumber}</span>
                     <p>
@@ -2289,37 +2278,26 @@ export default function CheckoutClient({
                     </div>
                     {isTopUp && !order ? (
                       <>
-                        <label className="confirm-box payment-consent legal-consent">
-                          <input
-                            type="checkbox"
-                            checked={legalAccepted}
-                            onChange={(event) => {
-                              setLegalAccepted(event.target.checked);
-                              if (event.target.checked)
-                                setCompatibilityError("");
-                            }}
-                          />
-                          <span>
-                            <b>I agree to the purchase terms</b>
-                            <small>
-                              I have read the{" "}
-                              <a href="/terms" target="_blank">
-                                Terms
-                              </a>
-                              ,{" "}
-                              <a href="/privacy" target="_blank">
-                                Privacy Policy
-                              </a>{" "}
-                              and{" "}
-                              <a href="/refund-policy" target="_blank">
-                                Refund Policy
-                              </a>
-                              .
-                            </small>
-                          </span>
-                        </label>
+                        <PurchaseConsent
+                          checked={legalAccepted}
+                          compact
+                          invalid={Boolean(compatibilityError)}
+                          errorId={
+                            compatibilityError
+                              ? "payment-consent-error"
+                              : undefined
+                          }
+                          onChange={(checked) => {
+                            setLegalAccepted(checked);
+                            if (checked) setCompatibilityError("");
+                          }}
+                        />
                         {compatibilityError ? (
-                          <p className="field-error" role="alert">
+                          <p
+                            id="payment-consent-error"
+                            className="field-error"
+                            role="alert"
+                          >
                             {compatibilityError}
                           </p>
                         ) : null}
