@@ -4,6 +4,7 @@ import "./globals.css";
 import CustomerHeader from "./customer-header";
 import { ClerkProvider } from "@clerk/nextjs";
 import Link from "next/link";
+import { ExternalLink, MapPin, MessageCircle, Phone } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Visa Compass eSIM",
@@ -43,6 +44,41 @@ export default function RootLayout({
                 width={933}
                 height={373}
               />
+              <address className="footer-contact">
+                <b>Visit or contact us</b>
+                <a
+                  href="https://maps.app.goo.gl/wE3iigygzFDKuyib7"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <MapPin size={16} aria-hidden="true" />
+                  <span>
+                    Prime-Rose Apartment Building, Ground Floor, Panchayan
+                    Marg, Thapathali, Kathmandu
+                  </span>
+                  <ExternalLink size={13} aria-hidden="true" />
+                </a>
+                <a
+                  href="https://wa.me/9779715200219"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <MessageCircle size={16} aria-hidden="true" />
+                  <span>WhatsApp: +977 9715200219</span>
+                </a>
+                <a href="tel:+97715927413">
+                  <Phone size={16} aria-hidden="true" />
+                  <span>Phone: +977 1 5927413</span>
+                </a>
+                <a
+                  href="https://www.facebook.com/profile.php?id=61577297199446"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink size={16} aria-hidden="true" />
+                  <span>Facebook</span>
+                </a>
+              </address>
               <div className="footer-copy">
                 <span>
                   © {new Date().getFullYear()} Visa Compass Nepal. All rights

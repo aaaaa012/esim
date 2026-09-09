@@ -26,6 +26,17 @@ export function scrollToHomeSection(href: string, pathname: string) {
   return true;
 }
 
+export function isCustomerNavActive(
+  href: string,
+  pathname: string,
+  activeHash: string,
+) {
+  if (href === "/") return pathname === "/" && !activeHash;
+  if (href.startsWith("/#"))
+    return pathname === "/" && activeHash === href.slice(1);
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export default function CustomerHeader() {
   const path = usePathname();
   const [activeHash, setActiveHash] = useState("");
@@ -40,7 +51,7 @@ export default function CustomerHeader() {
   const navLink = (href: string, label: string) => (
     <Link
       href={href}
-      className={path === href || (href !== "/" && path.startsWith(href)) || (href.startsWith("/#") && path === "/" && activeHash === href.slice(1)) ? "nav-active" : ""}
+      className={isCustomerNavActive(href, path, activeHash) ? "nav-active" : ""}
       onClick={(event) => {
         if (scrollToHomeSection(href, path)) event.preventDefault();
         setActiveHash(window.location.hash);

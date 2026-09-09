@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { scrollToHomeSection } from "./customer-header";
+import { isCustomerNavActive, scrollToHomeSection } from "./customer-header";
 
 describe("customer header section navigation", () => {
   const scrollIntoView = vi.fn();
@@ -47,5 +47,24 @@ describe("customer header section navigation", () => {
       behavior: "auto",
       block: "start",
     });
+  });
+});
+
+describe("customer header active navigation", () => {
+  it("highlights Home only for the homepage without a section hash", () => {
+    expect(isCustomerNavActive("/", "/", "")).toBe(true);
+    expect(isCustomerNavActive("/", "/", "#recharge")).toBe(false);
+    expect(isCustomerNavActive("/", "/destinations", "")).toBe(false);
+  });
+
+  it("highlights only the matching homepage section", () => {
+    expect(isCustomerNavActive("/#recharge", "/", "#recharge")).toBe(true);
+    expect(isCustomerNavActive("/#how", "/", "#recharge")).toBe(false);
+  });
+
+  it("matches standalone routes and their child pages", () => {
+    expect(isCustomerNavActive("/destinations", "/destinations", "")).toBe(true);
+    expect(isCustomerNavActive("/account/esims", "/account/esims/one", "")).toBe(true);
+    expect(isCustomerNavActive("/compatibility", "/destinations", "")).toBe(false);
   });
 });
