@@ -201,7 +201,6 @@ export default function CatalogPlans() {
       }));
   const destinationPlans = selected ? (grouped.get(selected) ?? []) : [];
   const visible = rankCatalogPlans(destinationPlans);
-  const destinationPopular = destinationPlans.filter((plan) => plan.popular);
   const coverageMessage = selected ? coverage[selected] : undefined;
   const popularCountries = new Set(
     countries
@@ -240,8 +239,6 @@ export default function CatalogPlans() {
       { scroll: false },
     );
   };
-
-  const focusPopularPlan = (plan: Plan) => selectDestination(plan.countryCode);
 
   return (
     <>
@@ -285,31 +282,6 @@ export default function CatalogPlans() {
             <span />
             <span />
             <span />
-          </div>
-        ) : null}
-
-        {destinationPopular.length ? (
-          <div className="destination-popular-plans">
-            <p className="destination-subtitle">
-              Popular for{" "}
-              {countryList.find((country) => country.code === selected)?.name}
-            </p>
-            <div className="destination-plan-chips">
-              {destinationPopular.map((plan) => (
-                <button
-                  key={plan.id}
-                  type="button"
-                  onClick={() => focusPopularPlan(plan)}
-                >
-                  <b>{plan.dataAllowance}</b>
-                  <span>
-                    {plan.validityDays}{" "}
-                    {plan.validityDays === 1 ? "day" : "days"} ·{" "}
-                    {npr(plan.sellingPriceNpr)}
-                  </span>
-                </button>
-              ))}
-            </div>
           </div>
         ) : null}
 

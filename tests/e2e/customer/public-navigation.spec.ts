@@ -60,7 +60,8 @@ test("header destinations navigation never falls back to the homepage", async ({
   page,
 }) => {
   await page.goto("/compatibility");
-  const mobileExplore = page.getByRole("navigation", { name: "Primary mobile navigation" })
+  const mobileNavigation = page.getByRole("navigation", { name: "Primary mobile navigation" });
+  const mobileExplore = mobileNavigation
     .getByRole("link", { name: "Explore" });
   if (await mobileExplore.isVisible()) {
     await mobileExplore.click();
@@ -83,6 +84,13 @@ test("homepage prioritizes destination discovery on mobile", async ({ page }) =>
     name: "Primary mobile navigation",
   }).isVisible();
   if (isMobileNavigation) {
+    const navigationBox = await page.getByRole("navigation", {
+      name: "Primary mobile navigation",
+    }).boundingBox();
+    expect(navigationBox).not.toBeNull();
+    expect((navigationBox?.y ?? 0) + (navigationBox?.height ?? 0)).toBeGreaterThan(
+      (page.viewportSize()?.height ?? 0) - 2,
+    );
     await expect(page.locator(".phone-stage")).toBeHidden();
     await expect(page.getByRole("button", { name: /navigation menu/i })).toBeHidden();
     await expect(page.getByRole("link", { name: "Recharge", exact: true }).last()).toBeVisible();

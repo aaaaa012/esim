@@ -51,8 +51,9 @@ export default function CustomerHeader() {
   );
 
   return (
-    <header className="site-header">
-      <div className="shell header-inner">
+    <>
+      <header className="site-header">
+        <div className="shell header-inner">
         <Link
           className="brand"
           href="/"
@@ -131,7 +132,8 @@ export default function CustomerHeader() {
             <UserButton />
           </SignedIn>
         </div>
-      </div>
+        </div>
+      </header>
       <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
         <Link
           href="/destinations"
@@ -166,6 +168,6 @@ export default function CustomerHeader() {
           <CircleHelp size={20} /><span>Help</span>
         </Link>
       </nav>
-    </header>
+    </>
   );
 }
