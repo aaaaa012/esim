@@ -512,7 +512,7 @@ chars) so ops can diagnose without the raw stack reaching customers.
 
 ### 6.3 Usage
 
-`GET <root>/ocs/inventory/api/subscriptions/products?msisdn=<iccid>&withBalances=true`
+`GET <root>/ocs/inventory/api/subscriptions/products?msisdn=<msisdn>&withBalances=true`
 
 Response `{ currentLocale, productSubscriptions: [...] }` with
 `balances.data[]` of `{ resourceName, resourceLabel, resourceUnit: KB|SECOND|SMS, resourceValue, resourceStartValue, resourceStartDate, resourceEndDate }`.

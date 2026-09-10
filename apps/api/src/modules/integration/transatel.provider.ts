@@ -70,7 +70,7 @@ interface ScpBalance {
   resourceLabel: string;
   resourceUnit: "KB" | "SECOND" | "SMS";
   resourceValue: number;
-  resourceStartValue: number;
+  resourceStartValue?: number;
   resourceStartDate: string;
   resourceEndDate: string;
 }
@@ -333,7 +333,7 @@ export class TransatelProvider implements ConnectivityProvider {
           errorCode: "CONNECTIVITY_UNAVAILABLE",
           errorMessage: detail.slice(0, 2000),
           requestBody: { grant_type: "client_credentials" },
-          responseBody,
+          responseBody: this.responseLogBody(response, responseBody),
         });
         throw new ApiException({
           code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
@@ -359,7 +359,7 @@ export class TransatelProvider implements ConnectivityProvider {
         status: 200,
         durationMs: Date.now() - startedAt,
         requestBody: { grant_type: "client_credentials" },
-        responseBody: this.redactLogBody(data),
+        responseBody: this.responseLogBody(response, this.redactLogBody(data)),
       });
       this.accessToken = data.access_token;
       this.tokenExpiry = Date.now() + data.expires_in * 1000;
@@ -471,7 +471,7 @@ export class TransatelProvider implements ConnectivityProvider {
         errorMessage: this.bodyText(responseBody).slice(0, 2000),
         ...(correlationId ? { correlationId } : {}),
         requestBody: this.requestLogPayload(url, request),
-        responseBody,
+        responseBody: this.responseLogBody(response, responseBody),
       });
       this.accessToken = null;
       this.tokenExpiry = 0;
@@ -523,7 +523,10 @@ export class TransatelProvider implements ConnectivityProvider {
         durationMs,
         ...(correlationId ? { correlationId } : {}),
         requestBody: this.requestLogPayload(url, request),
-        responseBody: await this.logBody(response),
+        responseBody: this.responseLogBody(
+          response,
+          await this.logBody(response),
+        ),
       });
     } else {
       if (response.status === 429 || response.status >= 500)
@@ -540,7 +543,7 @@ export class TransatelProvider implements ConnectivityProvider {
         errorCode: `HTTP_${response.status}`,
         ...(errorMessage ? { errorMessage } : {}),
         requestBody: this.requestLogPayload(url, request),
-        responseBody,
+        responseBody: this.responseLogBody(response, responseBody),
       });
     }
     return response;
@@ -625,6 +628,14 @@ export class TransatelProvider implements ConnectivityProvider {
     }
   }
 
+  private responseLogBody(
+    response: Response,
+    body: Prisma.InputJsonValue,
+  ): Prisma.InputJsonValue {
+    const providerRequestId = response.headers.get("x-tsl-request-id");
+    return providerRequestId ? { providerRequestId, body } : body;
+  }
+
   private bodyText(body: Prisma.InputJsonValue): string {
     return typeof body === "string" ? body : JSON.stringify(body);
   }
@@ -665,6 +676,24 @@ export class TransatelProvider implements ConnectivityProvider {
       );
     } catch {
       return response.text();
+    }
+  }
+
+  private async parseProviderJson<T>(
+    response: Response,
+    code: ApiErrorCode,
+    message: string,
+    contract: string,
+  ): Promise<T> {
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new ApiException({
+        code,
+        message,
+        status: 502,
+        details: `Transatel returned invalid JSON for ${contract}`,
+      });
     }
   }
 
@@ -1045,15 +1074,29 @@ export class TransatelProvider implements ConnectivityProvider {
       });
     }
 
-    const data = (await response.json()) as OrderProductResponse;
+    const data = await this.parseProviderJson<OrderProductResponse>(
+      response,
+      ApiErrorCode.PROVISIONING_FAILED,
+      "We could not activate your eSIM right now. Our team is reviewing it and will contact you.",
+      "the OCS product order",
+    );
     const providerSubscriptionId = data.subscriptionId;
-    if (!providerSubscriptionId)
+    if (
+      !providerSubscriptionId ||
+      !data.id ||
+      data.status?.toLowerCase() !== "done" ||
+      data.mvnoRef !== mvnoRef ||
+      data.bind?.msisdn?.replace(/\D/g, "") !== bindMsisdn ||
+      (data.transactionReference &&
+        data.transactionReference !== request.orderId)
+    )
       throw new ApiException({
         code: ApiErrorCode.PROVISIONING_FAILED,
         message:
           "We could not activate your eSIM right now. Our team is reviewing it and will contact you.",
         status: 502,
-        details: "OCS order response did not include a subscription id",
+        details:
+          "OCS order response was incomplete or did not match the submitted MVNO, MSISDN, or transaction reference",
       });
 
     // Provider acceptance is the commit point. Persist it before any secondary
@@ -1183,7 +1226,12 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Failed to fetch usage balance from Transatel: ${await this.errorText(response)}`,
       });
 
-    const data = (await response.json()) as ProductSubscriptionsResponse;
+    const data = await this.parseProviderJson<ProductSubscriptionsResponse>(
+      response,
+      ApiErrorCode.USAGE_UNAVAILABLE,
+      "Usage details are not available yet. Please check back shortly.",
+      "the OCS product inventory",
+    );
     if (!Array.isArray(data.productSubscriptions))
       throw new ApiException({
         code: ApiErrorCode.USAGE_UNAVAILABLE,
@@ -1222,7 +1270,12 @@ export class TransatelProvider implements ConnectivityProvider {
       });
 
     const packages = subscriptions.map((item, index) => {
-      const balance = this.usageFromBalances(item.balances);
+      const balance = this.usageFromBalances(
+        item.balances,
+        item.productDefinition?.allowances,
+      );
+      const activatedAt = this.validProviderDate(item.activationDate);
+      const expiresAt = this.validProviderDate(item.expirationDate);
       return {
         providerSubscriptionId: item.subscriptionId,
         status: item.status,
@@ -1230,11 +1283,9 @@ export class TransatelProvider implements ConnectivityProvider {
         totalMb: balance?.totalMb ?? 0,
         usageAvailable: Boolean(balance),
         priority: index + 1,
-        ...(item.activationDate ? { activatedAt: item.activationDate } : {}),
+        ...(activatedAt ? { activatedAt } : {}),
         // Before activation expirationDate is an activation deadline, not plan expiry.
-        ...(item.activationDate && item.expirationDate
-          ? { expiresAt: item.expirationDate }
-          : {}),
+        ...(activatedAt && expiresAt ? { expiresAt } : {}),
       };
     });
     const aggregate = packages
@@ -1257,6 +1308,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   private usageFromBalances(
     balances?: ProductSubscription["balances"],
+    allowances?: unknown,
   ): { usedMb: number; totalMb: number } | null {
     const entries: ScpBalance[] = Array.isArray(balances?.data)
       ? balances!.data!
@@ -1265,14 +1317,23 @@ export class TransatelProvider implements ConnectivityProvider {
       (entry) => String(entry.resourceUnit).toUpperCase() === "KB",
     );
     if (!dataResources.length) return null;
-    const start = Math.max(
-      ...dataResources.map((entry) =>
-        Number(entry.resourceStartValue) > 0
-          ? Number(entry.resourceStartValue)
-          : 0,
-      ),
-      0,
-    );
+    const allowanceData =
+      allowances && typeof allowances === "object"
+        ? (allowances as { data?: unknown }).data
+        : undefined;
+    const allowanceResources = Array.isArray(allowanceData)
+      ? allowanceData.filter(
+          (entry): entry is { resourceName?: string; resourceValue: number } =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            String(
+              (entry as { resourceUnit?: unknown }).resourceUnit,
+            ).toUpperCase() === "KB" &&
+            Number.isFinite(
+              Number((entry as { resourceValue?: unknown }).resourceValue),
+            ),
+        )
+      : [];
     const remaining = Math.max(
       ...dataResources.map((entry) =>
         Number(entry.resourceValue) >= 0 ? Number(entry.resourceValue) : 0,
@@ -1282,11 +1343,32 @@ export class TransatelProvider implements ConnectivityProvider {
     const unlimited = dataResources.some(
       (entry) => Number(entry.resourceValue) === -1,
     );
+    const start = Math.max(
+      ...dataResources.map((entry) => {
+        const reportedStart = Number(entry.resourceStartValue);
+        if (Number.isFinite(reportedStart) && reportedStart > 0)
+          return reportedStart;
+        const configured = allowanceResources.find(
+          (allowance) => allowance.resourceName === entry.resourceName,
+        );
+        const configuredValue = Number(configured?.resourceValue);
+        if (Number.isFinite(configuredValue) && configuredValue > 0)
+          return configuredValue;
+        const current = Number(entry.resourceValue);
+        return Number.isFinite(current) && current > 0 ? current : 0;
+      }),
+      0,
+    );
+    if (start <= 0 && !unlimited) return null;
     const totalMb = Math.max(1, Math.round(start / 1024));
     const remainingMb = unlimited
       ? totalMb
       : Math.min(totalMb, Math.round(remaining / 1024));
     return { usedMb: Math.max(0, totalMb - remainingMb), totalMb };
+  }
+
+  private validProviderDate(value?: string): string | undefined {
+    return value && Number.isFinite(Date.parse(value)) ? value : undefined;
   }
 
   async getEsimDetails(reference: string): Promise<EsimDetailsResult> {
@@ -1322,7 +1404,12 @@ export class TransatelProvider implements ConnectivityProvider {
       });
     }
 
-    const data = (await response.json()) as ESimDetailsResponse;
+    const data = await this.parseProviderJson<ESimDetailsResponse>(
+      response,
+      ApiErrorCode.ESIM_LOOKUP_UNAVAILABLE,
+      "Transatel could not check this eSIM right now. Please retry shortly.",
+      "the eSIM profile lookup",
+    );
     if (
       !data ||
       typeof data.status !== "string" ||
@@ -1371,11 +1458,16 @@ export class TransatelProvider implements ConnectivityProvider {
         status: response.status === 404 ? 404 : 502,
         details: await this.errorText(response),
       });
-    const data = (await response.json()) as {
+    const data = await this.parseProviderJson<{
       simSerial?: string;
       msisdn?: string;
       status?: string;
-    };
+    }>(
+      response,
+      ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      "Transatel could not check this subscriber right now.",
+      "the connectivity subscriber lookup",
+    );
     if (!data.status || (data.simSerial && data.simSerial !== iccid))
       throw new ApiException({
         code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
@@ -1413,8 +1505,7 @@ export class TransatelProvider implements ConnectivityProvider {
         "Idempotency-Key": transactionReference,
       },
       body: JSON.stringify({
-        mvnoRef: this.env("TRANSATEL_MVNO_REF"),
-        transactionReference,
+        externalReference: transactionReference,
       }),
       operation: `subscriber-${action}`,
       correlationId: transactionReference,
@@ -1427,13 +1518,40 @@ export class TransatelProvider implements ConnectivityProvider {
         details: await this.errorText(response),
       });
     const raw = await response.text();
-    const data = raw
-      ? (JSON.parse(raw) as { transactionId?: string; status?: string })
-      : {};
+    let data: {
+      transactionId?: string;
+      simSerial?: string;
+      transactionStatus?: string;
+      status?: string;
+    };
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: `Transatel returned an invalid ${action} response.`,
+        status: 502,
+        details: "Connectivity lifecycle response was not valid JSON",
+      });
+    }
+    const transactionStatus = data.transactionStatus ?? data.status;
+    if (
+      !data.transactionId ||
+      (data.simSerial && data.simSerial !== simSerial) ||
+      !transactionStatus ||
+      !["PENDING", "DONE", "SUCCESS"].includes(transactionStatus.toUpperCase())
+    )
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: `Transatel returned an invalid ${action} response.`,
+        status: 502,
+        details:
+          "Connectivity lifecycle response was incomplete, unsuccessful, or referenced another ICCID",
+      });
     return {
       accepted: true,
-      ...(data.transactionId ? { transactionId: data.transactionId } : {}),
-      status: data.status ?? "PENDING",
+      transactionId: data.transactionId,
+      status: transactionStatus.toUpperCase(),
     };
   }
 
@@ -1469,11 +1587,31 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel catalog fetch failed: ${await this.errorText(response)}`,
       });
 
-    const data = (await response.json()) as ProductCatalogResponse;
+    const data = await this.parseProviderJson<ProductCatalogResponse>(
+      response,
+      ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      "Catalog synchronization is unavailable right now.",
+      "the OCS catalog",
+    );
+    if (!Array.isArray(data.products))
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: "Catalog synchronization is unavailable right now.",
+        status: 502,
+        details: "Transatel returned an invalid OCS catalog response",
+      });
     let synced = 0;
     const skipped: string[] = [];
 
     for (const product of data.products) {
+      if (
+        !product ||
+        typeof product !== "object" ||
+        !product.productDefinition
+      ) {
+        skipped.push("invalid-product");
+        continue;
+      }
       const definition = product.productDefinition;
       const countries = (definition.countryList ?? [])
         .map((iso3) => this.iso3ToIso2(iso3))
@@ -1580,11 +1718,31 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel catalog fetch failed: ${await this.errorText(response)}`,
       });
 
-    const data = (await response.json()) as ProductCatalogResponse;
+    const data = await this.parseProviderJson<ProductCatalogResponse>(
+      response,
+      ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      "Catalog export is unavailable right now.",
+      "the OCS catalog export",
+    );
+    if (!Array.isArray(data.products))
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: "Catalog export is unavailable right now.",
+        status: 502,
+        details: "Transatel returned an invalid OCS catalog response",
+      });
     const rows: CatalogExportRow[] = [];
     const skipped: string[] = [];
 
     for (const product of data.products) {
+      if (
+        !product ||
+        typeof product !== "object" ||
+        !product.productDefinition
+      ) {
+        skipped.push("invalid-product");
+        continue;
+      }
       const definition = product.productDefinition;
       const countries = (definition.countryList ?? [])
         .map((iso3) => this.iso3ToIso2(iso3))
@@ -1670,14 +1828,20 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel eligibility check failed: ${detail}`,
       });
     }
-    const data = (await response.json()) as
-      ProductDetails | ProductCatalogResponse;
+    const data = await this.parseProviderJson<
+      ProductDetails | ProductCatalogResponse
+    >(
+      response,
+      ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      "Our connectivity service is temporarily unavailable. Please try again shortly.",
+      "the OCS eligibility lookup",
+    );
     // Transatel deployments have exposed the product-detail response both as
     // the product itself and wrapped in a `products` collection. Accept both
     // documented shapes so eligibility never becomes a false rejection merely
     // because the tenant is on a different compatible API revision.
     const details =
-      "canSubscribe" in data
+      data && typeof data === "object" && "canSubscribe" in data
         ? data
         : Array.isArray(data.products)
           ? data.products[0]
@@ -1921,14 +2085,16 @@ export class TransatelProvider implements ConnectivityProvider {
       typeof productDefinition.productId === "string"
         ? productDefinition.productId
         : undefined;
-    const activatedAt =
+    const activatedAt = this.validProviderDate(
       typeof productSubscription.activationDate === "string"
         ? productSubscription.activationDate
-        : undefined;
-    const expiresAt =
+        : undefined,
+    );
+    const expiresAt = this.validProviderDate(
       typeof productSubscription.expirationDate === "string"
         ? productSubscription.expirationDate
-        : undefined;
+        : undefined,
+    );
 
     return {
       ...(eventType ? { eventType } : {}),

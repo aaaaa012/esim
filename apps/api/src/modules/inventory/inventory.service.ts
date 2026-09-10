@@ -1155,11 +1155,13 @@ export class InventoryService implements OnModuleInit {
       event.eventType?.startsWith("CONNECTIVITY-MANAGEMENT/SUBSCRIBER/") ===
         true;
     const productEvent = !subscriberEvent;
+    const primaryProductEvent =
+      productEvent && inventory.assignedOrderId === orderId;
     const inventoryStatus = subscriberEvent
       ? event.status === "TERMINATED"
         ? InventoryStatus.TERMINATED
         : null
-      : event.status === "ACTIVATED"
+      : primaryProductEvent && event.status === "ACTIVATED"
         ? InventoryStatus.ACTIVATED
         : null;
     const subscriptionStatus = productEvent
@@ -1176,16 +1178,16 @@ export class InventoryService implements OnModuleInit {
               ...(subscriberEvent && event.status
                 ? { providerStatus: event.status }
                 : {}),
-              ...(event.subscriptionId
+              ...(primaryProductEvent && event.subscriptionId
                 ? { providerSubscriptionId: event.subscriptionId }
                 : {}),
               ...(event.msisdn
                 ? { msisdn: event.msisdn.replace(/\D/g, "") }
                 : {}),
-              ...(event.activatedAt
+              ...(primaryProductEvent && event.activatedAt
                 ? { activatedAt: new Date(event.activatedAt) }
                 : {}),
-              ...(event.expiresAt
+              ...(primaryProductEvent && event.expiresAt
                 ? { expiresAt: new Date(event.expiresAt) }
                 : {}),
               version: { increment: 1 },

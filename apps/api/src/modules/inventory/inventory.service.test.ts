@@ -308,6 +308,65 @@ describe("InventoryService.applyLifecycle", () => {
     });
     expect(subscriptionUpsert).not.toHaveBeenCalled();
   });
+
+  it("keeps the original inventory identity when a top-up product event arrives", async () => {
+    const inventoryUpdate = vi.fn().mockResolvedValue(undefined);
+    const subscriptionUpsert = vi.fn().mockResolvedValue({ id: "topup-row" });
+    const tx = {
+      esimInventory: { update: inventoryUpdate },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          assignedOrderId: "initial-order",
+          providerSubscriptionId: "initial-subscription",
+          status: "ACTIVATED",
+        }),
+      },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({
+          inventory: { id: "inventory-1" },
+        }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("topup-order", {
+      provider: "TRANSATEL",
+      eventType: "OCS/PRODUCT/ACTIVATED",
+      statusScope: "PRODUCT",
+      status: "ACTIVATED",
+      subscriptionId: "topup-subscription",
+      iccid: "8988247076000000319",
+      activatedAt: "2026-09-10T00:00:00Z",
+      expiresAt: "2026-09-17T00:00:00Z",
+    });
+
+    const inventoryData = inventoryUpdate.mock.calls[0]?.[0]?.data;
+    expect(inventoryData).not.toHaveProperty("providerSubscriptionId");
+    expect(inventoryData).not.toHaveProperty("activatedAt");
+    expect(inventoryData).not.toHaveProperty("expiresAt");
+    expect(subscriptionUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { providerSubscriptionId: "topup-subscription" },
+      }),
+    );
+  });
 });
 
 describe("InventoryService.importBatchCsv", () => {

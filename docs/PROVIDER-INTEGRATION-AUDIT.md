@@ -1,6 +1,6 @@
 # Provider integration release audit
 
-Reconciled with the implementation on 2026-09-08 against the public Transatel
+Reconciled with the implementation on 2026-09-10 against the public Transatel
 OpenAPI documents (OCS subscriptions 1.85, catalog, inventory and SIM
 management), Khalti KPG-2 documentation, and the supplied Fonepay Intent Flow
 v1.10 material.
@@ -27,10 +27,10 @@ top-ups, so the inventory row is not the authoritative owner of every package.
 | Initial purchase       | `POST /ocs/subscriptions/api/orders/products`, `orderType=preload`, real MSISDN                                        | Persist provider acceptance before QR lookup; fetch QR using ICCID                                   | Aligned                                                                             |
 | Top-up                 | Same endpoint, `orderType=subscribe`, real MSISDN                                                                      | Treat `201`/`done` as package commit; reuse existing eSIM QR record; do not request or send a new QR | Corrected in this audit                                                             |
 | Eligibility            | `GET /ocs/catalog/api/cos/{cosRef}/products/{productId}?msisdn=...`                                                    | Honor `canSubscribe.allowed`; retain provider code internally and return safe copy                   | Aligned                                                                             |
-| Usage                  | `GET /ocs/inventory/api/subscriptions/products?msisdn=...&withBalances=true`                                           | Aggregate non-terminated KB balances by product subscription                                         | Corrected: ICCID fallback removed                                                   |
+| Usage                  | `GET /ocs/inventory/api/subscriptions/products?msisdn=...&withBalances=true`                                           | Aggregate non-terminated KB balances by product subscription; recover the original allowance from the product definition when a balance omits it | Corrected and contract-validated                                                     |
 | eSIM details           | `GET /sim-management/sims/api/esims/sim-serial/{iccid}`                                                                | Retrieve profile state and activation material                                                       | Aligned                                                                             |
-| Subscriber suspension  | Tenant connectivity-management `.../sim-serial/{iccid}/suspend`                                                        | Audited, idempotent command; pending until provider confirmation                                     | Needs tenant-contract/live certification                                            |
-| Subscriber termination | Tenant connectivity-management `.../sim-serial/{iccid}/terminate`                                                      | Super-admin-only irreversible action; pending until confirmation                                     | Needs tenant-contract/live certification                                            |
+| Subscriber suspension  | Tenant connectivity-management `.../sim-serial/{iccid}/suspend`, body `{ externalReference }`                         | Audited, idempotent command; validates the returned transaction, ICCID and transaction status; pending until provider confirmation | Contract-aligned; needs tenant/live certification                                   |
+| Subscriber termination | Tenant connectivity-management `.../sim-serial/{iccid}/terminate`, body `{ externalReference }`                       | Super-admin-only irreversible action; validates the returned transaction, ICCID and transaction status; pending until confirmation | Contract-aligned; needs tenant/live certification                                   |
 | Catalog sync           | `GET /ocs/catalog/api/cos/{cosRef}/products`                                                                           | Imports available one-off products and converts provider pricing/allowance units                     | Aligned; commercial FX/margin approval required                                     |
 | Webhooks               | Configure a datastream in the Transatel Developer Console; signed raw-body inbox with durable dedupe/retry/dead-letter | Maps lifecycle events without state regression; deprecated API registration action removed           | Payload/signature and Console event selection must be certified with tenant samples |
 
@@ -53,6 +53,17 @@ expects just-in-time reservation, reserve/release must be implemented.
 | TERMINATED product         | Only the matching package becomes terminal                       | Purchase history retained                                                                |
 | TERMINATED subscriber      | Subscriber and eSIM inventory become terminal                    | Confirms approved termination or opens critical attention                                |
 | Unknown/out-of-order       | Raw event retained; no unsafe mutation                           | Attention or ignored regression, never guessed                                           |
+
+Product events update only their matching `Subscription`. A top-up callback
+does not replace the shared eSIM inventory row's original subscription ID,
+activation date or expiry date. Subscriber events independently update network
+lifecycle state. Provider profile, subscriber and product states are retained
+separately so a deleted profile is never reported as an active subscriber.
+
+Successful HTTP responses are still treated as failures when their JSON is
+malformed or their required identifiers do not match the request. Outbound logs
+retain Transatel's `X-TSL-Request-Id` when supplied, allowing Ops and Transatel
+support to correlate the exact provider call.
 
 ## Khalti KPG-2 matrix
 

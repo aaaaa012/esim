@@ -10,11 +10,15 @@ type FetchInit = {
   body?: string;
 };
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(
+  body: unknown,
+  status = 200,
+  headers?: Record<string, string>,
+) {
   return {
     ok: status >= 200 && status < 300,
     status,
-    headers: new Headers(),
+    headers: new Headers(headers),
     text: () => Promise.resolve(JSON.stringify(body)),
     json: () => Promise.resolve(body),
   } as Response;
@@ -665,25 +669,29 @@ describe("TransatelProvider", () => {
       "/authentication/api/token": () =>
         jsonResponse({ access_token: "token-1", expires_in: 3600 }),
       "/ocs/inventory/api/subscriptions/products": () =>
-        jsonResponse({
-          currentLocale: "en_US",
-          productSubscriptions: [
-            {
-              subscriptionId: "sub-1",
-              status: "active",
-              balances: {
-                data: [
-                  {
-                    resourceName: "DATA",
-                    resourceUnit: "KB",
-                    resourceStartValue: 5242880,
-                    resourceValue: 1048576,
-                  },
-                ],
+        jsonResponse(
+          {
+            currentLocale: "en_US",
+            productSubscriptions: [
+              {
+                subscriptionId: "sub-1",
+                status: "active",
+                balances: {
+                  data: [
+                    {
+                      resourceName: "DATA",
+                      resourceUnit: "KB",
+                      resourceStartValue: 5242880,
+                      resourceValue: 1048576,
+                    },
+                  ],
+                },
               },
-            },
-          ],
-        }),
+            ],
+          },
+          200,
+          { "x-tsl-request-id": "tsl-usage-request-1" },
+        ),
     });
     const usage = await provider.getUsage(ORDER_UUID);
     expect(usage).toEqual({
@@ -708,6 +716,16 @@ describe("TransatelProvider", () => {
     );
     expect(url).toContain("msisdn=33612345678");
     expect(url).toContain("withBalances=true");
+    expect(prisma.integrationLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          operation: "usage",
+          responseBody: expect.objectContaining({
+            providerRequestId: "tsl-usage-request-1",
+          }),
+        }),
+      }),
+    );
   });
 
   it("rejects OCS usage lookup when an inventory profile has no MSISDN", async () => {
@@ -750,6 +768,54 @@ describe("TransatelProvider", () => {
         String(call[0]).includes("/api/subscriptions/products"),
       ),
     ).toBe(false);
+  });
+
+  it("uses the catalog allowance when a balance omits its start value", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+    });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/ocs/inventory/api/subscriptions/products": () =>
+        jsonResponse({
+          productSubscriptions: [
+            {
+              subscriptionId: "sub-no-start",
+              status: "active",
+              productDefinition: {
+                allowances: {
+                  data: [
+                    {
+                      resourceName: "DATA",
+                      resourceUnit: "KB",
+                      resourceValue: 1048576,
+                    },
+                  ],
+                },
+              },
+              balances: {
+                data: [
+                  {
+                    resourceName: "DATA",
+                    resourceUnit: "KB",
+                    resourceValue: 524288,
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+    });
+
+    await expect(provider.getUsage(ORDER_UUID)).resolves.toMatchObject({
+      usedMb: 512,
+      totalMb: 1024,
+      usageAvailable: true,
+    });
   });
 
   it("rejects a malformed successful product inventory response", async () => {
@@ -1669,23 +1735,29 @@ describe("TransatelProvider", () => {
         jsonResponse({ access_token: "token-1", expires_in: 3600 }),
       "/connectivity-management/subscribers/api/subscribers/sim-serial/8988247076000000319/suspend":
         () =>
-          jsonResponse({ transactionId: "tx-suspend", status: "Pending" }, 201),
+          jsonResponse(
+            {
+              transactionId: "tx-suspend",
+              simSerial: "8988247076000000319",
+              transactionStatus: "PENDING",
+            },
+            201,
+          ),
     });
     expect(
       await provider.suspend("8988247076000000319", "ops:suspend:key-1"),
     ).toEqual({
       accepted: true,
       transactionId: "tx-suspend",
-      status: "Pending",
+      status: "PENDING",
     });
     const call = fetchMock.mock.calls.find((entry) =>
       String(entry[0]).endsWith("/suspend"),
     );
     expect(call?.[1]).toMatchObject({ method: "POST" });
     expect(call?.[1].headers?.["Idempotency-Key"]).toBe("ops:suspend:key-1");
-    expect(JSON.parse(String(call?.[1].body))).toMatchObject({
-      mvnoRef: "visacompass-test",
-      transactionReference: "ops:suspend:key-1",
+    expect(JSON.parse(String(call?.[1].body))).toEqual({
+      externalReference: "ops:suspend:key-1",
     });
   });
 
@@ -1697,7 +1769,11 @@ describe("TransatelProvider", () => {
       "/connectivity-management/subscribers/api/subscribers/sim-serial/8988247076000000319/terminate":
         () =>
           jsonResponse(
-            { transactionId: "tx-terminate", status: "Pending" },
+            {
+              transactionId: "tx-terminate",
+              simSerial: "8988247076000000319",
+              transactionStatus: "PENDING",
+            },
             201,
           ),
     });
@@ -1706,12 +1782,37 @@ describe("TransatelProvider", () => {
     ).toEqual({
       accepted: true,
       transactionId: "tx-terminate",
-      status: "Pending",
+      status: "PENDING",
     });
     expect(
       fetchMock.mock.calls.some((entry) =>
         String(entry[0]).endsWith("/terminate"),
       ),
     ).toBe(true);
+  });
+
+  it("rejects a lifecycle acknowledgement for a different ICCID", async () => {
+    const provider = new TransatelProvider(prismaStub());
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/connectivity-management/subscribers/api/subscribers/sim-serial/8988247076000000319/suspend":
+        () =>
+          jsonResponse(
+            {
+              transactionId: "tx-wrong-sim",
+              simSerial: "8988247076000000999",
+              transactionStatus: "PENDING",
+            },
+            201,
+          ),
+    });
+
+    await expect(
+      provider.suspend("8988247076000000319", "ops:suspend:key-2"),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      status: 502,
+    });
   });
 });

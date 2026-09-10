@@ -186,7 +186,13 @@ export class UsageService {
                   : balance.status === "expired"
                     ? { status: "EXPIRED" }
                     : balance.status === "terminated"
-                      ? { status: "TERMINATED" }
+                      ? {
+                          status:
+                            balance.expiresAt &&
+                            new Date(balance.expiresAt) <= checkedAt
+                              ? "EXPIRED"
+                              : "TERMINATED",
+                        }
                       : {}),
             providerLastSeenAt: checkedAt,
             assignmentVerificationStatus: "VERIFIED",
