@@ -24,8 +24,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgresql://visa_compass:ci_password@localhost:5432/visa_compass_ci?schema=public
-      DIRECT_DATABASE_URL: postgresql://visa_compass:ci_password@localhost:5432/visa_compass_ci?schema=public
+      DATABASE_URL: postgresql://visa_compass:ci_password@localhost:5432/visa_compass_ci?schema=visa_compass
+      DIRECT_DATABASE_URL: postgresql://visa_compass:ci_password@localhost:5432/visa_compass_ci?schema=visa_compass
       PERSISTENCE_MODE: prisma
     steps:
       - uses: actions/checkout@v4
