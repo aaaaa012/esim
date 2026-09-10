@@ -1791,6 +1791,36 @@ describe("TransatelProvider", () => {
     ).toBe(true);
   });
 
+  it("submits subscriber reactivation through the dedicated lifecycle endpoint", async () => {
+    const provider = new TransatelProvider(prismaStub());
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/connectivity-management/subscribers/api/subscribers/sim-serial/8988247076000000319/reactivate":
+        () =>
+          jsonResponse(
+            {
+              transactionId: "tx-reactivate",
+              simSerial: "8988247076000000319",
+              transactionStatus: "PENDING",
+            },
+            201,
+          ),
+    });
+    expect(
+      await provider.reactivate("8988247076000000319", "ops:reactivate:key-1"),
+    ).toEqual({
+      accepted: true,
+      transactionId: "tx-reactivate",
+      status: "PENDING",
+    });
+    expect(
+      fetchMock.mock.calls.some((entry) =>
+        String(entry[0]).endsWith("/reactivate"),
+      ),
+    ).toBe(true);
+  });
+
   it("rejects a lifecycle acknowledgement for a different ICCID", async () => {
     const provider = new TransatelProvider(prismaStub());
     route({

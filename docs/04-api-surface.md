@@ -90,6 +90,9 @@ All handlers call `requireRole(OPERATIONS, SUPER_ADMIN)` in addition to
 | POST   | `/operations/payments/expire-stale`                             | Expire stale pending payments; returns `{ expired }`                                                                  |
 | GET    | `/operations/transatel`                                         | Consolidated provider health, subscriber balances, unassigned inventory, failures, and lifecycle history              |
 | POST   | `/operations/transatel/orders/:id/suspend`                      | Idempotent audited suspension. Body `{ reason, idempotencyKey }`; Operations or Super Admin                           |
+| POST   | `/operations/transatel/orders/:id/reactivate-request`           | Requests reactivation of a suspended subscriber; Operations or Super Admin                                            |
+| POST   | `/operations/transatel/reactivations/:id/approve`               | A different Super Admin approves and submits the reactivation to Transatel                                            |
+| POST   | `/operations/transatel/reactivations/:id/reject`                | A different Super Admin rejects with a reason; nothing is sent to Transatel                                           |
 | POST   | `/operations/transatel/orders/:id/terminate`                    | Irreversible idempotent termination. Body `{ reason, idempotencyKey }`; Super Admin only                              |
 
 ## Guest orders (no login; HMAC header)
@@ -100,19 +103,19 @@ After creation, every order-specific guest endpoint requires
 From `apps/api/src/modules/orders/guest-orders.controller.ts:12-61`.
 All mutations require a per-order HMAC `token` bound to `GUEST_ORDER_SECRET`.
 
-| Method | Path                                              | Behavior                                                                                                   |
-| ------ | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| POST   | `/guest/orders`                                   | Create order without an owner; returns `{ order, token }`. Optional `mobile`, `email`                      |
-| GET    | `/guest/orders/:id`                               | Customer-redacted order view                                                                               |
-| PATCH  | `/guest/orders/:id/traveler`                      | Traveler body                                                                                              |
-| POST   | `/guest/orders/:id/documents`                     | Body `{ type, fileName, contentType? }`                                                                     |
-| POST   | `/guest/orders/:id/documents/:documentId/confirm` | Empty body                                                                                                 |
-| POST   | `/guest/orders/:id/payment`                       | Body `{ provider }`                                                                                        |
-| POST   | `/guest/orders/:id/payment/verify`                | Body `{ reference }`                                                                                       |
-| POST   | `/guest/orders/:id/payment/simulate`              | Body `{ reference, scenario? }` (scenario: SUCCESS/CANCELLED/PENDING/WRONG_AMOUNT/REFUNDED/TIMEOUT)       |
-| POST   | `/guest/orders/:id/payment/abandon`               | Body `{ reason? }`                                                                                         |
-| POST   | `/guest/orders/:id/cancel`                        | Body `{ reason? }`                                                                                         |
-| POST   | `/guest/orders/topup-lookup`                      | Body `{ mobile }` — subscriber lookup (no token)                                                           |
+| Method | Path                                              | Behavior                                                                                            |
+| ------ | ------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| POST   | `/guest/orders`                                   | Create order without an owner; returns `{ order, token }`. Optional `mobile`, `email`               |
+| GET    | `/guest/orders/:id`                               | Customer-redacted order view                                                                        |
+| PATCH  | `/guest/orders/:id/traveler`                      | Traveler body                                                                                       |
+| POST   | `/guest/orders/:id/documents`                     | Body `{ type, fileName, contentType? }`                                                             |
+| POST   | `/guest/orders/:id/documents/:documentId/confirm` | Empty body                                                                                          |
+| POST   | `/guest/orders/:id/payment`                       | Body `{ provider }`                                                                                 |
+| POST   | `/guest/orders/:id/payment/verify`                | Body `{ reference }`                                                                                |
+| POST   | `/guest/orders/:id/payment/simulate`              | Body `{ reference, scenario? }` (scenario: SUCCESS/CANCELLED/PENDING/WRONG_AMOUNT/REFUNDED/TIMEOUT) |
+| POST   | `/guest/orders/:id/payment/abandon`               | Body `{ reason? }`                                                                                  |
+| POST   | `/guest/orders/:id/cancel`                        | Body `{ reason? }`                                                                                  |
+| POST   | `/guest/orders/topup-lookup`                      | Body `{ mobile }` — subscriber lookup (no token)                                                    |
 
 ## Payments (auth: CUSTOMER)
 
@@ -138,22 +141,22 @@ From `apps/api/src/modules/inventory/inventory.controller.ts:7-25`.
 
 From `apps/api/src/modules/admin/admin.controller.ts:22-99`.
 
-| Method | Path                                           | Behavior                                                              |
-| ------ | ---------------------------------------------- | --------------------------------------------------------------------- |
-| GET    | `/admin/plans`                                 | Plans with country, prices, status                                    |
-| POST   | `/admin/plans/import-csv`                      | Body `{ csv }` bulk upsert (≤2000 rows)                               |
-| PATCH  | `/admin/plans/:id`                             | Body `{ sellingPriceNpr?, popular?, status? }`                        |
-| GET    | `/admin/integrations`                          | Integration statuses (email, khalti, transatel, S3, whatsapp)        |
-| POST   | `/admin/integrations/:id/test`                 | Test integration configuration                                        |
-| POST   | `/admin/integrations/transatel/sync-catalog`   | Sync Transatel catalog                                                |
-| POST   | `/admin/integrations/transatel/eligibility`    | Body `{ planId, msisdn }` eligibility check                           |
-| GET    | `/admin/users`                                 | Users with roles, capabilities, customerCode                          |
-| PATCH  | `/admin/users/:id/account-type`                | Body `{ accountType }` (OPERATIONS/SUPER_ADMIN)                       |
-| PATCH  | `/admin/users/:id/status`                      | Body `{ status }`                                                     |
-| GET    | `/admin/staff-invitations`                     | Invitation list                                                       |
-| POST   | `/admin/staff-invitations`                     | Body `{ email, accountType }`                                         |
-| POST   | `/admin/staff-invitations/:id/resend`          | Amazon SES invitation                                                     |
-| DELETE | `/admin/staff-invitations/:id`                 | Revoke invitation                                                     |
+| Method | Path                                         | Behavior                                                      |
+| ------ | -------------------------------------------- | ------------------------------------------------------------- |
+| GET    | `/admin/plans`                               | Plans with country, prices, status                            |
+| POST   | `/admin/plans/import-csv`                    | Body `{ csv }` bulk upsert (≤2000 rows)                       |
+| PATCH  | `/admin/plans/:id`                           | Body `{ sellingPriceNpr?, popular?, status? }`                |
+| GET    | `/admin/integrations`                        | Integration statuses (email, khalti, transatel, S3, whatsapp) |
+| POST   | `/admin/integrations/:id/test`               | Test integration configuration                                |
+| POST   | `/admin/integrations/transatel/sync-catalog` | Sync Transatel catalog                                        |
+| POST   | `/admin/integrations/transatel/eligibility`  | Body `{ planId, msisdn }` eligibility check                   |
+| GET    | `/admin/users`                               | Users with roles, capabilities, customerCode                  |
+| PATCH  | `/admin/users/:id/account-type`              | Body `{ accountType }` (OPERATIONS/SUPER_ADMIN)               |
+| PATCH  | `/admin/users/:id/status`                    | Body `{ status }`                                             |
+| GET    | `/admin/staff-invitations`                   | Invitation list                                               |
+| POST   | `/admin/staff-invitations`                   | Body `{ email, accountType }`                                 |
+| POST   | `/admin/staff-invitations/:id/resend`        | Amazon SES invitation                                         |
+| DELETE | `/admin/staff-invitations/:id`               | Revoke invitation                                             |
 
 ## Partners (partner API key)
 
@@ -203,11 +206,11 @@ Guarded by `AuthGuard`.
 From `apps/api/src/modules/webhooks/webhooks.controller.ts:13-77`. Rate limit
 exempt. Returns HTTP 202.
 
-| Method | Path                               | Verification                                                                                 | Behavior                                                                                   |
-| ------ | ---------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| POST   | `/webhooks/clerk`                  | Svix via `CLERK_WEBHOOK_SECRET`; simulated (accepted) when not configured and not production | Synchronizes user lifecycle (`clerk-sync.service.ts`)                                      |
+| Method | Path                               | Verification                                                                                   | Behavior                                                                                                                                      |
+| ------ | ---------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/webhooks/clerk`                  | Svix via `CLERK_WEBHOOK_SECRET`; simulated (accepted) when not configured and not production   | Synchronizes user lifecycle (`clerk-sync.service.ts`)                                                                                         |
 | POST   | `/webhooks/payments/:provider`     | Optional merchant-specific Khalti integration; required `x-visa-signature` HMAC over raw bytes | Persists durable inbox event + enqueues payment/dispute callback processing; Fonepay uses WebSocket signal plus status lookup, not this route |
-| POST   | `/webhooks/connectivity/:provider` | `x-tsl-signature-256` or `x-visa-signature`; required in production                          | Persists event + enqueues `providerCallbacks` job `connectivity-callback` (Transatel only) |
+| POST   | `/webhooks/connectivity/:provider` | `x-tsl-signature-256` or `x-visa-signature`; required in production                            | Persists event + enqueues `providerCallbacks` job `connectivity-callback` (Transatel only)                                                    |
 
 ## Integration events & logs (auth: OPERATIONS/SUPER_ADMIN)
 

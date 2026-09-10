@@ -2792,16 +2792,25 @@ export class OrdersService implements OnModuleInit {
     if (event.subscriptionId)
       order.providerSubscriptionId = event.subscriptionId;
     if (subscriberEvent && event.status) order.providerStatus = event.status;
+    const reactivated =
+      subscriberEvent && event.eventType.toUpperCase().endsWith("REACTIVATED");
+    const lifecycleLabel = reactivated ? "REACTIVATED" : event.status;
     if (
       this.prisma.enabled &&
       subscriberEvent &&
-      (event.status === "SUSPENDED" || event.status === "TERMINATED")
+      (event.status === "SUSPENDED" ||
+        event.status === "TERMINATED" ||
+        reactivated)
     ) {
       const expected = await this.prisma.transatelLifecycleOperation.updateMany(
         {
           where: {
             orderId: order.id,
-            action: event.status === "SUSPENDED" ? "SUSPEND" : "TERMINATE",
+            action: reactivated
+              ? "REACTIVATE"
+              : event.status === "SUSPENDED"
+                ? "SUSPEND"
+                : "TERMINATE",
             state: { in: ["ACCEPTED", "CONFIRMED"] },
           },
           data: { state: "CONFIRMED" },
@@ -2809,17 +2818,17 @@ export class OrdersService implements OnModuleInit {
       );
       if (expected.count === 0) {
         await this.resilience?.attention({
-          dedupeKey: `unexpected-provider-lifecycle:${order.id}:${event.status}`,
+          dedupeKey: `unexpected-provider-lifecycle:${order.id}:${lifecycleLabel}`,
           category: "UNEXPECTED_PROVIDER_LIFECYCLE",
           entityType: "Order",
           entityId: order.id,
           orderId: order.id,
           severity: "CRITICAL",
-          summary: `Transatel unexpectedly reported ${event.status.toLowerCase()} for ${order.orderNumber}`,
+          summary: `Transatel unexpectedly reported ${lifecycleLabel?.toLowerCase() ?? "unknown"} for ${order.orderNumber}`,
           detail:
             "No matching approved lifecycle operation exists; service and refund impact require review",
           localState: order.status,
-          externalState: event.status,
+          ...(lifecycleLabel ? { externalState: lifecycleLabel } : {}),
           lastSuccessfulStep: "ESIM_FULFILLED",
           failureCategory: "UNEXPECTED_PROVIDER_STATE",
           availableActions: ["RECHECK_ORDER_PROVIDER"],

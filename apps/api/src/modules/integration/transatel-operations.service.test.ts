@@ -26,8 +26,12 @@ function setup(
     }),
   );
   const auditCreate = vi.fn().mockResolvedValue({});
+  const lifecycleUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
   const tx = {
-    transatelLifecycleOperation: { update: lifecycleUpdate },
+    transatelLifecycleOperation: {
+      create: lifecycleCreate,
+      update: lifecycleUpdate,
+    },
     order: { update: vi.fn().mockResolvedValue({}) },
     esimInventory: { update: vi.fn().mockResolvedValue({}) },
     subscription: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
@@ -56,7 +60,9 @@ function setup(
     transatelLifecycleOperation: {
       create: lifecycleCreate,
       update: lifecycleUpdate,
+      updateMany: lifecycleUpdateMany,
       findFirst: vi.fn().mockResolvedValue(null),
+      findUnique: vi.fn().mockResolvedValue(null),
     },
     $transaction: vi.fn(async (input: unknown) =>
       typeof input === "function"
@@ -67,6 +73,7 @@ function setup(
   } as unknown as PrismaService;
   const connectivity = {
     suspend: vi.fn().mockResolvedValue(providerResult),
+    reactivate: vi.fn().mockResolvedValue(providerResult),
     terminate: vi.fn().mockResolvedValue(providerResult),
     getSubscriberDetails: vi.fn().mockResolvedValue({ status: "Active" }),
   } as unknown as ConnectivityService;
@@ -79,6 +86,7 @@ function setup(
     connectivity,
     lifecycleCreate,
     lifecycleUpdate,
+    lifecycleUpdateMany,
     auditCreate,
     tx,
     orders,
@@ -196,6 +204,253 @@ describe("TransatelOperationsService lifecycle", () => {
         errorMessage: "socket closed after send",
       },
     });
+  });
+
+  it("records reactivation for approval without calling Transatel", async () => {
+    const context = setup();
+    context.connectivity.getSubscriberDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "Suspended" });
+    const result = await context.service.requestReactivation({
+      orderId: "order-1",
+      reason: "Customer identity and account access verified",
+      idempotencyKey: "ops:reactivate:12345678",
+      actorId: "requester-1",
+    });
+    expect(context.tx.transatelLifecycleOperation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: "REACTIVATE",
+        state: "APPROVAL_REQUIRED",
+        performedById: "requester-1",
+      }),
+    });
+    expect(context.connectivity.reactivate).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: "operation-1" });
+  });
+
+  it("prevents a requester from approving their own reactivation", async () => {
+    const context = setup();
+    (
+      context.prisma.transatelLifecycleOperation.findUnique as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue({
+      id: "operation-1",
+      orderId: "order-1",
+      action: "REACTIVATE",
+      state: "APPROVAL_REQUIRED",
+      performedById: "requester-1",
+    });
+    await expect(
+      context.service.approveReactivation("operation-1", "requester-1"),
+    ).rejects.toThrow("cannot approve their own");
+    expect(context.connectivity.reactivate).not.toHaveBeenCalled();
+  });
+
+  it("allows a different administrator to approve and submit reactivation", async () => {
+    const context = setup();
+    const operation = {
+      id: "operation-1",
+      orderId: "order-1",
+      action: "REACTIVATE",
+      state: "APPROVAL_REQUIRED",
+      performedById: "requester-1",
+      reason: "Customer identity and account access verified",
+      idempotencyKey: "ops:reactivate:12345678",
+    };
+    (
+      context.prisma.transatelLifecycleOperation.findUnique as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue(operation);
+    (
+      context.prisma.transatelLifecycleOperation.findFirst as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue({
+      ...operation,
+      state: "CREATED",
+      approvedById: "approver-1",
+    });
+    context.connectivity.getSubscriberDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "Suspended" });
+
+    const result = await context.service.approveReactivation(
+      "operation-1",
+      "approver-1",
+    );
+
+    expect(context.connectivity.reactivate).toHaveBeenCalledWith(
+      "8988247076000000319",
+      "ops:reactivate:12345678",
+    );
+    expect(context.tx.order.update).toHaveBeenCalledWith({
+      where: { id: "order-1" },
+      data: {
+        providerStatus: "REACTIVATION_PENDING",
+        version: { increment: 1 },
+      },
+    });
+    expect(result).toMatchObject({ state: "ACCEPTED" });
+  });
+
+  it("expires a stale reactivation request without calling Transatel", async () => {
+    const context = setup();
+    (
+      context.prisma.transatelLifecycleOperation.findUnique as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue({
+      id: "operation-1",
+      orderId: "order-1",
+      action: "REACTIVATE",
+      state: "APPROVAL_REQUIRED",
+      performedById: "requester-1",
+      reason: "Customer identity verified",
+      createdAt: new Date("2020-01-01T00:00:00Z"),
+    });
+
+    await expect(
+      context.service.approveReactivation("operation-1", "approver-1"),
+    ).rejects.toThrow("has expired");
+    expect(context.connectivity.reactivate).not.toHaveBeenCalled();
+    expect(context.lifecycleUpdateMany).toHaveBeenCalledWith({
+      where: { id: "operation-1", state: "APPROVAL_REQUIRED" },
+      data: {
+        state: "EXPIRED",
+        errorMessage: "Approval window expired before a decision was recorded",
+      },
+    });
+  });
+
+  it("records a dual-control rejection without calling Transatel", async () => {
+    const context = setup();
+    (
+      context.prisma.transatelLifecycleOperation.findUnique as ReturnType<
+        typeof vi.fn
+      >
+    )
+      .mockResolvedValueOnce({
+        id: "operation-1",
+        orderId: "order-1",
+        action: "REACTIVATE",
+        state: "APPROVAL_REQUIRED",
+        performedById: "requester-1",
+      })
+      .mockResolvedValueOnce({ id: "operation-1", state: "REJECTED" });
+
+    const result = await context.service.rejectReactivation(
+      "operation-1",
+      "approver-1",
+      "Customer request could not be verified",
+    );
+
+    expect(context.connectivity.reactivate).not.toHaveBeenCalled();
+    expect(context.lifecycleUpdateMany).toHaveBeenCalledWith({
+      where: { id: "operation-1", state: "APPROVAL_REQUIRED" },
+      data: expect.objectContaining({
+        state: "REJECTED",
+        approvedById: "approver-1",
+        errorMessage: "Customer request could not be verified",
+      }),
+    });
+    expect(result).toMatchObject({ state: "REJECTED" });
+  });
+
+  it("lets only the atomic approval winner call Transatel", async () => {
+    const context = setup();
+    (
+      context.prisma.transatelLifecycleOperation.findUnique as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue({
+      id: "operation-1",
+      orderId: "order-1",
+      action: "REACTIVATE",
+      state: "APPROVAL_REQUIRED",
+      performedById: "requester-1",
+      reason: "Customer identity verified",
+      idempotencyKey: "ops:reactivate:12345678",
+      createdAt: new Date(),
+    });
+    context.lifecycleUpdateMany.mockResolvedValue({ count: 0 });
+    context.connectivity.getSubscriberDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "Suspended" });
+
+    await expect(
+      context.service.approveReactivation("operation-1", "approver-2"),
+    ).rejects.toThrow("changed by another administrator");
+    expect(context.connectivity.reactivate).not.toHaveBeenCalled();
+    expect(context.auditCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: "REACTIVATE_APPROVED" }),
+      }),
+    );
+  });
+
+  it("lets only the atomic rejection winner record a decision", async () => {
+    const context = setup();
+    (
+      context.prisma.transatelLifecycleOperation.findUnique as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue({
+      id: "operation-1",
+      orderId: "order-1",
+      action: "REACTIVATE",
+      state: "APPROVAL_REQUIRED",
+      performedById: "requester-1",
+      createdAt: new Date(),
+    });
+    context.lifecycleUpdateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      context.service.rejectReactivation(
+        "operation-1",
+        "approver-2",
+        "Customer request could not be verified",
+      ),
+    ).rejects.toThrow("changed by another administrator");
+    expect(context.connectivity.reactivate).not.toHaveBeenCalled();
+    expect(context.auditCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: "REACTIVATE_REJECTED" }),
+      }),
+    );
+  });
+
+  it("expires a stale rejection attempt without recording a rejection", async () => {
+    const context = setup();
+    (
+      context.prisma.transatelLifecycleOperation.findUnique as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue({
+      id: "operation-1",
+      orderId: "order-1",
+      action: "REACTIVATE",
+      state: "APPROVAL_REQUIRED",
+      performedById: "requester-1",
+      createdAt: new Date("2020-01-01T00:00:00Z"),
+    });
+
+    await expect(
+      context.service.rejectReactivation(
+        "operation-1",
+        "approver-1",
+        "Customer request could not be verified",
+      ),
+    ).rejects.toThrow("has expired");
+    expect(context.lifecycleUpdateMany).toHaveBeenCalledWith({
+      where: { id: "operation-1", state: "APPROVAL_REQUIRED" },
+      data: {
+        state: "EXPIRED",
+        errorMessage: "Approval window expired before a decision was recorded",
+      },
+    });
+    expect(context.connectivity.reactivate).not.toHaveBeenCalled();
   });
 });
 
@@ -558,7 +813,7 @@ describe("TransatelOperationsService reconciliation", () => {
     });
   });
 
-  it("keeps a live subscriber active when only its downloaded profile is deleted", async () => {
+  it("does not resurrect terminated inventory when its profile is deleted", async () => {
     const context = setup();
     vi.mocked(context.prisma.order.findUnique).mockResolvedValue({
       id: "order-1",
@@ -595,9 +850,13 @@ describe("TransatelOperationsService reconciliation", () => {
       where: { id: "inventory-1" },
       data: expect.objectContaining({
         providerStatus: "DELETED",
-        status: "ACTIVATED",
       }),
     });
+    expect(context.tx.esimInventory.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "ACTIVATED" }),
+      }),
+    );
   });
 });
 

@@ -516,6 +516,7 @@ function transatelOperationTitle(
     "esim-details": "Transatel eSIM profile lookup",
     "subscriber-details": "Transatel subscriber status lookup",
     "subscriber-suspend": "Transatel subscriber suspension",
+    "subscriber-reactivate": "Transatel subscriber reactivation",
     "subscriber-terminate": "Transatel subscriber termination",
     catalog: "Transatel product catalog lookup",
     eligibility: "Transatel product eligibility check",

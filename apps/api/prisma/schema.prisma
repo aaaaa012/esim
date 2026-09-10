@@ -224,16 +224,20 @@ enum ProvisioningOperationState {
 
 enum TransatelLifecycleAction {
   SUSPEND
+  REACTIVATE
   TERMINATE
 }
 
 enum TransatelLifecycleState {
+  APPROVAL_REQUIRED
   CREATED
   SUBMITTING
   ACCEPTED
   CONFIRMED
   RECONCILE_REQUIRED
   FAILED
+  REJECTED
+  EXPIRED
 }
 
 enum ManualRefundStatus {
@@ -341,40 +345,41 @@ enum ApiIdempotencyStatus {
 }
 
 model User {
-  id                           String                        @id @default(uuid()) @db.Uuid
-  clerkId                      String                        @unique
-  email                        String                        @unique
-  status                       UserStatus                    @default(ACTIVE)
-  accountType                  UserRoleName                  @default(CUSTOMER)
-  mustChangePassword           Boolean                       @default(false)
-  roles                        UserRole[]
-  rechargePurchases            Order[]                       @relation("RechargePurchaser")
-  customer                     Customer?
-  reviews                      OrderReview[]
-  auditLogs                    AuditLog[]
-  transatelLifecycleOperations TransatelLifecycleOperation[]
-  manualRefundsRequested       ManualRefund[]                @relation("ManualRefundRequester")
-  manualRefundsReviewed        ManualRefund[]                @relation("ManualRefundReviewer")
-  staffInvitationsSent         StaffInvitation[]             @relation("StaffInvitationInviter")
-  createdAt                    DateTime                      @default(now())
-  updatedAt                    DateTime                      @updatedAt
+  id                                    String                        @id @default(uuid()) @db.Uuid
+  clerkId                               String                        @unique
+  email                                 String                        @unique
+  status                                UserStatus                    @default(ACTIVE)
+  accountType                           UserRoleName                  @default(CUSTOMER)
+  mustChangePassword                    Boolean                       @default(false)
+  roles                                 UserRole[]
+  rechargePurchases                     Order[]                       @relation("RechargePurchaser")
+  customer                              Customer?
+  reviews                               OrderReview[]
+  auditLogs                             AuditLog[]
+  transatelLifecycleOperationsRequested TransatelLifecycleOperation[] @relation("TransatelLifecycleRequester")
+  transatelLifecycleOperationsApproved  TransatelLifecycleOperation[] @relation("TransatelLifecycleApprover")
+  manualRefundsRequested                ManualRefund[]                @relation("ManualRefundRequester")
+  manualRefundsReviewed                 ManualRefund[]                @relation("ManualRefundReviewer")
+  staffInvitationsSent                  StaffInvitation[]             @relation("StaffInvitationInviter")
+  createdAt                             DateTime                      @default(now())
+  updatedAt                             DateTime                      @updatedAt
 }
 
 model StaffInvitation {
-  id                String                @id @default(uuid()) @db.Uuid
-  email             String
-  accountType       UserRoleName
-  status            StaffInvitationStatus @default(PENDING)
-  clerkInvitationId String?               @unique
-  activationTokenHash String?             @unique
-  invitedById       String                @db.Uuid
-  invitedBy         User                  @relation("StaffInvitationInviter", fields: [invitedById], references: [id])
-  acceptedById      String?               @db.Uuid
-  expiresAt         DateTime
-  acceptedAt        DateTime?
-  revokedAt         DateTime?
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
+  id                  String                @id @default(uuid()) @db.Uuid
+  email               String
+  accountType         UserRoleName
+  status              StaffInvitationStatus @default(PENDING)
+  clerkInvitationId   String?               @unique
+  activationTokenHash String?               @unique
+  invitedById         String                @db.Uuid
+  invitedBy           User                  @relation("StaffInvitationInviter", fields: [invitedById], references: [id])
+  acceptedById        String?               @db.Uuid
+  expiresAt           DateTime
+  acceptedAt          DateTime?
+  revokedAt           DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
 
   @@index([email, status])
 }
@@ -422,25 +427,25 @@ model Country {
 }
 
 model Plan {
-  id             String                 @id @default(uuid()) @db.Uuid
-  countryId      String                 @db.Uuid
-  country        Country                @relation(fields: [countryId], references: [id])
-  providerPlanId String
-  name           String
-  dataAllowance  String
-  validityDays   Int
-  costPrice      Decimal                @db.Decimal(12, 2)
-  sellingPrice   Decimal                @db.Decimal(12, 2)
-  currency       String                 @default("NPR")
-  coverage       Json
-  popular        Boolean                @default(false)
-  status         PlanStatus             @default(DRAFT)
-  lastCatalogSeenAt DateTime?
+  id                   String                 @id @default(uuid()) @db.Uuid
+  countryId            String                 @db.Uuid
+  country              Country                @relation(fields: [countryId], references: [id])
+  providerPlanId       String
+  name                 String
+  dataAllowance        String
+  validityDays         Int
+  costPrice            Decimal                @db.Decimal(12, 2)
+  sellingPrice         Decimal                @db.Decimal(12, 2)
+  currency             String                 @default("NPR")
+  coverage             Json
+  popular              Boolean                @default(false)
+  status               PlanStatus             @default(DRAFT)
+  lastCatalogSeenAt    DateTime?
   providerMissingSince DateTime?
-  orders         Order[]
-  partnerPrices  PartnerPriceListItem[]
-  partnerQuotes  PartnerQuote[]
-  updatedAt      DateTime               @updatedAt
+  orders               Order[]
+  partnerPrices        PartnerPriceListItem[]
+  partnerQuotes        PartnerQuote[]
+  updatedAt            DateTime               @updatedAt
 
   @@unique([countryId, providerPlanId])
 }
@@ -710,7 +715,7 @@ model EsimInventory {
   quarantineReason        String?
   activatedAt             DateTime?
   expiresAt               DateTime?
-  rechargeOrders          Order[] @relation("RechargeTarget")
+  rechargeOrders          Order[]                       @relation("RechargeTarget")
   customerEsims           CustomerEsim[]
   reconciliationItems     InventoryReconciliationItem[]
   version                 Int                           @default(0)
@@ -1181,7 +1186,10 @@ model TransatelLifecycleOperation {
   idempotencyKey        String                   @unique
   reason                String
   performedById         String                   @db.Uuid
-  performedBy           User                     @relation(fields: [performedById], references: [id])
+  performedBy           User                     @relation("TransatelLifecycleRequester", fields: [performedById], references: [id])
+  approvedById          String?                  @db.Uuid
+  approvedBy            User?                    @relation("TransatelLifecycleApprover", fields: [approvedById], references: [id])
+  approvedAt            DateTime?
   providerTransactionId String?
   requestSnapshot       Json
   responseSnapshot      Json?
@@ -1193,6 +1201,7 @@ model TransatelLifecycleOperation {
 
   @@index([orderId, createdAt])
   @@index([state, createdAt])
+  @@index([approvedById])
 }
 
 model ManualRefund {
@@ -1287,22 +1296,22 @@ model IntegrationLog {
 }
 
 model Notification {
-  dedupeKey     String?   @unique
+  dedupeKey            String?   @unique
   recoveryUrlEncrypted String?
-  id            String    @id @default(uuid()) @db.Uuid
-  orderId       String?   @db.Uuid
-  order         Order?    @relation(fields: [orderId], references: [id])
-  channel       String
-  template      String
-  recipient     String?
-  orderNumber   String?
-  reason        String?
-  status        String
-  sentAt        DateTime?
-  attemptCount  Int       @default(0)
-  nextAttemptAt DateTime?
-  errorMessage  String?
-  createdAt     DateTime  @default(now())
+  id                   String    @id @default(uuid()) @db.Uuid
+  orderId              String?   @db.Uuid
+  order                Order?    @relation(fields: [orderId], references: [id])
+  channel              String
+  template             String
+  recipient            String?
+  orderNumber          String?
+  reason               String?
+  status               String
+  sentAt               DateTime?
+  attemptCount         Int       @default(0)
+  nextAttemptAt        DateTime?
+  errorMessage         String?
+  createdAt            DateTime  @default(now())
 
   @@index([status, nextAttemptAt])
 }

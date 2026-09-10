@@ -22,17 +22,18 @@ top-ups, so the inventory row is not the authoritative owner of every package.
 
 ## Transatel command matrix
 
-| Business action        | Provider request                                                                                                       | Local behavior                                                                                       | Audit result                                                                        |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Initial purchase       | `POST /ocs/subscriptions/api/orders/products`, `orderType=preload`, real MSISDN                                        | Persist provider acceptance before QR lookup; fetch QR using ICCID                                   | Aligned                                                                             |
-| Top-up                 | Same endpoint, `orderType=subscribe`, real MSISDN                                                                      | Treat `201`/`done` as package commit; reuse existing eSIM QR record; do not request or send a new QR | Corrected in this audit                                                             |
-| Eligibility            | `GET /ocs/catalog/api/cos/{cosRef}/products/{productId}?msisdn=...`                                                    | Honor `canSubscribe.allowed`; retain provider code internally and return safe copy                   | Aligned                                                                             |
-| Usage                  | `GET /ocs/inventory/api/subscriptions/products?msisdn=...&withBalances=true`                                           | Aggregate non-terminated KB balances by product subscription; recover the original allowance from the product definition when a balance omits it | Corrected and contract-validated                                                     |
-| eSIM details           | `GET /sim-management/sims/api/esims/sim-serial/{iccid}`                                                                | Retrieve profile state and activation material                                                       | Aligned                                                                             |
-| Subscriber suspension  | Tenant connectivity-management `.../sim-serial/{iccid}/suspend`, body `{ externalReference }`                         | Audited, idempotent command; validates the returned transaction, ICCID and transaction status; pending until provider confirmation | Contract-aligned; needs tenant/live certification                                   |
-| Subscriber termination | Tenant connectivity-management `.../sim-serial/{iccid}/terminate`, body `{ externalReference }`                       | Super-admin-only irreversible action; validates the returned transaction, ICCID and transaction status; pending until confirmation | Contract-aligned; needs tenant/live certification                                   |
-| Catalog sync           | `GET /ocs/catalog/api/cos/{cosRef}/products`                                                                           | Imports available one-off products and converts provider pricing/allowance units                     | Aligned; commercial FX/margin approval required                                     |
-| Webhooks               | Configure a datastream in the Transatel Developer Console; signed raw-body inbox with durable dedupe/retry/dead-letter | Maps lifecycle events without state regression; deprecated API registration action removed           | Payload/signature and Console event selection must be certified with tenant samples |
+| Business action         | Provider request                                                                                                       | Local behavior                                                                                                                                                                  | Audit result                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Initial purchase        | `POST /ocs/subscriptions/api/orders/products`, `orderType=preload`, real MSISDN                                        | Persist provider acceptance before QR lookup; fetch QR using ICCID                                                                                                              | Aligned                                                                             |
+| Top-up                  | Same endpoint, `orderType=subscribe`, real MSISDN                                                                      | Treat `201`/`done` as package commit; reuse existing eSIM QR record; do not request or send a new QR                                                                            | Corrected in this audit                                                             |
+| Eligibility             | `GET /ocs/catalog/api/cos/{cosRef}/products/{productId}?msisdn=...`                                                    | Honor `canSubscribe.allowed`; retain provider code internally and return safe copy                                                                                              | Aligned                                                                             |
+| Usage                   | `GET /ocs/inventory/api/subscriptions/products?msisdn=...&withBalances=true`                                           | Aggregate non-terminated KB balances by product subscription; recover the original allowance from the product definition when a balance omits it                                | Corrected and contract-validated                                                    |
+| eSIM details            | `GET /sim-management/sims/api/esims/sim-serial/{iccid}`                                                                | Retrieve profile state and activation material                                                                                                                                  | Aligned                                                                             |
+| Subscriber suspension   | Tenant connectivity-management `.../sim-serial/{iccid}/suspend`, body `{ externalReference }`                          | Audited, idempotent command; validates the returned transaction, ICCID and transaction status; pending until provider confirmation                                              | Contract-aligned; needs tenant/live certification                                   |
+| Subscriber reactivation | Tenant connectivity-management `.../sim-serial/{iccid}/reactivate`, body `{ externalReference }`                       | Requester/approver separation; a different Super Admin approves or rejects within the configured window; atomic decisions and a database uniqueness constraint permit only one active operation per order; the asynchronous provider event confirms an approved reactivation | Contract-aligned; needs tenant/live certification                                   |
+| Subscriber termination  | Tenant connectivity-management `.../sim-serial/{iccid}/terminate`, body `{ externalReference }`                        | Super-admin-only irreversible action; validates the returned transaction, ICCID and transaction status; pending until confirmation                                              | Contract-aligned; needs tenant/live certification                                   |
+| Catalog sync            | `GET /ocs/catalog/api/cos/{cosRef}/products`                                                                           | Imports available one-off products and converts provider pricing/allowance units                                                                                                | Aligned; commercial FX/margin approval required                                     |
+| Webhooks                | Configure a datastream in the Transatel Developer Console; signed raw-body inbox with durable dedupe/retry/dead-letter | Maps lifecycle events without state regression; deprecated API registration action removed                                                                                      | Payload/signature and Console event selection must be certified with tenant samples |
 
 Transatel also publishes SIM reserve/release endpoints. Visa Compass currently
 uses approved inventory batch imports instead. This is complete only if the
@@ -48,6 +49,7 @@ expects just-in-time reservation, reserve/release must be implemented.
 | PRELOADED                  | Package pending; cannot regress active/terminal state            | No completed order regression                                                            |
 | ACTIVATED                  | Inventory activated; package active; dates and identity verified | Completes initial provisioning when activation material exists                           |
 | SUSPENDED subscriber       | Network service stops; package status remains independent        | Confirms an approved lifecycle operation; unexpected suspension opens critical attention |
+| REACTIVATED subscriber     | Network service resumes; package status remains independent      | Confirms a dual-approved reactivation; unexpected reactivation opens critical attention  |
 | CANCELED                   | Stops future renewal but preserves service until expiration      | Order history retained                                                                   |
 | EXPIRED product            | Only the matching package expires; the reusable eSIM remains     | Purchase history retained                                                                |
 | TERMINATED product         | Only the matching package becomes terminal                       | Purchase history retained                                                                |
@@ -146,7 +148,8 @@ a terminal API order.
    new QR and no overwrite of the original package ID.
 5. Replay/reorder real webhooks, including expiry of an older package after a
    newer top-up.
-6. Suspend and terminate only a designated test eSIM and reconcile final state.
+6. Suspend, dual-approve reactivation, and terminate only a designated test eSIM;
+   reconcile each final state and verify recurring-package billing behavior.
    Configure and test the callback datastream in the Transatel Developer
    Console; API-based webhook subscription is no longer supported.
 7. Run Khalti Completed, Pending, Expired and User-canceled lookups; verify
@@ -154,6 +157,16 @@ a terminal API order.
 8. Exercise manual refunds for one Khalti and one Fonepay payment, including
    rejection, duplicate request/reference, wrong amount and concurrent completion.
 9. Confirm batch inventory delivery versus Transatel reserve/release.
+
+## Dependency security gate
+
+Next.js is pinned to `15.5.24`, removing the two critical advisories found in
+the 2026-09-10 production dependency audit. The audit still reports six high
+severity findings in transitive `nanoid`, `sharp`, `deepmerge-ts`, and `multer`
+dependencies. These require compatible upstream Next.js, Prisma, and NestJS
+releases; forcing incompatible transitive versions is not an acceptable release
+fix. Re-run `pnpm audit --prod --audit-level high` before deployment and review
+provider patches as they become available.
 
 Until these checks pass, the system is contract-audited and automated-test
 ready, but it must not be described as fully provider-certified.

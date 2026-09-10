@@ -12,14 +12,14 @@ import { RedisRateLimitIncidentService } from "./redis-rate-limit-incident.servi
 type Bucket = { tokens: number; lastRefill: number };
 
 /**
- * In-memory token-bucket limiter keyed by IP + normalized route.
+ * Distributed fixed-window limiter keyed by IP + normalized route.
  *
  * Webhook endpoints are exempt (they are signature-verified provider
  * callbacks). Public and auth routes are throttled more aggressively to slow
  * scraping and brute force; everything else gets a generous default.
  *
- * NOTE: in-memory state is per process. For multi-instance deployments swap
- * this for a Redis-backed limiter.
+ * Redis is authoritative when queues are enabled. A deliberately stricter
+ * per-process token bucket keeps requests bounded during short Redis outages.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
@@ -38,14 +38,12 @@ export class RateLimitGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context
-      .switchToHttp()
-      .getRequest<{
-        ip?: string;
-        socket?: { remoteAddress?: string };
-        path: string;
-        method: string;
-      }>();
+    const request = context.switchToHttp().getRequest<{
+      ip?: string;
+      socket?: { remoteAddress?: string };
+      path: string;
+      method: string;
+    }>();
     const ip = clientIp(request);
     const path = request.path ?? "";
 
@@ -67,7 +65,10 @@ export class RateLimitGuard implements CanActivate {
       // Hosted-checkout tokens are high entropy, but must still share one
       // per-IP bucket so a leaked link cannot be used to bypass throttling by
       // varying token-shaped path segments.
-      .replace(/\/partner-checkout\/[A-Za-z0-9_-]{32,100}(?=\/|$)/g, "/partner-checkout/:token")
+      .replace(
+        /\/partner-checkout\/[A-Za-z0-9_-]{32,100}(?=\/|$)/g,
+        "/partner-checkout/:token",
+      )
       .replace(/\/\d+(?=\/|$)/g, "/:id");
     const key = `${ip}:${request.method}:${route}`;
 

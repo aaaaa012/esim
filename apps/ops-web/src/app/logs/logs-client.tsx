@@ -132,6 +132,7 @@ const ACTION_FILTER_OPTIONS = [
   { value: "transatel-catalog", label: "Transatel Plan Catalog Lookup" },
   { value: "transatel-eligibility", label: "Transatel Eligibility Check" },
   { value: "transatel-suspend", label: "Transatel eSIM Suspension" },
+  { value: "transatel-reactivate", label: "Transatel eSIM Reactivation" },
   { value: "transatel-terminate", label: "Transatel eSIM Termination" },
   { value: "transatel-webhook", label: "Transatel Webhook Setup" },
   { value: "khalti-lookup", label: "Khalti Payment Lookup" },
@@ -327,6 +328,8 @@ export default function LogsClient() {
         return act.includes("eligibility");
       if (actionFilter === "transatel-suspend")
         return act.includes("suspension");
+      if (actionFilter === "transatel-reactivate")
+        return act.includes("reactivation");
       if (actionFilter === "transatel-terminate")
         return act.includes("termination");
       if (actionFilter === "transatel-webhook") return act.includes("webhook");

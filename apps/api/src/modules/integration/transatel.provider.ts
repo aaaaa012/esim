@@ -1484,7 +1484,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   private async lifecycle(
     reference: string,
-    action: "suspend" | "terminate",
+    action: "suspend" | "reactivate" | "terminate",
     transactionReference: string,
   ): Promise<LifecycleResult> {
     const subscriber = await this.resolveSubscriber(reference);
@@ -1557,6 +1557,9 @@ export class TransatelProvider implements ConnectivityProvider {
 
   suspend(subscriptionId: string, transactionReference: string) {
     return this.lifecycle(subscriptionId, "suspend", transactionReference);
+  }
+  reactivate(subscriptionId: string, transactionReference: string) {
+    return this.lifecycle(subscriptionId, "reactivate", transactionReference);
   }
   terminate(subscriptionId: string, transactionReference: string) {
     return this.lifecycle(subscriptionId, "terminate", transactionReference);
@@ -1899,8 +1902,9 @@ export class TransatelProvider implements ConnectivityProvider {
       const subscriberEvent = eventType.startsWith(
         "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/",
       );
-      const lifecycleAction =
-        eventStatus === "SUSPENDED"
+      const lifecycleAction = eventType.toUpperCase().endsWith("REACTIVATED")
+        ? "REACTIVATE"
+        : eventStatus === "SUSPENDED"
           ? "SUSPEND"
           : eventStatus === "TERMINATED"
             ? "TERMINATE"

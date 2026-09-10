@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { MoreHorizontal, PauseCircle, RefreshCcw, Trash2 } from "lucide-react";
+import {
+  MoreHorizontal,
+  PauseCircle,
+  PlayCircle,
+  RefreshCcw,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { Button } from "@/components/ui/button";
@@ -24,7 +30,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-type Action = "suspend" | "terminate";
+type Action = "suspend" | "reactivate-request" | "terminate";
 
 export function LifecycleActions({
   orderId,
@@ -45,13 +51,18 @@ export function LifecycleActions({
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const pending =
-    providerStatus === "SUSPENDED" ||
     providerStatus === "SUSPEND_PENDING" ||
+    providerStatus === "REACTIVATION_PENDING" ||
     providerStatus === "TERMINATION_PENDING" ||
     providerStatus === "TERMINATED";
   const suspendable =
     providerStatus === "ACTIVE" || providerStatus === "ACTIVATED";
-  const required = action === "terminate" ? iccid : "SUSPEND";
+  const required =
+    action === "terminate"
+      ? iccid
+      : action === "reactivate-request"
+        ? "REACTIVATE"
+        : "SUSPEND";
   const close = () => {
     if (!busy) {
       setAction(null);
@@ -83,7 +94,9 @@ export function LifecycleActions({
       toast.success(
         action === "suspend"
           ? "Suspension sent to the network"
-          : "Termination sent to the network",
+          : action === "reactivate-request"
+            ? "Reactivation request sent for Super Admin approval"
+            : "Termination sent to the network",
       );
       setAction(null);
       setReason("");
@@ -171,6 +184,18 @@ export function LifecycleActions({
               </small>
             </span>
           </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={pending || providerStatus !== "SUSPENDED"}
+            onSelect={() => setAction("reactivate-request")}
+          >
+            <PlayCircle className="size-4" />
+            <span>
+              Request reactivation
+              <small className="block text-xs text-muted-foreground">
+                Requires another Super Admin to approve
+              </small>
+            </span>
+          </DropdownMenuItem>
           {canTerminate ? (
             <>
               <DropdownMenuSeparator />
@@ -205,12 +230,16 @@ export function LifecycleActions({
             <DialogTitle>
               {action === "terminate"
                 ? "Permanently terminate eSIM"
-                : "Pause this eSIM's mobile data"}
+                : action === "reactivate-request"
+                  ? "Request eSIM reactivation"
+                  : "Suspend this eSIM's network service"}
             </DialogTitle>
             <DialogDescription>
               {action === "terminate"
                 ? "This permanently removes the eSIM from the network and cannot be undone. Any remaining data will be lost."
-                : "This asks Transatel to temporarily stop mobile data on this eSIM. The eSIM remains registered and can be reconnected later."}
+                : action === "reactivate-request"
+                  ? "This records a request to restore network service. A different Super Admin must approve it before anything is sent to Transatel."
+                  : "This asks Transatel to temporarily stop network service. Recurring provider charges may continue, and no cancellation or refund is performed."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -229,7 +258,7 @@ export function LifecycleActions({
                 <>Type the eSIM number to confirm</>
               ) : (
                 <>
-                  Type <code>SUSPEND</code> to confirm
+                  Type <code>{required}</code> to confirm
                 </>
               )}
               <Input
@@ -254,7 +283,9 @@ export function LifecycleActions({
                 ? "Submitting…"
                 : action === "terminate"
                   ? "Terminate permanently"
-                  : "Confirm data pause"}
+                  : action === "reactivate-request"
+                    ? "Request reactivation"
+                    : "Confirm data pause"}
             </Button>
           </DialogFooter>
         </DialogContent>

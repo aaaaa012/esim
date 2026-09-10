@@ -9,6 +9,7 @@ import {
   RefreshCcw,
   RadioTower,
   ShieldAlert,
+  XCircle,
   Wifi,
   type LucideIcon,
 } from "lucide-react";
@@ -26,6 +27,14 @@ import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { downloadCsv } from "@/lib/csv";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -81,11 +90,15 @@ type LifecycleOperation = {
   state: string;
   reason: string;
   actor: string;
+  requesterId: string;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
   providerTransactionId?: string | null;
   errorMessage?: string | null;
   createdAt: string;
 };
 type Dashboard = {
+  currentActorId?: string | null;
   health: {
     ok: boolean;
     configured?: boolean;
@@ -116,6 +129,8 @@ export default function TransatelDashboard() {
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState("");
+  const [rejection, setRejection] = useState<LifecycleOperation | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
   const [busy, setBusy] = useState("");
   const [canTerminate, setCanTerminate] = useState(false);
   const [activeTab, setActiveTab] = useState<SearchScope>("subscribers");
@@ -337,10 +352,69 @@ export default function TransatelDashboard() {
     setBusy("refresh-dashboard");
     try {
       await load();
-      toast.success("Provider dashboard refreshed");
+      toast.success("Saved dashboard data reloaded");
     } catch (cause) {
       toast.error(
         cause instanceof Error ? cause.message : "Dashboard refresh failed",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const approveReactivation = async (operation: LifecycleOperation) => {
+    setBusy(`approve:${operation.id}`);
+    try {
+      const response = await authFetch(
+        `${API}/operations/transatel/reactivations/${operation.id}/approve`,
+        {
+          method: "POST",
+          headers: { "x-idempotency-key": crypto.randomUUID() },
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Reactivation approval failed");
+      toast.success("Reactivation approved and sent to the network");
+      await load();
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error ? cause.message : "Reactivation approval failed",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const rejectReactivation = async () => {
+    if (!rejection || rejectionReason.trim().length < 5) return;
+    setBusy(`reject:${rejection.id}`);
+    try {
+      const response = await authFetch(
+        `${API}/operations/transatel/reactivations/${rejection.id}/reject`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({ reason: rejectionReason.trim() }),
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Reactivation rejection failed",
+        );
+      toast.success("Reactivation request rejected");
+      setRejection(null);
+      setRejectionReason("");
+      await load();
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : "Reactivation rejection failed",
       );
     } finally {
       setBusy("");
@@ -487,8 +561,8 @@ export default function TransatelDashboard() {
                 <RefreshCcw className="size-4" />
               )}
               {busy === "refresh-dashboard"
-                ? "Refreshing…"
-                : "Refresh dashboard"}
+                ? "Reloading…"
+                : "Reload saved data"}
             </Button>
           </div>
         }
@@ -813,8 +887,8 @@ export default function TransatelDashboard() {
             </TabsContent>
             <TabsContent value="actions" className="mt-4">
               <Panel
-                title="Mobile data pause and eSIM closure history"
-                description="Record of temporary data pauses and permanent eSIM closure requests sent to Transatel"
+                title="Network lifecycle history"
+                description="Audited suspension, reactivation and permanent termination requests"
                 actions={searchControl(
                   "actions",
                   "Search order, actor, reason or reference…",
@@ -832,6 +906,7 @@ export default function TransatelDashboard() {
                         <TableHead>Actor</TableHead>
                         <TableHead>Reason</TableHead>
                         <TableHead>Reference</TableHead>
+                        <TableHead />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -845,7 +920,13 @@ export default function TransatelDashboard() {
                               label={row.state}
                               tone={
                                 row.state === "FAILED" ||
-                                row.state === "RECONCILE_REQUIRED"
+                                row.state === "RECONCILE_REQUIRED" ||
+                                row.state === "APPROVAL_REQUIRED" ||
+                                row.state === "REJECTED" ||
+                                row.state === "EXPIRED" ||
+                                row.state === "CREATED" ||
+                                row.state === "SUBMITTING" ||
+                                row.state === "ACCEPTED"
                                   ? "warning"
                                   : "success"
                               }
@@ -857,6 +938,45 @@ export default function TransatelDashboard() {
                           </TableCell>
                           <TableCell className="font-mono text-xs">
                             {row.providerTransactionId ?? "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {canTerminate &&
+                            row.action === "REACTIVATE" &&
+                            row.state === "APPROVAL_REQUIRED" &&
+                            row.requesterId !== data.currentActorId ? (
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={Boolean(busy)}
+                                  onClick={() => setRejection(row)}
+                                >
+                                  <XCircle className="size-4" />
+                                  Reject
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  disabled={Boolean(busy)}
+                                  onClick={() => void approveReactivation(row)}
+                                >
+                                  {busy === `approve:${row.id}` ? (
+                                    <Spinner />
+                                  ) : null}
+                                  Approve reactivation
+                                </Button>
+                              </div>
+                            ) : row.state === "APPROVAL_REQUIRED" ? (
+                              <span className="text-xs text-muted-foreground">
+                                Awaiting another Super Admin
+                              </span>
+                            ) : row.approvedBy ? (
+                              <span className="text-xs text-muted-foreground">
+                                {row.state === "REJECTED"
+                                  ? "Rejected"
+                                  : "Approved"}{" "}
+                                by {row.approvedBy}
+                              </span>
+                            ) : null}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -873,6 +993,56 @@ export default function TransatelDashboard() {
           </Tabs>
         </>
       ) : null}
+      <Dialog
+        open={Boolean(rejection)}
+        onOpenChange={(open) => {
+          if (!open && !busy) {
+            setRejection(null);
+            setRejectionReason("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject reactivation request</DialogTitle>
+            <DialogDescription>
+              Record why network service must remain suspended. No request will
+              be sent to Transatel.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="block space-y-1.5 text-sm font-medium">
+            Rejection reason
+            <textarea
+              className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm"
+              maxLength={500}
+              value={rejectionReason}
+              onChange={(event) => setRejectionReason(event.target.value)}
+            />
+          </label>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={Boolean(busy)}
+              onClick={() => {
+                setRejection(null);
+                setRejectionReason("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={Boolean(busy) || rejectionReason.trim().length < 5}
+              onClick={() => void rejectReactivation()}
+            >
+              {rejection && busy === `reject:${rejection.id}` ? (
+                <Spinner />
+              ) : null}
+              Reject request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

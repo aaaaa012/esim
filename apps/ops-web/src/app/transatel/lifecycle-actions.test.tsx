@@ -7,6 +7,28 @@ vi.mock("../authenticated-api-provider", () => ({
   useAuthenticatedFetch: () => authFetch,
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => children,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => children,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div role="menu">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    onSelect?: () => void;
+  }) => (
+    <button role="menuitem" onClick={onSelect} {...props}>
+      {children}
+    </button>
+  ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => (
+    <span>{children}</span>
+  ),
+  DropdownMenuSeparator: () => <hr />,
+}));
 
 describe("LifecycleActions", () => {
   beforeEach(() => authFetch.mockReset());
@@ -23,12 +45,6 @@ describe("LifecycleActions", () => {
         providerStatus="ACTIVE"
         canTerminate
       />,
-    );
-    fireEvent.keyDown(
-      screen.getByRole("button", {
-        name: "Actions for eSIM 8988247076000000319",
-      }),
-      { key: "Enter" },
     );
     fireEvent.click(
       await screen.findByRole("menuitem", { name: /Pause mobile data/ }),
@@ -59,12 +75,6 @@ describe("LifecycleActions", () => {
         providerStatus="ACTIVE"
         canTerminate={false}
       />,
-    );
-    fireEvent.keyDown(
-      screen.getByRole("button", {
-        name: "Actions for eSIM 8988247076000000319",
-      }),
-      { key: "Enter" },
     );
     expect(
       await screen.findByRole("menuitem", { name: /Pause mobile data/ }),

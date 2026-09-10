@@ -62,6 +62,9 @@ export class ConnectivityService implements OnModuleInit {
   suspend(subscriptionId: string, transactionReference: string) {
     return this.transatel.suspend(subscriptionId, transactionReference);
   }
+  reactivate(subscriptionId: string, transactionReference: string) {
+    return this.transatel.reactivate(subscriptionId, transactionReference);
+  }
   terminate(subscriptionId: string, transactionReference: string) {
     return this.transatel.terminate(subscriptionId, transactionReference);
   }

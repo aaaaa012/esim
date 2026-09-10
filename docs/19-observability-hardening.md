@@ -52,15 +52,18 @@ Server detail is logged with the stack; 5xx responses never leak internals
 
 ## Rate limiting (`rate-limit.guard.ts`)
 
-- Fixed-window token buckets, keyed `ip:method:path`; in-memory (per-process)
-  (`:17,34`).
+- Redis-backed fixed-window buckets are keyed by normalized
+  `ip:method:path`. During a short Redis outage the guard opens a five-second
+  circuit and falls back to a stricter per-process token bucket so checkout
+  remains available without silently restoring the full allowance.
 - Webhook paths are exempt (`:30`); `/auth` and `/public` use
   `AUTH_RATE_LIMIT_PER_MINUTE` (default 60), everything else
   `RATE_LIMIT_PER_MINUTE` (default 300) (`:18-19,32-33`).
 - Responds with `x-ratelimit-limit`, `x-ratelimit-remaining`, and on reject
   `retry-after` + 429 `RATE_LIMITED` (`:46-53`).
-- Buckets are reaped when the map exceeds 10,000 entries (`:56-61`).
-- Multi-instance deployments require a shared store (flagged in
+- Local fallback buckets are reaped when the map exceeds 10,000 entries.
+- Multi-instance deployments use the shared Redis store; degraded/recovered
+  transitions are surfaced through the rate-limit incident service.
   `docs/20-documentation-gaps.md`).
 
 ## Request logging (`logging.interceptor.ts`)

@@ -124,7 +124,11 @@ eSIM stock records move through `IMPORTED → AVAILABLE → RESERVED → ASSIGNE
 
 The system stores a `ProvisioningOperation` so it can recover a delayed provider request safely. Its states are `CREATED`, `SUBMITTING`, `ACCEPTED`, `WAITING_FOR_QR`, `QR_READY`, `ACTIVATED`, `RECONCILE_REQUIRED`, `REJECTED`, `MANUAL_REVIEW` and `CANCELLED`. This allows Operations to check the provider before retrying instead of accidentally sending a second preload request.
 
-Operations can suspend and terminate a Transatel subscription. **[PARTIALLY IMPLEMENTED]** Ops does not yet expose provider reactivation/unsuspend. That is a Phase 2 item.
+Operations can suspend a Transatel subscriber and request reactivation. A
+different Super Admin must approve reactivation before the provider request is
+sent. Termination remains Super-Admin-only and irreversible. Suspension affects
+network service only; it does not automatically cancel a product or issue a
+refund, and recurring provider charges may continue.
 
 ## 7. Operations guide — what staff can do today
 
@@ -234,7 +238,8 @@ Production requires `ORDER_WORKFLOW_MODE=database-first`. Lifecycle mutations re
 
 ### High-priority product gaps
 
-- Operations can suspend/terminate but cannot reactivate/unsuspend an eSIM.
+- Operations can suspend or request reactivation; reactivation requires approval
+  by a different Super Admin. Termination cannot be reversed.
 - Manual payment confirmation and refund-reconciliation rules/workflow need business approval.
 - The business rule for manual review versus automatic approval after verified payment needs to be agreed and documented.
 

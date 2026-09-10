@@ -12,6 +12,7 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { UsageService } from "./usage.service.js";
+import { QueueService } from "../../jobs/queue.service.js";
 
 @Injectable()
 export class CustomerEsimsService {
@@ -21,6 +22,7 @@ export class CustomerEsimsService {
     private readonly connectivity: ConnectivityService,
     private readonly crypto: CryptoService,
     @Optional() private readonly usageService?: UsageService,
+    @Optional() private readonly queues?: QueueService,
   ) {}
 
   async list(ownerId: string) {
@@ -70,6 +72,22 @@ export class CustomerEsimsService {
         "Usage was refreshed recently. Please wait before trying again.",
         HttpStatus.TOO_MANY_REQUESTS,
       );
+    if (this.queues?.enabled) {
+      try {
+        const shared = await this.queues.consumeRateLimit(
+          `customer-usage-refresh:${customer.id}:${id}`,
+          30_000,
+        );
+        if (shared.count > 1)
+          throw new HttpException(
+            "Usage was refreshed recently. Please wait before trying again.",
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+      } catch (error) {
+        if (error instanceof HttpException) throw error;
+        // The process-local guard remains available during a Redis incident.
+      }
+    }
     if (!row.iccid)
       throw new BadRequestException(
         "Usage is unavailable until the eSIM is provisioned",

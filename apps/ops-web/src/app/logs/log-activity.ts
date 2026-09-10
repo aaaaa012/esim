@@ -36,6 +36,8 @@ export function activityLabel(entry: LogActivity): string {
     return "Transatel eSIM Details Lookup";
   if (operation.includes("subscriber-suspend"))
     return "Transatel eSIM Suspension";
+  if (operation.includes("subscriber-reactivate"))
+    return "Transatel eSIM Reactivation";
   if (operation.includes("subscriber-terminate"))
     return "Transatel eSIM Termination";
   if (operation.includes("catalog")) return "Transatel Plan Catalog Lookup";

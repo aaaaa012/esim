@@ -620,6 +620,55 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.apiIdempotencyRecord.deleteMany({
       where: { expiresAt: { lte: now } },
     });
+    const rateBucketRetentionHours = Number(
+      process.env.PARTNER_RATE_BUCKET_RETENTION_HOURS ?? 48,
+    );
+    await this.prisma.partnerRateBucket.deleteMany({
+      where: {
+        windowStart: {
+          lte: new Date(now.getTime() - rateBucketRetentionHours * 60 * 60_000),
+        },
+      },
+    });
+    const approvalMinutes = Number(
+      process.env.TRANSATEL_REACTIVATION_APPROVAL_MINUTES ?? 30,
+    );
+    const staleApprovals =
+      await this.prisma.transatelLifecycleOperation.findMany({
+        where: {
+          action: "REACTIVATE",
+          state: "APPROVAL_REQUIRED",
+          createdAt: {
+            lte: new Date(now.getTime() - approvalMinutes * 60_000),
+          },
+        },
+        select: { id: true, orderId: true },
+        take: 100,
+      });
+    for (const operation of staleApprovals) {
+      const expired = await this.prisma.transatelLifecycleOperation.updateMany({
+        where: { id: operation.id, state: "APPROVAL_REQUIRED" },
+        data: {
+          state: "EXPIRED",
+          errorMessage:
+            "Approval window expired before a decision was recorded",
+        },
+      });
+      if (expired.count)
+        await this.prisma.auditLog.create({
+          data: {
+            module: "TRANSATEL",
+            entity: "Order",
+            entityId: operation.orderId,
+            action: "REACTIVATE_APPROVAL_EXPIRED",
+            newValue: {
+              operationId: operation.id,
+              providerRequestSent: false,
+              source: "RECONCILIATION_SWEEP",
+            },
+          },
+        });
+    }
     const staleDocuments = await this.prisma.travelerDocument.findMany({
       where: {
         uploadVerified: false,

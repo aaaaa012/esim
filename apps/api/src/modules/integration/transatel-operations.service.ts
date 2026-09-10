@@ -27,6 +27,7 @@ type LifecycleInput = {
   reason: string;
   idempotencyKey: string;
   actorId: string;
+  verifiedSubscriberStatus?: string;
 };
 
 function canonicalSubscriptionStatus(status: string | null) {
@@ -93,6 +94,7 @@ export class TransatelOperationsService {
   async dashboard(params?: {
     scope?: "subscribers" | "inventory" | "failures" | "actions";
     q?: string;
+    actorId?: string;
   }) {
     const health = await this.connectivity.transatelHealth().catch((error) => ({
       ok: false,
@@ -424,6 +426,7 @@ export class TransatelOperationsService {
         include: {
           order: { select: { orderNumber: true } },
           performedBy: { select: { email: true } },
+          approvedBy: { select: { email: true } },
         },
         orderBy: { createdAt: "desc" },
         take: 50,
@@ -432,6 +435,7 @@ export class TransatelOperationsService {
     return {
       health,
       persistence: "ENABLED",
+      currentActorId: params?.actorId ?? null,
       counts: {
         available,
         quarantined,
@@ -489,7 +493,10 @@ export class TransatelOperationsService {
         action: operation.action,
         state: operation.state,
         reason: operation.reason,
+        requesterId: operation.performedById,
         actor: operation.performedBy.email,
+        approvedBy: operation.approvedBy?.email ?? null,
+        approvedAt: operation.approvedAt?.toISOString() ?? null,
         providerTransactionId: operation.providerTransactionId,
         errorMessage: operation.errorMessage,
         createdAt: operation.createdAt.toISOString(),
@@ -507,6 +514,351 @@ export class TransatelOperationsService {
     return this.lifecycle({
       ...input,
       action: TransatelLifecycleAction.TERMINATE,
+    });
+  }
+
+  async requestReactivation(input: Omit<LifecycleInput, "action">) {
+    if (!this.prisma.enabled)
+      throw new ServiceUnavailableException(
+        "Transatel lifecycle operations require database persistence",
+      );
+    const reason = input.reason.trim();
+    if (reason.length < 5 || reason.length > 500)
+      throw new BadRequestException(
+        "A reason between 5 and 500 characters is required",
+      );
+    if (!/^[a-zA-Z0-9:_-]{12,128}$/.test(input.idempotencyKey))
+      throw new BadRequestException("A valid idempotency key is required");
+    const order = await this.prisma.order.findUnique({
+      where: { id: input.orderId },
+      include: {
+        inventory: true,
+        customerEsim: { include: { inventory: true } },
+      },
+    });
+    const inventory = order?.inventory ?? order?.customerEsim?.inventory;
+    if (!order || !inventory)
+      throw new NotFoundException("The order does not have an assigned eSIM");
+    let subscriber;
+    try {
+      subscriber = await this.connectivity.getSubscriberDetails(
+        inventory.iccid,
+      );
+    } catch (error) {
+      await this.auditStatusCheckFailure(
+        order.id,
+        TransatelLifecycleAction.REACTIVATE,
+        input.actorId,
+        reason,
+        error,
+      );
+      throw this.statusCheckUnavailable();
+    }
+    const status = canonicalSubscriberStatus(subscriber.status) ?? "UNKNOWN";
+    if (status !== "SUSPENDED")
+      await this.rejectLifecycle(
+        { ...input, action: TransatelLifecycleAction.REACTIVATE },
+        status,
+        `Only a suspended eSIM can be reactivated (current provider state: ${status})`,
+      );
+    let existing = await this.prisma.transatelLifecycleOperation.findFirst({
+      where: {
+        orderId: order.id,
+        state: {
+          in: [
+            TransatelLifecycleState.APPROVAL_REQUIRED,
+            TransatelLifecycleState.CREATED,
+            TransatelLifecycleState.SUBMITTING,
+            TransatelLifecycleState.ACCEPTED,
+            TransatelLifecycleState.RECONCILE_REQUIRED,
+          ],
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (
+      existing?.action === TransatelLifecycleAction.REACTIVATE &&
+      existing.state === TransatelLifecycleState.APPROVAL_REQUIRED &&
+      this.reactivationApprovalExpired(existing.createdAt)
+    ) {
+      await this.expireReactivation(existing.id, order.id, input.actorId);
+      existing = null;
+    }
+    if (existing) {
+      if (existing.action === TransatelLifecycleAction.REACTIVATE)
+        return existing;
+      throw new ConflictException(
+        `A ${existing.action.toLowerCase()} operation is already in progress`,
+      );
+    }
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const created = await tx.transatelLifecycleOperation.create({
+          data: {
+            orderId: order.id,
+            action: TransatelLifecycleAction.REACTIVATE,
+            state: TransatelLifecycleState.APPROVAL_REQUIRED,
+            idempotencyKey: input.idempotencyKey,
+            reason,
+            performedById: input.actorId,
+            requestSnapshot: {
+              orderId: order.id,
+              iccid: inventory.iccid,
+              observedSubscriberStatus: status,
+              action: TransatelLifecycleAction.REACTIVATE,
+              reason,
+            },
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            module: "TRANSATEL",
+            entity: "Order",
+            entityId: order.id,
+            action: "REACTIVATE_APPROVAL_REQUESTED",
+            performedById: input.actorId,
+            newValue: {
+              operationId: created.id,
+              reason,
+              providerRequestSent: false,
+            },
+          },
+        });
+        return created;
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        const replay = await this.prisma.transatelLifecycleOperation.findUnique(
+          {
+            where: { idempotencyKey: input.idempotencyKey },
+          },
+        );
+        if (
+          replay?.orderId === order.id &&
+          replay.action === TransatelLifecycleAction.REACTIVATE &&
+          replay.performedById === input.actorId
+        )
+          return replay;
+        const concurrent =
+          await this.prisma.transatelLifecycleOperation.findFirst({
+            where: {
+              orderId: order.id,
+              state: {
+                in: [
+                  TransatelLifecycleState.APPROVAL_REQUIRED,
+                  TransatelLifecycleState.CREATED,
+                  TransatelLifecycleState.SUBMITTING,
+                  TransatelLifecycleState.ACCEPTED,
+                  TransatelLifecycleState.RECONCILE_REQUIRED,
+                ],
+              },
+            },
+            orderBy: { createdAt: "desc" },
+          });
+        if (concurrent?.action === TransatelLifecycleAction.REACTIVATE)
+          return concurrent;
+        if (concurrent)
+          throw new ConflictException(
+            `A ${concurrent.action.toLowerCase()} operation is already in progress`,
+          );
+        throw new ConflictException(
+          "Idempotency key is already used for a different operation",
+        );
+      }
+      throw error;
+    }
+  }
+
+  async approveReactivation(operationId: string, actorId: string) {
+    const operation = await this.prisma.transatelLifecycleOperation.findUnique({
+      where: { id: operationId },
+    });
+    if (!operation || operation.action !== TransatelLifecycleAction.REACTIVATE)
+      throw new NotFoundException("Reactivation request not found");
+    if (operation.performedById === actorId)
+      throw new ConflictException(
+        "The requester cannot approve their own reactivation request",
+      );
+    if (operation.state !== TransatelLifecycleState.APPROVAL_REQUIRED)
+      throw new ConflictException(
+        "This reactivation request is no longer awaiting approval",
+      );
+    if (this.reactivationApprovalExpired(operation.createdAt)) {
+      await this.expireReactivation(operation.id, operation.orderId, actorId);
+      throw new ConflictException(
+        "This reactivation approval request has expired. Create a new request after checking the current network state.",
+      );
+    }
+    const order = await this.prisma.order.findUnique({
+      where: { id: operation.orderId },
+      include: {
+        inventory: true,
+        customerEsim: { include: { inventory: true } },
+      },
+    });
+    const inventory = order?.inventory ?? order?.customerEsim?.inventory;
+    if (!order || !inventory)
+      throw new NotFoundException("The order does not have an assigned eSIM");
+    let subscriber;
+    try {
+      subscriber = await this.connectivity.getSubscriberDetails(
+        inventory.iccid,
+      );
+    } catch (error) {
+      await this.auditStatusCheckFailure(
+        order.id,
+        TransatelLifecycleAction.REACTIVATE,
+        actorId,
+        operation.reason,
+        error,
+      );
+      throw this.statusCheckUnavailable();
+    }
+    const status = canonicalSubscriberStatus(subscriber.status) ?? "UNKNOWN";
+    if (status !== "SUSPENDED")
+      throw new ConflictException(
+        `The eSIM can no longer be reactivated because its network state is ${status}`,
+      );
+    const approvedAt = new Date();
+    const changed = await this.prisma.transatelLifecycleOperation.updateMany({
+      where: {
+        id: operation.id,
+        state: TransatelLifecycleState.APPROVAL_REQUIRED,
+      },
+      data: {
+        state: TransatelLifecycleState.CREATED,
+        approvedById: actorId,
+        approvedAt,
+      },
+    });
+    if (changed.count !== 1)
+      throw new ConflictException(
+        "This reactivation request was changed by another administrator",
+      );
+    await this.prisma.auditLog.create({
+      data: {
+        module: "TRANSATEL",
+        entity: "Order",
+        entityId: operation.orderId,
+        action: "REACTIVATE_APPROVED",
+        performedById: actorId,
+        newValue: {
+          operationId: operation.id,
+          requestedById: operation.performedById,
+        },
+      },
+    });
+    return this.lifecycle({
+      orderId: operation.orderId,
+      action: TransatelLifecycleAction.REACTIVATE,
+      reason: operation.reason,
+      idempotencyKey: operation.idempotencyKey,
+      actorId,
+      verifiedSubscriberStatus: status,
+    });
+  }
+
+  async rejectReactivation(
+    operationId: string,
+    actorId: string,
+    rejectionReason: string,
+  ) {
+    const reason = rejectionReason.trim();
+    if (reason.length < 5 || reason.length > 500)
+      throw new BadRequestException(
+        "A rejection reason between 5 and 500 characters is required",
+      );
+    const operation = await this.prisma.transatelLifecycleOperation.findUnique({
+      where: { id: operationId },
+    });
+    if (!operation || operation.action !== TransatelLifecycleAction.REACTIVATE)
+      throw new NotFoundException("Reactivation request not found");
+    if (operation.performedById === actorId)
+      throw new ConflictException(
+        "The requester cannot reject their own reactivation request",
+      );
+    if (operation.state !== TransatelLifecycleState.APPROVAL_REQUIRED)
+      throw new ConflictException(
+        "This reactivation request is no longer awaiting a decision",
+      );
+    if (this.reactivationApprovalExpired(operation.createdAt)) {
+      await this.expireReactivation(operation.id, operation.orderId, actorId);
+      throw new ConflictException(
+        "This reactivation approval request has expired. Create a new request after checking the current network state.",
+      );
+    }
+    const changed = await this.prisma.transatelLifecycleOperation.updateMany({
+      where: {
+        id: operation.id,
+        state: TransatelLifecycleState.APPROVAL_REQUIRED,
+      },
+      data: {
+        state: TransatelLifecycleState.REJECTED,
+        approvedById: actorId,
+        approvedAt: new Date(),
+        errorMessage: reason,
+      },
+    });
+    if (changed.count !== 1)
+      throw new ConflictException(
+        "This reactivation request was changed by another administrator",
+      );
+    await this.prisma.auditLog.create({
+      data: {
+        module: "TRANSATEL",
+        entity: "Order",
+        entityId: operation.orderId,
+        action: "REACTIVATE_REJECTED",
+        performedById: actorId,
+        newValue: {
+          operationId: operation.id,
+          requestedById: operation.performedById,
+          reason,
+          providerRequestSent: false,
+        },
+      },
+    });
+    return this.prisma.transatelLifecycleOperation.findUnique({
+      where: { id: operation.id },
+    });
+  }
+
+  private reactivationApprovalExpired(createdAt: Date | undefined) {
+    if (!createdAt) return false;
+    const minutes = Number(
+      process.env.TRANSATEL_REACTIVATION_APPROVAL_MINUTES ?? 30,
+    );
+    return createdAt.getTime() <= Date.now() - minutes * 60_000;
+  }
+
+  private async expireReactivation(
+    operationId: string,
+    orderId: string,
+    actorId: string,
+  ) {
+    const changed = await this.prisma.transatelLifecycleOperation.updateMany({
+      where: {
+        id: operationId,
+        state: TransatelLifecycleState.APPROVAL_REQUIRED,
+      },
+      data: {
+        state: TransatelLifecycleState.EXPIRED,
+        errorMessage: "Approval window expired before a decision was recorded",
+      },
+    });
+    if (!changed.count) return;
+    await this.prisma.auditLog.create({
+      data: {
+        module: "TRANSATEL",
+        entity: "Order",
+        entityId: orderId,
+        action: "REACTIVATE_APPROVAL_EXPIRED",
+        performedById: actorId,
+        newValue: { operationId, providerRequestSent: false },
+      },
     });
   }
 
@@ -531,6 +883,7 @@ export class TransatelOperationsService {
               "usage",
               "provision",
               "subscriber-suspend",
+              "subscriber-reactivate",
               "subscriber-terminate",
             ],
           },
@@ -554,6 +907,7 @@ export class TransatelOperationsService {
       "usage",
       "provision",
       "subscriber-suspend",
+      "subscriber-reactivate",
       "subscriber-terminate",
     ];
     return {
@@ -767,6 +1121,8 @@ export class TransatelOperationsService {
       latest &&
       ((latest.action === TransatelLifecycleAction.SUSPEND &&
         observedSubscriberStatus === "SUSPENDED") ||
+        (latest.action === TransatelLifecycleAction.REACTIVATE &&
+          observedSubscriberStatus === "ACTIVE") ||
         (latest.action === TransatelLifecycleAction.TERMINATE &&
           observedSubscriberStatus === "TERMINATED"));
     await this.prisma.$transaction(async (tx) => {
@@ -794,8 +1150,11 @@ export class TransatelOperationsService {
           providerCheckError: null,
           ...(subscriberTerminal
             ? { status: InventoryStatus.TERMINATED }
-            : observedSubscriberStatus &&
-                order.inventory!.status === InventoryStatus.TERMINATED
+            : observedSubscriberStatus === "ACTIVE" &&
+                order.inventory!.status === InventoryStatus.TERMINATED &&
+                observedProfileStatus !== "DELETED" &&
+                order.transatelLifecycleOperations[0]?.action ===
+                  TransatelLifecycleAction.REACTIVATE
               ? { status: InventoryStatus.ACTIVATED }
               : {}),
           version: { increment: 1 },
@@ -977,47 +1336,25 @@ export class TransatelOperationsService {
     });
     if (!order?.inventory || !order.customerEsim)
       throw new NotFoundException("The order does not have an assigned eSIM");
-    let subscriber;
-    try {
-      subscriber = await this.connectivity.getSubscriberDetails(
-        order.inventory.iccid,
-      );
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Provider subscriber status lookup failed";
-      await this.prisma.auditLog
-        .create({
-          data: {
-            module: "TRANSATEL",
-            entity: "Order",
-            entityId: order.id,
-            action: `${input.action}_STATUS_CHECK_FAILED`,
-            performedById: input.actorId,
-            newValue: {
-              reason,
-              error: message,
-              providerRequestSent: false,
-            } as Prisma.InputJsonValue,
-          },
-        })
-        .catch((auditError) =>
-          this.logger.error(
-            `Could not audit failed subscriber status check for order ${order.id}: ${auditError instanceof Error ? auditError.message : "unknown"}`,
-          ),
+    let observedStatus = input.verifiedSubscriberStatus;
+    if (!observedStatus) {
+      try {
+        const subscriber = await this.connectivity.getSubscriberDetails(
+          order.inventory.iccid,
         );
-      throw new ApiException({
-        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
-        message:
-          "The current network status could not be verified. No change was sent; please try again.",
-        status: 503,
-        details: { providerRequestSent: false },
-      });
+        observedStatus = subscriber.status;
+      } catch (error) {
+        await this.auditStatusCheckFailure(
+          order.id,
+          input.action,
+          input.actorId,
+          reason,
+          error,
+        );
+        throw this.statusCheckUnavailable();
+      }
     }
-    const canonicalLifecycleStatus = canonicalSubscriberStatus(
-      subscriber.status,
-    );
+    const canonicalLifecycleStatus = canonicalSubscriberStatus(observedStatus);
     const lifecycleStatus = canonicalLifecycleStatus ?? "UNKNOWN";
     if (!canonicalLifecycleStatus)
       await this.rejectLifecycle(
@@ -1044,6 +1381,15 @@ export class TransatelOperationsService {
         `Only an active eSIM can be suspended (current provider state: ${lifecycleStatus})`,
       );
     if (
+      input.action === TransatelLifecycleAction.REACTIVATE &&
+      lifecycleStatus !== "SUSPENDED"
+    )
+      await this.rejectLifecycle(
+        input,
+        lifecycleStatus,
+        `Only a suspended eSIM can be reactivated (current provider state: ${lifecycleStatus})`,
+      );
+    if (
       input.action === TransatelLifecycleAction.TERMINATE &&
       !["ACTIVE", "SUSPENDED", "TESTMODE", "TARIFFHOLIDAY"].includes(
         lifecycleStatus,
@@ -1057,7 +1403,6 @@ export class TransatelOperationsService {
     const inFlight = await this.prisma.transatelLifecycleOperation.findFirst({
       where: {
         orderId: order.id,
-        action: input.action,
         state: {
           in: [
             TransatelLifecycleState.CREATED,
@@ -1069,13 +1414,23 @@ export class TransatelOperationsService {
       },
       orderBy: { createdAt: "desc" },
     });
+    if (inFlight && inFlight.action !== input.action)
+      await this.rejectLifecycle(
+        input,
+        lifecycleStatus,
+        `A ${inFlight.action.toLowerCase()} operation is already pending provider confirmation`,
+      );
     if (inFlight && inFlight.idempotencyKey !== input.idempotencyKey)
       await this.rejectLifecycle(
         input,
         lifecycleStatus,
         `A ${input.action.toLowerCase()} operation is already pending provider confirmation`,
       );
-    if (inFlight) return inFlight;
+    const approvedReactivation =
+      inFlight?.action === TransatelLifecycleAction.REACTIVATE &&
+      inFlight.state === TransatelLifecycleState.CREATED &&
+      Boolean(inFlight.approvedById);
+    if (inFlight && !approvedReactivation) return inFlight;
     const reference = order.inventory.iccid;
     const requestSnapshot = {
       orderId: order.id,
@@ -1088,9 +1443,9 @@ export class TransatelOperationsService {
       action: input.action,
       reason,
     } as Prisma.InputJsonValue;
-    let operation;
+    let operation = approvedReactivation ? inFlight : null;
     try {
-      operation = await this.prisma.transatelLifecycleOperation.create({
+      operation ??= await this.prisma.transatelLifecycleOperation.create({
         data: {
           orderId: order.id,
           action: input.action,
@@ -1133,12 +1488,22 @@ export class TransatelOperationsService {
       const result =
         input.action === TransatelLifecycleAction.SUSPEND
           ? await this.connectivity.suspend(reference, input.idempotencyKey)
-          : await this.connectivity.terminate(reference, input.idempotencyKey);
+          : input.action === TransatelLifecycleAction.REACTIVATE
+            ? await this.connectivity.reactivate(
+                reference,
+                input.idempotencyKey,
+              )
+            : await this.connectivity.terminate(
+                reference,
+                input.idempotencyKey,
+              );
       providerAccepted = true;
       const pendingStatus =
         input.action === TransatelLifecycleAction.SUSPEND
           ? "SUSPEND_PENDING"
-          : "TERMINATION_PENDING";
+          : input.action === TransatelLifecycleAction.REACTIVATE
+            ? "REACTIVATION_PENDING"
+            : "TERMINATION_PENDING";
       const acceptedAt = new Date();
       const completed = await this.prisma.$transaction(async (tx) => {
         const saved = await tx.transatelLifecycleOperation.update({
@@ -1221,6 +1586,49 @@ export class TransatelOperationsService {
       ]);
       throw error;
     }
+  }
+
+  private statusCheckUnavailable() {
+    return new ApiException({
+      code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      message:
+        "The current network status could not be verified. No change was sent; please try again.",
+      status: 503,
+      details: { providerRequestSent: false },
+    });
+  }
+
+  private async auditStatusCheckFailure(
+    orderId: string,
+    action: TransatelLifecycleAction,
+    actorId: string,
+    reason: string,
+    error: unknown,
+  ) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Provider subscriber status lookup failed";
+    await this.prisma.auditLog
+      .create({
+        data: {
+          module: "TRANSATEL",
+          entity: "Order",
+          entityId: orderId,
+          action: `${action}_STATUS_CHECK_FAILED`,
+          performedById: actorId,
+          newValue: {
+            reason,
+            error: message,
+            providerRequestSent: false,
+          } as Prisma.InputJsonValue,
+        },
+      })
+      .catch((auditError) =>
+        this.logger.error(
+          `Could not audit failed subscriber status check for order ${orderId}: ${auditError instanceof Error ? auditError.message : "unknown"}`,
+        ),
+      );
   }
 
   private async rejectLifecycle(

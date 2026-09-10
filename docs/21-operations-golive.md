@@ -1,8 +1,8 @@
 # Operational Go-Live Guide: Approval Workflow, Observability & Disaster Recovery
 
 This guide describes the operator-facing features added for production go-live:
-the Super Admin approval gate over SIM-profile and plan uploads, the public
-`/metrics` endpoint, structured logging, Redis-aware readiness, operational
+the Super Admin approval gate over SIM-profile and plan uploads, the protected
+`/api/v1/metrics` endpoint, structured logging, Redis-aware readiness, operational
 alerts, and the PostgreSQL backup / disaster-recovery runbook.
 
 It assumes the platform described in `docs/PLATFORM-SPECIFICATION.md` and
@@ -52,11 +52,12 @@ only. Operators cannot approve their own uploads.
 
 ---
 
-## 2. Public Prometheus `/metrics`
+## 2. Protected Prometheus `/api/v1/metrics`
 
 A lightweight in-memory registry is exposed in Prometheus text format:
 
-- `GET /metrics` (public, no PII) at `{API_PUBLIC_URL}/metrics`.
+- `GET /api/v1/metrics` at `{API_PUBLIC_URL}/api/v1/metrics` requires a valid
+  Operations or Super Admin bearer token. Do not expose it anonymously.
 
 Metrics include `vc_http_requests_total`, `vc_http_responses_total`,
 `vc_http_request_duration_ms_sum` (per normalized route), `vc_failures_total`
@@ -69,7 +70,9 @@ alerting, scrape this endpoint into a real Prometheus (sample scrape config):
 ```yaml
 scrape_configs:
   - job_name: "visa-compass-api"
-    metrics_path: /metrics
+    metrics_path: /api/v1/metrics
+    authorization:
+      credentials_file: /run/secrets/visa_compass_metrics_token
     static_configs:
       - targets: ["api:4000"]
 ```
@@ -183,7 +186,7 @@ point-in-time recovery complement these dumps; they do not replace restore tests
 
 1. Run a **restore drill** at least monthly into a scratch schema/database.
 2. Validate row counts on the restored cluster against the last logs.
-3. Confirm `/metrics`-visible counts (orders, profiles, etc.) match.
+3. Confirm `/api/v1/metrics`-visible counts (orders, profiles, etc.) match.
 
 ---
 
@@ -195,5 +198,6 @@ point-in-time recovery complement these dumps; they do not replace restore tests
       `BOOTSTRAP_SUPER_ADMIN_TOKEN`, Khalti, Transatel, Amazon S3, Amazon SES.
 - [ ] Set `STAFF_EMAIL_DOMAIN` (default `visacompassnepal.com`) — staff accounts are
       pre-provisioned by a Super Admin at this domain; there is no public staff sign-up.
-- [ ] Point `/metrics` at a Prometheus scrape and add the failure alert rules.
+- [ ] Point `/api/v1/metrics` at an authenticated Prometheus scrape and add
+      the failure alert rules.
 - [ ] Enable managed PITR, schedule nightly `pg_dump`, and run a monthly restore drill.

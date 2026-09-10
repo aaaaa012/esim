@@ -81,6 +81,18 @@ const baseSchema = z.object({
     .min(5_000)
     .max(300_000)
     .optional(),
+  TRANSATEL_REACTIVATION_APPROVAL_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .max(1_440)
+    .optional(),
+  PARTNER_RATE_BUCKET_RETENTION_HOURS: z.coerce
+    .number()
+    .int()
+    .min(2)
+    .max(720)
+    .optional(),
   TRANSATEL_BASE_URL: z.string().url().optional(),
   TRANSATEL_CLIENT_ID: z.string().min(1).optional(),
   TRANSATEL_CLIENT_SECRET: z.string().min(1).optional(),
@@ -196,8 +208,13 @@ export function validateEnv(
   if (config.E2E_AUTH_ENABLED === "true") {
     if (config.NODE_ENV !== "test")
       throw new Error("E2E_AUTH_ENABLED=true requires NODE_ENV=test");
-    if (typeof config.E2E_AUTH_SECRET !== "string" || config.E2E_AUTH_SECRET.length < 32)
-      throw new Error("E2E_AUTH_ENABLED=true requires E2E_AUTH_SECRET of at least 32 characters");
+    if (
+      typeof config.E2E_AUTH_SECRET !== "string" ||
+      config.E2E_AUTH_SECRET.length < 32
+    )
+      throw new Error(
+        "E2E_AUTH_ENABLED=true requires E2E_AUTH_SECRET of at least 32 characters",
+      );
   }
 
   // Even outside production, if an encryption key or persistence is configured

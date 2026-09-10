@@ -9,6 +9,24 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     permissions: { contents: read }
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: visa_compass
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: visa_compass_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U visa_compass -d visa_compass_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://visa_compass:ci_password@localhost:5432/visa_compass_ci?schema=public
+      DIRECT_DATABASE_URL: postgresql://visa_compass:ci_password@localhost:5432/visa_compass_ci?schema=public
+      PERSISTENCE_MODE: prisma
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -17,6 +35,10 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate
+      - name: Apply migrations to disposable PostgreSQL
+        run: pnpm db:deploy
+      - name: Reject high or critical production dependency advisories
+        run: pnpm audit --prod --audit-level high
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build

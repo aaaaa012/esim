@@ -135,6 +135,10 @@ export interface ConnectivityProvider {
     subscriptionId: string,
     transactionReference: string,
   ): Promise<LifecycleResult>;
+  reactivate?(
+    subscriptionId: string,
+    transactionReference: string,
+  ): Promise<LifecycleResult>;
   terminate?(
     subscriptionId: string,
     transactionReference: string,
