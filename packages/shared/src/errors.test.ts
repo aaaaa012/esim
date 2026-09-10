@@ -13,8 +13,14 @@ describe("publicApiErrorMessage", () => {
       code: "CLERK_ACTIVATION_FAILED",
       message: "form_data_missing correlationId=secret-reference",
     };
-    expect(publicApiErrorMessage(unsafe, "Unable to complete the request.")).toBe(
-      "Unable to complete the request.",
+    expect(
+      publicApiErrorMessage(unsafe, "Unable to complete the request."),
+    ).toBe("Unable to complete the request.");
+  });
+
+  it("provides actionable copy for rejected eSIM lifecycle actions", () => {
+    expect(publicApiErrorMessage({ code: "ESIM_LIFECYCLE_NOT_ALLOWED" })).toBe(
+      "This action is not available for the eSIM's current network status.",
     );
   });
 });

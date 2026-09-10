@@ -139,6 +139,7 @@ type ProviderCheck = {
   orderStatus: string;
   provisioningState?: string | null;
   profileStatus: string;
+  subscriberStatus?: string | null;
   subscriptionStatus?: string | null;
   checkedAt: string;
   recommendedAction: string;
@@ -821,12 +822,16 @@ export default function OrderReview({ id }: { id: string }) {
                       value={providerCheck?.profileStatus ?? "Not checked"}
                     />
                     <InfoRow
-                      label="Data subscription"
+                      label="Network subscriber"
                       value={
-                        providerCheck?.subscriptionStatus ??
+                        providerCheck?.subscriberStatus ??
                         order.providerStatus ??
-                        "Pending first use"
+                        "Not checked"
                       }
+                    />
+                    <InfoRow
+                      label="Data subscription"
+                      value={providerCheck?.subscriptionStatus ?? "Not checked"}
                     />
                     {order.purchaseType !== "TOPUP" ? (
                       <InfoRow

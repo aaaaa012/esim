@@ -38,6 +38,7 @@ function prismaStub(overrides: Record<string, unknown> = {}) {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     integrationLog: { create: vi.fn() },
+    transatelLifecycleOperation: { findFirst: vi.fn().mockResolvedValue(null) },
     provisioningOperation: {
       findUnique: vi.fn().mockResolvedValue(null),
       upsert: vi.fn().mockResolvedValue({ state: "CREATED" }),
@@ -594,12 +595,10 @@ describe("TransatelProvider", () => {
     "retains ready packages without balances and excludes walled-garden products (active=%s)",
     async (active) => {
       const prisma = prismaStub();
-      prisma.esimInventory.findFirst = vi
-        .fn()
-        .mockResolvedValue({
-          iccid: "8988247076000000319",
-          msisdn: "33612345678",
-        });
+      prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+        iccid: "8988247076000000319",
+        msisdn: "33612345678",
+      });
       const provider = new TransatelProvider(prisma);
       const balance = {
         data: [
@@ -753,6 +752,29 @@ describe("TransatelProvider", () => {
     ).toBe(false);
   });
 
+  it("rejects a malformed successful product inventory response", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+    });
+    const provider = new TransatelProvider(prisma);
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ currentLocale: "en_US" }), {
+          status: 200,
+        }),
+      );
+
+    await expect(provider.getUsage(ORDER_UUID)).rejects.toMatchObject({
+      code: ApiErrorCode.USAGE_UNAVAILABLE,
+      status: 502,
+    });
+  });
+
   it("returns the QR payload and SM-DP+ address from eSIM details", async () => {
     const prisma = prismaStub();
     prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
@@ -780,6 +802,113 @@ describe("TransatelProvider", () => {
       status: "downloaded",
       smDpAddress: "consumer.rsp.world",
       qrPayload: "LPA:1$consumer.rsp.world$XYZ",
+    });
+  });
+
+  it("rejects an eSIM response for a different ICCID", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+    });
+    const provider = new TransatelProvider(prisma);
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            simSerial: "8988247076000000999",
+            status: "downloaded",
+          }),
+          { status: 200 },
+        ),
+      );
+
+    await expect(
+      provider.getEsimDetails("8988247076000000319"),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.ESIM_LOOKUP_UNAVAILABLE,
+      status: 502,
+    });
+  });
+
+  it("reads the connectivity subscriber status independently of the eSIM profile", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+    });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/connectivity-management/subscribers/api/subscribers/sim-serial/8988247076000000319":
+        () =>
+          jsonResponse({
+            simSerial: "8988247076000000319",
+            msisdn: "33612345678",
+            status: "Active",
+          }),
+    });
+
+    await expect(
+      provider.getSubscriberDetails("8988247076000000319"),
+    ).resolves.toEqual({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+      status: "Active",
+    });
+  });
+
+  it("rejects an incomplete connectivity subscriber response", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi
+      .fn()
+      .mockResolvedValue({ iccid: "8988247076000000319" });
+    const provider = new TransatelProvider(prisma);
+    route({
+      "/authentication/api/token": () =>
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      "/connectivity-management/subscribers/api/subscribers/sim-serial/8988247076000000319":
+        () => jsonResponse({ simSerial: "8988247076000000319" }),
+    });
+
+    await expect(
+      provider.getSubscriberDetails("8988247076000000319"),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      status: 502,
+    });
+  });
+
+  it("rejects a connectivity subscriber response for another ICCID", async () => {
+    const prisma = prismaStub();
+    prisma.esimInventory.findFirst = vi.fn().mockResolvedValue({
+      iccid: "8988247076000000319",
+      msisdn: "33612345678",
+    });
+    const provider = new TransatelProvider(prisma);
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ access_token: "token-1", expires_in: 3600 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            simSerial: "8988247076000000999",
+            status: "Active",
+          }),
+          { status: 200 },
+        ),
+      );
+
+    await expect(
+      provider.getSubscriberDetails("8988247076000000319"),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      status: 502,
     });
   });
 
@@ -1056,6 +1185,7 @@ describe("TransatelProvider", () => {
       },
     });
     expect(result.event).toMatchObject({
+      statusScope: "PRODUCT",
       status: "EXPIRED",
       expiresAt: "2026-08-19T00:00:00Z",
     });
@@ -1191,8 +1321,35 @@ describe("TransatelProvider", () => {
     });
     expect(result.handled).toBe(true);
     expect(result.event).toMatchObject({
+      statusScope: "SUBSCRIBER",
       orderId: "order-1",
       iccid: "8988247076000000319",
+      status: "SUSPENDED",
+    });
+  });
+
+  it("routes a subscriber callback to its pending lifecycle operation after top-ups", async () => {
+    const prisma = prismaStub();
+    prisma.transatelLifecycleOperation.findFirst = vi
+      .fn()
+      .mockResolvedValue({ orderId: "order-topup" });
+    prisma.esimInventory.findUnique = vi.fn().mockResolvedValue({
+      assignedOrderId: "order-initial",
+      customerEsims: [{ orderId: "order-initial" }, { orderId: "order-topup" }],
+    });
+    const provider = new TransatelProvider(prisma);
+
+    const result = await provider.handleWebhook({
+      header: {
+        eventId: "evt-suspended-topup",
+        eventType: "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED",
+      },
+      body: { simSerial: "8988247076000000319" },
+    });
+
+    expect(result.event).toMatchObject({
+      orderId: "order-topup",
+      statusScope: "SUBSCRIBER",
       status: "SUSPENDED",
     });
   });

@@ -61,6 +61,11 @@ export type LifecycleResult = {
   transactionId?: string;
   status: string;
 };
+export type SubscriberDetailsResult = {
+  iccid: string;
+  msisdn?: string;
+  status: string;
+};
 
 /**
  * Normalized provider lifecycle event emitted by the connectivity provider.
@@ -69,6 +74,7 @@ export type LifecycleResult = {
  */
 export type ProviderWebhookEvent = {
   eventType: string;
+  statusScope?: "PRODUCT" | "SUBSCRIBER" | "PROFILE";
   orderId?: string;
   iccid?: string;
   msisdn?: string;

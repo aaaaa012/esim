@@ -497,6 +497,58 @@ function sanitizeLogEndpoint(endpoint: string) {
   return path ?? endpoint;
 }
 
+function transatelOperationTitle(
+  operation: string,
+  requestBody: Prisma.JsonValue,
+  method: string,
+  endpoint: string,
+) {
+  const normalized = operation.replace(/-auth-retry$/, "");
+  const orderType =
+    requestBody &&
+    typeof requestBody === "object" &&
+    !Array.isArray(requestBody)
+      ? String((requestBody as Record<string, unknown>).orderType ?? "")
+      : "";
+  const labels: Record<string, string> = {
+    token: "Transatel authentication",
+    usage: "Transatel product inventory and balances",
+    "esim-details": "Transatel eSIM profile lookup",
+    "subscriber-details": "Transatel subscriber status lookup",
+    "subscriber-suspend": "Transatel subscriber suspension",
+    "subscriber-terminate": "Transatel subscriber termination",
+    catalog: "Transatel product catalog lookup",
+    eligibility: "Transatel product eligibility check",
+  };
+  if (normalized === "provision")
+    return orderType.toLowerCase() === "subscribe"
+      ? "Transatel top-up subscription"
+      : "Transatel plan preload";
+  return labels[normalized] ?? `${method} ${sanitizeLogEndpoint(endpoint)}`;
+}
+
+function transatelWebhookTitle(payload: Prisma.JsonValue) {
+  const eventType =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as { header?: { eventType?: unknown } }).header?.eventType
+      : null;
+  if (typeof eventType !== "string") return "Transatel callback received";
+  const labels: Record<string, string> = {
+    "OCS/PRODUCT/PRELOADED": "Transatel plan preloaded",
+    "OCS/PRODUCT/ACTIVATED": "Transatel plan activated",
+    "OCS/PRODUCT/CANCELED": "Transatel plan renewal canceled",
+    "OCS/PRODUCT/EXPIRED": "Transatel plan expired",
+    "OCS/PRODUCT/TERMINATED": "Transatel plan terminated",
+    "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED":
+      "Transatel subscriber suspended",
+    "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/REACTIVATED":
+      "Transatel subscriber reactivated",
+    "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED":
+      "Transatel subscriber terminated",
+  };
+  return labels[eventType.toUpperCase()] ?? `Transatel ${eventType}`;
+}
+
 @Controller("operations/logs")
 @UseGuards(AuthGuard, AccountGuard)
 @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
@@ -643,9 +695,7 @@ export class OperationsLogsController {
       integrationRows = await safeQuery(
         () =>
           this.prisma.integrationLog.findMany({
-            ...(timestampRange
-              ? { where: { createdAt: timestampRange } }
-              : {}),
+            ...(timestampRange ? { where: { createdAt: timestampRange } } : {}),
             orderBy: { createdAt: "desc" },
             take,
           }),
@@ -689,9 +739,7 @@ export class OperationsLogsController {
       auditRows = await safeQuery(
         () =>
           this.prisma.auditLog.findMany({
-            ...(timestampRange
-              ? { where: { createdAt: timestampRange } }
-              : {}),
+            ...(timestampRange ? { where: { createdAt: timestampRange } } : {}),
             orderBy: { createdAt: "desc" },
             take,
             include: { performedBy: { select: { email: true } } },
@@ -712,9 +760,7 @@ export class OperationsLogsController {
       orderRows = await safeQuery(
         () =>
           this.prisma.order.findMany({
-            ...(timestampRange
-              ? { where: { createdAt: timestampRange } }
-              : {}),
+            ...(timestampRange ? { where: { createdAt: timestampRange } } : {}),
             select: {
               id: true,
               orderNumber: true,
@@ -740,9 +786,7 @@ export class OperationsLogsController {
       provisioningAttemptRows = await safeQuery(
         () =>
           this.prisma.provisioningAttempt.findMany({
-            ...(timestampRange
-              ? { where: { createdAt: timestampRange } }
-              : {}),
+            ...(timestampRange ? { where: { createdAt: timestampRange } } : {}),
             orderBy: { createdAt: "desc" },
             take,
           }),
@@ -751,9 +795,7 @@ export class OperationsLogsController {
       provisioningOperationRows = await safeQuery(
         () =>
           this.prisma.provisioningOperation.findMany({
-            ...(timestampRange
-              ? { where: { updatedAt: timestampRange } }
-              : {}),
+            ...(timestampRange ? { where: { updatedAt: timestampRange } } : {}),
             orderBy: { updatedAt: "desc" },
             take,
             select: {
@@ -794,7 +836,12 @@ export class OperationsLogsController {
         group: "provider",
         id: row.id,
         identifier: row.operation,
-        title: `${row.method} ${sanitizeLogEndpoint(row.endpoint)}`,
+        title: transatelOperationTitle(
+          row.operation,
+          row.requestBody,
+          row.method,
+          row.endpoint,
+        ),
         detail:
           sanitizeLogText(row.errorMessage ?? row.errorCode) ??
           "Provider request completed",
@@ -812,10 +859,13 @@ export class OperationsLogsController {
         group: "incoming",
         id: row.id,
         identifier: row.source,
-        title: row.eventId,
+        title:
+          row.source === "transatel"
+            ? transatelWebhookTitle(row.payload)
+            : `${row.source} callback received`,
         detail:
           sanitizeLogText(row.errorMessage) ??
-          (row.processedAt ? "Callback processed" : "Callback queued"),
+          `${row.processedAt ? "Callback processed" : "Callback queued"} / Event ${row.eventId}`,
         status: row.signatureValid
           ? row.deadLetteredAt || row.errorMessage
             ? 500

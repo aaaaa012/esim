@@ -64,6 +64,7 @@ export const ApiErrorCode = {
   ESIM_NOT_FOUND: "ESIM_NOT_FOUND",
   ESIM_LOOKUP_UNAVAILABLE: "ESIM_LOOKUP_UNAVAILABLE",
   USAGE_UNAVAILABLE: "USAGE_UNAVAILABLE",
+  ESIM_LIFECYCLE_NOT_ALLOWED: "ESIM_LIFECYCLE_NOT_ALLOWED",
 } as const;
 
 export type ApiErrorCode = (typeof ApiErrorCode)[keyof typeof ApiErrorCode];
@@ -144,6 +145,8 @@ export const apiErrorMessage = (
       return "No active eSIM was found for that number. It will be processed as a new purchase.";
     case ApiErrorCode.USAGE_UNAVAILABLE:
       return "Usage details are not available yet. Please check back shortly.";
+    case ApiErrorCode.ESIM_LIFECYCLE_NOT_ALLOWED:
+      return "This action is not available for the eSIM's current network status.";
     default:
       return fallback;
   }

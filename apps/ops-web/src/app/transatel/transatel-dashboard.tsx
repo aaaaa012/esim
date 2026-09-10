@@ -649,11 +649,14 @@ export default function TransatelDashboard() {
                             {row.usageLastCheckedAt ? (
                               <>
                                 <p className="font-medium">
-                                  {row.remainingMb.toLocaleString()} MB left
+                                  {row.status === "EXPIRED"
+                                    ? `${row.totalMb.toLocaleString()} MB allowance`
+                                    : `${row.remainingMb.toLocaleString()} MB left`}
                                 </p>
                                 <p className="text-xs text-muted-foreground">
-                                  {row.usedMb.toLocaleString()} /{" "}
-                                  {row.totalMb.toLocaleString()} MB
+                                  {row.status === "EXPIRED"
+                                    ? "Plan expired"
+                                    : `${row.usedMb.toLocaleString()} / ${row.totalMb.toLocaleString()} MB used`}
                                 </p>
                               </>
                             ) : (

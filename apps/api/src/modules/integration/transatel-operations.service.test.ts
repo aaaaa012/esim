@@ -68,6 +68,7 @@ function setup(
   const connectivity = {
     suspend: vi.fn().mockResolvedValue(providerResult),
     terminate: vi.fn().mockResolvedValue(providerResult),
+    getSubscriberDetails: vi.fn().mockResolvedValue({ status: "Active" }),
   } as unknown as ConnectivityService;
   const orders = {
     applyProviderEvent: vi.fn().mockResolvedValue({ accepted: true }),
@@ -123,6 +124,9 @@ describe("TransatelOperationsService lifecycle", () => {
 
   it("refuses to suspend an already terminated eSIM before calling Transatel", async () => {
     const context = setup();
+    context.connectivity.getSubscriberDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "Terminated" });
     (
       context.prisma.order.findUnique as ReturnType<typeof vi.fn>
     ).mockResolvedValue({
@@ -144,6 +148,32 @@ describe("TransatelOperationsService lifecycle", () => {
       }),
     ).rejects.toThrow("terminated eSIM cannot be suspended");
     expect(context.connectivity.suspend).not.toHaveBeenCalled();
+  });
+
+  it("fails closed and records the rejection when live subscriber status is unavailable", async () => {
+    const context = setup();
+    context.connectivity.getSubscriberDetails = vi
+      .fn()
+      .mockRejectedValue(new Error("provider timeout"));
+
+    await expect(
+      context.service.suspend({
+        orderId: "order-1",
+        reason: "Customer requested suspension",
+        idempotencyKey: "ops:suspend:12345678",
+        actorId: "actor-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "CONNECTIVITY_UNAVAILABLE",
+      status: 503,
+    });
+    expect(context.connectivity.suspend).not.toHaveBeenCalled();
+    expect(context.auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: "SUSPEND_STATUS_CHECK_FAILED",
+        newValue: expect.objectContaining({ providerRequestSent: false }),
+      }),
+    });
   });
 
   it("marks a network-ambiguous outcome for reconciliation instead of allowing a replay", async () => {
@@ -238,20 +268,18 @@ describe("TransatelOperationsService reconciliation", () => {
     context.connectivity.getEsimDetails = vi
       .fn()
       .mockResolvedValue({ status: "enabled" });
-    context.connectivity.getUsage = vi
-      .fn()
-      .mockResolvedValue({
-        usageAvailable: true,
-        subscriptions: [
-          {
-            providerSubscriptionId: "sub-1",
-            status: "readyForUse",
-            usedMb: 0,
-            totalMb: 0,
-            usageAvailable: false,
-          },
-        ],
-      });
+    context.connectivity.getUsage = vi.fn().mockResolvedValue({
+      usageAvailable: true,
+      subscriptions: [
+        {
+          providerSubscriptionId: "sub-1",
+          status: "readyForUse",
+          usedMb: 0,
+          totalMb: 0,
+          usageAvailable: false,
+        },
+      ],
+    });
     const result = await context.service.reconcile("order-1");
     expect(result).toMatchObject({
       classification: "AWAITING_ACTIVATION",
@@ -305,7 +333,8 @@ describe("TransatelOperationsService reconciliation", () => {
     });
 
     await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
-      providerStatus: "READYFORUSE",
+      classification: "AWAITING_INSTALLATION",
+      providerStatus: "ACTIVE",
       profileStatus: "ENABLED",
       subscriptionStatus: "READYFORUSE",
     });
@@ -358,7 +387,7 @@ describe("TransatelOperationsService reconciliation", () => {
     expect(context.tx.order.update).toHaveBeenCalledWith({
       where: { id: "order-1" },
       data: {
-        providerStatus: "PENDINGFORFIRSTUSE",
+        providerStatus: "ACTIVE",
         version: { increment: 1 },
       },
     });
@@ -399,7 +428,175 @@ describe("TransatelOperationsService reconciliation", () => {
     expect(context.orders.applyProviderEvent).not.toHaveBeenCalled();
     expect(context.tx.order.update).toHaveBeenCalledWith({
       where: { id: "order-1" },
-      data: { version: { increment: 1 } },
+      data: {
+        providerStatus: "ACTIVE",
+        version: { increment: 1 },
+      },
+    });
+  });
+
+  it("treats a deleted Transatel profile as terminal across operational records", async () => {
+    const context = setup();
+    vi.mocked(context.prisma.order.findUnique).mockResolvedValue({
+      id: "order-1",
+      orderType: "INITIAL",
+      status: "COMPLETED",
+      providerStatus: "ACTIVATED",
+      providerSubscriptionId: "sub-expired",
+      inventory: {
+        id: "inventory-1",
+        iccid: "8988247000140073199",
+        status: "ACTIVATED",
+        providerStatus: "ENABLED",
+      },
+      customerEsim: { id: "customer-esim-1", subscriptions: [] },
+      transatelLifecycleOperations: [],
+    } as never);
+    context.connectivity.getEsimDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "deleted" });
+    context.connectivity.getSubscriberDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "Terminated" });
+    context.connectivity.getUsage = vi.fn().mockResolvedValue({
+      usageAvailable: true,
+      subscriptions: [],
+    });
+
+    await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      classification: "PROVIDER_TERMINAL",
+      providerStatus: "TERMINATED",
+      profileStatus: "DELETED",
+      subscriptionStatus: null,
+    });
+    expect(context.tx.order.update).toHaveBeenCalledWith({
+      where: { id: "order-1" },
+      data: {
+        providerStatus: "TERMINATED",
+        version: { increment: 1 },
+      },
+    });
+    expect(context.tx.esimInventory.update).toHaveBeenCalledWith({
+      where: { id: "inventory-1" },
+      data: expect.objectContaining({
+        providerStatus: "DELETED",
+        status: "TERMINATED",
+      }),
+    });
+    expect(context.auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: "PROVIDER_STATUS_RECONCILED",
+        newValue: expect.objectContaining({
+          esimProfileStatus: "DELETED",
+          effectiveProviderStatus: "TERMINATED",
+        }),
+      }),
+    });
+  });
+
+  it("synchronizes a suspended commercial subscription without terminating its profile", async () => {
+    const context = setup();
+    vi.mocked(context.prisma.order.findUnique).mockResolvedValue({
+      id: "order-1",
+      orderType: "INITIAL",
+      status: "COMPLETED",
+      providerStatus: "ACTIVE",
+      providerSubscriptionId: "sub-1",
+      inventory: {
+        id: "inventory-1",
+        iccid: "8988247000140073199",
+        status: "ACTIVATED",
+        providerStatus: "ENABLED",
+      },
+      customerEsim: { id: "customer-esim-1", subscriptions: [] },
+      transatelLifecycleOperations: [
+        { id: "operation-1", action: "SUSPEND", state: "ACCEPTED" },
+      ],
+    } as never);
+    context.connectivity.getEsimDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "enabled" });
+    context.connectivity.getSubscriberDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "Suspended" });
+    context.connectivity.getUsage = vi.fn().mockResolvedValue({
+      usageAvailable: true,
+      subscriptions: [
+        {
+          providerSubscriptionId: "sub-1",
+          status: "suspended",
+          usedMb: 100,
+          totalMb: 500,
+        },
+      ],
+    });
+
+    await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      providerStatus: "SUSPENDED",
+      subscriptionStatus: "SUSPENDED",
+    });
+    expect(context.tx.order.update).toHaveBeenCalledWith({
+      where: { id: "order-1" },
+      data: {
+        providerStatus: "SUSPENDED",
+        version: { increment: 1 },
+      },
+    });
+    expect(context.tx.subscription.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "SUSPENDED" }),
+      }),
+    );
+    expect(context.lifecycleUpdate).toHaveBeenCalledWith({
+      where: { id: "operation-1" },
+      data: expect.objectContaining({
+        state: "CONFIRMED",
+        responseSnapshot: expect.objectContaining({
+          observedSubscriberStatus: "SUSPENDED",
+        }),
+      }),
+    });
+  });
+
+  it("keeps a live subscriber active when only its downloaded profile is deleted", async () => {
+    const context = setup();
+    vi.mocked(context.prisma.order.findUnique).mockResolvedValue({
+      id: "order-1",
+      orderType: "INITIAL",
+      status: "COMPLETED",
+      providerStatus: "TERMINATED",
+      providerSubscriptionId: "sub-1",
+      inventory: {
+        id: "inventory-1",
+        iccid: "8988247000140073199",
+        status: "TERMINATED",
+        providerStatus: "DELETED",
+      },
+      customerEsim: { id: "customer-esim-1", subscriptions: [] },
+      transatelLifecycleOperations: [],
+    } as never);
+    context.connectivity.getEsimDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "deleted" });
+    context.connectivity.getSubscriberDetails = vi
+      .fn()
+      .mockResolvedValue({ status: "Active" });
+    context.connectivity.getUsage = vi.fn().mockResolvedValue({
+      usageAvailable: true,
+      subscriptions: [],
+    });
+
+    await expect(context.service.reconcile("order-1")).resolves.toMatchObject({
+      classification: "PROFILE_DELETED",
+      providerStatus: "ACTIVE",
+      profileStatus: "DELETED",
+    });
+    expect(context.tx.esimInventory.update).toHaveBeenCalledWith({
+      where: { id: "inventory-1" },
+      data: expect.objectContaining({
+        providerStatus: "DELETED",
+        status: "ACTIVATED",
+      }),
     });
   });
 });
@@ -481,10 +678,9 @@ describe("TransatelOperationsService usage sync", () => {
     const prisma = {
       enabled: true,
       esimInventory: {
-        findMany: vi.fn().mockResolvedValue([
-          { id: "inventory-1" },
-          { id: "inventory-2" },
-        ]),
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ id: "inventory-1" }, { id: "inventory-2" }]),
       },
     } as unknown as PrismaService;
     const service = new TransatelOperationsService(

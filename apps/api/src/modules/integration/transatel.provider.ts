@@ -15,6 +15,7 @@ import type {
   ProviderWebhookEvent,
   UsageBreakdown,
   LifecycleResult,
+  SubscriberDetailsResult,
 } from "./connectivity-provider.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { resiliencePolicy } from "../../infrastructure/resilience-policy.js";
@@ -76,10 +77,13 @@ interface ScpBalance {
 
 type SubscriptionStatus =
   | "active"
+  | "canceled"
+  | "expired"
   | "pending"
   | "pendingForFirstUse"
   | "readyForUse"
   | "scheduled"
+  | "suspended"
   | "terminated";
 
 interface ProductSubscription {
@@ -444,7 +448,16 @@ export class TransatelProvider implements ConnectivityProvider {
         ...(correlationId ? { correlationId } : {}),
         requestBody: this.requestLogPayload(url, request),
       });
-      throw error;
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message:
+          "Our connectivity service is temporarily unavailable. Please try again shortly.",
+        status: 503,
+        details:
+          error instanceof Error
+            ? `Transatel network request failed: ${error.message}`
+            : "Transatel network request failed",
+      });
     }
     if (response.status === 401 && retryOnAuth) {
       const responseBody = await this.logBody(response);
@@ -480,7 +493,16 @@ export class TransatelProvider implements ConnectivityProvider {
           ...(correlationId ? { correlationId } : {}),
           requestBody: this.requestLogPayload(url, request),
         });
-        throw error;
+        throw new ApiException({
+          code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+          message:
+            "Our connectivity service is temporarily unavailable. Please try again shortly.",
+          status: 503,
+          details:
+            error instanceof Error
+              ? `Transatel authentication retry failed: ${error.message}`
+              : "Transatel authentication retry failed",
+        });
       }
     }
     const durationMs = Date.now() - startedAt;
@@ -607,27 +629,28 @@ export class TransatelProvider implements ConnectivityProvider {
     return typeof body === "string" ? body : JSON.stringify(body);
   }
 
-  private redactLogBody(value: unknown): Prisma.InputJsonValue {
+  private redactLogBody(value: unknown, depth = 0): Prisma.InputJsonValue {
+    if (depth >= 8) return "[TRUNCATED]";
     if (Array.isArray(value))
-      return value.map((item) => this.redactLogBody(item));
+      return value
+        .slice(0, 100)
+        .map((item) => this.redactLogBody(item, depth + 1));
     if (value && typeof value === "object") {
       return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-          key,
-          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|activation_?code|matching_?id|qr_?(code|payload)|data_?url)$/i.test(
+        Object.entries(value as Record<string, unknown>)
+          .slice(0, 200)
+          .map(([key, item]) => [
             key,
-          )
-            ? "[REDACTED]"
-            : this.redactLogBody(item),
-        ]),
+            /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|activation_?code|matching_?id|qr_?(code|payload)|data_?url)$/i.test(
+              key,
+            )
+              ? "[REDACTED]"
+              : this.redactLogBody(item, depth + 1),
+          ]),
       );
     }
-    if (
-      typeof value === "string" ||
-      typeof value === "number" ||
-      typeof value === "boolean"
-    )
-      return value;
+    if (typeof value === "string") return value.slice(0, 20_000);
+    if (typeof value === "number" || typeof value === "boolean") return value;
     return "";
   }
 
@@ -1161,10 +1184,33 @@ export class TransatelProvider implements ConnectivityProvider {
       });
 
     const data = (await response.json()) as ProductSubscriptionsResponse;
+    if (!Array.isArray(data.productSubscriptions))
+      throw new ApiException({
+        code: ApiErrorCode.USAGE_UNAVAILABLE,
+        message:
+          "Usage details are not available yet. Please check back shortly.",
+        status: 502,
+        details: "Transatel returned an invalid product inventory response",
+      });
+    if (
+      data.productSubscriptions.some(
+        (item) =>
+          !item ||
+          typeof item.subscriptionId !== "string" ||
+          !item.subscriptionId.trim() ||
+          typeof item.status !== "string" ||
+          !item.status.trim(),
+      )
+    )
+      throw new ApiException({
+        code: ApiErrorCode.USAGE_UNAVAILABLE,
+        message:
+          "Usage details are not available yet. Please check back shortly.",
+        status: 502,
+        details: "Transatel returned an incomplete product subscription",
+      });
     const subscriptions = data.productSubscriptions.filter(
-      (item) =>
-        item.status !== "terminated" &&
-        !item.productDefinition?.tags?.includes("WALLED_GARDEN"),
+      (item) => !item.productDefinition?.tags?.includes("WALLED_GARDEN"),
     );
     if (!subscriptions.length)
       throw new ApiException({
@@ -1172,7 +1218,7 @@ export class TransatelProvider implements ConnectivityProvider {
         message:
           "Usage details are not available yet. Please check back shortly.",
         status: 404,
-        details: "No active subscription found for this subscriber",
+        details: "No product subscription found for this subscriber",
       });
 
     const packages = subscriptions.map((item, index) => {
@@ -1192,7 +1238,7 @@ export class TransatelProvider implements ConnectivityProvider {
       };
     });
     const aggregate = packages
-      .filter((item) => item.usageAvailable)
+      .filter((item) => item.usageAvailable && item.status === "active")
       .reduce(
         (total, item) => ({
           usedMb: total.usedMb + item.usedMb,
@@ -1202,7 +1248,9 @@ export class TransatelProvider implements ConnectivityProvider {
       );
     return {
       ...aggregate,
-      usageAvailable: packages.some((item) => item.usageAvailable),
+      usageAvailable: packages.some(
+        (item) => item.usageAvailable && item.status === "active",
+      ),
       subscriptions: packages,
     };
   }
@@ -1275,6 +1323,18 @@ export class TransatelProvider implements ConnectivityProvider {
     }
 
     const data = (await response.json()) as ESimDetailsResponse;
+    if (
+      !data ||
+      typeof data.status !== "string" ||
+      !data.status.trim() ||
+      (data.simSerial && data.simSerial !== iccid)
+    )
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_LOOKUP_UNAVAILABLE,
+        message: "Transatel returned an invalid eSIM status response.",
+        status: 502,
+        details: "The eSIM response was incomplete or referenced another ICCID",
+      });
     return {
       iccid,
       status: data.status,
@@ -1282,6 +1342,51 @@ export class TransatelProvider implements ConnectivityProvider {
       ...(data.qrCode?.value || data.activationCode
         ? { qrPayload: data.qrCode?.value ?? data.activationCode }
         : {}),
+    };
+  }
+
+  async getSubscriberDetails(
+    reference: string,
+  ): Promise<SubscriberDetailsResult> {
+    const subscriber = await this.resolveSubscriber(reference);
+    const iccid = subscriber.iccid ?? "";
+    if (!iccid)
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_NOT_FOUND,
+        message: "This ICCID was not found in the Transatel inventory.",
+        status: 404,
+        details: "No ICCID found for the requested subscriber",
+      });
+    const url = `${this.baseUrl("connectivity-management/subscribers")}/api/subscribers/sim-serial/${encodeURIComponent(iccid)}`;
+    const response = await this.authorizedFetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      operation: "subscriber-details",
+      correlationId: reference,
+    });
+    if (!response.ok)
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: "Transatel could not check this subscriber right now.",
+        status: response.status === 404 ? 404 : 502,
+        details: await this.errorText(response),
+      });
+    const data = (await response.json()) as {
+      simSerial?: string;
+      msisdn?: string;
+      status?: string;
+    };
+    if (!data.status || (data.simSerial && data.simSerial !== iccid))
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: "Transatel returned an invalid subscriber status.",
+        status: 502,
+        details: data,
+      });
+    return {
+      iccid,
+      ...(data.msisdn ? { msisdn: data.msisdn } : {}),
+      status: data.status,
     };
   }
 
@@ -1627,12 +1732,42 @@ export class TransatelProvider implements ConnectivityProvider {
 
     let orderId: string | undefined;
     if (this.prisma.enabled) {
+      const subscriberEvent = eventType.startsWith(
+        "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/",
+      );
+      const lifecycleAction =
+        eventStatus === "SUSPENDED"
+          ? "SUSPEND"
+          : eventStatus === "TERMINATED"
+            ? "TERMINATE"
+            : null;
+      if (subscriberEvent && lifecycleAction) {
+        const pendingLifecycle =
+          await this.prisma.transatelLifecycleOperation.findFirst({
+            where: {
+              action: lifecycleAction,
+              state: {
+                in: ["CREATED", "SUBMITTING", "ACCEPTED", "RECONCILE_REQUIRED"],
+              },
+              order: {
+                OR: [
+                  { inventory: { is: { iccid } } },
+                  { targetInventory: { is: { iccid } } },
+                  { customerEsim: { is: { inventory: { is: { iccid } } } } },
+                ],
+              },
+            },
+            select: { orderId: true },
+            orderBy: { createdAt: "desc" },
+          });
+        if (pendingLifecycle) orderId = pendingLifecycle.orderId;
+      }
       // Bind the event to an order by our own transaction/order reference first
       // (Transatel echoes it back as body.externalReference), falling back to the
       // provider subscription id, and finally an unambiguous SIM serial.
       // A SIM can have many top-up orders, so blindly using its original
       // assignedOrderId would apply a top-up event to the wrong order.
-      if (envelope.externalReference) {
+      if (!orderId && envelope.externalReference) {
         const order = await this.prisma.order.findUnique({
           where: { id: envelope.externalReference },
           select: { id: true },
@@ -1667,7 +1802,9 @@ export class TransatelProvider implements ConnectivityProvider {
             ...(inventory?.customerEsims ?? []).map((item) => item.orderId),
           ].filter((candidate): candidate is string => Boolean(candidate)),
         );
-        if (candidates.size === 1) orderId = [...candidates][0];
+        if (subscriberEvent && inventory?.assignedOrderId)
+          orderId = inventory.assignedOrderId;
+        else if (candidates.size === 1) orderId = [...candidates][0];
         else if (candidates.size > 1)
           return {
             handled: false,
@@ -1683,6 +1820,9 @@ export class TransatelProvider implements ConnectivityProvider {
 
     const event: ProviderWebhookEvent = {
       eventType,
+      statusScope: eventType.startsWith("CONNECTIVITY-MANAGEMENT/SUBSCRIBER/")
+        ? "SUBSCRIBER"
+        : "PRODUCT",
       orderId,
       iccid,
       ...(envelope.msisdn ? { msisdn: envelope.msisdn } : {}),
@@ -1804,6 +1944,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   private mapEventType(eventType: string): ProviderWebhookEvent["status"] {
     const normalized = eventType.toUpperCase();
+    if (normalized.endsWith("REACTIVATED")) return "ACTIVATED";
     if (normalized.endsWith("ACTIVATED")) return "ACTIVATED";
     if (normalized.endsWith("SUSPENDED")) return "SUSPENDED";
     if (normalized.endsWith("PRELOADED")) return "PRELOADED";

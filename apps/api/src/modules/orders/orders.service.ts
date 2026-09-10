@@ -2668,6 +2668,9 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
+    const subscriberEvent =
+      event.statusScope === "SUBSCRIBER" ||
+      event.eventType.startsWith("CONNECTIVITY-MANAGEMENT/SUBSCRIBER/");
     const currentProviderState = order.providerStatus?.toUpperCase();
     const incomingProviderState = event.status?.toUpperCase();
     const currentIsTerminal = ["TERMINATED", "EXPIRED"].includes(
@@ -2676,7 +2679,8 @@ export class OrdersService implements OnModuleInit {
     const incomingWouldRegress =
       (currentProviderState === "ACTIVATED" &&
         incomingProviderState === "PRELOADED") ||
-      (currentIsTerminal &&
+      (subscriberEvent &&
+        currentIsTerminal &&
         Boolean(incomingProviderState) &&
         incomingProviderState !== currentProviderState);
     if (incomingWouldRegress) {
@@ -2736,6 +2740,8 @@ export class OrdersService implements OnModuleInit {
     }
     const lifecycle = {
       provider,
+      eventType: event.eventType,
+      ...(event.statusScope ? { statusScope: event.statusScope } : {}),
       ...(event.iccid ? { iccid: event.iccid } : {}),
       ...(event.msisdn ? { msisdn: event.msisdn } : {}),
       ...(event.status ? { status: event.status } : {}),
@@ -2785,9 +2791,10 @@ export class OrdersService implements OnModuleInit {
       };
     if (event.subscriptionId)
       order.providerSubscriptionId = event.subscriptionId;
-    if (event.status) order.providerStatus = event.status;
+    if (subscriberEvent && event.status) order.providerStatus = event.status;
     if (
       this.prisma.enabled &&
+      subscriberEvent &&
       (event.status === "SUSPENDED" || event.status === "TERMINATED")
     ) {
       const expected = await this.prisma.transatelLifecycleOperation.updateMany(

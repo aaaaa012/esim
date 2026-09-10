@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
   ServiceUnavailableException,
@@ -13,7 +14,9 @@ import {
   TransatelLifecycleAction,
   TransatelLifecycleState,
 } from "@prisma/client";
+import { ApiErrorCode } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { ApiException } from "../../common/api-error.js";
 import { ConnectivityService } from "./connectivity.service.js";
 import { OrdersService } from "../orders/orders.service.js";
 import { UsageService } from "../esims/usage.service.js";
@@ -26,8 +29,60 @@ type LifecycleInput = {
   actorId: string;
 };
 
+function canonicalSubscriptionStatus(status: string | null) {
+  if (!status) return null;
+  if (["ACTIVE", "ACTIVATED"].includes(status))
+    return SubscriptionStatus.ACTIVE;
+  if (status === "SUSPENDED") return SubscriptionStatus.SUSPENDED;
+  if (status === "EXPIRED") return SubscriptionStatus.EXPIRED;
+  if (status === "TERMINATED") return SubscriptionStatus.TERMINATED;
+  if (["FAILED", "REJECTED"].includes(status)) return SubscriptionStatus.FAILED;
+  if (
+    [
+      "PENDING",
+      "PRELOADED",
+      "SUBSCRIBED",
+      "READYFORUSE",
+      "PENDINGFORFIRSTUSE",
+      "SCHEDULED",
+    ].includes(status)
+  )
+    return SubscriptionStatus.PENDING;
+  // A recurring-product cancellation remains usable until its expiration
+  // event. Unknown statuses are also preserved for manual review.
+  return null;
+}
+
+function canonicalSubscriberStatus(status: string | null) {
+  if (!status) return null;
+  const normalized = status.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (["ACTIVE", "ACTIVATED", "REACTIVATED"].includes(normalized))
+    return "ACTIVE";
+  if (normalized === "SUSPENDED") return "SUSPENDED";
+  if (normalized === "TERMINATED") return "TERMINATED";
+  if (normalized === "PREACTIVATED") return "PREACTIVATED";
+  if (normalized === "TESTMODE") return "TESTMODE";
+  if (normalized === "TARIFFHOLIDAY") return "TARIFFHOLIDAY";
+  if (normalized === "AVAILABLE") return "AVAILABLE";
+  if (normalized === "LOADED") return "LOADED";
+  return status.toUpperCase();
+}
+
+function dashboardProviderStatus(input: {
+  orderStatus: string | null;
+  inventoryProviderStatus: string | null;
+  inventoryStatus: string;
+}) {
+  const inventoryProvider =
+    input.inventoryProviderStatus?.toUpperCase() ?? null;
+  if (input.orderStatus) return canonicalSubscriberStatus(input.orderStatus);
+  if (input.inventoryStatus === InventoryStatus.TERMINATED) return "TERMINATED";
+  return inventoryProvider;
+}
+
 @Injectable()
 export class TransatelOperationsService {
+  private readonly logger = new Logger(TransatelOperationsService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
@@ -397,9 +452,12 @@ export class TransatelOperationsService {
         msisdn: subscription.customerEsim.inventory.msisdn,
         providerSubscriptionId: subscription.providerSubscriptionId,
         status: subscription.status,
-        providerStatus:
-          subscription.customerEsim.order.providerStatus ??
-          subscription.customerEsim.inventory.providerStatus,
+        providerStatus: dashboardProviderStatus({
+          orderStatus: subscription.customerEsim.order.providerStatus,
+          inventoryProviderStatus:
+            subscription.customerEsim.inventory.providerStatus,
+          inventoryStatus: subscription.customerEsim.inventory.status,
+        }),
         plan: `${subscription.customerEsim.order.plan.country.isoCode} · ${subscription.customerEsim.order.plan.name}`,
         usedMb: subscription.usedMb,
         totalMb: subscription.totalMb,
@@ -558,6 +616,16 @@ export class TransatelOperationsService {
       order.inventory.iccid,
     );
     const observedProfileStatus = details.status.toUpperCase();
+    let subscriberStatusUnavailable = false;
+    const subscriber = await this.connectivity
+      .getSubscriberDetails(order.inventory.iccid)
+      .catch(() => {
+        subscriberStatusUnavailable = true;
+        return null;
+      });
+    const observedSubscriberStatus = canonicalSubscriberStatus(
+      subscriber?.status ?? null,
+    );
     let usageUnavailable = false;
     const usage = await this.connectivity
       .getUsage(order.inventory.iccid)
@@ -572,11 +640,18 @@ export class TransatelOperationsService {
     );
     const observedSubscriptionStatus =
       providerSubscription?.status.toUpperCase() ?? null;
-    const activationConfirmed = observedSubscriptionStatus === "ACTIVE";
-    const observedState = observedSubscriptionStatus ?? observedProfileStatus;
-    const terminal = ["REJECTED", "TERMINATED", "DELETED"].includes(
-      observedState,
-    );
+    const canonicalProviderStatus =
+      observedSubscriberStatus ?? order.providerStatus;
+    const subscriberTerminal = observedSubscriberStatus === "TERMINATED";
+    const activationConfirmed =
+      canonicalSubscriptionStatus(observedSubscriptionStatus) ===
+        SubscriptionStatus.ACTIVE &&
+      !["DELETED", "TERMINATED"].includes(observedProfileStatus) &&
+      ["ACTIVE", "TESTMODE"].includes(observedSubscriberStatus ?? "");
+    const observedState = canonicalProviderStatus ?? observedProfileStatus;
+    const terminal = subscriberTerminal;
+    const providerStatusUnavailable =
+      usageUnavailable || subscriberStatusUnavailable;
     const awaitingInstallation = [
       "READYFORUSE",
       "SCHEDULED",
@@ -589,7 +664,13 @@ export class TransatelOperationsService {
       usage?.subscriptions?.length &&
       !providerSubscription,
     );
-    const critical = terminal || identityMismatch;
+    const profileDeleted = observedProfileStatus === "DELETED";
+    const critical = terminal || identityMismatch || profileDeleted;
+    const movesOrderToAttention =
+      critical &&
+      ["PROVISIONING", "QR_READY", "ACTIVATION_ATTENTION"].includes(
+        order.status,
+      );
     const checkedAt = new Date();
     if (
       activationConfirmed &&
@@ -649,8 +730,9 @@ export class TransatelOperationsService {
         classification: "ACTIVE" as const,
         orderId,
         orderStatus: "COMPLETED",
-        providerStatus: observedSubscriptionStatus ?? observedProfileStatus,
+        providerStatus: canonicalProviderStatus,
         profileStatus: observedProfileStatus,
+        subscriberStatus: observedSubscriberStatus,
         subscriptionStatus: observedSubscriptionStatus,
         usageAvailable:
           Boolean(usage) &&
@@ -669,6 +751,7 @@ export class TransatelOperationsService {
         orderStatus: order.status,
         providerStatus: observedState,
         profileStatus: observedProfileStatus,
+        subscriberStatus: observedSubscriberStatus,
         subscriptionStatus: observedSubscriptionStatus,
         usageAvailable:
           Boolean(usage) &&
@@ -683,20 +766,18 @@ export class TransatelOperationsService {
     const confirmed =
       latest &&
       ((latest.action === TransatelLifecycleAction.SUSPEND &&
-        observedSubscriptionStatus === "SUSPENDED") ||
+        observedSubscriberStatus === "SUSPENDED") ||
         (latest.action === TransatelLifecycleAction.TERMINATE &&
-          observedSubscriptionStatus === "TERMINATED"));
+          observedSubscriberStatus === "TERMINATED"));
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: order.id },
         data: {
-          ...(observedSubscriptionStatus
-            ? { providerStatus: observedSubscriptionStatus }
+          ...(canonicalProviderStatus &&
+          canonicalProviderStatus !== order.providerStatus
+            ? { providerStatus: canonicalProviderStatus }
             : {}),
-          ...(critical &&
-          ["PROVISIONING", "QR_READY", "ACTIVATION_ATTENTION"].includes(
-            order.status,
-          )
+          ...(movesOrderToAttention
             ? {
                 status: "ACTIVATION_ATTENTION",
                 operationalDisposition: "MANUAL_ACTION",
@@ -711,23 +792,19 @@ export class TransatelOperationsService {
           providerStatus: observedProfileStatus,
           lastProviderCheckedAt: checkedAt,
           providerCheckError: null,
-          ...(observedProfileStatus === "DELETED"
-            ? { status: "TERMINATED" }
-            : {}),
+          ...(subscriberTerminal
+            ? { status: InventoryStatus.TERMINATED }
+            : observedSubscriberStatus &&
+                order.inventory!.status === InventoryStatus.TERMINATED
+              ? { status: InventoryStatus.ACTIVATED }
+              : {}),
           version: { increment: 1 },
         },
       });
       if (order.customerEsim && providerSubscription) {
-        const subscriptionStatus =
-          observedSubscriptionStatus === "SUSPENDED"
-            ? ("SUSPENDED" as const)
-            : observedSubscriptionStatus === "TERMINATED"
-              ? ("TERMINATED" as const)
-              : observedSubscriptionStatus === "ACTIVE"
-                ? ("ACTIVE" as const)
-                : observedSubscriptionStatus
-                  ? ("PENDING" as const)
-                  : null;
+        const subscriptionStatus = canonicalSubscriptionStatus(
+          observedSubscriptionStatus,
+        );
         await tx.subscription.updateMany({
           where: {
             customerEsimId: order.customerEsim.id,
@@ -754,17 +831,13 @@ export class TransatelOperationsService {
             state: TransatelLifecycleState.CONFIRMED,
             responseSnapshot: {
               observedProfileStatus,
+              observedSubscriberStatus,
               observedSubscriptionStatus,
               checkedAt: checkedAt.toISOString(),
             },
           },
         });
-      if (
-        critical &&
-        ["PROVISIONING", "QR_READY", "ACTIVATION_ATTENTION"].includes(
-          order.status,
-        )
-      ) {
+      if (movesOrderToAttention) {
         if (order.status !== "ACTIVATION_ATTENTION")
           await tx.orderEvent.create({
             data: {
@@ -773,7 +846,9 @@ export class TransatelOperationsService {
               toStatus: "ACTIVATION_ATTENTION",
               reason: identityMismatch
                 ? "Transatel subscription did not match the assigned order"
-                : `Transatel reported terminal state ${observedState}`,
+                : profileDeleted && !terminal
+                  ? "Transatel reported that the assigned eSIM profile was deleted"
+                  : `Transatel reported terminal state ${observedState}`,
             },
           });
         await tx.attentionCase.upsert({
@@ -782,20 +857,26 @@ export class TransatelOperationsService {
             dedupeKey: `provider-status-critical:${order.id}`,
             category: identityMismatch
               ? "PROVISIONING_IDENTITY_CONFLICT"
-              : "PROVIDER_TERMINAL_STATE",
+              : profileDeleted && !terminal
+                ? "ESIM_PROFILE_DELETED"
+                : "PROVIDER_TERMINAL_STATE",
             entityType: "Order",
             entityId: order.id,
             orderId: order.id,
             severity: "CRITICAL",
             summary: identityMismatch
               ? `Transatel subscription does not match ${order.orderNumber}`
-              : `Transatel reported ${observedState} for ${order.orderNumber}`,
+              : profileDeleted && !terminal
+                ? `Transatel profile was deleted for ${order.orderNumber}`
+                : `Transatel reported ${observedState} for ${order.orderNumber}`,
             localState: "ACTIVATION_ATTENTION",
             externalState: observedState,
             lastSuccessfulStep: "PROVIDER_STATUS_CHECK",
             failureCategory: identityMismatch
               ? "PROVIDER_SUBSCRIPTION_MISMATCH"
-              : "PROVIDER_TERMINAL_STATE",
+              : profileDeleted && !terminal
+                ? "ESIM_PROFILE_DELETED"
+                : "PROVIDER_TERMINAL_STATE",
             availableActions: [],
           },
           update: {
@@ -821,7 +902,10 @@ export class TransatelOperationsService {
           } as Prisma.InputJsonValue,
           newValue: {
             esimProfileStatus: observedProfileStatus,
+            subscriberStatus: observedSubscriberStatus,
             subscriptionStatus: observedSubscriptionStatus,
+            effectiveProviderStatus: canonicalProviderStatus,
+            subscriberStatusUnavailable,
             operationId: latest?.id ?? null,
           } as Prisma.InputJsonValue,
         },
@@ -832,36 +916,43 @@ export class TransatelOperationsService {
         ? ("IDENTITY_MISMATCH" as const)
         : terminal
           ? ("PROVIDER_TERMINAL" as const)
-          : usageUnavailable
-            ? ("PROVIDER_UNAVAILABLE" as const)
-            : awaitingInstallation
-              ? order.orderType === "TOPUP"
-                ? ("AWAITING_ACTIVATION" as const)
-                : ("AWAITING_INSTALLATION" as const)
-              : ("PROVISIONING_PENDING" as const),
+          : profileDeleted
+            ? ("PROFILE_DELETED" as const)
+            : providerStatusUnavailable
+              ? ("PROVIDER_UNAVAILABLE" as const)
+              : awaitingInstallation
+                ? order.orderType === "TOPUP"
+                  ? ("AWAITING_ACTIVATION" as const)
+                  : ("AWAITING_INSTALLATION" as const)
+                : ("PROVISIONING_PENDING" as const),
       orderId,
-      orderStatus: critical ? "ACTIVATION_ATTENTION" : order.status,
-      providerStatus: observedSubscriptionStatus ?? observedProfileStatus,
+      orderStatus: movesOrderToAttention
+        ? "ACTIVATION_ATTENTION"
+        : order.status,
+      providerStatus: canonicalProviderStatus,
       profileStatus: observedProfileStatus,
+      subscriberStatus: observedSubscriberStatus,
       subscriptionStatus: observedSubscriptionStatus,
       usageAvailable:
         Boolean(usage) &&
         usage?.usageAvailable !== false &&
         providerSubscription?.usageAvailable !== false,
       provisioningState: order.provisioningOperation?.state ?? null,
-      changed: critical && order.status !== "ACTIVATION_ATTENTION",
+      changed: movesOrderToAttention && order.status !== "ACTIVATION_ATTENTION",
       checkedAt: checkedAt.toISOString(),
       recommendedAction: identityMismatch
         ? "Do not retry; verify the ICCID and subscription assignment with Transatel."
         : terminal
           ? "Review the provider rejection before creating a replacement or refund."
-          : usageUnavailable
-            ? "Provider usage status is temporarily unavailable; local state was preserved."
-            : awaitingInstallation
-              ? order.orderType === "TOPUP"
-                ? "Package is added to the existing eSIM and awaiting activation. No new installation is required."
-                : "Ask the customer to install the eSIM and connect to a supported network."
-              : "The provider setup is still pending; check again later.",
+          : profileDeleted
+            ? "The network subscriber remains separate from the deleted eSIM profile; verify whether the customer needs a replacement profile."
+            : providerStatusUnavailable
+              ? "Provider status is temporarily unavailable; local state was preserved."
+              : awaitingInstallation
+                ? order.orderType === "TOPUP"
+                  ? "Package is added to the existing eSIM and awaiting activation. No new installation is required."
+                  : "Ask the customer to install the eSIM and connect to a supported network."
+                : "The provider setup is still pending; check again later.",
     };
   }
 
@@ -886,39 +977,82 @@ export class TransatelOperationsService {
     });
     if (!order?.inventory || !order.customerEsim)
       throw new NotFoundException("The order does not have an assigned eSIM");
-    if (
-      order.inventory.status === "TERMINATED" ||
-      order.providerStatus === "TERMINATED"
-    ) {
-      if (input.action === TransatelLifecycleAction.TERMINATE)
-        throw new ConflictException("This eSIM is already terminated");
-      throw new ConflictException("A terminated eSIM cannot be suspended");
+    let subscriber;
+    try {
+      subscriber = await this.connectivity.getSubscriberDetails(
+        order.inventory.iccid,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Provider subscriber status lookup failed";
+      await this.prisma.auditLog
+        .create({
+          data: {
+            module: "TRANSATEL",
+            entity: "Order",
+            entityId: order.id,
+            action: `${input.action}_STATUS_CHECK_FAILED`,
+            performedById: input.actorId,
+            newValue: {
+              reason,
+              error: message,
+              providerRequestSent: false,
+            } as Prisma.InputJsonValue,
+          },
+        })
+        .catch((auditError) =>
+          this.logger.error(
+            `Could not audit failed subscriber status check for order ${order.id}: ${auditError instanceof Error ? auditError.message : "unknown"}`,
+          ),
+        );
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message:
+          "The current network status could not be verified. No change was sent; please try again.",
+        status: 503,
+        details: { providerRequestSent: false },
+      });
     }
-    const lifecycleStatus = (
-      order.providerStatus ??
-      order.inventory.providerStatus ??
-      order.inventory.status
-    ).toUpperCase();
+    const canonicalLifecycleStatus = canonicalSubscriberStatus(
+      subscriber.status,
+    );
+    const lifecycleStatus = canonicalLifecycleStatus ?? "UNKNOWN";
+    if (!canonicalLifecycleStatus)
+      await this.rejectLifecycle(
+        input,
+        "UNKNOWN",
+        "The provider returned an unknown network status. No change was sent.",
+      );
+    if (lifecycleStatus === "TERMINATED") {
+      await this.rejectLifecycle(
+        input,
+        lifecycleStatus,
+        input.action === TransatelLifecycleAction.TERMINATE
+          ? "This eSIM is already terminated"
+          : "A terminated eSIM cannot be suspended",
+      );
+    }
     if (
       input.action === TransatelLifecycleAction.SUSPEND &&
-      !["ACTIVE", "ACTIVATED"].includes(lifecycleStatus)
+      !["ACTIVE", "TESTMODE"].includes(lifecycleStatus)
     )
-      throw new ConflictException(
+      await this.rejectLifecycle(
+        input,
+        lifecycleStatus,
         `Only an active eSIM can be suspended (current provider state: ${lifecycleStatus})`,
       );
     if (
       input.action === TransatelLifecycleAction.TERMINATE &&
-      !["ACTIVE", "ACTIVATED", "SUSPENDED"].includes(lifecycleStatus)
+      !["ACTIVE", "SUSPENDED", "TESTMODE", "TARIFFHOLIDAY"].includes(
+        lifecycleStatus,
+      )
     )
-      throw new ConflictException(
+      await this.rejectLifecycle(
+        input,
+        lifecycleStatus,
         `This eSIM cannot be terminated from provider state ${lifecycleStatus}`,
-      );
-    if (
-      input.action === TransatelLifecycleAction.SUSPEND &&
-      ["SUSPENDED", "SUSPEND_PENDING"].includes(order.providerStatus ?? "")
-    )
-      throw new ConflictException(
-        "This eSIM is already suspended or suspension is pending",
       );
     const inFlight = await this.prisma.transatelLifecycleOperation.findFirst({
       where: {
@@ -936,18 +1070,21 @@ export class TransatelOperationsService {
       orderBy: { createdAt: "desc" },
     });
     if (inFlight && inFlight.idempotencyKey !== input.idempotencyKey)
-      throw new ConflictException(
+      await this.rejectLifecycle(
+        input,
+        lifecycleStatus,
         `A ${input.action.toLowerCase()} operation is already pending provider confirmation`,
       );
     if (inFlight) return inFlight;
-    const reference =
-      order.inventory.providerSubscriptionId ??
-      order.providerSubscriptionId ??
-      order.inventory.iccid;
+    const reference = order.inventory.iccid;
     const requestSnapshot = {
       orderId: order.id,
       iccid: order.inventory.iccid,
-      providerSubscriptionId: reference,
+      providerSubscriptionId:
+        order.inventory.providerSubscriptionId ??
+        order.providerSubscriptionId ??
+        null,
+      observedSubscriberStatus: lifecycleStatus,
       action: input.action,
       reason,
     } as Prisma.InputJsonValue;
@@ -1084,6 +1221,40 @@ export class TransatelOperationsService {
       ]);
       throw error;
     }
+  }
+
+  private async rejectLifecycle(
+    input: LifecycleInput,
+    providerStatus: string,
+    message: string,
+  ): Promise<never> {
+    await this.prisma.auditLog
+      .create({
+        data: {
+          module: "TRANSATEL",
+          entity: "Order",
+          entityId: input.orderId,
+          action: `${input.action}_REJECTED`,
+          performedById: input.actorId,
+          newValue: {
+            reason: input.reason.trim(),
+            providerStatus,
+            rejection: message,
+            providerRequestSent: false,
+          } as Prisma.InputJsonValue,
+        },
+      })
+      .catch((error) =>
+        this.logger.error(
+          `Could not audit rejected ${input.action.toLowerCase()} for order ${input.orderId}: ${error instanceof Error ? error.message : "unknown"}`,
+        ),
+      );
+    throw new ApiException({
+      code: ApiErrorCode.ESIM_LIFECYCLE_NOT_ALLOWED,
+      message,
+      status: 409,
+      details: { providerStatus, providerRequestSent: false },
+    });
   }
 
   async syncAllUsage(): Promise<{ synced: number; failed: number }> {

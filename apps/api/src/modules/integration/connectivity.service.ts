@@ -56,6 +56,9 @@ export class ConnectivityService implements OnModuleInit {
   getEsimDetails(subscriptionId: string) {
     return this.selected().getEsimDetails(subscriptionId);
   }
+  getSubscriberDetails(subscriptionId: string) {
+    return this.transatel.getSubscriberDetails(subscriptionId);
+  }
   suspend(subscriptionId: string, transactionReference: string) {
     return this.transatel.suspend(subscriptionId, transactionReference);
   }

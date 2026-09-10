@@ -211,6 +211,103 @@ describe("InventoryService.applyLifecycle", () => {
     });
     expect(subscriptionUpsert).not.toHaveBeenCalled();
   });
+
+  it("does not expire the whole eSIM inventory when one product expires", async () => {
+    const inventoryUpdate = vi.fn().mockResolvedValue(undefined);
+    const subscriptionUpsert = vi.fn().mockResolvedValue({ id: "sub-row-1" });
+    const tx = {
+      esimInventory: { update: inventoryUpdate },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          providerSubscriptionId: "sub-1",
+          status: "ACTIVATED",
+          providerStatus: "ACTIVE",
+        }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("order-1", {
+      provider: "TRANSATEL",
+      eventType: "OCS/PRODUCT/EXPIRED",
+      statusScope: "PRODUCT",
+      status: "EXPIRED",
+      subscriptionId: "sub-1",
+      iccid: "8988247076000000319",
+    });
+
+    const inventoryData = inventoryUpdate.mock.calls[0]?.[0]?.data;
+    expect(inventoryData).not.toHaveProperty("status");
+    expect(inventoryData).not.toHaveProperty("providerStatus");
+    expect(subscriptionUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ status: "EXPIRED" }),
+      }),
+    );
+  });
+
+  it("does not suspend a product row when the network subscriber is suspended", async () => {
+    const inventoryUpdate = vi.fn().mockResolvedValue(undefined);
+    const subscriptionUpsert = vi.fn();
+    const tx = {
+      esimInventory: { update: inventoryUpdate },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          providerSubscriptionId: "sub-1",
+          status: "ACTIVATED",
+        }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("order-1", {
+      provider: "TRANSATEL",
+      eventType: "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED",
+      statusScope: "SUBSCRIBER",
+      status: "SUSPENDED",
+      iccid: "8988247076000000319",
+    });
+
+    expect(inventoryUpdate).toHaveBeenCalledWith({
+      where: { id: "inventory-1" },
+      data: expect.objectContaining({ providerStatus: "SUSPENDED" }),
+    });
+    expect(subscriptionUpsert).not.toHaveBeenCalled();
+  });
 });
 
 describe("InventoryService.importBatchCsv", () => {

@@ -47,10 +47,11 @@ expects just-in-time reservation, reserve/release must be implemented.
 | OCS `done` for `subscribe` | New `Subscription` linked to the existing physical eSIM          | Top-up becomes `COMPLETED`; no new QR                                                    |
 | PRELOADED                  | Package pending; cannot regress active/terminal state            | No completed order regression                                                            |
 | ACTIVATED                  | Inventory activated; package active; dates and identity verified | Completes initial provisioning when activation material exists                           |
-| SUSPENDED                  | Package/subscriber displayed suspended                           | Confirms an approved lifecycle operation; unexpected suspension opens critical attention |
+| SUSPENDED subscriber       | Network service stops; package status remains independent        | Confirms an approved lifecycle operation; unexpected suspension opens critical attention |
 | CANCELED                   | Stops future renewal but preserves service until expiration      | Order history retained                                                                   |
-| EXPIRED                    | Package/inventory expired                                        | Purchase history retained                                                                |
-| TERMINATED                 | Package/inventory terminal                                       | Confirms approved termination or opens critical attention                                |
+| EXPIRED product            | Only the matching package expires; the reusable eSIM remains     | Purchase history retained                                                                |
+| TERMINATED product         | Only the matching package becomes terminal                       | Purchase history retained                                                                |
+| TERMINATED subscriber      | Subscriber and eSIM inventory become terminal                    | Confirms approved termination or opens critical attention                                |
 | Unknown/out-of-order       | Raw event retained; no unsafe mutation                           | Attention or ignored regression, never guessed                                           |
 
 ## Khalti KPG-2 matrix

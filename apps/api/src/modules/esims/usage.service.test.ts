@@ -184,6 +184,29 @@ describe("UsageService", () => {
     expect(resilience.attention).not.toHaveBeenCalled();
   });
 
+  it("persists explicit terminal and suspended product states from inventory polling", async () => {
+    const { service, prisma } = context([
+      {
+        providerSubscriptionId: "provider-1",
+        status: "expired",
+        usedMb: 1000,
+        totalMb: 1000,
+      },
+      {
+        providerSubscriptionId: "provider-2",
+        status: "suspended",
+        usedMb: 250,
+        totalMb: 2000,
+      },
+    ]);
+
+    await service.refresh("inventory-1");
+
+    const row = await prisma.esimInventory.findUnique();
+    expect(row.customerEsims[0].subscriptions[0].status).toBe("EXPIRED");
+    expect(row.customerEsims[1].subscriptions[0].status).toBe("SUSPENDED");
+  });
+
   it("processes inventory evidence even when no package has a balance", async () => {
     const { service, connectivity, resilience } = context([]);
     connectivity.getUsage.mockResolvedValue({

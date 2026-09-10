@@ -108,21 +108,20 @@ export function LifecycleActions({
       if (!response.ok)
         throw new Error(value.error?.message ?? "Live status check failed");
       const result = value.data as {
-        esimProfileStatus?: string | null;
+        profileStatus?: string | null;
+        subscriberStatus?: string | null;
         subscriptionStatus?: string | null;
         providerStatus?: string | null;
       };
-      const profileStatus =
-        result.esimProfileStatus ?? result.providerStatus ?? null;
+      const profileStatus = result.profileStatus ?? null;
       const statuses = [
-        profileStatus ? `eSIM: ${profileStatus}` : null,
-        result.subscriptionStatus
-          ? `Subscription: ${result.subscriptionStatus}`
-          : null,
+        profileStatus ? `Profile: ${profileStatus}` : null,
+        result.subscriberStatus ? `Network: ${result.subscriberStatus}` : null,
+        result.subscriptionStatus ? `Plan: ${result.subscriptionStatus}` : null,
       ].filter((status): status is string => Boolean(status));
       toast.success(
         statuses.length
-          ? statuses.join(" · ")
+          ? statuses.join(" / ")
           : "Provider status refreshed successfully",
       );
       onCompleted?.();

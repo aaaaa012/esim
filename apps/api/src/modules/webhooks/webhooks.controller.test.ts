@@ -180,12 +180,13 @@ describe("OperationsLogsController", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "integration-1",
-          title: "GET /usage",
+          title: "Transatel product inventory and balances",
           requestBody: { msisdn: "9779800000000" },
           responseBody: { accessToken: "[REDACTED]", safe: true },
         }),
         expect.objectContaining({
           id: "webhook-1",
+          title: "Transatel callback received",
           statusLabel: "FAILED",
         }),
         expect.objectContaining({

@@ -1070,6 +1070,8 @@ export class InventoryService implements OnModuleInit {
     orderId: string,
     event: {
       provider: string;
+      eventType?: string;
+      statusScope?: "PRODUCT" | "SUBSCRIBER" | "PROFILE";
       status?:
         | "PRELOADED"
         | "ACTIVATED"
@@ -1148,8 +1150,21 @@ export class InventoryService implements OnModuleInit {
       );
     }
 
-    const inventoryStatus = this.mapInventoryStatus(event.status);
-    const subscriptionStatus = this.mapSubscriptionStatus(event.status);
+    const subscriberEvent =
+      event.statusScope === "SUBSCRIBER" ||
+      event.eventType?.startsWith("CONNECTIVITY-MANAGEMENT/SUBSCRIBER/") ===
+        true;
+    const productEvent = !subscriberEvent;
+    const inventoryStatus = subscriberEvent
+      ? event.status === "TERMINATED"
+        ? InventoryStatus.TERMINATED
+        : null
+      : event.status === "ACTIVATED"
+        ? InventoryStatus.ACTIVATED
+        : null;
+    const subscriptionStatus = productEvent
+      ? this.mapSubscriptionStatus(event.status)
+      : null;
 
     await withPostgresTransactionRetry(() =>
       this.prisma.$transaction(
@@ -1158,7 +1173,9 @@ export class InventoryService implements OnModuleInit {
             where: { id: inventory.id },
             data: {
               ...(inventoryStatus ? { status: inventoryStatus } : {}),
-              ...(event.status ? { providerStatus: event.status } : {}),
+              ...(subscriberEvent && event.status
+                ? { providerStatus: event.status }
+                : {}),
               ...(event.subscriptionId
                 ? { providerSubscriptionId: event.subscriptionId }
                 : {}),
@@ -1179,7 +1196,7 @@ export class InventoryService implements OnModuleInit {
           });
           const providerSubscriptionId =
             event.subscriptionId ?? inventory.providerSubscriptionId;
-          if (!customerEsim || !providerSubscriptionId) return;
+          if (!productEvent || !customerEsim || !providerSubscriptionId) return;
           if (event.status === "CANCELED") {
             // Product cancellation stops future renewal but remains usable until
             // the provider-supplied expiration date. Preserve the current local
