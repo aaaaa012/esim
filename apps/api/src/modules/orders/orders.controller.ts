@@ -511,7 +511,7 @@ export class OperationsController {
     const inventoryIds = [
       ...new Set(
         profile.orders
-          .map((order: any) => order.esim?.id)
+          .map((order) => ("esim" in order ? order.esim?.id : undefined))
           .filter((id: unknown): id is string => typeof id === "string"),
       ),
     ];

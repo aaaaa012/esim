@@ -156,16 +156,22 @@ if (!process.env.NODE_ENV) {
   );
 }
 
-// Last-gasp logging for crashes that bypass the framework (async gaps,
-// queue callbacks). Node still exits on unhandled rejections / uncaught
-// exceptions; these hooks guarantee the reason reaches container logs first.
-process.on('unhandledRejection', (reason) => {
+// Last-gasp logging for crashes that bypass the framework. A process that has
+// observed either condition is unsafe to keep serving traffic.
+let fatalExitStarted = false;
+const terminateAfterFatalError = (label: string, reason: unknown) => {
   // eslint-disable-next-line no-console
-  console.error('[fatal] Unhandled promise rejection:', reason);
-});
-process.on('uncaughtException', (err) => {
-  // eslint-disable-next-line no-console
-  console.error('[fatal] Uncaught exception:', err);
-});
+  console.error(`[fatal] ${label}:`, reason);
+  if (fatalExitStarted) return;
+  fatalExitStarted = true;
+  process.exitCode = 1;
+  setImmediate(() => process.exit(1));
+};
+process.on("unhandledRejection", (reason) =>
+  terminateAfterFatalError("Unhandled promise rejection", reason),
+);
+process.on("uncaughtException", (error) =>
+  terminateAfterFatalError("Uncaught exception", error),
+);
 
 void bootstrap();

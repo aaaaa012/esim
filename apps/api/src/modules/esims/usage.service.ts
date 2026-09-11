@@ -7,6 +7,28 @@ import { createHmac } from "node:crypto";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
+import { Prisma } from "@prisma/client";
+
+export const usageInventoryArgs =
+  Prisma.validator<Prisma.EsimInventoryDefaultArgs>()({
+    include: {
+      customerEsims: {
+        include: {
+          order: { include: { plan: { include: { country: true } } } },
+          subscriptions: true,
+        },
+      },
+    },
+  });
+
+export type UsageInventory = Prisma.EsimInventoryGetPayload<
+  typeof usageInventoryArgs
+>;
+type UsageSubscription =
+  UsageInventory["customerEsims"][number]["subscriptions"][number] & {
+    orderId: string;
+    assignedAt: Date;
+  };
 
 export type UsageFreshness = "FRESH" | "STALE";
 export type UsageCompleteness = "FULL" | "PARTIAL";
@@ -90,8 +112,8 @@ export class UsageService {
     return this.toView(row);
   }
 
-  viewFromInventory(row: unknown): EsimUsageView {
-    return this.toView(row as any);
+  viewFromInventory(row: UsageInventory): EsimUsageView {
+    return this.toView(row);
   }
 
   async refresh(inventoryId: string): Promise<EsimUsageView> {
@@ -116,20 +138,21 @@ export class UsageService {
         )
         .map((item) => [item.providerSubscriptionId, item]),
     );
-    const local = row.customerEsims.flatMap((link: any) =>
-      link.subscriptions.map((subscription: any) => ({
+    const local = row.customerEsims.flatMap((link) =>
+      link.subscriptions.map((subscription) => ({
         ...subscription,
         orderId: link.orderId,
         assignedAt: link.assignedAt,
       })),
     );
-    const eligible = local.filter((subscription: any) =>
+    const eligible = local.filter((subscription) =>
       ["ACTIVE", "PENDING"].includes(subscription.status),
     );
-    if (!usage.subscriptions && eligible.length === 1)
-      balances.set(eligible[0].providerSubscriptionId, {
-        providerSubscriptionId: eligible[0].providerSubscriptionId,
-        status: eligible[0].status,
+    const onlyEligible = eligible.length === 1 ? eligible[0] : undefined;
+    if (!usage.subscriptions && onlyEligible)
+      balances.set(onlyEligible.providerSubscriptionId, {
+        providerSubscriptionId: onlyEligible.providerSubscriptionId,
+        status: onlyEligible.status,
         usedMb: usage.usedMb,
         totalMb: usage.totalMb,
         priority: 1,
@@ -138,7 +161,7 @@ export class UsageService {
     const matchedProviderIds = new Set<string>();
 
     await this.prisma.$transaction(
-      eligible.map((subscription: any) => {
+      eligible.map((subscription) => {
         const balance = balances.get(subscription.providerSubscriptionId);
         if (!balance) {
           if (this.awaitingBalancePublication(subscription, checkedAt))
@@ -204,7 +227,7 @@ export class UsageService {
     );
 
     await Promise.allSettled(
-      eligible.map(async (subscription: any) => {
+      eligible.map(async (subscription) => {
         const key = `subscription-assignment:${subscription.id}`;
         if (balances.has(subscription.providerSubscriptionId))
           return this.resilience.resolve(
@@ -276,15 +299,12 @@ export class UsageService {
     return this.reference(providerSubscriptionId);
   }
 
-  private async load(inventoryId: string): Promise<any> {
+  private async load(inventoryId: string): Promise<UsageInventory> {
     const row = await this.prisma.esimInventory.findUnique({
       where: { id: inventoryId },
       include: {
         customerEsims: {
-          include: {
-            order: { include: { plan: { include: { country: true } } } },
-            subscriptions: true,
-          },
+          ...usageInventoryArgs.include.customerEsims,
           orderBy: { assignedAt: "asc" },
         },
       },
@@ -297,13 +317,13 @@ export class UsageService {
     return row;
   }
 
-  private toView(row: any): EsimUsageView {
+  private toView(row: UsageInventory): EsimUsageView {
     const now = Date.now();
     const freshnessMs =
       Math.max(1, Number(process.env.RECONCILIATION_INTERVAL_MINUTES ?? 15)) *
       60_000;
-    const packages: UsagePackage[] = row.customerEsims.flatMap((link: any) =>
-      link.subscriptions.map((subscription: any) => {
+    const packages: UsagePackage[] = row.customerEsims.flatMap((link) =>
+      link.subscriptions.map((subscription) => {
         const eligible = ["ACTIVE", "PENDING"].includes(subscription.status);
         const confirmed =
           eligible &&
@@ -423,7 +443,10 @@ export class UsageService {
     return `pkg_${createHmac("sha256", secret).update(value).digest("hex").slice(0, 20)}`;
   }
 
-  private awaitingBalancePublication(subscription: any, now: Date) {
+  private awaitingBalancePublication(
+    subscription: Pick<UsageSubscription, "assignedAt">,
+    now: Date,
+  ) {
     if (!subscription.assignedAt) return false;
     const configured = Number(
       process.env.PROVIDER_BALANCE_PUBLICATION_GRACE_MINUTES ?? 60,

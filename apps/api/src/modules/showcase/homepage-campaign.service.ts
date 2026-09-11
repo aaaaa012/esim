@@ -10,6 +10,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { PublicAssetStorageService } from "../../infrastructure/public-asset-storage.service.js";
+import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 
 const SINGLETON_PLACEMENTS = new Set<HomepageCampaignPlacement>([
   HomepageCampaignPlacement.FEATURED_BANNER,
@@ -38,6 +39,7 @@ export class HomepageCampaignService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly assets: PublicAssetStorageService,
+    private readonly resilience: ProductionResilienceService,
   ) {}
 
   async listAll() {
@@ -89,10 +91,14 @@ export class HomepageCampaignService {
     return grouped;
   }
 
-  private present<T extends { imageUrl: string; assetKey?: string | null }>(item: T) {
+  private present<T extends { imageUrl: string; assetKey?: string | null }>(
+    item: T,
+  ) {
     return {
       ...item,
-      imageUrl: item.assetKey ? this.assets.publicUrl(item.assetKey) : item.imageUrl,
+      imageUrl: item.assetKey
+        ? this.assets.publicUrl(item.assetKey)
+        : item.imageUrl,
     };
   }
 
@@ -138,7 +144,7 @@ export class HomepageCampaignService {
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
     } catch (error) {
-      void this.assets.deleteCampaignAsset(input.assetKey).catch(() => {});
+      await this.scheduleAssetCleanup(input.assetKey, "CREATE_ROLLED_BACK");
       throw error;
     }
   }
@@ -211,11 +217,11 @@ export class HomepageCampaignService {
       );
     } catch (error) {
       if (input.assetKey)
-        void this.assets.deleteCampaignAsset(input.assetKey).catch(() => {});
+        await this.scheduleAssetCleanup(input.assetKey, "UPDATE_ROLLED_BACK");
       throw error;
     }
     if (image && existing.assetKey && existing.assetKey !== input.assetKey)
-      void this.assets.deleteCampaignAsset(existing.assetKey).catch(() => {});
+      await this.scheduleAssetCleanup(existing.assetKey, "ASSET_REPLACED");
     return updated;
   }
 
@@ -231,8 +237,17 @@ export class HomepageCampaignService {
       await this.audit(tx, actorId, id, "DELETED", existing, null);
     });
     if (existing.assetKey)
-      void this.assets.deleteCampaignAsset(existing.assetKey).catch(() => {});
+      await this.scheduleAssetCleanup(existing.assetKey, "CAMPAIGN_DELETED");
     return { deleted: true };
+  }
+
+  private async scheduleAssetCleanup(assetKey: string, reason: string) {
+    await this.resilience.outbox({
+      dedupeKey: `homepage-asset-cleanup:${assetKey}`,
+      topic: "reconciliation",
+      jobName: "homepage-asset-cleanup",
+      payload: { kind: "homepage-asset-cleanup", assetKey, reason },
+    });
   }
 
   private async validateCountry(countryCode: string | null | undefined) {

@@ -13,7 +13,7 @@ import {
 import { formatDataMb, formatPlanDataText } from "../lib/format-data";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { publicApiErrorMessage } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -43,7 +43,11 @@ type LookupResult = {
 
 const npr = (amount: number) => `NPR ${amount.toLocaleString("en-NP")}`;
 
-export default function TopupLookup({ friendMode = false }: { friendMode?: boolean }) {
+export default function TopupLookup({
+  friendMode = false,
+}: {
+  friendMode?: boolean;
+}) {
   const router = useRouter();
   const [mobile, setMobile] = useState("");
   const [busy, setBusy] = useState(false);
@@ -55,8 +59,9 @@ export default function TopupLookup({ friendMode = false }: { friendMode?: boole
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
   const [verificationRequested, setVerificationRequested] = useState(false);
+  const initialTokenConsumed = useRef(false);
 
-  const verifyLookup = async (lookupToken: string) => {
+  const verifyLookup = useCallback(async (lookupToken: string) => {
     setOpen(true);
     setBusy(true);
     setError("");
@@ -94,16 +99,16 @@ export default function TopupLookup({ friendMode = false }: { friendMode?: boole
     } finally {
       setBusy(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
+    if (initialTokenConsumed.current) return;
+    initialTokenConsumed.current = true;
     const lookupToken = new URLSearchParams(window.location.hash.slice(1)).get(
       "topup",
     );
     if (lookupToken) void verifyLookup(lookupToken);
-    // The signed token is consumed only on the initial page load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [verifyLookup]);
 
   const close = () => {
     if (busy) return;
@@ -274,10 +279,14 @@ export default function TopupLookup({ friendMode = false }: { friendMode?: boole
                 <RefreshCcw size={21} />
               </span>
               <p className="recharge-kicker">
-                {friendMode ? "Recharge for someone else" : "For returning travellers"}
+                {friendMode
+                  ? "Recharge for someone else"
+                  : "For returning travellers"}
               </p>
               <h2 id="recharge-title">
-                {friendMode ? "Help a friend stay connected" : "Add data to your existing eSIM"}
+                {friendMode
+                  ? "Help a friend stay connected"
+                  : "Add data to your existing eSIM"}
               </h2>
               <p className="recharge-description">
                 {friendMode
@@ -411,7 +420,8 @@ export default function TopupLookup({ friendMode = false }: { friendMode?: boole
                     <div className="topup-subscriber">
                       <b>{plan.name}</b>
                       <span>
-                        {plan.countryName} · {formatPlanDataText(plan.dataAllowance)} ·{" "}
+                        {plan.countryName} ·{" "}
+                        {formatPlanDataText(plan.dataAllowance)} ·{" "}
                         {plan.validityDays} days
                       </span>
                       {result.subscriber.usage ? (
@@ -485,8 +495,9 @@ export default function TopupLookup({ friendMode = false }: { friendMode?: boole
                                   <span>
                                     <b>{item.name}</b>
                                     <small>
-                                      {formatPlanDataText(item.dataAllowance)} · {item.validityDays}{" "}
-                                      days · {npr(item.sellingPriceNpr)}
+                                      {formatPlanDataText(item.dataAllowance)} ·{" "}
+                                      {item.validityDays} days ·{" "}
+                                      {npr(item.sellingPriceNpr)}
                                     </small>
                                   </span>
                                   <button

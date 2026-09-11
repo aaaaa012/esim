@@ -33,10 +33,16 @@ function service(overrides: Record<string, unknown> = {}) {
     }),
     deleteCampaignAsset: vi.fn().mockResolvedValue(undefined),
   };
+  const resilience = { outbox: vi.fn().mockResolvedValue({}) };
   return {
     prisma,
     assets,
-    subject: new HomepageCampaignService(prisma as never, assets as never),
+    resilience,
+    subject: new HomepageCampaignService(
+      prisma as never,
+      assets as never,
+      resilience as never,
+    ),
   };
 }
 
@@ -73,7 +79,7 @@ describe("HomepageCampaignService", () => {
   });
 
   it("rejects overlapping active schedules in a singleton placement", async () => {
-    const { prisma, subject } = service();
+    const { prisma, resilience, subject } = service();
     prisma.homepageCampaign.findMany.mockResolvedValueOnce([
       {
         id: "existing",
@@ -98,6 +104,14 @@ describe("HomepageCampaignService", () => {
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.$transaction).toHaveBeenCalled();
+    expect(resilience.outbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dedupeKey:
+          "homepage-asset-cleanup:visa-compass/public/homepage-promotions/new.jpg",
+        topic: "reconciliation",
+        jobName: "homepage-asset-cleanup",
+      }),
+    );
   });
 
   it("allows adjacent singleton schedules because the end is exclusive", async () => {

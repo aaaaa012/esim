@@ -1,6 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Building2,
@@ -150,21 +150,24 @@ const fileToTabularContent = async (file: File): Promise<string> => {
 export default function AdminWorkspace() {
   const authFetch = useAuthenticatedFetch();
   const confirm = useConfirmation();
-  const request = async <T,>(path: string, init?: RequestInit) => {
-    const r = await authFetch(`${API}${path}`, {
-      ...init,
-      headers: { ...headers, ...init?.headers },
-    });
-    const v = await r.json();
-    if (!r.ok) {
-      const error = new Error(v.error?.message ?? "Request failed") as Error & {
-        code?: string;
-      };
-      error.code = v.error?.code;
-      throw error;
-    }
-    return v.data as T;
-  };
+  const request = useCallback(
+    async <T,>(path: string, init?: RequestInit) => {
+      const r = await authFetch(`${API}${path}`, {
+        ...init,
+        headers: { ...headers, ...init?.headers },
+      });
+      const v = await r.json();
+      if (!r.ok) {
+        const error = new Error(
+          v.error?.message ?? "Request failed",
+        ) as Error & { code?: string };
+        error.code = v.error?.code;
+        throw error;
+      }
+      return v.data as T;
+    },
+    [authFetch],
+  );
   const [tab, setTab] = useState("Plans");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [planTotal, setPlanTotal] = useState(0);
@@ -244,23 +247,26 @@ export default function AdminWorkspace() {
   const [logs, setLogs] = useState<IntegrationLog[]>([]);
   const [logsBusy, setLogsBusy] = useState(false);
 
-  const load = () =>
-    Promise.all([
-      request<Integration[]>("/admin/integrations"),
-      request<{ items: User[] }>("/admin/users?limit=200"),
-      request<Invitation[]>("/admin/staff-invitations"),
-      request<Partner[]>("/admin/partners"),
-    ])
-      .then(([i, u, invitationsValue, partnerValues]) => {
-        setIntegrations(i);
-        setUsers(u.items);
-        setInvitations(invitationsValue);
-        setPartners(partnerValues);
-      })
-      .catch((e) => toast.error(e.message));
+  const load = useCallback(
+    () =>
+      Promise.all([
+        request<Integration[]>("/admin/integrations"),
+        request<{ items: User[] }>("/admin/users?limit=200"),
+        request<Invitation[]>("/admin/staff-invitations"),
+        request<Partner[]>("/admin/partners"),
+      ])
+        .then(([i, u, invitationsValue, partnerValues]) => {
+          setIntegrations(i);
+          setUsers(u.items);
+          setInvitations(invitationsValue);
+          setPartners(partnerValues);
+        })
+        .catch((e) => toast.error(e.message)),
+    [request],
+  );
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
   const loadPlans = async (
     page = planPage,
     query = planQuery,
@@ -933,7 +939,7 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     setLogsBusy(true);
     try {
       setLogs(await request<IntegrationLog[]>("/operations/integration-logs"));
@@ -944,11 +950,10 @@ export default function AdminWorkspace() {
     } finally {
       setLogsBusy(false);
     }
-  };
+  }, [request]);
   useEffect(() => {
     if (tab === "Integrations") void loadLogs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [loadLogs, tab]);
 
   const planTabVisible = tab === "Plans";
 
@@ -2538,8 +2543,7 @@ function ConfigPanel({
           ),
         );
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [request, tab]);
   const rows: { label: string; value: string | number; ok?: boolean }[] =
     tab === "Document Rules"
       ? [

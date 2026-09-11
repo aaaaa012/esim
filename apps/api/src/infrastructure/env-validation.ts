@@ -93,6 +93,37 @@ const baseSchema = z.object({
     .min(2)
     .max(720)
     .optional(),
+  DATA_RETENTION_ENABLED: z.enum(["true", "false"]).optional(),
+  DATA_RETENTION_BATCH_SIZE: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(1_000)
+    .optional(),
+  INTEGRATION_LOG_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(3_650)
+    .optional(),
+  WEBHOOK_EVENT_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(3_650)
+    .optional(),
+  NOTIFICATION_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(3_650)
+    .optional(),
+  AUDIT_LOG_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(365)
+    .max(3_650)
+    .optional(),
   TRANSATEL_BASE_URL: z.string().url().optional(),
   TRANSATEL_CLIENT_ID: z.string().min(1).optional(),
   TRANSATEL_CLIENT_SECRET: z.string().min(1).optional(),

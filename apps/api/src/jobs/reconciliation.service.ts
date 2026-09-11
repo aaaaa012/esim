@@ -27,6 +27,7 @@ import {
 } from "./ocr-recovery.config.js";
 import { createHash, randomUUID } from "node:crypto";
 import { PartnerService } from "../modules/partners/partner.service.js";
+import { PublicAssetStorageService } from "../infrastructure/public-asset-storage.service.js";
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -59,6 +60,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly partners: PartnerService,
     private readonly metrics?: MetricsService,
     private readonly usageService?: UsageService,
+    private readonly publicAssets?: PublicAssetStorageService,
   ) {}
 
   onModuleInit() {
@@ -66,7 +68,53 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     this.queues.registerWorker(
       QUEUES.reconciliation,
       async (job) => {
-        const data = job.data as { id: string; kind?: string; runId?: string };
+        const data = job.data as {
+          id?: string;
+          kind?: string;
+          runId?: string;
+          assetKey?: string;
+          outboxId?: string;
+        };
+        if (data.kind === "homepage-asset-cleanup") {
+          if (!data.assetKey) throw new Error("Asset cleanup key is missing");
+          if (!this.publicAssets)
+            throw new Error("Public asset storage is unavailable");
+          try {
+            await this.publicAssets.deleteCampaignAsset(data.assetKey);
+            await this.resilience.resolve(
+              `homepage-asset-cleanup:${data.assetKey}`,
+              null,
+              "Campaign asset deleted",
+            );
+            return { deleted: true };
+          } catch (error) {
+            const finalAttempt =
+              job.attemptsMade + 1 >= Number(job.opts.attempts ?? 1);
+            if (finalAttempt && data.outboxId && this.prisma.enabled)
+              await this.prisma.outboxMessage.updateMany({
+                where: { id: data.outboxId, status: "ENQUEUED" },
+                data: {
+                  status: "FAILED",
+                  errorMessage:
+                    error instanceof Error ? error.message : "unknown",
+                  nextAttemptAt: new Date(Date.now() + 60 * 60_000),
+                },
+              });
+            if (finalAttempt)
+              await this.resilience.attention({
+                dedupeKey: `homepage-asset-cleanup:${data.assetKey}`,
+                category: "ASSET_CLEANUP_FAILED",
+                entityType: "HomepageCampaignAsset",
+                entityId: data.assetKey,
+                severity: "WARNING",
+                summary: "Campaign asset deletion is delayed",
+                detail: error instanceof Error ? error.message : "unknown",
+                failureCategory: "OBJECT_STORAGE_DELETE_FAILED",
+                availableActions: [],
+              });
+            throw error;
+          }
+        }
         if (data.kind === "esim-usage" && this.usageService)
           return this.usageService.refresh(String(data.id));
         if (data.kind !== "inventory-profile")
@@ -630,6 +678,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
         },
       },
     });
+    await this.applyDataRetention(now);
     const approvalMinutes = Number(
       process.env.TRANSATEL_REACTIVATION_APPROVAL_MINUTES ?? 30,
     );
@@ -695,6 +744,123 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
           where: { id: document.orderId },
           data: { version: { increment: 1 } },
         });
+    }
+  }
+
+  private async applyDataRetention(now: Date) {
+    if (process.env.DATA_RETENTION_ENABLED !== "true") return;
+    const cutoff = (name: string, fallbackDays: number) => {
+      const configured = Number(process.env[name] ?? fallbackDays);
+      const days =
+        Number.isFinite(configured) && configured >= 1
+          ? configured
+          : fallbackDays;
+      return new Date(now.getTime() - days * 24 * 60 * 60_000);
+    };
+    const batchSize = Math.min(
+      1_000,
+      Math.max(1, Number(process.env.DATA_RETENTION_BATCH_SIZE ?? 250)),
+    );
+    const removeBatch = async (
+      findIds: () => Promise<Array<{ id: string }>>,
+      remove: (ids: string[]) => Promise<unknown>,
+    ) => {
+      const ids = (await findIds()).map(({ id }) => id);
+      if (ids.length) await remove(ids);
+      return ids.length;
+    };
+
+    const removed = {
+      integrationLogs: await removeBatch(
+        () =>
+          this.prisma.integrationLog.findMany({
+            where: {
+              createdAt: {
+                lt: cutoff("INTEGRATION_LOG_RETENTION_DAYS", 365),
+              },
+            },
+            select: { id: true },
+            orderBy: { createdAt: "asc" },
+            take: batchSize,
+          }),
+        (ids) =>
+          this.prisma.integrationLog.deleteMany({ where: { id: { in: ids } } }),
+      ),
+      processedWebhooks: await removeBatch(
+        () =>
+          this.prisma.webhookEvent.findMany({
+            where: {
+              processedAt: {
+                lt: cutoff("WEBHOOK_EVENT_RETENTION_DAYS", 365),
+              },
+              deadLetteredAt: null,
+              errorMessage: null,
+            },
+            select: { id: true },
+            orderBy: { processedAt: "asc" },
+            take: batchSize,
+          }),
+        (ids) =>
+          this.prisma.webhookEvent.deleteMany({ where: { id: { in: ids } } }),
+      ),
+      sentNotifications: await removeBatch(
+        () =>
+          this.prisma.notification.findMany({
+            where: {
+              status: "SENT",
+              sentAt: {
+                lt: cutoff("NOTIFICATION_RETENTION_DAYS", 365),
+              },
+              errorMessage: null,
+            },
+            select: { id: true },
+            orderBy: { sentAt: "asc" },
+            take: batchSize,
+          }),
+        (ids) =>
+          this.prisma.notification.deleteMany({ where: { id: { in: ids } } }),
+      ),
+      auditLogs: await removeBatch(
+        () =>
+          this.prisma.auditLog.findMany({
+            where: {
+              createdAt: { lt: cutoff("AUDIT_LOG_RETENTION_DAYS", 2_555) },
+            },
+            select: { id: true },
+            orderBy: { createdAt: "asc" },
+            take: batchSize,
+          }),
+        (ids) =>
+          this.prisma.auditLog.deleteMany({ where: { id: { in: ids } } }),
+      ),
+    };
+    if (Object.values(removed).some(Boolean)) {
+      this.logger.log(`Retention sweep removed ${JSON.stringify(removed)}`);
+      await this.prisma.auditLog.create({
+        data: {
+          module: "SYSTEM",
+          entity: "DataRetention",
+          entityId: now.toISOString(),
+          action: "DATA_RETENTION_SWEEP",
+          newValue: {
+            removed,
+            policy: {
+              integrationLogDays: Number(
+                process.env.INTEGRATION_LOG_RETENTION_DAYS ?? 365,
+              ),
+              webhookEventDays: Number(
+                process.env.WEBHOOK_EVENT_RETENTION_DAYS ?? 365,
+              ),
+              notificationDays: Number(
+                process.env.NOTIFICATION_RETENTION_DAYS ?? 365,
+              ),
+              auditLogDays: Number(
+                process.env.AUDIT_LOG_RETENTION_DAYS ?? 2_555,
+              ),
+            },
+          },
+        },
+      });
     }
   }
 

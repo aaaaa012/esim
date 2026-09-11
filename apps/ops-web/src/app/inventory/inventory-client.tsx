@@ -327,7 +327,7 @@ export default function InventoryClient() {
     );
   };
 
-  const loadProfiles = () => {
+  const loadProfiles = useCallback(() => {
     setProfilesLoading(true);
     const params = new URLSearchParams({
       limit: String(PAGE_SIZE),
@@ -344,12 +344,11 @@ export default function InventoryClient() {
       })
       .catch((e) => toast.error(e.message))
       .finally(() => setProfilesLoading(false));
-  };
+  }, [authFetch, profilesPage, profilesSearch, profilesStatus]);
   const inventoryReady = data !== null;
   useEffect(() => {
     if (inventoryReady) loadProfiles();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profilesPage, profilesStatus, profilesSearch, inventoryReady]);
+  }, [inventoryReady, loadProfiles]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setProfilesPage(1);
@@ -358,7 +357,7 @@ export default function InventoryClient() {
     return () => window.clearTimeout(timer);
   }, [profilesQuery]);
 
-  const load = () => {
+  const load = useCallback(() => {
     setError("");
     const liveParams = new URLSearchParams({
       limit: "100",
@@ -382,15 +381,14 @@ export default function InventoryClient() {
         setReconciliationProfiles(profilesValue.data.items);
       })
       .catch((e) => setError(e.message));
-  };
+  }, [authFetch, liveSearch]);
   useEffect(() => {
     const timer = window.setTimeout(() => setLiveSearch(liveQuery.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [liveQuery]);
   useEffect(() => {
-    if (data) load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveSearch]);
+    load();
+  }, [load]);
   const reconcileProfile = async (profile: InventoryProfile) => {
     setReconciling(profile.id);
     try {
@@ -449,10 +447,7 @@ export default function InventoryClient() {
       return;
     refreshedReconciliationRun.current = reconciliationRun.id;
     load();
-    // Refresh overview and visible reconciliation rows exactly once when a run
-    // finishes. `load` intentionally reads the current live-search value.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reconciliationRun?.id, reconciliationRun?.status]);
+  }, [load, reconciliationRun]);
   const startBulkReconciliation = async () => {
     setBulkReconciling(true);
     try {
@@ -519,9 +514,7 @@ export default function InventoryClient() {
         setIsSuperAdmin(caps.includes("admin:portal"));
       })
       .catch(() => undefined);
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authFetch]);
 
   const submitProfiles = async () => {
     if (!profileFile) {
@@ -598,57 +591,64 @@ export default function InventoryClient() {
     }
   };
 
-  const loadCatalogBatch = async (
-    id: string,
-    change: CatalogChange | "ALL" = catalogFilter,
-  ) => {
-    setCatalogLoading(true);
-    try {
-      const query = change === "ALL" ? "" : `?change=${change}`;
-      const response = await authFetch(
-        `${API}/admin/plans/import-batches/${id}${query}`,
-        { headers: {} },
-      );
-      const value = await response.json();
-      if (!response.ok)
-        throw new Error(value.error?.message ?? "Catalogue batch unavailable");
-      const { rows, ...batch } = value.data as CatalogBatch & {
-        rows: CatalogRow[];
-      };
-      setCatalogBatch(batch);
-      setCatalogRows(rows);
-    } catch (cause) {
-      toast.error(
-        cause instanceof Error ? cause.message : "Catalogue batch unavailable",
-      );
-    } finally {
-      setCatalogLoading(false);
-    }
-  };
-
-  const loadCatalogBatches = async (selectId?: string) => {
-    try {
-      const response = await authFetch(
-        `${API}/admin/plans/import-batches?limit=24`,
-        { headers: {} },
-      );
-      const value = await response.json();
-      if (!response.ok)
-        throw new Error(
-          value.error?.message ?? "Catalogue history unavailable",
+  const loadCatalogBatch = useCallback(
+    async (id: string, change: CatalogChange | "ALL" = catalogFilter) => {
+      setCatalogLoading(true);
+      try {
+        const query = change === "ALL" ? "" : `?change=${change}`;
+        const response = await authFetch(
+          `${API}/admin/plans/import-batches/${id}${query}`,
+          { headers: {} },
         );
-      const batches = (value.data ?? []) as CatalogBatch[];
-      setCatalogBatches(batches);
-      const id = selectId ?? catalogBatch?.id ?? batches[0]?.id;
-      if (id) await loadCatalogBatch(id);
-    } catch (cause) {
-      toast.error(
-        cause instanceof Error
-          ? cause.message
-          : "Catalogue history unavailable",
-      );
-    }
-  };
+        const value = await response.json();
+        if (!response.ok)
+          throw new Error(
+            value.error?.message ?? "Catalogue batch unavailable",
+          );
+        const { rows, ...batch } = value.data as CatalogBatch & {
+          rows: CatalogRow[];
+        };
+        setCatalogBatch(batch);
+        setCatalogRows(rows);
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : "Catalogue batch unavailable",
+        );
+      } finally {
+        setCatalogLoading(false);
+      }
+    },
+    [authFetch, catalogFilter],
+  );
+
+  const loadCatalogBatches = useCallback(
+    async (selectId?: string) => {
+      try {
+        const response = await authFetch(
+          `${API}/admin/plans/import-batches?limit=24`,
+          { headers: {} },
+        );
+        const value = await response.json();
+        if (!response.ok)
+          throw new Error(
+            value.error?.message ?? "Catalogue history unavailable",
+          );
+        const batches = (value.data ?? []) as CatalogBatch[];
+        setCatalogBatches(batches);
+        const id = selectId ?? catalogBatch?.id ?? batches[0]?.id;
+        if (id) await loadCatalogBatch(id);
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : "Catalogue history unavailable",
+        );
+      }
+    },
+    [authFetch, catalogBatch?.id, loadCatalogBatch],
+  );
 
   const disableMissingPlan = async (row: CatalogRow) => {
     if (!catalogBatch || !row.planId) return;
@@ -687,9 +687,7 @@ export default function InventoryClient() {
   };
   useEffect(() => {
     void loadCatalogBatches();
-    // Catalogue history is refreshed explicitly after every import.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadCatalogBatches]);
 
   const decide = async (batch: Batch, approve: boolean) => {
     setDecision(batch.id);
@@ -719,7 +717,7 @@ export default function InventoryClient() {
     }
   };
 
-  const loadPlans = () => {
+  const loadPlans = useCallback(() => {
     const params = new URLSearchParams({
       status: "DRAFT",
       limit: "100",
@@ -733,15 +731,14 @@ export default function InventoryClient() {
         setDraftPlans(v.data?.items ?? []);
       })
       .catch((e) => toast.error(e.message));
-  };
+  }, [authFetch, planSearch]);
   useEffect(() => {
     const timer = window.setTimeout(() => setPlanSearch(planQuery.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [planQuery]);
   useEffect(() => {
     loadPlans();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planSearch]);
+  }, [loadPlans]);
 
   const decidePlan = async (plan: Plan, approve: boolean) => {
     setPlanDecision(plan.id);

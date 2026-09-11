@@ -1497,18 +1497,36 @@ export class AdminService {
     const actor = await this.prisma.user.findUnique({
       where: { clerkId: actorClerkId },
     });
+    let clerkCleanup: "NOT_REQUIRED" | "SUCCEEDED" | "FAILED" = "NOT_REQUIRED";
+    let clerkCleanupError: string | null = null;
     if (invitation.clerkInvitationId && process.env.CLERK_SECRET_KEY) {
       try {
         await createClerkClient({
           secretKey: process.env.CLERK_SECRET_KEY,
         }).users.deleteUser(invitation.clerkInvitationId);
-      } catch {}
+        clerkCleanup = "SUCCEEDED";
+      } catch (error) {
+        clerkCleanup = "FAILED";
+        clerkCleanupError =
+          error instanceof Error
+            ? error.message.slice(0, 500)
+            : "Unknown error";
+        this.logger.warn({
+          event: "staff_invitation_clerk_cleanup_failed",
+          invitationId: invitation.id,
+          clerkReference: invitation.clerkInvitationId,
+          error: clerkCleanupError,
+        });
+      }
     }
     const updated = await this.prisma.staffInvitation.update({
       where: { id },
       data: { status: StaffInvitationStatus.REVOKED, revokedAt: new Date() },
     });
-    await this.audit(actor?.id, "StaffInvitation", id, "REVOKED", null);
+    await this.audit(actor?.id, "StaffInvitation", id, "REVOKED", {
+      clerkCleanup,
+      ...(clerkCleanupError ? { clerkCleanupError } : {}),
+    });
     return updated;
   }
   async resendInvitation(id: string, actorClerkId: string) {

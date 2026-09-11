@@ -1,6 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -168,14 +168,17 @@ export default function OrderReview({ id }: { id: string }) {
     contentType: string;
   } | null>(null);
 
-  const load = () =>
-    authFetch(`${API}/operations/orders/${id}`, { headers: opsHeaders }).then(
-      async (response) => {
+  const load = useCallback(
+    () =>
+      authFetch(`${API}/operations/orders/${id}`, {
+        headers: opsHeaders,
+      }).then(async (response) => {
         const value = await response.json();
         if (!response.ok) throw new Error(value.error?.message);
         setOrder(value.data);
-      },
-    );
+      }),
+    [authFetch, id],
+  );
   useEffect(() => {
     void load().catch((error) => setError(error.message));
     void authFetch(`${API}/auth/me`, { headers: {} })
@@ -183,8 +186,7 @@ export default function OrderReview({ id }: { id: string }) {
       .then((value) =>
         setIsSuperAdmin(value.data?.accountType === "SUPER_ADMIN"),
       );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [authFetch, load]);
   const action = async (path: string, body?: object) => {
     setBusy(path);
     setError("");

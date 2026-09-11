@@ -11,7 +11,12 @@ import QRCode from "qrcode";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
-import { UsageService } from "./usage.service.js";
+import {
+  type EsimUsageView,
+  type UsageInventory,
+  UsageService,
+  usageInventoryArgs,
+} from "./usage.service.js";
 import { QueueService } from "../../jobs/queue.service.js";
 
 @Injectable()
@@ -33,10 +38,7 @@ export class CustomerEsimsService {
       where: { customerEsims: this.ownedAssignment(customer.id) },
       include: {
         customerEsims: {
-          include: {
-            order: { include: { plan: { include: { country: true } } } },
-            subscriptions: true,
-          },
+          ...usageInventoryArgs.include.customerEsims,
           orderBy: { assignedAt: "desc" },
         },
       },
@@ -208,12 +210,9 @@ export class CustomerEsimsService {
     });
   }
 
-  private toView(
-    row: any,
-    canonical?: ReturnType<UsageService["viewFromInventory"]>,
-  ) {
-    const subscriptions = row.customerEsims.flatMap((link: any) =>
-      link.subscriptions.map((subscription: any) => ({
+  private toView(row: UsageInventory, canonical?: EsimUsageView) {
+    const subscriptions = row.customerEsims.flatMap((link) =>
+      link.subscriptions.map((subscription) => ({
         id: subscription.id,
         orderId: link.order.id,
         orderNumber: link.order.orderNumber,
@@ -240,16 +239,16 @@ export class CustomerEsimsService {
       })),
     );
     const active = subscriptions.filter(
-      (item: any) => item.status === "ACTIVE" || item.status === "PENDING",
+      (item) => item.status === "ACTIVE" || item.status === "PENDING",
     );
-    const measured = active.filter((item: any) => item.lastCheckedAt);
+    const measured = active.filter((item) => item.lastCheckedAt);
     const lastCheckedAt = measured
-      .map((item: any) => item.lastCheckedAt)
+      .map((item) => item.lastCheckedAt)
       .sort()
       .at(-1);
     const usage = measured.length
       ? measured.reduce(
-          (sum: any, item: any) => ({
+          (sum, item) => ({
             usedMb: sum.usedMb + item.usedMb,
             totalMb: sum.totalMb + item.totalMb,
             remainingMb: sum.remainingMb + item.remainingMb,
@@ -258,7 +257,7 @@ export class CustomerEsimsService {
         )
       : null;
     const qrOrder = row.customerEsims.find(
-      (link: any) =>
+      (link) =>
         link.order.orderType === "INITIAL_PURCHASE" &&
         (link.order.status === "COMPLETED" || link.order.status === "QR_READY"),
     );
@@ -267,7 +266,7 @@ export class CustomerEsimsService {
     return {
       id: row.id,
       status:
-        subscriptions.some((item: any) => item.status === "SUSPENDED") &&
+        subscriptions.some((item) => item.status === "SUSPENDED") &&
         !active.length
           ? "SUSPENDED"
           : active.length
@@ -294,13 +293,12 @@ export class CustomerEsimsService {
       completeness: canonical?.completeness,
       freshness: canonical?.freshness,
       summary: canonical?.summary,
-      subscriptions: (canonical?.packages ?? subscriptions).sort(
-        (a: any, b: any) =>
-          (b.activatedAt ?? "").localeCompare(a.activatedAt ?? ""),
+      subscriptions: (canonical?.packages ?? subscriptions).sort((a, b) =>
+        (b.activatedAt ?? "").localeCompare(a.activatedAt ?? ""),
       ),
       qrOrderId: qrOrder?.order.id,
       activity: row.customerEsims
-        .map((link: any) => ({
+        .map((link) => ({
           orderId: link.order.id,
           orderNumber: link.order.orderNumber,
           orderStatus: link.order.status,
@@ -312,7 +310,7 @@ export class CustomerEsimsService {
             link.assignedAt?.toISOString?.() ??
             new Date(0).toISOString(),
         }))
-        .sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt)),
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     };
   }
 }
