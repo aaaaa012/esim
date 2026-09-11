@@ -1201,21 +1201,65 @@
   color: var(--text-3);
 }
 
-.gateway-grid .fonepay-provider {
-  min-height: 72px;
-  background: #ffffff;
+.payment-gateway-grid button {
+  min-height: 92px;
+  justify-content: flex-start;
+  text-align: left;
 }
 
-.gateway-grid .fonepay-provider img {
-  width: 132px;
-  height: auto;
+.payment-gateway-grid img {
+  width: 124px;
+  max-height: 48px;
+  flex: 0 0 124px;
   object-fit: contain;
+  object-position: left center;
+}
+
+.payment-gateway-grid .gateway-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.payment-gateway-grid .gateway-copy b {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.payment-gateway-grid .gateway-copy small {
+  line-height: 1.45;
+}
+
+.gateway-grid .fonepay-provider,
+.gateway-grid .khalti-provider {
+  background: #ffffff;
+  color: #151515;
+}
+
+.gateway-grid .khalti-provider.selected {
+  border-color: #5c2d91;
+  box-shadow: 0 0 0 3px rgb(92 45 145 / 14%);
+  background: #faf7fd;
 }
 
 .gateway-grid .fonepay-provider.selected {
   border-color: #d2202f;
   box-shadow: 0 0 0 3px rgb(210 32 47 / 14%);
   background: #fff7f7;
+}
+
+@media (max-width: 520px) {
+  .payment-gateway-grid button {
+    align-items: flex-start;
+    min-height: 0;
+    padding: 16px;
+  }
+
+  .payment-gateway-grid img {
+    width: 96px;
+    max-height: 40px;
+    flex-basis: 96px;
+  }
 }
 
 .fonepay-checkout {

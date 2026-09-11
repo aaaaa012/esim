@@ -2256,18 +2256,21 @@ export default function CheckoutClient({
                         existing eSIM.
                       </p>
                     )}
-                    <div className="gateway-grid">
+                    <div className="gateway-grid payment-gateway-grid">
                       <button
-                        className={
-                          provider === PaymentProvider.KHALTI ? "selected" : ""
-                        }
+                        type="button"
+                        className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
                         onClick={() => setProvider(PaymentProvider.KHALTI)}
                       >
-                        <b>Khalti</b>
-                        <small>Digital wallet</small>
+                        <img src="/brand/khalti-logo.png" alt="Khalti" />
+                        <span className="gateway-copy">
+                          <b>Khalti wallet</b>
+                          <small>Use when you want to pay from your Khalti balance.</small>
+                        </span>
                       </button>
                       {availableProviders.includes(PaymentProvider.FONEPAY) ? (
                         <button
+                          type="button"
                           className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
                           onClick={() => setProvider(PaymentProvider.FONEPAY)}
                         >
@@ -2275,7 +2278,10 @@ export default function CheckoutClient({
                             src="/brand/fonepay-logo.png"
                             alt="Checkout by Fonepay"
                           />
-                          <small>Mobile banking &amp; QR</small>
+                          <span className="gateway-copy">
+                            <b>Mobile banking</b>
+                            <small>Use any supported banking app or scan the QR.</small>
+                          </span>
                         </button>
                       ) : null}
                     </div>
