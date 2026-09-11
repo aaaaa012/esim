@@ -3,8 +3,11 @@ import { filterFonepayBanks, fonepayBankIntentUrl } from "./payment-intent";
 
 describe("fonepayBankIntentUrl", () => {
   it("uses the documented issuer deep-link shape", () => {
-    expect(fonepayBankIntentUrl("ExampleBank://payment", "a+b/c=")).toBe(
-      "examplebank://payment/?qrPayload=a%2Bb%2Fc%3D",
+    expect(fonepayBankIntentUrl("LXBLNPKA://payment", "a+b/c=")).toBe(
+      "LXBLNPKA://payment/?qrPayload=a%2Bb%2Fc%3D",
+    );
+    expect(fonepayBankIntentUrl("fonepay", "payload")).toBe(
+      "fonepay://payment/?qrPayload=payload",
     );
   });
 
@@ -12,6 +15,9 @@ describe("fonepayBankIntentUrl", () => {
     expect(fonepayBankIntentUrl("javascript:alert", "payload")).toBeNull();
     expect(fonepayBankIntentUrl("https://bank.example", "payload")).toBeNull();
     expect(fonepayBankIntentUrl("data:text/plain", "payload")).toBeNull();
+    expect(
+      fonepayBankIntentUrl("safe://attacker.example", "payload"),
+    ).toBeNull();
   });
 });
 
