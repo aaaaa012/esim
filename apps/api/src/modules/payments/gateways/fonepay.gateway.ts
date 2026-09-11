@@ -122,14 +122,21 @@ export class FonepayGateway implements PaymentGateway {
   private sign(payload: unknown) {
     const value = JSON.stringify(payload);
     try {
-      const raw = process.env.FONEPAY_PRIVATE_KEY_BASE64!;
-      const key = raw.includes("BEGIN")
-        ? raw
-        : createPrivateKey({
-            key: Buffer.from(raw, "base64"),
-            format: "der",
-            type: "pkcs8",
-          });
+      const configured = process.env.FONEPAY_PRIVATE_KEY_BASE64!;
+      const raw = configured.replace(/\\n/g, "\n").trim();
+      let key: ReturnType<typeof createPrivateKey>;
+      if (raw.includes("-----BEGIN PRIVATE KEY-----")) {
+        key = createPrivateKey(raw);
+      } else {
+        const encoded = raw.replace(/\s+/g, "");
+        const bytes = /^[0-9a-f]+$/i.test(encoded) && encoded.length % 2 === 0
+          ? Buffer.from(encoded, "hex")
+          : Buffer.from(encoded, "base64");
+        const decoded = bytes.toString("utf8").trim();
+        key = decoded.includes("-----BEGIN PRIVATE KEY-----")
+          ? createPrivateKey(decoded)
+          : createPrivateKey({ key: bytes, format: "der", type: "pkcs8" });
+      }
       const signer = createSign("RSA-SHA256");
       signer.update(value);
       signer.end();
@@ -147,7 +154,8 @@ export class FonepayGateway implements PaymentGateway {
       username: process.env.FONEPAY_USERNAME!,
       password: process.env.FONEPAY_PASSWORD!,
     };
-    const path = "/api/merchant/merchantDetailsForThirdParty/v2/login";
+    const path = "/api/merchant/third-party/v2/login";
+    const signature = this.sign(body);
     const startedAt = Date.now();
     let response: Response;
     try {
@@ -156,7 +164,7 @@ export class FonepayGateway implements PaymentGateway {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Basic ${Buffer.from(`${body.username}:${body.password}`).toString("base64")}`,
-          signature: this.sign(body),
+          signature,
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(resiliencePolicy.fonepayTimeoutMs()),

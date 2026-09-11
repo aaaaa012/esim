@@ -68,6 +68,9 @@ describe("FonepayGateway", () => {
     expect(result.qrPayload).toBe("fonepay-qr-payload");
     expect(result.websocketUrl).toBe("wss://fonepay.example/status/1");
     expect(result.banks).toHaveLength(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://fonepay.example/api/merchant/third-party/v2/login",
+    );
     const bankHeaders = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
     const qrHeaders = new Headers(fetchMock.mock.calls[2]?.[1]?.headers);
     expect(bankHeaders.has("signature")).toBe(false);
@@ -97,6 +100,50 @@ describe("FonepayGateway", () => {
         returnUrl: "https://checkout.example/return",
       }),
     ).rejects.toMatchObject({ response: expect.anything() });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a PKCS8 PEM wrapped in base64", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    process.env.FONEPAY_PRIVATE_KEY_BASE64 = Buffer.from(
+      privateKey.export({ type: "pkcs8", format: "pem" }),
+    ).toString("base64");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockResolvedValueOnce(
+        json({
+          prn: "VCREF",
+          merchantCode: "VC-TERMINAL",
+          paymentStatus: "pending",
+          requestedAmount: 2499,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).resolves.toMatchObject({ status: PaymentStatus.PENDING });
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("signature"))
+      .toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+  });
+
+  it("reports an invalid signing key before making a network request", async () => {
+    process.env.FONEPAY_PRIVATE_KEY_BASE64 = "not-a-private-key";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).rejects.toMatchObject({
+      internalDetail: "FONEPAY_PRIVATE_KEY_BASE64 is invalid",
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

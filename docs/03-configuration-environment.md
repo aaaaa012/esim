@@ -72,7 +72,7 @@ local guest-order continuity.
 | `KHALTI_SECRET_KEY`         | —                                                     | Khalti auth; its presence reports gateway UP (`khalti.gateway.ts:27-30`, `orders.controller.ts:30`, `admin.service.ts:209`) |
 | `KHALTI_REQUEST_TIMEOUT_MS` | `15000`                                               | Khalti request timeout (`khalti.gateway.ts:31-34`)                                                                          |
 | `FONEPAY_ENABLED`           | `false`                                               | Exposes Checkout by Fonepay only when every required credential is present                                                   |
-| `FONEPAY_BASE_URL`          | —                                                     | Merchant API root supplied by Fonepay                                                                                         |
+| `FONEPAY_BASE_URL`          | `https://thirdparty-merchantapi.fonepay.com`          | Live Merchant API root supplied by Fonepay                                                                                    |
 | `FONEPAY_USERNAME`          | —                                                     | Server-side OAuth username                                                                                                    |
 | `FONEPAY_PASSWORD`          | —                                                     | Server-side OAuth password; never sent to either web frontend                                                                 |
 | `FONEPAY_TERMINAL_ID`       | —                                                     | Merchant terminal identifier, maximum 16 characters                                                                           |
