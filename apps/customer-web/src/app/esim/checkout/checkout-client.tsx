@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import ErrorModal from "../../../components/error-modal";
 import { formatPlanDataText } from "../../../lib/format-data";
 import { filterFonepayBanks, fonepayBankIntentUrl } from "./payment-intent";
+import { FonepayBankLogo } from "./fonepay-bank-logo";
 import { paymentActionDisabled } from "./payment-gates";
 import Link from "next/link";
 import {
@@ -484,6 +485,7 @@ export default function CheckoutClient({
     };
   }, [orderId]);
   const verifyRunToken = useRef(0);
+  const paymentVerificationInFlight = useRef(false);
   const passportRetryNoBefore = useRef(0);
   const resendQrEmail = async () => {
     if (!order || uxResending) return;
@@ -1270,12 +1272,46 @@ export default function CheckoutClient({
       }
       void verifyPayment(order);
     });
+  const verifyFonepaySilently = async () => {
+    if (!order || paymentVerificationInFlight.current) return;
+    paymentVerificationInFlight.current = true;
+    try {
+      const updated = await api<Order>(
+        `/customer/orders/${order.id}/payment/verify`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reference: payment?.reference }),
+        },
+      );
+      setOrder(updated);
+      if (
+        ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
+          updated.status,
+        )
+      )
+        setPayment(null);
+    } catch (cause) {
+      const code = (cause as { code?: string })?.code;
+      if (
+        code !== "PAYMENT_NOT_CONFIRMED" &&
+        code !== "PAYMENT_EXPIRED" &&
+        code !== "PAYMENT_REFERENCE_MISMATCH"
+      )
+        void api<Order>(`/customer/orders/${order.id}`)
+          .then(setOrder)
+          .catch(() => undefined);
+    } finally {
+      paymentVerificationInFlight.current = false;
+    }
+  };
   useEffect(() => {
     if (!payment?.websocketUrl || !order) return;
     let socket: WebSocket | undefined;
     try {
       socket = new WebSocket(payment.websocketUrl);
-      socket.onmessage = () => complete(); // Socket is only a prompt; API verification remains authoritative.
+      // A socket message can mean that the QR was merely scanned. Keep the QR
+      // visible while the authoritative status endpoint still reports pending.
+      socket.onmessage = () => void verifyFonepaySilently();
     } catch {
       /* Manual status verification remains available. */
     }
@@ -1284,7 +1320,8 @@ export default function CheckoutClient({
   useEffect(() => {
     if (!payment || !order || SIMULATOR) return;
     const interval = window.setInterval(() => {
-      if (new Date(payment.expiresAt).getTime() > Date.now()) void complete();
+      if (new Date(payment.expiresAt).getTime() > Date.now())
+        void verifyFonepaySilently();
     }, 5_000);
     return () => window.clearInterval(interval);
   }, [payment?.reference, payment?.expiresAt, order?.id]);
@@ -2396,19 +2433,10 @@ export default function CheckoutClient({
                                     }}
                                   >
                                     <span className="fonepay-bank-identity">
-                                      {bank.bankIcon ? (
-                                        <img
-                                          src={bank.bankIcon}
-                                          alt={`${bank.bankName} logo`}
-                                        />
-                                      ) : (
-                                        <span
-                                          className="fonepay-bank-fallback"
-                                          aria-hidden="true"
-                                        >
-                                          {bank.bankName.slice(0, 1)}
-                                        </span>
-                                      )}
+                                      <FonepayBankLogo
+                                        name={bank.bankName}
+                                        src={bank.bankIcon}
+                                      />
                                       <b>{bank.bankName}</b>
                                     </span>
                                     <span className="fonepay-bank-open">

@@ -43,6 +43,7 @@ import {
   filterFonepayBanks,
   fonepayBankIntentUrl,
 } from "../../esim/checkout/payment-intent";
+import { FonepayBankLogo } from "../../esim/checkout/fonepay-bank-logo";
 import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -1185,19 +1186,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 }}
                               >
                                 <span className="fonepay-bank-identity">
-                                  {bank.bankIcon ? (
-                                    <img
-                                      src={bank.bankIcon}
-                                      alt={`${bank.bankName} logo`}
-                                    />
-                                  ) : (
-                                    <span
-                                      className="fonepay-bank-fallback"
-                                      aria-hidden="true"
-                                    >
-                                      {bank.bankName.slice(0, 1)}
-                                    </span>
-                                  )}
+                                  <FonepayBankLogo
+                                    name={bank.bankName}
+                                    src={bank.bankIcon}
+                                  />
                                   <b>{bank.bankName}</b>
                                 </span>
                                 <span className="fonepay-bank-open">
