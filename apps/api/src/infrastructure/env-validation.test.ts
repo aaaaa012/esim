@@ -128,6 +128,20 @@ describe("validateEnv production gate", () => {
     ).not.toThrow();
   });
 
+  it("accepts a Fonepay PKCS8 private-key file path", () => {
+    expect(() =>
+      validateEnv({
+        NODE_ENV: "development",
+        FONEPAY_ENABLED: "true",
+        FONEPAY_BASE_URL: "https://fonepay.example",
+        FONEPAY_USERNAME: "merchant",
+        FONEPAY_PASSWORD: "secret",
+        FONEPAY_TERMINAL_ID: "VC-TERMINAL",
+        FONEPAY_PRIVATE_KEY_PATH: "/etc/visacompass/fonepay-private.pem",
+      }),
+    ).not.toThrow();
+  });
+
   it("permits local E2E authentication only in the test environment", () => {
     const e2e = {
       E2E_AUTH_ENABLED: "true",

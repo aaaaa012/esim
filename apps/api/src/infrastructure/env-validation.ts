@@ -30,6 +30,7 @@ const baseSchema = z.object({
   FONEPAY_USERNAME: z.string().min(1).optional(),
   FONEPAY_PASSWORD: z.string().min(1).optional(),
   FONEPAY_TERMINAL_ID: z.string().min(1).max(16).optional(),
+  FONEPAY_PRIVATE_KEY_PATH: z.string().min(1).optional(),
   FONEPAY_PRIVATE_KEY_BASE64: z.string().min(1).optional(),
   CONNECTIVITY_PROVIDER: z.enum(["transatel", "auriga-mock"]).optional(),
   GUEST_ORDER_SECRET: z.string().min(32).optional(),
@@ -270,8 +271,9 @@ function assertFonepayConfiguration(config: Record<string, unknown>) {
     "FONEPAY_USERNAME",
     "FONEPAY_PASSWORD",
     "FONEPAY_TERMINAL_ID",
-    "FONEPAY_PRIVATE_KEY_BASE64",
   ].filter((key) => !config[key]);
+  if (!config.FONEPAY_PRIVATE_KEY_PATH && !config.FONEPAY_PRIVATE_KEY_BASE64)
+    required.push("FONEPAY_PRIVATE_KEY_PATH or FONEPAY_PRIVATE_KEY_BASE64");
   if (required.length)
     throw new Error(
       `FONEPAY_ENABLED=true requires ${required.join(", ")}. Refusing to boot.`,

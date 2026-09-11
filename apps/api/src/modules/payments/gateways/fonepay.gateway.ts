@@ -1,6 +1,7 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { createPrivateKey, createSign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import QRCode from "qrcode";
 import { z } from "zod";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
@@ -73,7 +74,8 @@ export class FonepayGateway implements PaymentGateway {
       process.env.FONEPAY_USERNAME &&
       process.env.FONEPAY_PASSWORD &&
       process.env.FONEPAY_TERMINAL_ID &&
-      process.env.FONEPAY_PRIVATE_KEY_BASE64
+      (process.env.FONEPAY_PRIVATE_KEY_PATH ||
+        process.env.FONEPAY_PRIVATE_KEY_BASE64)
     );
   }
   private fail(details: string): never {
@@ -122,7 +124,9 @@ export class FonepayGateway implements PaymentGateway {
   private sign(payload: unknown) {
     const value = JSON.stringify(payload);
     try {
-      const configured = process.env.FONEPAY_PRIVATE_KEY_BASE64!;
+      const configured = process.env.FONEPAY_PRIVATE_KEY_PATH
+        ? readFileSync(process.env.FONEPAY_PRIVATE_KEY_PATH, "utf8")
+        : process.env.FONEPAY_PRIVATE_KEY_BASE64!;
       const raw = configured.replace(/\\n/g, "\n").trim();
       let key: ReturnType<typeof createPrivateKey>;
       if (raw.includes("-----BEGIN PRIVATE KEY-----")) {
@@ -142,7 +146,7 @@ export class FonepayGateway implements PaymentGateway {
       signer.end();
       return signer.sign(key, "base64");
     } catch {
-      return this.fail("FONEPAY_PRIVATE_KEY_BASE64 is invalid");
+      return this.fail("Fonepay private key is invalid or unreadable");
     }
   }
   private async auth(correlationId?: string) {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
 import { PaymentStatus } from "@visa-compass/shared";
 import { FonepayGateway } from "./fonepay.gateway.js";
 import type { PrismaService } from "../../../infrastructure/prisma.service.js";
@@ -11,6 +12,7 @@ const json = (body: unknown, status = 200) =>
   });
 
 describe("FonepayGateway", () => {
+  const fileKeyPath = `/tmp/fonepay-gateway-${process.pid}.pem`;
   beforeEach(() => {
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     process.env.FONEPAY_ENABLED = "true";
@@ -28,6 +30,7 @@ describe("FonepayGateway", () => {
     vi.unstubAllGlobals();
     for (const key of Object.keys(process.env))
       if (key.startsWith("FONEPAY_")) delete process.env[key];
+    rmSync(fileKeyPath, { force: true });
   });
 
   it("creates a unique attempt reference and validates the returned PRN", async () => {
@@ -131,6 +134,38 @@ describe("FonepayGateway", () => {
       .toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
   });
 
+  it("signs requests with a PKCS8 PEM loaded from a file", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(
+      fileKeyPath,
+      privateKey.export({ type: "pkcs8", format: "pem" }),
+      { mode: 0o600 },
+    );
+    process.env.FONEPAY_PRIVATE_KEY_PATH = fileKeyPath;
+    delete process.env.FONEPAY_PRIVATE_KEY_BASE64;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockResolvedValueOnce(
+        json({
+          prn: "VCREF",
+          merchantCode: "VC-TERMINAL",
+          paymentStatus: "pending",
+          requestedAmount: 2499,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).resolves.toMatchObject({ status: PaymentStatus.PENDING });
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("signature"))
+      .toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+  });
+
   it("reports an invalid signing key before making a network request", async () => {
     process.env.FONEPAY_PRIVATE_KEY_BASE64 = "not-a-private-key";
     const fetchMock = vi.fn();
@@ -142,7 +177,7 @@ describe("FonepayGateway", () => {
         amountNpr: 2499,
       }),
     ).rejects.toMatchObject({
-      internalDetail: "FONEPAY_PRIVATE_KEY_BASE64 is invalid",
+      internalDetail: "Fonepay private key is invalid or unreadable",
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });

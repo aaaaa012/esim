@@ -76,7 +76,8 @@ local guest-order continuity.
 | `FONEPAY_USERNAME`          | —                                                     | Server-side OAuth username                                                                                                    |
 | `FONEPAY_PASSWORD`          | —                                                     | Server-side OAuth password; never sent to either web frontend                                                                 |
 | `FONEPAY_TERMINAL_ID`       | —                                                     | Merchant terminal identifier, maximum 16 characters                                                                           |
-| `FONEPAY_PRIVATE_KEY_BASE64`| —                                                     | PKCS8 RSA private key used to sign the exact request JSON; server only                                                        |
+| `FONEPAY_PRIVATE_KEY_PATH`  | —                                                     | Preferred absolute path to the server-only PKCS8 PEM used to sign request JSON                                                |
+| `FONEPAY_PRIVATE_KEY_BASE64`| —                                                     | Alternative PKCS8 private key encoded as Base64 DER or PEM                                                                     |
 | `FONEPAY_REQUEST_TIMEOUT_MS`| `15000`                                               | Fonepay request timeout                                                                                                       |
 
 ## Connectivity (Transatel)

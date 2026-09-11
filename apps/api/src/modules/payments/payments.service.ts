@@ -80,7 +80,8 @@ export class PaymentsService {
       process.env.FONEPAY_USERNAME &&
       process.env.FONEPAY_PASSWORD &&
       process.env.FONEPAY_TERMINAL_ID &&
-      process.env.FONEPAY_PRIVATE_KEY_BASE64
+      (process.env.FONEPAY_PRIVATE_KEY_PATH ||
+        process.env.FONEPAY_PRIVATE_KEY_BASE64)
     )
       providers.push(PaymentProvider.FONEPAY);
     return { providers, simulator };
