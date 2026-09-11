@@ -39,6 +39,7 @@ export function FileUploader({
         ref={inputRef}
         type="file"
         accept={accept}
+        disabled={busy}
         className="hidden"
         onChange={(e) => onFileSelected(e.target.files?.[0] ?? null)}
       />
@@ -59,6 +60,8 @@ export function FileUploader({
             type="button"
             variant="ghost"
             size="icon-sm"
+            aria-label={`Remove ${active.name}`}
+            disabled={busy}
             onClick={() => {
               onFileSelected(null);
               if (inputRef.current) inputRef.current.value = "";
@@ -70,6 +73,7 @@ export function FileUploader({
       ) : (
         <button
           type="button"
+          disabled={busy}
           onClick={() => inputRef.current?.click()}
           onDragOver={(e) => {
             e.preventDefault();
@@ -79,7 +83,7 @@ export function FileUploader({
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            onFileSelected(e.dataTransfer.files?.[0] ?? null);
+            if (!busy) onFileSelected(e.dataTransfer.files?.[0] ?? null);
           }}
           className={cn(
             "flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-8 text-center transition-colors",

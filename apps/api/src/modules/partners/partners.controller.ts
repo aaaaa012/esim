@@ -278,7 +278,7 @@ export class PartnersController {
         },
         documents: {
           type: "array",
-          minItems: 1,
+          minItems: 2,
           maxItems: 3,
           items: {
             type: "object",
@@ -344,15 +344,31 @@ export class PartnersController {
             "externalOrderId",
             "externalCustomerId",
             "planId",
-            "documentVerificationId",
             "consent",
           ],
           properties: {
             externalOrderId: { type: "string", example: "agency-order-1042" },
             externalCustomerId: { type: "string", example: "customer-91" },
             planId: { type: "string", format: "uuid" },
+            purchaseType: {
+              type: "string",
+              enum: ["INITIAL_PURCHASE", "TOPUP"],
+              description:
+                "Defaults to TOPUP when topUpMobile is supplied; otherwise INITIAL_PURCHASE",
+            },
             settlement: { type: "object" },
-            documentVerificationId: { type: "string", format: "uuid" },
+            documentVerificationId: {
+              type: "string",
+              format: "uuid",
+              description:
+                "Required only for INITIAL_PURCHASE and forbidden for TOPUP",
+            },
+            topUpMobile: {
+              type: "string",
+              description:
+                "Required only for TOPUP and forbidden for INITIAL_PURCHASE",
+              example: "+9779800000000",
+            },
             consent: { type: "object" },
             metadata: {
               type: "object",

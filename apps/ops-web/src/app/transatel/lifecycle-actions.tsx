@@ -30,7 +30,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-type Action = "suspend" | "reactivate-request" | "terminate";
+export type LifecycleAction = "suspend" | "reactivate-request" | "terminate";
+export type LifecycleCompletion = {
+  action: LifecycleAction | "reconcile";
+  state?: string;
+};
 
 export function LifecycleActions({
   orderId,
@@ -43,10 +47,10 @@ export function LifecycleActions({
   iccid: string;
   providerStatus?: string | null | undefined;
   canTerminate: boolean;
-  onCompleted?: () => void;
+  onCompleted?: (completion: LifecycleCompletion) => void;
 }) {
   const authFetch = useAuthenticatedFetch();
-  const [action, setAction] = useState<Action | null>(null);
+  const [action, setAction] = useState<LifecycleAction | null>(null);
   const [reason, setReason] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
@@ -101,7 +105,7 @@ export function LifecycleActions({
       setAction(null);
       setReason("");
       setConfirmation("");
-      onCompleted?.();
+      onCompleted?.({ action, state: value.data?.state });
     } catch (cause) {
       toast.error(
         cause instanceof Error ? cause.message : `Could not ${action} eSIM`,
@@ -137,7 +141,7 @@ export function LifecycleActions({
           ? statuses.join(" / ")
           : "Provider status refreshed successfully",
       );
-      onCompleted?.();
+      onCompleted?.({ action: "reconcile" });
     } catch (cause) {
       toast.error(
         cause instanceof Error ? cause.message : "Live status check failed",

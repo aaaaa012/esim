@@ -15,7 +15,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
-import { LifecycleActions } from "./lifecycle-actions";
+import {
+  LifecycleActions,
+  type LifecycleCompletion,
+} from "./lifecycle-actions";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge } from "@/components/status-badge";
@@ -125,6 +128,16 @@ type SearchScope = "subscribers" | "inventory" | "actions";
 const formatDate = (value?: string | null) =>
   value ? new Date(value).toLocaleString() : "Never";
 
+export function lifecycleApprovalMessage(
+  operation: Pick<LifecycleOperation, "state" | "requesterId">,
+  currentActorId?: string | null,
+) {
+  if (operation.state !== "APPROVAL_REQUIRED") return null;
+  return operation.requesterId === currentActorId
+    ? "Request sent · awaiting another Super Admin"
+    : "Awaiting another Super Admin";
+}
+
 export default function TransatelDashboard() {
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Dashboard | null>(null);
@@ -209,6 +222,13 @@ export default function TransatelDashboard() {
       className="w-full sm:w-80"
     />
   );
+  const lifecycleCompleted = (completion: LifecycleCompletion) => {
+    if (completion.action === "reactivate-request") {
+      setActiveTab("actions");
+      setSearchRequest({ scope: "actions", q: "" });
+    }
+    void load();
+  };
   const reconcile = async (profile: Inventory) => {
     setBusy(profile.id);
     try {
@@ -774,7 +794,7 @@ export default function TransatelDashboard() {
                               iccid={row.iccid}
                               providerStatus={row.providerStatus}
                               canTerminate={canTerminate}
-                              onCompleted={() => void load()}
+                              onCompleted={lifecycleCompleted}
                             />
                           </TableCell>
                         </TableRow>
@@ -967,7 +987,10 @@ export default function TransatelDashboard() {
                               </div>
                             ) : row.state === "APPROVAL_REQUIRED" ? (
                               <span className="text-xs text-muted-foreground">
-                                Awaiting another Super Admin
+                                {lifecycleApprovalMessage(
+                                  row,
+                                  data.currentActorId,
+                                )}
                               </span>
                             ) : row.approvedBy ? (
                               <span className="text-xs text-muted-foreground">

@@ -9,7 +9,8 @@ vi.mock("../authenticated-api-provider", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => children,
-  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => children,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) =>
+    children,
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
     <div role="menu">{children}</div>
   ),
@@ -82,5 +83,42 @@ describe("LifecycleActions", () => {
     expect(
       screen.queryByRole("menuitem", { name: /Permanently end eSIM/ }),
     ).toBeNull();
+  });
+
+  it("reports a durable approval state after requesting reactivation", async () => {
+    const onCompleted = vi.fn();
+    authFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { state: "APPROVAL_REQUIRED" } }),
+    });
+    render(
+      <LifecycleActions
+        orderId="order-1"
+        iccid="8988247076000000319"
+        providerStatus="SUSPENDED"
+        canTerminate
+        onCompleted={onCompleted}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /Request reactivation/ }),
+    );
+    fireEvent.change(screen.getByPlaceholderText("Reason (required)"), {
+      target: { value: "Customer requested service restoration" },
+    });
+    fireEvent.change(screen.getByLabelText(/Type.*REACTIVATE.*to confirm/), {
+      target: { value: "REACTIVATE" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Request reactivation" }),
+    );
+
+    await waitFor(() =>
+      expect(onCompleted).toHaveBeenCalledWith({
+        action: "reactivate-request",
+        state: "APPROVAL_REQUIRED",
+      }),
+    );
   });
 });
