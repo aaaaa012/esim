@@ -7,7 +7,13 @@ export type PaymentInitiation = {
   qrDataUrl?: string;
   qrPayload?: string;
   websocketUrl?: string;
-  banks?: { bankName: string; bankCode: string; bankIcon?: string; packageName?: string; intentScheme: string }[];
+  banks?: {
+    bankName: string;
+    bankCode: string;
+    bankIcon?: string;
+    packageName?: string;
+    intentScheme: string;
+  }[];
 };
 export type PaymentVerification = {
   reference: string;
@@ -22,6 +28,7 @@ export type PaymentContext = {
   amountNpr: number;
   currency?: string;
   correlationId?: string;
+  expiresAt?: string;
 };
 export interface PaymentGateway {
   readonly provider: string;

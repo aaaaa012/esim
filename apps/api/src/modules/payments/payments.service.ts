@@ -688,6 +688,9 @@ export class PaymentsService {
       ...(order.payment.correlationId
         ? { correlationId: order.payment.correlationId }
         : {}),
+      ...(order.payment.expiresAt
+        ? { expiresAt: order.payment.expiresAt }
+        : {}),
     };
   }
   private gateway(provider?: PaymentProvider) {

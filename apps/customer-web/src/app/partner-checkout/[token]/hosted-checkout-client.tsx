@@ -723,13 +723,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         // The provider status endpoint remains authoritative.
       }
     }
-    const interval = window.setInterval(() => {
-      if (new Date(payment.expiresAt).getTime() > Date.now())
-        void verifySilently();
-    }, 5_000);
     return () => {
       stopped = true;
-      window.clearInterval(interval);
       socket?.close();
     };
   }, [payment, outcome, orderNumber, token]);
@@ -1171,6 +1166,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                               fonepayBankQuery,
                             ).map((bank) => (
                               <button
+                                type="button"
                                 key={bank.bankCode}
                                 onClick={() => {
                                   if (!payment.qrPayload) return;
@@ -1198,6 +1194,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                               </button>
                             ))}
                           </div>
+                          <small className="fonepay-security-note">
+                            Banking-app links open only on a phone with the
+                            selected app installed. You can always scan the QR
+                            instead.
+                          </small>
                           {!filterFonepayBanks(payment.banks, fonepayBankQuery)
                             .length ? (
                             <p className="fonepay-bank-empty">
@@ -1208,7 +1209,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         </div>
                       ) : null}
                       <Action busy={busy} onClick={checkPayment}>
-                        Check payment status
+                        I&apos;ve completed payment - check status
                       </Action>
                       <small className="fonepay-security-note">
                         Your order is completed only after Fonepay confirms the

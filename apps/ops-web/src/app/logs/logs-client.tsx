@@ -46,7 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { activityLabel } from "./log-activity";
+import { activityLabel, providerLabel } from "./log-activity";
 import { toast } from "sonner";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -137,6 +137,9 @@ const ACTION_FILTER_OPTIONS = [
   { value: "transatel-webhook", label: "Transatel Webhook Setup" },
   { value: "khalti-lookup", label: "Khalti Payment Lookup" },
   { value: "khalti-initiate", label: "Khalti Payment Initiation" },
+  { value: "fonepay-status", label: "Fonepay Payment Status Lookup" },
+  { value: "fonepay-initiate", label: "Fonepay Payment Initiation" },
+  { value: "fonepay-banks", label: "Fonepay Bank List" },
   { value: "khalti-callback", label: "Khalti Payment Callback Received" },
   { value: "transatel-callback", label: "Transatel Network Update Received" },
   { value: "partner-api", label: "Partner API Request" },
@@ -176,7 +179,11 @@ function serialise(entry: LogEntry): string {
   lines.push("=".repeat(78));
   lines.push(`When:     ${new Date(entry.createdAt).toLocaleString()}`);
   lines.push(`Type:     ${GROUP_LABELS[entry.group] ?? entry.group}`);
-  if (entry.identifier) lines.push(`Provider: ${entry.identifier}`);
+  if (entry.identifier) {
+    lines.push(`Provider: ${providerLabel(entry)}`);
+    if (providerLabel(entry) !== entry.identifier)
+      lines.push(`Operation: ${entry.identifier}`);
+  }
   lines.push(`Action:   ${activityLabel(entry)}`);
   lines.push(`Details:  ${entry.detail}`);
   if (entry.status != null) lines.push(`Status:   ${entry.status}`);
@@ -337,6 +344,12 @@ export default function LogsClient() {
         return act.includes("khalti payment lookup");
       if (actionFilter === "khalti-initiate")
         return act.includes("khalti payment initiation");
+      if (actionFilter === "fonepay-status")
+        return act.includes("fonepay payment status lookup");
+      if (actionFilter === "fonepay-initiate")
+        return act.includes("fonepay payment initiation");
+      if (actionFilter === "fonepay-banks")
+        return act.includes("fonepay bank list");
       if (actionFilter === "khalti-callback")
         return act.includes("khalti payment callback");
       if (actionFilter === "transatel-callback")
@@ -431,10 +444,17 @@ export default function LogsClient() {
                   </div>
                   <div>
                     <span className="text-muted-foreground block text-[11px]">
-                      Provider / ID
+                      Provider / operation
                     </span>
                     <span className="font-semibold">
-                      {inspectEntry.identifier ?? "N/A"}
+                      {providerLabel(inspectEntry)}
+                      {inspectEntry.identifier &&
+                      providerLabel(inspectEntry) !==
+                        inspectEntry.identifier ? (
+                        <span className="mt-0.5 block break-all font-mono text-[10px] font-normal text-muted-foreground">
+                          {inspectEntry.identifier}
+                        </span>
+                      ) : null}
                     </span>
                   </div>
                   <div>
@@ -712,7 +732,7 @@ export default function LogsClient() {
                         </span>
                         {entry.identifier && (
                           <span className="inline-flex items-center rounded-full border bg-muted/40 px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
-                            {entry.identifier}
+                            {providerLabel(entry)}
                           </span>
                         )}
                       </div>

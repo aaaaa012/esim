@@ -296,6 +296,51 @@ describe("FonepayGateway", () => {
     ).rejects.toMatchObject({ response: expect.anything() });
   });
 
+  it("treats Fonepay timeout as pending until the local QR window expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-12T06:00:00Z"));
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(json({ accessToken: "token" }))
+        .mockResolvedValueOnce(
+          json({
+            prn: "VCREF",
+            merchantCode: "VC-TERMINAL",
+            paymentStatus: "timeout",
+            paymentMessage: "Data not found.",
+            requestedAmount: 2499,
+          }),
+        )
+        .mockResolvedValueOnce(
+          json({
+            prn: "VCREF",
+            merchantCode: "VC-TERMINAL",
+            paymentStatus: "timeout",
+            paymentMessage: "Data not found.",
+            requestedAmount: 2499,
+          }),
+        ),
+    );
+    const gateway = new FonepayGateway();
+
+    await expect(
+      gateway.verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+        expiresAt: "2026-09-12T06:30:00Z",
+      }),
+    ).resolves.toMatchObject({ status: PaymentStatus.PENDING });
+    await expect(
+      gateway.verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+        expiresAt: "2026-09-12T05:59:59Z",
+      }),
+    ).resolves.toMatchObject({ status: PaymentStatus.FAILED });
+  });
+
   it("records redacted provider calls with the order correlation", async () => {
     const create = vi.fn().mockResolvedValue({});
     const prisma = {

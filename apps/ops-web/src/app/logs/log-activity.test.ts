@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityLabel } from "./log-activity";
+import { activityLabel, providerLabel } from "./log-activity";
 
 describe("activityLabel", () => {
   it("labels Khalti provider calls", () => {
@@ -39,7 +39,34 @@ describe("activityLabel", () => {
         identifier: "unknown-operation",
         title: "POST /external/check",
       }),
-    ).toBe("Transatel Service Request");
+    ).toBe("External Provider Service Request");
+  });
+
+  it.each([
+    [
+      "fonepay-authentication",
+      "POST /merchantDetailsForThirdParty/v2/login",
+      "Fonepay Authentication",
+    ],
+    [
+      "fonepay-list",
+      "GET /api/merchant/third-party/v2/banks/list",
+      "Fonepay Bank List",
+    ],
+    [
+      "fonepay-generate-intent-qr",
+      "POST /api/merchant/third-party/v2/generate-intent-qr",
+      "Fonepay Payment Initiation",
+    ],
+    [
+      "fonepay-thirdPartyDynamicQrGetStatus",
+      "POST /api/merchant/third-party/v2/thirdPartyDynamicQrGetStatus",
+      "Fonepay Payment Status Lookup",
+    ],
+  ])("labels %s as a Fonepay operation", (identifier, title, label) => {
+    const entry = { group: "provider" as const, identifier, title };
+    expect(providerLabel(entry)).toBe("Fonepay");
+    expect(activityLabel(entry)).toBe(label);
   });
 
   it.each([

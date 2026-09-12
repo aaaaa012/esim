@@ -615,7 +615,7 @@ export default function CheckoutClient({
               redirectUrl: "",
               expiresAt: "",
             });
-            void verifyPayment(value);
+            void verifyPayment(value, hasGatewayReturnSignal());
           }
           return;
         }
@@ -625,7 +625,7 @@ export default function CheckoutClient({
             redirectUrl: "",
             expiresAt: "",
           });
-          void verifyPayment(value);
+          void verifyPayment(value, hasGatewayReturnSignal());
         } else if (value.status === "PAYMENT_FAILED") {
           setPayment(null);
         }
@@ -686,7 +686,18 @@ export default function CheckoutClient({
       url.searchParams.delete(key);
     window.history.replaceState({}, "", url.toString());
   };
-  const verifyPayment = async (initialOrder: Order) => {
+  const hasGatewayReturnSignal = () => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return [
+      "reference",
+      "pidx",
+      "status",
+      "transaction_id",
+      "purchase_order_id",
+    ].some((key) => params.has(key));
+  };
+  const verifyPayment = async (initialOrder: Order, poll = false) => {
     const token = ++verifyRunToken.current;
     setVerifying(true);
     setError("");
@@ -720,6 +731,13 @@ export default function CheckoutClient({
           setVerifying(false);
           return;
         }
+        if (!poll) {
+          setError(
+            "Your payment provider has not confirmed this payment yet. Complete payment in the provider app, then check again.",
+          );
+          setVerifying(false);
+          return;
+        }
       } catch (cause) {
         const code = (cause as { code?: string })?.code;
         if (
@@ -746,6 +764,13 @@ export default function CheckoutClient({
           setVerifying(false);
           return;
         }
+        if (!poll) {
+          setError(
+            "We could not confirm the payment right now. Your order remains unpaid; please try again shortly.",
+          );
+          setVerifying(false);
+          return;
+        }
       }
     }
     setOrder(
@@ -754,6 +779,10 @@ export default function CheckoutClient({
     setError(
       "Your payment is still being confirmed. Return to this tracking page shortly.",
     );
+    setVerifying(false);
+  };
+  const cancelPaymentVerification = () => {
+    verifyRunToken.current += 1;
     setVerifying(false);
   };
   const update = (key: keyof Traveler, value: string) => {
@@ -1317,15 +1346,6 @@ export default function CheckoutClient({
     }
     return () => socket?.close();
   }, [payment?.websocketUrl, order?.id]);
-  useEffect(() => {
-    if (!payment || !order || SIMULATOR) return;
-    const interval = window.setInterval(() => {
-      if (new Date(payment.expiresAt).getTime() > Date.now())
-        void verifyFonepaySilently();
-    }, 5_000);
-    return () => window.clearInterval(interval);
-  }, [payment?.reference, payment?.expiresAt, order?.id]);
-
   const recoveryUrl =
     order && recovery && typeof window !== "undefined"
       ? `${window.location.origin}/esim/checkout?order=${encodeURIComponent(order.id)}${isTopUp ? "&recharge=1" : ""}#resume=${encodeURIComponent(recovery.token)}`
@@ -2257,6 +2277,13 @@ export default function CheckoutClient({
                       will only be marked as paid after the gateway confirms the
                       transaction.
                     </p>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={cancelPaymentVerification}
+                    >
+                      Return to payment
+                    </button>
                   </div>
                 ) : (
                   <>
@@ -2417,6 +2444,7 @@ export default function CheckoutClient({
                                   fonepayBankQuery,
                                 ).map((bank) => (
                                   <button
+                                    type="button"
                                     key={bank.bankCode}
                                     onClick={() => {
                                       if (!payment.qrPayload) return;
@@ -2445,6 +2473,11 @@ export default function CheckoutClient({
                                   </button>
                                 ))}
                               </div>
+                              <small className="fonepay-security-note">
+                                Banking-app links open only on a phone with the
+                                selected app installed. You can always scan the
+                                QR instead.
+                              </small>
                               {!filterFonepayBanks(
                                 payment.banks,
                                 fonepayBankQuery,
@@ -2465,7 +2498,7 @@ export default function CheckoutClient({
                             })}
                             onClick={complete}
                           >
-                            Check payment status
+                            I&apos;ve completed payment - check status
                           </Action>
                           <small className="fonepay-security-note">
                             Your order is completed only after Fonepay confirms
@@ -2482,7 +2515,7 @@ export default function CheckoutClient({
                           })}
                           onClick={complete}
                         >
-                          Check payment status
+                          I&apos;ve completed payment - check status
                         </Action>
                       )
                     ) : isTopUp && !order ? (

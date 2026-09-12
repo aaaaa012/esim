@@ -93,7 +93,9 @@ export class FonepayGateway implements PaymentGateway {
       return Object.fromEntries(
         Object.entries(value as Record<string, unknown>).map(([key, item]) => [
           key,
-          /authorization|password|secret|signature|token|qr|string|websocket/i.test(key)
+          /authorization|password|secret|signature|token|qr|string|websocket/i.test(
+            key,
+          )
             ? "[REDACTED]"
             : this.redact(item),
         ]),
@@ -118,7 +120,10 @@ export class FonepayGateway implements PaymentGateway {
     try {
       await this.prisma.integrationLog.create({ data: entry });
     } catch (error) {
-      this.logger.error(`Failed to persist integration log for ${entry.operation}`, error);
+      this.logger.error(
+        `Failed to persist integration log for ${entry.operation}`,
+        error,
+      );
     }
   }
   private sign(payload: unknown) {
@@ -196,7 +201,10 @@ export class FonepayGateway implements PaymentGateway {
       durationMs: Date.now() - startedAt,
       ...(correlationId ? { correlationId } : {}),
       ...(!response.ok
-        ? { errorCode: `HTTP_${response.status}`, errorMessage: "Fonepay authentication was rejected" }
+        ? {
+            errorCode: `HTTP_${response.status}`,
+            errorMessage: "Fonepay authentication was rejected",
+          }
         : {}),
       requestBody: { username: "[REDACTED]", password: "[REDACTED]" },
       responseBody: this.redact(raw),
@@ -261,7 +269,10 @@ export class FonepayGateway implements PaymentGateway {
       durationMs: Date.now() - startedAt,
       ...(correlationId ? { correlationId } : {}),
       ...(!response.ok
-        ? { errorCode: `HTTP_${response.status}`, errorMessage: `Fonepay returned HTTP ${response.status}` }
+        ? {
+            errorCode: `HTTP_${response.status}`,
+            errorMessage: `Fonepay returned HTTP ${response.status}`,
+          }
         : {}),
       requestBody: this.redact(payload),
       responseBody: this.redact(data),
@@ -282,7 +293,9 @@ export class FonepayGateway implements PaymentGateway {
       input.amountNpr < 1 ||
       input.amountNpr > 9_999_999
     )
-      return this.fail("Fonepay amount must be between NPR 1 and NPR 9,999,999");
+      return this.fail(
+        "Fonepay amount must be between NPR 1 and NPR 9,999,999",
+      );
     if (!input.orderNumber.trim())
       return this.fail("Fonepay billId must not be blank");
     const reference = `VC${input.attemptId.replace(/[^A-Za-z0-9]/g, "").slice(0, 28)}`;
@@ -352,8 +365,18 @@ export class FonepayGateway implements PaymentGateway {
     if (data.merchantCode !== process.env.FONEPAY_TERMINAL_ID)
       return this.fail("Fonepay merchant terminal did not match the request");
     const status = String(data.paymentStatus ?? "").toLowerCase();
-    if (!["success", "pending", "failed", "cancelled"].includes(status))
+    if (
+      !["success", "pending", "failed", "cancelled", "timeout"].includes(status)
+    )
       return this.fail(`Fonepay returned an unknown payment status: ${status}`);
+    // Fonepay returns HTTP 200 with paymentStatus=timeout and "Data not found"
+    // when no matching transaction exists yet. That is not evidence of a
+    // failed payment while the issued QR is still valid. Once our authoritative
+    // payment window has elapsed, the same result can close the attempt.
+    const timedOut = status === "timeout";
+    const paymentWindowExpired =
+      Boolean(context.expiresAt) &&
+      new Date(context.expiresAt!).getTime() <= Date.now();
     return {
       reference,
       orderId: context.orderId,
@@ -365,7 +388,7 @@ export class FonepayGateway implements PaymentGateway {
       status:
         status === "success"
           ? PaymentStatus.COMPLETED
-          : status === "pending"
+          : status === "pending" || (timedOut && !paymentWindowExpired)
             ? PaymentStatus.PENDING
             : status === "cancelled"
               ? PaymentStatus.CANCELLED
