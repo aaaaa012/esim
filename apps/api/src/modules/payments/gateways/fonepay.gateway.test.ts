@@ -76,7 +76,7 @@ describe("FonepayGateway", () => {
     );
     const bankHeaders = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
     const qrHeaders = new Headers(fetchMock.mock.calls[2]?.[1]?.headers);
-    expect(bankHeaders.has("signature")).toBe(false);
+    expect(bankHeaders.get("signature")).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
     expect(qrHeaders.get("signature")).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
   });
 
@@ -339,6 +339,52 @@ describe("FonepayGateway", () => {
         expiresAt: "2026-09-12T05:59:59Z",
       }),
     ).resolves.toMatchObject({ status: PaymentStatus.FAILED });
+  });
+
+  it("honors a gateway-specific API base path (V1.10 vs collection gateways)", async () => {
+    process.env.FONEPAY_API_BASE_PATH =
+      "/api/merchant/merchantDetailsForThirdParty/v2";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockResolvedValueOnce(
+        json({
+          prn: "VCREF",
+          merchantCode: "VC-TERMINAL",
+          paymentStatus: "pending",
+          requestedAmount: 2499,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new FonepayGateway().verify("VCREF", {
+      orderId: "order-1",
+      amountNpr: 2499,
+    });
+
+    expect(String(fetchMock?.mock.calls[1]?.[0])).toBe(
+      "https://fonepay.example/api/merchant/merchantDetailsForThirdParty/v2/thirdPartyDynamicQrGetStatus",
+    );
+  });
+
+  it("rejects a terminalId longer than the V1.10 16-character contract", async () => {
+    process.env.FONEPAY_TERMINAL_ID = "TERMINAL-1234567890";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new FonepayGateway().initiate({
+        attemptId: "attempt-terminal",
+        orderId: "order-1",
+        orderNumber: "VC-100",
+        amountNpr: 100,
+        returnUrl: "https://checkout.example/return",
+      }),
+    ).rejects.toMatchObject({
+      internalDetail:
+        "Fonepay terminalId is missing or exceeds 16 characters (V1.10 contract)",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("records redacted provider calls with the order correlation", async () => {

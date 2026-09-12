@@ -1201,6 +1201,60 @@
   color: var(--text-3);
 }
 
+.chosen-provider-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.chosen-provider-card img {
+  width: 124px;
+  max-height: 48px;
+  flex: 0 0 124px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.chosen-provider-card .gateway-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chosen-provider-card .gateway-copy b {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.chosen-provider-card .gateway-copy small {
+  line-height: 1.45;
+}
+
+.change-provider {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.change-provider:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 .payment-gateway-grid button {
   min-height: 92px;
   justify-content: flex-start;
@@ -1255,10 +1309,20 @@
     padding: 16px;
   }
 
-  .payment-gateway-grid img {
+  .payment-gateway-grid img,
+  .chosen-provider-card img {
     width: 96px;
     max-height: 40px;
     flex-basis: 96px;
+  }
+
+  .chosen-provider-card {
+    align-items: flex-start;
+    padding: 16px;
+  }
+
+  .change-provider {
+    margin-left: 0;
   }
 }
 
@@ -1301,6 +1365,28 @@
   margin: 0;
   color: #4a4a4a;
   line-height: 1.55;
+}
+
+.fonepay-qr-steps {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  color: #4a4a4a;
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.fonepay-bank-hint {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #f0cf3c;
+  border-radius: 10px;
+  background: #fffdf2;
+  color: #5b4b08;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .fonepay-qr {

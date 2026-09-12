@@ -41,6 +41,7 @@ import ErrorModal from "../../../components/error-modal";
 import { formatPlanDataText } from "../../../lib/format-data";
 import {
   filterFonepayBanks,
+  fonepayBankAndroidIntentUrl,
   fonepayBankIntentUrl,
 } from "../../esim/checkout/payment-intent";
 import { FonepayBankLogo } from "../../esim/checkout/fonepay-bank-logo";
@@ -104,6 +105,7 @@ type Payment = {
     bankName: string;
     bankCode: string;
     bankIcon?: string;
+    packageName?: string;
     intentScheme: string;
   }[];
 };
@@ -219,6 +221,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     PaymentProvider.KHALTI,
   );
   const [fonepayBankQuery, setFonepayBankQuery] = useState("");
+  const [fonepayBankHint, setFonepayBankHint] = useState("");
+  const [lockedProvider, setLockedProvider] = useState<PaymentProvider | null>(
+    null,
+  );
   const [availableProviders, setAvailableProviders] = useState<
     PaymentProvider[]
   >([PaymentProvider.KHALTI]);
@@ -229,8 +235,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       .then((value) => {
         if (!value.providers.length) return;
         setAvailableProviders(value.providers);
-        if (!value.providers.includes(provider))
+        if (!value.providers.includes(provider)) {
           setProvider(value.providers[0]!);
+          setLockedProvider(null);
+        }
       })
       .catch(() => undefined);
   }, []);
@@ -1079,35 +1087,85 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     )}
                   </>
                 )}
-                <div className="gateway-grid payment-gateway-grid">
-                  <button
-                    type="button"
-                    className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
-                    onClick={() => setProvider(PaymentProvider.KHALTI)}
-                  >
-                    <img src="/brand/khalti-logo.png" alt="Khalti" />
-                    <span className="gateway-copy">
-                      <b>Khalti wallet</b>
-                      <small>Use when you want to pay from your Khalti balance.</small>
-                    </span>
-                  </button>
-                  {availableProviders.includes(PaymentProvider.FONEPAY) ? (
-                    <button
-                      type="button"
-                      className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
-                      onClick={() => setProvider(PaymentProvider.FONEPAY)}
-                    >
-                      <img
-                        src="/brand/fonepay-logo.png"
-                        alt="Checkout by Fonepay"
-                      />
-                      <span className="gateway-copy">
-                        <b>Mobile banking</b>
-                        <small>Use any supported banking app or scan the QR.</small>
-                      </span>
-                    </button>
-                  ) : null}
-                </div>
+                {!payment ? (
+                  lockedProvider ? (
+                    <div className="gateway-grid chosen-provider">
+                      <div className="chosen-provider-card">
+                        <img
+                          src={
+                            lockedProvider === PaymentProvider.FONEPAY
+                              ? "/brand/fonepay-logo.png"
+                              : "/brand/khalti-logo.png"
+                          }
+                          alt={
+                            lockedProvider === PaymentProvider.FONEPAY
+                              ? "Checkout by Fonepay"
+                              : "Khalti"
+                          }
+                        />
+                        <span className="gateway-copy">
+                          <b>
+                            {lockedProvider === PaymentProvider.FONEPAY
+                              ? "Mobile banking"
+                              : "Khalti wallet"}
+                          </b>
+                          <small>
+                            {lockedProvider === PaymentProvider.FONEPAY
+                              ? "Pay with any supported banking app or scan the QR."
+                              : "Pay from your Khalti balance."}
+                          </small>
+                        </span>
+                        <button
+                          type="button"
+                          className="change-provider"
+                          onClick={() => setLockedProvider(null)}
+                        >
+                          Change
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="gateway-grid payment-gateway-grid">
+                      <button
+                        type="button"
+                        className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
+                        onClick={() => {
+                          setProvider(PaymentProvider.KHALTI);
+                          setLockedProvider(PaymentProvider.KHALTI);
+                        }}
+                      >
+                        <img src="/brand/khalti-logo.png" alt="Khalti" />
+                        <span className="gateway-copy">
+                          <b>Khalti wallet</b>
+                          <small>
+                            Use when you want to pay from your Khalti balance.
+                          </small>
+                        </span>
+                      </button>
+                      {availableProviders.includes(PaymentProvider.FONEPAY) ? (
+                        <button
+                          type="button"
+                          className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
+                          onClick={() => {
+                            setProvider(PaymentProvider.FONEPAY);
+                            setLockedProvider(PaymentProvider.FONEPAY);
+                          }}
+                        >
+                          <img
+                            src="/brand/fonepay-logo.png"
+                            alt="Checkout by Fonepay"
+                          />
+                          <span className="gateway-copy">
+                            <b>Mobile banking</b>
+                            <small>
+                              Use any supported banking app or scan the QR.
+                            </small>
+                          </span>
+                        </button>
+                      ) : null}
+                    </div>
+                  )
+                ) : null}
                 {payment ? (
                   SIMULATOR ? (
                     <div className="simulator-box">
@@ -1130,23 +1188,36 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         alt="Checkout by Fonepay"
                       />
                       <div className="fonepay-qr-stage">
-                        <h2 id="hosted-fonepay-checkout-title">Scan to pay</h2>
-                        <p>
-                          Scan this QR with a Fonepay-supported mobile banking
-                          app.
-                        </p>
+                        <h2 id="hosted-fonepay-checkout-title">
+                          Scan to pay with any banking app
+                        </h2>
+                        <ol className="fonepay-qr-steps">
+                          <li>
+                            Open a Fonepay-supported banking app on your phone.
+                          </li>
+                          <li>
+                            Choose &ldquo;Scan QR&rdquo; inside the app and scan
+                            this code.
+                          </li>
+                          <li>
+                            Approve the payment to confirm your order.
+                          </li>
+                        </ol>
                         <img
                           className="fonepay-qr"
                           src={payment.qrDataUrl}
                           alt="Fonepay payment QR code"
                         />
                       </div>
-                      {payment.banks?.length ? (
+                      {provider === PaymentProvider.FONEPAY &&
+                      payment.banks?.length ? (
                         <div className="fonepay-bank-section">
                           <div className="fonepay-bank-heading">
-                            <b>Or pay with your banking app</b>
+                            <b>Prefer your banking app directly?</b>
                             <small>
-                              Select your bank to continue securely.
+                              The selected app opens on your phone. If your bank
+                              isn&apos;t listed, just scan the QR above — it
+                              works with any Fonepay-supported banking app.
                             </small>
                           </div>
                           <label className="fonepay-bank-search">
@@ -1169,16 +1240,37 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 type="button"
                                 key={bank.bankCode}
                                 onClick={() => {
-                                  if (!payment.qrPayload) return;
-                                  const target = fonepayBankIntentUrl(
-                                    bank.intentScheme,
-                                    payment.qrPayload,
-                                  );
-                                  if (target) window.location.assign(target);
-                                  else
+                                  const target = payment.qrPayload
+                                    ? /Android/i.test(navigator.userAgent) &&
+                                      bank.packageName
+                                      ? (fonepayBankAndroidIntentUrl(
+                                          bank.intentScheme,
+                                          payment.qrPayload,
+                                          bank.packageName,
+                                        ) ??
+                                          fonepayBankIntentUrl(
+                                            bank.intentScheme,
+                                            payment.qrPayload,
+                                          ))
+                                      : fonepayBankIntentUrl(
+                                          bank.intentScheme,
+                                          payment.qrPayload,
+                                        )
+                                    : null;
+                                  if (!target) {
                                     setError(
-                                      "This banking app cannot be opened securely. Please choose another bank or scan the QR code.",
+                                      "This banking app could not be opened securely. Scan the QR code above instead.",
                                     );
+                                    return;
+                                  }
+                                  setFonepayBankHint("");
+                                  window.location.assign(target);
+                                  window.setTimeout(() => {
+                                    if (document.visibilityState !== "hidden")
+                                      setFonepayBankHint(
+                                        "If your banking app didn\u2019t open, install it or scan the QR code above.",
+                                      );
+                                  }, 900);
                                 }}
                               >
                                 <span className="fonepay-bank-identity">
@@ -1195,15 +1287,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                             ))}
                           </div>
                           <small className="fonepay-security-note">
-                            Banking-app links open only on a phone with the
-                            selected app installed. You can always scan the QR
-                            instead.
+                            Banking-app links work on a phone with the selected
+                            app installed. On this device, scanning the QR above
+                            is the reliable option.
                           </small>
+                          {fonepayBankHint ? (
+                            <p className="fonepay-bank-hint" role="status">
+                              {fonepayBankHint}
+                            </p>
+                          ) : null}
                           {!filterFonepayBanks(payment.banks, fonepayBankQuery)
                             .length ? (
                             <p className="fonepay-bank-empty">
                               No matching banking app. Try another name or scan
-                              the QR code.
+                              the QR code above.
                             </p>
                           ) : null}
                         </div>

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { filterFonepayBanks, fonepayBankIntentUrl } from "./payment-intent";
+import {
+  filterFonepayBanks,
+  fonepayBankAndroidIntentUrl,
+  fonepayBankIntentUrl,
+} from "./payment-intent";
 
 describe("fonepayBankIntentUrl", () => {
   it("uses the documented issuer deep-link shape", () => {
@@ -18,6 +22,33 @@ describe("fonepayBankIntentUrl", () => {
     expect(
       fonepayBankIntentUrl("safe://attacker.example", "payload"),
     ).toBeNull();
+  });
+});
+
+describe("fonepayBankAndroidIntentUrl", () => {
+  it("pins the issuer package and adds a Play Store fallback per V1.10 §8", () => {
+    const url = fonepayBankAndroidIntentUrl(
+      "LXBLNPKA://payment",
+      "a+b/c=",
+      "com.lxblnpka.app",
+    );
+    expect(url).toBe(
+      "intent://payment/?qrPayload=a%2Bb%2Fc%3D#Intent;" +
+        "scheme=LXBLNPKA;package=com.lxblnpka.app;" +
+        "S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom.lxblnpka.app;end",
+    );
+  });
+
+  it("falls back to a null and keeps the plain deep link usable", () => {
+    expect(
+      fonepayBankAndroidIntentUrl("LXBLNPKA://payment", "payload", "bad pkg!"),
+    ).toBeNull();
+    expect(
+      fonepayBankAndroidIntentUrl("javascript:bad", "payload", "com.bad.app"),
+    ).toBeNull();
+    expect(
+      fonepayBankIntentUrl("LXBLNPKA://payment", "payload"),
+    ).toBe("LXBLNPKA://payment/?qrPayload=payload");
   });
 });
 

@@ -1,5 +1,6 @@
 const SAFE_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*$/;
 const BLOCKED_SCHEMES = new Set(["data", "file", "http", "https", "javascript"]);
+const SAFE_PACKAGE = /^[A-Za-z0-9]+([A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 export function fonepayBankIntentUrl(
   intentScheme: string,
@@ -13,6 +14,26 @@ export function fonepayBankIntentUrl(
   // Preserve the exact casing supplied by Fonepay. Android intent-filter
   // matching can be case-sensitive even though URI schemes generally are not.
   return `${scheme}://payment/?qrPayload=${encodeURIComponent(qrPayload)}`;
+}
+
+// V1.10 "Checkout Intent Flow" §8: on Android the merchant must also pin the
+// issuer package so the intent resolves to the banking app, falling back to
+// the Play Store listing when that app is not installed. Only meaningful on
+// Android webviews/Chrome; other clients keep the plain scheme deep link.
+export function fonepayBankAndroidIntentUrl(
+  intentScheme: string,
+  qrPayload: string,
+  packageName: string,
+): string | null {
+  const raw = intentScheme.trim();
+  const deepLink = raw.match(/^([A-Za-z][A-Za-z0-9+.-]*):\/\/payment\/?$/);
+  const scheme = deepLink?.[1] ?? raw;
+  const pkg = packageName.trim().replace(/\s+/g, "");
+  if (!SAFE_SCHEME.test(scheme) || BLOCKED_SCHEMES.has(scheme.toLowerCase()))
+    return null;
+  if (!SAFE_PACKAGE.test(pkg)) return null;
+  const store = `https://play.google.com/store/apps/details?id=${encodeURIComponent(pkg)}`;
+  return `intent://payment/?qrPayload=${encodeURIComponent(qrPayload)}#Intent;scheme=${scheme};package=${pkg};S.browser_fallback_url=${encodeURIComponent(store)};end`;
 }
 
 export function filterFonepayBanks<T extends { bankName: string; bankCode: string }>(

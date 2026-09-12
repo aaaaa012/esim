@@ -82,6 +82,11 @@ export class FonepayGateway implements PaymentGateway {
   private get base() {
     return (process.env.FONEPAY_BASE_URL ?? "").replace(/\/+$/, "");
   }
+  private get basePath() {
+    return (
+      process.env.FONEPAY_API_BASE_PATH ?? "/api/merchant/third-party/v2"
+    ).replace(/\/+$/, "");
+  }
   private configured() {
     return (
       process.env.FONEPAY_ENABLED === "true" &&
@@ -101,6 +106,14 @@ export class FonepayGateway implements PaymentGateway {
       status: 503,
       details,
     });
+  }
+  private terminalId(): string {
+    const terminalId = process.env.FONEPAY_TERMINAL_ID;
+    if (!terminalId || terminalId.length > 16)
+      return this.fail(
+        "Fonepay terminalId is missing or exceeds 16 characters (V1.10 contract)",
+      );
+    return terminalId;
   }
   private redact(value: unknown): Prisma.InputJsonValue {
     if (Array.isArray(value)) return value.map((item) => this.redact(item));
@@ -142,7 +155,9 @@ export class FonepayGateway implements PaymentGateway {
     }
   }
   private sign(payload: unknown) {
-    const value = JSON.stringify(payload);
+    return this.signString(JSON.stringify(payload));
+  }
+  private signString(value: string) {
     try {
       const configured = process.env.FONEPAY_PRIVATE_KEY_PATH
         ? readFileSync(process.env.FONEPAY_PRIVATE_KEY_PATH, "utf8")
@@ -178,7 +193,7 @@ export class FonepayGateway implements PaymentGateway {
       username: process.env.FONEPAY_USERNAME!,
       password: process.env.FONEPAY_PASSWORD!,
     };
-    const path = "/api/merchant/third-party/v2/login";
+    const path = `${this.basePath}/login`;
     const signature = this.sign(body);
     const startedAt = Date.now();
     let response: Response;
@@ -317,14 +332,17 @@ export class FonepayGateway implements PaymentGateway {
         : {}),
       intentScheme,
     };
-  }
+}
 
-  private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
+private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
     const raw = await this.request(
-      "/api/merchant/third-party/v2/banks/list",
+      `${this.basePath}/banks/list`,
       "GET",
       undefined,
-      { paymentMode: "INTENT" },
+      {
+        paymentMode: "INTENT",
+        signature: this.signString(""),
+      },
       correlationId,
     );
     const parsed = bankListSchema.safeParse(raw);
@@ -452,19 +470,20 @@ private async banksForCheckout(correlationId: string): Promise<FonepayBank[]> {
       return this.fail(
         "Fonepay amount must be between NPR 1 and NPR 9,999,999",
       );
-    if (!input.orderNumber.trim())
+if (!input.orderNumber.trim())
       return this.fail("Fonepay billId must not be blank");
+    const terminalId = this.terminalId();
     const reference = `VC${input.attemptId.replace(/[^A-Za-z0-9]/g, "").slice(0, 28)}`;
     // Bank discovery is optional checkout enhancement data. A failed refresh
     // returns cached data (or an empty list) and must never block QR creation.
     const banks = await this.banksForCheckout(input.orderId);
     const qrRaw = await this.request(
-      "/api/merchant/third-party/v2/generate-intent-qr",
+      `${this.basePath}/generate-intent-qr`,
       "POST",
       {
         amount: input.amountNpr,
         billId: input.orderNumber,
-        terminalId: process.env.FONEPAY_TERMINAL_ID!,
+        terminalId,
         paymentMode: "QR",
         referenceLabel: reference,
         qrType: "INTENT_QR",
@@ -495,11 +514,12 @@ private async banksForCheckout(correlationId: string): Promise<FonepayBank[]> {
     reference: string,
     context: PaymentContext,
   ): Promise<PaymentVerification> {
+    const terminalId = this.terminalId();
     const raw = await this.request(
-      "/api/merchant/third-party/v2/thirdPartyDynamicQrGetStatus",
+      `${this.basePath}/thirdPartyDynamicQrGetStatus`,
       "POST",
       {
-        terminalId: process.env.FONEPAY_TERMINAL_ID!,
+        terminalId,
         referenceLabel: reference,
       },
       {},
@@ -511,7 +531,7 @@ private async banksForCheckout(correlationId: string): Promise<FonepayBank[]> {
     const data = parsed.data;
     if (data.prn !== reference)
       return this.fail("Fonepay payment reference did not match the request");
-    if (data.merchantCode !== process.env.FONEPAY_TERMINAL_ID)
+    if (data.merchantCode !== terminalId)
       return this.fail("Fonepay merchant terminal did not match the request");
     const status = String(data.paymentStatus ?? "").toLowerCase();
     if (
