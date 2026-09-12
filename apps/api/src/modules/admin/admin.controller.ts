@@ -156,6 +156,18 @@ export class AdminController {
   eligibility(@Body() body: { planId: string; msisdn: string }) {
     return this.admin.transatelEligibility(body.planId, body.msisdn);
   }
+@Get("integrations/fonepay/banks")
+  fonepayBanks() {
+    return this.admin.fonepayBanks();
+  }
+  @Post("integrations/fonepay/banks/sync")
+  syncFonepayBanks() {
+    return this.admin.syncFonepayBanks();
+  }
+  @Get("integrations/payment-gateways")
+  paymentGateways() {
+    return this.admin.paymentProviderCapabilities();
+  }
   @Get("users") users(
     @Query("q") q?: string,
     @Query("accountType") accountType?: UserRoleName,

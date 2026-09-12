@@ -15,7 +15,9 @@ import {
   OrderStatus,
   PaymentProvider,
   PaymentStatus,
+  declarePaymentRetry,
   provisioningFailure,
+  type PaymentRetryDeclaration,
   type ProvisioningFailure,
   type TravelerInput,
 } from "@visa-compass/shared";
@@ -53,6 +55,7 @@ type Timeline = {
 export type DemoOrder = {
   id: string;
   ownerId: string | null;
+  paymentRetry?: PaymentRetryDeclaration;
   refundStatus?: string | undefined;
   beneficiaryCustomerId?: string | undefined;
   purchasedByUserId?: string | undefined;
@@ -3556,7 +3559,14 @@ export class OrdersService implements OnModuleInit {
   }
   private expand(order: DemoOrder) {
     const { qrPayload: _qrPayload, ...safe } = order;
-    return safe;
+    return {
+      ...safe,
+      paymentRetry: declarePaymentRetry({
+        status: safe.status,
+        payment: safe.payment,
+        now: Date.now(),
+      }),
+    };
   }
   private redact(order: DemoOrder) {
     const {
@@ -3621,6 +3631,11 @@ export class OrdersService implements OnModuleInit {
       documents,
       ...(payment ? { payment } : {}),
       ...(assignment ? { assignment } : {}),
+      paymentRetry: declarePaymentRetry({
+        status: safe.status,
+        payment: safe.payment,
+        now: Date.now(),
+      }),
       timeline,
     } as unknown as DemoOrder;
   }

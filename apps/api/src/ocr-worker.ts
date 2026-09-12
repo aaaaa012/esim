@@ -3,8 +3,10 @@ import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { OcrWorkerModule } from "./ocr-worker.module.js";
 import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
+import { requireProcessRole } from "./common/process-role.js";
 
 async function bootstrap() {
+  requireProcessRole("ocr-worker");
   const app = await NestFactory.createApplicationContext(OcrWorkerModule);
   app.enableShutdownHooks();
   const resilience = app.get(ProductionResilienceService);

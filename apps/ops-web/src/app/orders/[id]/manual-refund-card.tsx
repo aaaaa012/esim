@@ -35,9 +35,11 @@ const apiError = (value: unknown, fallback: string) => {
 export function ManualRefundCard({
   orderId,
   paid,
+  paymentProvider,
 }: {
   orderId: string;
   paid: boolean;
+  paymentProvider?: string;
 }) {
   const authFetch = useAuthenticatedFetch();
   const [refund, setRefund] = useState<ManualRefund | null>(null);
@@ -108,7 +110,7 @@ export function ManualRefundCard({
           </p>
           {refund.status === "APPROVED" ? (
             <p className="mt-2 text-xs font-medium">
-              Do the refund in Khalti, then mark it done from Manual Refunds.
+              Complete the refund in {paymentProvider === "FONEPAY" ? "Fonepay" : "Khalti"}, then mark it done from Manual Refunds.
             </p>
           ) : null}
         </div>

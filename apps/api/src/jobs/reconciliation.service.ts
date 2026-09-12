@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from "@nestjs/common";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 import { ConnectivityService } from "../modules/integration/connectivity.service.js";
@@ -28,6 +29,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { PartnerService } from "../modules/partners/partner.service.js";
 import { PublicAssetStorageService } from "../infrastructure/public-asset-storage.service.js";
+import { FonepayGateway } from "../modules/payments/gateways/fonepay.gateway.js";
 
 /**
  * Background reconciliation of active Transatel subscriptions.
@@ -43,6 +45,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   private pendingPaymentTimer?: ReturnType<typeof setInterval>;
   private ocrRecoveryTimer?: ReturnType<typeof setInterval>;
+  private fonepayBankSyncTimer?: ReturnType<typeof setInterval>;
   private repairedReusableInventory = false;
 
   constructor(
@@ -61,6 +64,7 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     private readonly metrics?: MetricsService,
     private readonly usageService?: UsageService,
     private readonly publicAssets?: PublicAssetStorageService,
+    @Optional() private readonly fonepay?: FonepayGateway,
   ) {}
 
   onModuleInit() {
@@ -199,12 +203,14 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     void this.ocrRecoveryAsLeader().catch((error) =>
       this.recordRunFailure(error, "ocr-recovery"),
     );
+    this.registerFonepayBankSync();
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
     if (this.pendingPaymentTimer) clearInterval(this.pendingPaymentTimer);
     if (this.ocrRecoveryTimer) clearInterval(this.ocrRecoveryTimer);
+    if (this.fonepayBankSyncTimer) clearInterval(this.fonepayBankSyncTimer);
   }
 
   private async runAsLeader() {
@@ -230,6 +236,19 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       this.logger.debug(
         "Skipped pending-payment reconciliation; another replica holds the lease",
       );
+    else
+      await this.resilience
+        .heartbeat("payment-reconcile", {
+          role: process.env.PROCESS_ROLE ?? "workflow-worker",
+          completedAt: new Date().toISOString(),
+          confirmed: result.value?.confirmed.length ?? 0,
+          stillPending: result.value?.stillPending.length ?? 0,
+        })
+        .catch((error) =>
+          this.logger.warn(
+            `Could not heartbeat payment reconcile: ${error instanceof Error ? error.message : "unknown"}`,
+          ),
+        );
     return result.value;
   }
 
@@ -243,6 +262,52 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
     if (!result.acquired)
       this.logger.debug(
         "Skipped OCR recovery; another replica holds the lease",
+      );
+    return result.value;
+  }
+
+  /**
+   * Periodic refresh of the Fonepay bank directory. This is a background,
+   * single-flight sync (distributed lease) so the cached, audited directory
+   * stays current without concurrent writers. Outages keep the last good
+   * directory; the failure is recorded on the sync row and surfaced to Ops.
+   * Runs only on workers (onModuleInit already returns early for PROCESS_ROLE
+   * "api") and only when Fonepay is actually configured.
+   */
+  private registerFonepayBankSync() {
+    if (process.env.FONEPAY_ENABLED !== "true") return;
+    if (!this.fonepay) {
+      this.logger.warn("Fonepay is enabled but the gateway is unavailable");
+      return;
+    }
+    const minutes = Number(
+      process.env.FONEPAY_BANK_SYNC_INTERVAL_MINUTES ?? 360,
+    );
+    const intervalMs =
+      Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 360 * 60_000;
+    this.fonepayBankSyncTimer = setInterval(
+      () =>
+        void this.fonepayBankSyncAsLeader().catch((error) =>
+          this.recordRunFailure(error, "fonepay-bank-sync"),
+        ),
+      intervalMs,
+    );
+    void this.fonepayBankSyncAsLeader().catch((error) =>
+      this.recordRunFailure(error, "fonepay-bank-sync"),
+    );
+  }
+
+  private async fonepayBankSyncAsLeader() {
+    if (!this.fonepay) return { synced: false };
+    const gateway = this.fonepay;
+    const result = await this.queues.withDistributedLock(
+      "fonepay-bank-directory-sync",
+      10 * 60_000,
+      () => gateway.syncBankDirectory(),
+    );
+    if (!result.acquired)
+      this.logger.debug(
+        "Skipped Fonepay bank sync; another replica holds the lease",
       );
     return result.value;
   }

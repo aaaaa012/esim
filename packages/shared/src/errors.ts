@@ -51,6 +51,7 @@ export const ApiErrorCode = {
   PAYMENT_NOT_CONFIRMED: "PAYMENT_NOT_CONFIRMED",
   PAYMENT_REFERENCE_MISMATCH: "PAYMENT_REFERENCE_MISMATCH",
   PAYMENT_EXPIRED: "PAYMENT_EXPIRED",
+  PAYMENT_RETRY_NOT_SAFE: "PAYMENT_RETRY_NOT_SAFE",
 
   // Connectivity (Transatel)
   CONNECTIVITY_CONFIGURATION: "CONNECTIVITY_CONFIGURATION",
@@ -125,6 +126,8 @@ export const apiErrorMessage = (
       return "The payment reference does not match this order.";
     case ApiErrorCode.PAYMENT_EXPIRED:
       return "This payment attempt has expired. Please start a new one.";
+    case ApiErrorCode.PAYMENT_RETRY_NOT_SAFE:
+      return "A payment is still being confirmed for this order. Starting a new one now is not safe.";
     case ApiErrorCode.CONNECTIVITY_UNAVAILABLE:
       return "Our connectivity provider is temporarily unavailable. Please try again shortly.";
     case ApiErrorCode.ELIGIBILITY_REJECTED:

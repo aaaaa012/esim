@@ -8,7 +8,7 @@ import ErrorModal from "../../../components/error-modal";
 import { formatPlanDataText } from "../../../lib/format-data";
 import { filterFonepayBanks, fonepayBankIntentUrl } from "./payment-intent";
 import { FonepayBankLogo } from "./fonepay-bank-logo";
-import { paymentActionDisabled } from "./payment-gates";
+import { paymentActionDisabled, retryDeclaredAllowed } from "./payment-gates";
 import Link from "next/link";
 import {
   Check,
@@ -97,6 +97,11 @@ type Order = {
     | "SKIPPED";
   refundStatus?: string;
   provisioningFailure?: { code: string; message: string };
+  paymentRetry?: {
+    canRetry: boolean;
+    canChangeProvider: boolean;
+    blockedReason?: string;
+  };
 };
 type Payment = {
   reference: string;
@@ -766,7 +771,7 @@ export default function CheckoutClient({
         }
         if (!poll) {
           setError(
-            "We could not confirm the payment right now. Your order remains unpaid; please try again shortly.",
+            "We could not reach the payment provider just now. No second charge was made: your order stays pending until a confirmation comes back. Please check again shortly.",
           );
           setVerifying(false);
           return;
@@ -2324,6 +2329,10 @@ export default function CheckoutClient({
                       <button
                         type="button"
                         className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
+                        disabled={!retryDeclaredAllowed(
+                          order?.paymentRetry,
+                          "canChangeProvider",
+                        )}
                         onClick={() => setProvider(PaymentProvider.KHALTI)}
                       >
                         <img src="/brand/khalti-logo.png" alt="Khalti" />
@@ -2336,6 +2345,10 @@ export default function CheckoutClient({
                         <button
                           type="button"
                           className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
+                          disabled={!retryDeclaredAllowed(
+                            order?.paymentRetry,
+                            "canChangeProvider",
+                          )}
                           onClick={() => setProvider(PaymentProvider.FONEPAY)}
                         >
                           <img
@@ -2349,6 +2362,13 @@ export default function CheckoutClient({
                         </button>
                       ) : null}
                     </div>
+                    {order?.paymentRetry &&
+                    !order.paymentRetry.canRetry &&
+                    order.paymentRetry.blockedReason ? (
+                      <p className="form-note" role="status">
+                        {order.paymentRetry.blockedReason}
+                      </p>
+                    ) : null}
                     {isTopUp && !order ? (
                       <>
                         <PurchaseConsent
@@ -2422,7 +2442,9 @@ export default function CheckoutClient({
                               <div className="fonepay-bank-heading">
                                 <b>Or pay with your banking app</b>
                                 <small>
-                                  Select your bank to continue securely.
+                                  This list is indicative. If your bank is
+                                  missing, scan the QR instead — it works with
+                                  any Fonepay-supported banking app.
                                 </small>
                               </div>
                               <label className="fonepay-bank-search">
@@ -2533,6 +2555,10 @@ export default function CheckoutClient({
                           isTopUp,
                           verifyingPassport,
                           passportGatePassed: passportGatePassed(order),
+                          retryAllowed: retryDeclaredAllowed(
+                            order?.paymentRetry,
+                            "canRetry",
+                          ),
                         })}
                         onClick={() => void initiate()}
                       >

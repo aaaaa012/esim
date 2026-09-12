@@ -514,7 +514,7 @@ export default function OrderReview({ id }: { id: string }) {
               }
             >
               <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
-                The Khalti payment is confirmed before this plan is added to the
+                The payment provider confirms payment before this plan is added to the
                 customer&apos;s existing eSIM. The plan is then confirmed on the
                 network profile automatically.
               </div>
@@ -531,14 +531,14 @@ export default function OrderReview({ id }: { id: string }) {
                   label="Payment status"
                   value={
                     order.payment?.status === "COMPLETED"
-                      ? "Confirmed by Khalti"
+                      ? `Confirmed by ${order.payment?.provider === "FONEPAY" ? "Fonepay" : "Khalti"}`
                       : order.payment?.status
                         ? humane(order.payment.status)
                         : "Not started"
                   }
                 />
                 <InfoRow
-                  label="Khalti payment ID"
+                  label={`${order.payment?.provider === "FONEPAY" ? "Fonepay" : "Khalti"} payment ID`}
                   value={
                     order.payment?.providerTransactionId ??
                     order.payment?.reference ??
@@ -1246,6 +1246,9 @@ export default function OrderReview({ id }: { id: string }) {
             )}
             <ManualRefundCard
               orderId={order.id}
+              {...(order.payment?.provider
+                ? { paymentProvider: order.payment.provider }
+                : {})}
               paid={
                 order.payment?.status === "COMPLETED" &&
                 order.status !== "REFUNDED"

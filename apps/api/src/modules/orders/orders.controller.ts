@@ -827,8 +827,34 @@ export class OperationsController {
     const esimUsage = this.prisma.enabled
       ? await this.usageService.forOrder(id)
       : null;
+    const paymentHistory = this.prisma.enabled
+      ? await this.prisma.paymentEvent.findMany({
+          where: { orderId: id },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+          select: {
+            id: true,
+            provider: true,
+            eventType: true,
+            source: true,
+            paymentReference: true,
+            fromStatus: true,
+            toStatus: true,
+            amount: true,
+            currency: true,
+            providerTransactionId: true,
+            providerMessage: true,
+            createdAt: true,
+          },
+        })
+      : [];
     return {
       ...order,
+      paymentHistory: paymentHistory.map((event) => ({
+        ...event,
+        amount: event.amount === null ? null : Number(event.amount),
+        createdAt: event.createdAt.toISOString(),
+      })),
       ...(esimUsage
         ? {
             packageUsage: this.usageService.packageForOrder(esimUsage, id),

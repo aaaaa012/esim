@@ -4,6 +4,7 @@ import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
+import { PaymentCapability } from "../payment-gateway.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -29,6 +30,16 @@ export class KhaltiGateway implements PaymentGateway {
   private readonly logger = new Logger(KhaltiGateway.name);
 
   constructor(@Optional() private readonly prisma?: PrismaService) {}
+
+  capabilities() {
+    return {
+      checkout: "REDIRECT" as const,
+      statusLookup: true,
+      refunds: "MANUAL" as const,
+      disputes: "SUPPORTED" as const,
+      extra: [PaymentCapability.MANUAL_REFUND_GUIDANCE],
+    };
+  }
 
   private get baseUrl(): string {
     return (

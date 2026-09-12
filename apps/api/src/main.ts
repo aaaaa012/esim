@@ -14,6 +14,7 @@ import { RateLimitGuard } from "./common/rate-limit.guard.js";
 import { MetricsService } from "./observability/metrics.service.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
 import { webhookIngressMiddleware } from "./common/webhook-ingress.middleware.js";
+import { requireProcessRole } from "./common/process-role.js";
 
 const BOOT_DB_RETRIES = Number(process.env.BOOT_DB_RETRIES ?? 12);
 const BOOT_DB_RETRY_BASE_MS = Number(process.env.BOOT_DB_RETRY_BASE_MS ?? 1500);
@@ -33,6 +34,7 @@ function isDbUnreachable(err: unknown): boolean {
 }
 
 async function bootstrap() {
+  requireProcessRole("api");
   let attempt = 0;
   for (;;) {
     try {

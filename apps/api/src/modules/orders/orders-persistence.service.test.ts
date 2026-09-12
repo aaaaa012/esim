@@ -17,6 +17,10 @@ function serviceFor(payment: {
     },
     order: { updateMany: orderUpdateMany },
     orderEvent: { create: eventCreate },
+    paymentEvent: {
+      createMany: vi.fn(async () => ({ count: 1 })),
+      create: vi.fn(async () => ({})),
+    },
   };
   const prisma = {
     enabled: true,

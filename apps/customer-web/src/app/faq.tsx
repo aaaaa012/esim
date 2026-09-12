@@ -18,7 +18,7 @@ const ITEMS = [
   },
   {
     q: "Which payment methods do you support?",
-    a: "We accept payments via Khalti in NPR. All prices shown are in NPR and include the full cost of the plan with no hidden fees.",
+    a: "We accept supported digital payments, including Khalti and Fonepay, in NPR. All prices shown are in NPR and include the full cost of the plan with no hidden fees.",
   },
   {
     q: "Can I top up an existing eSIM?",

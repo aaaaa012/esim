@@ -124,7 +124,7 @@ export default function IntegrationEventsClient() {
         ) : !items.length ? (
           <EmptyState
             title="No updates received yet"
-            description="Messages from Khalti and the network provider will appear here."
+            description="Messages from payment and network providers will appear here."
           />
         ) : (
           <Table>

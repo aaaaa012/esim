@@ -8,6 +8,7 @@ import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
+import { PaymentCapability } from "../payment-gateway.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -15,7 +16,7 @@ import type {
   PaymentVerification,
 } from "../payment-gateway.js";
 
-type Bank = {
+export type FonepayBank = {
   bankName: string;
   bankCode: string;
   bankIcon?: string;
@@ -64,6 +65,20 @@ export class FonepayGateway implements PaymentGateway {
   private readonly logger = new Logger(FonepayGateway.name);
   private token?: { value: string; expiresAt: number };
   constructor(@Optional() private readonly prisma?: PrismaService) {}
+
+  capabilities() {
+    return {
+      checkout: "QR" as const,
+      statusLookup: true,
+      refunds: "MANUAL" as const,
+      disputes: "NOT_SUPPORTED" as const,
+      extra: [
+        PaymentCapability.BANK_DIRECTORY,
+        PaymentCapability.PROVIDER_WEBSOCKET,
+        PaymentCapability.MANUAL_REFUND_GUIDANCE,
+      ],
+    };
+  }
   private get base() {
     return (process.env.FONEPAY_BASE_URL ?? "").replace(/\/+$/, "");
   }
@@ -281,6 +296,147 @@ export class FonepayGateway implements PaymentGateway {
       return this.fail(`Fonepay ${path} failed (${response.status})`);
     return data as Record<string, unknown>;
   }
+
+  private validBank(bank: z.infer<typeof bankSchema>): FonepayBank | null {
+    const intentScheme = bank.intentScheme.trim();
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(intentScheme)) return null;
+    const bankIcon = bank.bankIcon?.trim();
+    if (bankIcon) {
+      try {
+        if (new URL(bankIcon).protocol !== "https:") return null;
+      } catch {
+        return null;
+      }
+    }
+    return {
+      bankName: bank.bankName.trim(),
+      bankCode: bank.bankCode.trim(),
+      ...(bankIcon ? { bankIcon } : {}),
+      ...(bank.packageName?.trim()
+        ? { packageName: bank.packageName.trim() }
+        : {}),
+      intentScheme,
+    };
+  }
+
+  private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
+    const raw = await this.request(
+      "/api/merchant/third-party/v2/banks/list",
+      "GET",
+      undefined,
+      { paymentMode: "INTENT" },
+      correlationId,
+    );
+    const parsed = bankListSchema.safeParse(raw);
+    if (!parsed.success) return this.fail("Fonepay bank-list response was invalid");
+    const banks = parsed.data.bankDetails
+      .map((bank) => this.validBank(bank))
+      .filter((bank): bank is FonepayBank => Boolean(bank));
+    if (banks.length !== parsed.data.bankDetails.length)
+      this.logger.warn("Ignored one or more unsafe Fonepay bank directory entries");
+    return banks;
+  }
+
+  async bankDirectory() {
+    if (!this.prisma?.enabled) return { banks: [], lastSyncedAt: null };
+    const [banks, latest] = await Promise.all([
+      this.prisma.fonepayBankDirectoryEntry.findMany({
+        where: { active: true },
+        orderBy: { bankName: "asc" },
+      }),
+      this.prisma.fonepayBankDirectorySync.findFirst({
+        where: { status: "SUCCEEDED" },
+        orderBy: { completedAt: "desc" },
+      }),
+    ]);
+    return { banks, lastSyncedAt: latest?.completedAt?.toISOString() ?? null };
+  }
+
+  async syncBankDirectory(requestedById?: string) {
+    if (!this.prisma?.enabled)
+      return { banks: await this.fetchBanks(), lastSyncedAt: null };
+    const sync = await this.prisma.fonepayBankDirectorySync.create({
+      data: { status: "RUNNING", ...(requestedById ? { requestedById } : {}) },
+    });
+    try {
+      const banks = await this.fetchBanks(sync.id);
+      const now = new Date();
+      const existing = await this.prisma.fonepayBankDirectoryEntry.findMany();
+      const byCode = new Map(existing.map((bank) => [bank.bankCode, bank]));
+      const incomingCodes = banks.map((bank) => bank.bankCode);
+      let addedCount = 0;
+      let updatedCount = 0;
+      for (const bank of banks) {
+        if (byCode.has(bank.bankCode)) updatedCount += 1;
+        else addedCount += 1;
+        await this.prisma.fonepayBankDirectoryEntry.upsert({
+          where: { bankCode: bank.bankCode },
+          create: { ...bank, active: true, firstSeenAt: now, lastSeenAt: now },
+          update: { ...bank, active: true, lastSeenAt: now },
+        });
+      }
+      const deactivated = await this.prisma.fonepayBankDirectoryEntry.updateMany({
+        where: incomingCodes.length
+          ? { active: true, bankCode: { notIn: incomingCodes } }
+          : { active: true },
+        data: { active: false },
+      });
+      await this.prisma.fonepayBankDirectorySync.update({
+        where: { id: sync.id },
+        data: {
+          status: "SUCCEEDED",
+          totalCount: banks.length,
+          addedCount,
+          updatedCount,
+          deactivatedCount: deactivated.count,
+          completedAt: now,
+        },
+      });
+      return this.bankDirectory();
+    } catch (error) {
+      await this.prisma.fonepayBankDirectorySync.update({
+        where: { id: sync.id },
+        data: {
+          status: "FAILED",
+          errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+          completedAt: new Date(),
+        },
+      });
+      throw error;
+    }
+  }
+
+private async banksForCheckout(correlationId: string): Promise<FonepayBank[]> {
+    const cached = await this.bankDirectory();
+    const toBank = (bank: {
+      bankName: string;
+      bankCode: string;
+      intentScheme: string;
+      bankIcon?: string | null;
+      packageName?: string | null;
+    }): FonepayBank => ({
+      bankName: bank.bankName,
+      bankCode: bank.bankCode,
+      intentScheme: bank.intentScheme,
+      ...(bank.bankIcon ? { bankIcon: bank.bankIcon } : {}),
+      ...(bank.packageName ? { packageName: bank.packageName } : {}),
+    });
+    const ttlMs = Math.max(300, Number(process.env.FONEPAY_BANK_CACHE_TTL_SECONDS ?? 86_400)) * 1_000;
+    const fresh = cached.lastSyncedAt && Date.now() - new Date(cached.lastSyncedAt).getTime() < ttlMs;
+    const cachedBanks = cached.banks.map(toBank);
+    if (fresh && cachedBanks.length) return cachedBanks;
+    try {
+      const synced = await this.syncBankDirectory();
+      return synced.banks.map(toBank);
+    } catch (error) {
+      if (cachedBanks.length) {
+        this.logger.warn(`Using last-known-good Fonepay bank directory: ${error instanceof Error ? error.message : String(error)}`);
+        return cachedBanks;
+      }
+      this.logger.warn(`Fonepay bank directory unavailable; QR checkout remains available (${correlationId})`);
+      return [];
+    }
+  }
   async initiate(input: {
     attemptId: string;
     orderId: string;
@@ -299,16 +455,9 @@ export class FonepayGateway implements PaymentGateway {
     if (!input.orderNumber.trim())
       return this.fail("Fonepay billId must not be blank");
     const reference = `VC${input.attemptId.replace(/[^A-Za-z0-9]/g, "").slice(0, 28)}`;
-    const banksRaw = await this.request(
-      "/api/merchant/third-party/v2/banks/list",
-      "GET",
-      undefined,
-      { paymentMode: "INTENT" },
-      input.orderId,
-    );
-    const banks = bankListSchema.safeParse(banksRaw);
-    if (!banks.success)
-      return this.fail("Fonepay bank-list response was invalid");
+    // Bank discovery is optional checkout enhancement data. A failed refresh
+    // returns cached data (or an empty list) and must never block QR creation.
+    const banks = await this.banksForCheckout(input.orderId);
     const qrRaw = await this.request(
       "/api/merchant/third-party/v2/generate-intent-qr",
       "POST",
@@ -339,7 +488,7 @@ export class FonepayGateway implements PaymentGateway {
       qrPayload,
       qrDataUrl: await QRCode.toDataURL(qrPayload, { margin: 1, width: 360 }),
       ...(qr.websocketId ? { websocketUrl: qr.websocketId } : {}),
-      banks: banks.data.bankDetails as Bank[],
+      banks,
     };
   }
   async verify(

@@ -518,7 +518,7 @@ export class OrdersPersistenceService {
               },
             });
           }
-          if (order.payment)
+          if (order.payment) {
             await tx.payment.upsert({
               where: { paymentReference: order.payment.reference },
               update: {
@@ -554,6 +554,25 @@ export class OrdersPersistenceService {
                 status: order.payment.status as DbPaymentStatus,
               },
             });
+            await tx.paymentEvent.createMany({
+              data: [
+                {
+                  orderId: order.id,
+                  provider: order.payment.provider as never,
+                  eventType: "PAYMENT_STATE_RECORDED",
+                  source: "ORDER_PERSISTENCE",
+                  paymentReference: order.payment.reference,
+                  toStatus: order.payment.status as DbPaymentStatus,
+                  amount: order.totalAmountNpr,
+                  currency: "NPR",
+                  providerTransactionId:
+                    order.payment.providerTransactionId ?? null,
+                  dedupeKey: `payment-state:${order.payment.reference}:${order.payment.status}`,
+                },
+              ],
+              skipDuplicates: true,
+            });
+          }
           const persistedEvents = await tx.orderEvent.findMany({
             where: { orderId: order.id },
             select: {
@@ -631,6 +650,7 @@ export class OrdersPersistenceService {
             where: { paymentReference: reference },
             select: {
               orderId: true,
+              provider: true,
               status: true,
               order: { select: { status: true } },
             },
@@ -679,6 +699,22 @@ export class OrdersPersistenceService {
               requiresReview: false,
             };
           }
+          await tx.paymentEvent.createMany({
+            data: [
+              {
+                orderId,
+                provider: payment.provider,
+                eventType: "PAYMENT_CONFIRMED",
+                source: "GATEWAY_VERIFICATION",
+                paymentReference: reference,
+                fromStatus: payment.status,
+                toStatus: PaymentStatus.COMPLETED as DbPaymentStatus,
+                providerTransactionId: transactionId ?? null,
+                dedupeKey: `payment-confirmed:${reference}`,
+              },
+            ],
+            skipDuplicates: true,
+          });
           if (!orderCanAdvance)
             return {
               claimed: true,

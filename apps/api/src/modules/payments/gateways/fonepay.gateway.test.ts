@@ -43,7 +43,7 @@ describe("FonepayGateway", () => {
             {
               bankName: "Example Bank",
               bankCode: "EX",
-              intentScheme: "examplebank",
+              intentScheme: "examplebank://",
             },
           ],
         }),

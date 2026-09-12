@@ -9,6 +9,7 @@ import {
   OrderStatus,
   PaymentProvider,
   PaymentStatus,
+  declarePaymentRetry,
 } from "@visa-compass/shared";
 import { ApiException } from "../../common/api-error.js";
 import { OrdersService, type DemoOrder } from "../orders/orders.service.js";
@@ -87,6 +88,51 @@ export class PaymentsService {
     return { providers, simulator };
   }
 
+  /**
+   * Server-side retry/change-provider safety gate. A new payment session is
+   * only permitted when the server can prove no charge is uncertain. Orders
+   * under PAYMENT_REVIEW_REQUIRED or with an expired-but-unresolved pending
+   * payment are blocked with PAYMENT_RETRY_NOT_SAFE / a reconcile-first error;
+   * the checkout UI reads the same declaration before it even renders actions.
+   */
+  private assertSafeToInitiate(order: DemoOrder): void {
+    const declaration = declarePaymentRetry({
+      status: order.status,
+      payment: order.payment,
+      now: Date.now(),
+    });
+    if (
+      order.status === OrderStatus.PAYMENT_REVIEW_REQUIRED ||
+      order.payment?.status === PaymentStatus.REVIEW_REQUIRED
+    )
+      throw new ApiException({
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message: "A new payment cannot start until the previous one is reconciled.",
+        status: 409,
+        details:
+          declaration.blockedReason ??
+          "Payment confirmation is under operational review.",
+      });
+    if (
+      ![
+        OrderStatus.DRAFT,
+        OrderStatus.PAYMENT_PENDING,
+        OrderStatus.PAYMENT_FAILED,
+      ].includes(order.status)
+    )
+      throw new BadRequestException(
+        "This order cannot collect another payment",
+      );
+    if (
+      order.payment?.status === PaymentStatus.PENDING &&
+      (!order.payment.expiresAt ||
+        new Date(order.payment.expiresAt).getTime() <= Date.now())
+    )
+      throw new BadRequestException(
+        "Reconcile the pending payment before another attempt",
+      );
+  }
+
   async initiate(
     orderId: string,
     ownerId: string | null,
@@ -97,26 +143,7 @@ export class PaymentsService {
     const order = this.orders.get(orderId, ownerId ?? undefined);
     if (order.purchaseType !== "TOPUP")
       await this.orders.assertInventoryAvailableForNewOrder();
-    if (order.purchaseType === "TOPUP") {
-      if (
-        ![
-          OrderStatus.DRAFT,
-          OrderStatus.PAYMENT_FAILED,
-          OrderStatus.PAYMENT_PENDING,
-        ].includes(order.status)
-      )
-        throw new BadRequestException(
-          "This recharge cannot collect another payment",
-        );
-      if (
-        order.payment?.status === PaymentStatus.PENDING &&
-        (!order.payment.expiresAt ||
-          new Date(order.payment.expiresAt).getTime() <= Date.now())
-      )
-        throw new BadRequestException(
-          "Reconcile the pending payment before another attempt",
-        );
-    }
+    this.assertSafeToInitiate(order);
     const existing = order.payment;
     if (
       existing &&
@@ -172,6 +199,17 @@ export class PaymentsService {
           amountNpr: order.totalAmountNpr,
           claimToken,
           leaseExpiresAt,
+        },
+      });
+      await prisma.paymentEvent?.create({
+        data: {
+          orderId: order.id,
+          provider: provider as never,
+          eventType: "PAYMENT_INITIATION_CLAIMED",
+          source: "CHECKOUT",
+          amount: order.totalAmountNpr,
+          currency: "NPR",
+          dedupeKey: `payment-initiation:${claimToken}`,
         },
       });
       owned = true;
@@ -277,6 +315,25 @@ export class PaymentsService {
         throw new Error(
           "Payment initiation ownership was lost before persistence",
         );
+      await prisma.paymentEvent?.create({
+        data: {
+          orderId: order.id,
+          provider: provider as never,
+          eventType: "PAYMENT_INITIATED",
+          source: "CHECKOUT",
+          paymentReference: result.reference,
+          toStatus: PaymentStatus.PENDING as never,
+          amount: order.totalAmountNpr,
+          currency: "NPR",
+evidence: {
+            expiresAt: result.expiresAt ?? null,
+            correlationId: "correlationId" in result
+              ? (result.correlationId ?? null)
+              : null,
+          },
+          dedupeKey: `payment-initiated:${result.reference}`,
+        },
+      });
       return result;
     } catch (error) {
       await prisma.paymentInitiation.updateMany({
@@ -290,6 +347,19 @@ export class PaymentsService {
           errorCode: "PROVIDER_INITIATION_FAILED",
           leaseExpiresAt: new Date(),
         },
+      });
+      await prisma.paymentEvent?.createMany({
+        data: [{
+          orderId: order.id,
+          provider: provider as never,
+          eventType: "PAYMENT_INITIATION_FAILED",
+          source: "CHECKOUT",
+          amount: order.totalAmountNpr,
+          currency: "NPR",
+          providerMessage: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+          dedupeKey: `payment-initiation-failed:${claimToken}`,
+        }],
+        skipDuplicates: true,
       });
       throw error;
     }
@@ -336,6 +406,10 @@ export class PaymentsService {
    * fails them, so a normal pending result is not confused with a provider
    * failure. Provider errors are deferred. Expiry enforcement stays with
    * reconcilePendingPayments().
+   *
+   * With persistence enabled the candidate set is read from the canonical
+   * store (Payment rows in PENDING under a PAYMENT_PENDING order) so every
+   * replica reconciles the same set regardless of its in-memory cache.
    */
   async reconcileRecentPendingPayments(): Promise<{
     confirmed: string[];
@@ -343,6 +417,21 @@ export class PaymentsService {
     terminal: string[];
     errored: string[];
   }> {
+    if (this.prisma?.enabled) {
+      const rows = await this.prisma.payment.findMany({
+        where: {
+          status: PaymentStatus.PENDING,
+          order: { status: OrderStatus.PAYMENT_PENDING },
+        },
+        select: { orderId: true },
+        orderBy: { updatedAt: "asc" },
+        take: Number(process.env.PAYMENT_RECONCILE_BATCH ?? 200),
+      });
+      const orderIds = [...new Set(rows.map((row) => row.orderId))];
+      await Promise.all(
+        orderIds.map((orderId) => this.orders.refreshOne?.(orderId, true)),
+      );
+    }
     const confirmed: string[] = [];
     const stillPending: string[] = [];
     const terminal: string[] = [];
@@ -444,10 +533,54 @@ export class PaymentsService {
     source: VerifySource,
   ): Promise<LookupVerdict> {
     const context = this.context(order, reference);
-    const result = await this.gateway(order.payment?.provider).verify(
-      reference,
-      context,
-    );
+    let result: import("./payment-gateway.js").PaymentVerification;
+    try {
+      result = await this.gateway(order.payment?.provider).verify(
+        reference,
+        context,
+      );
+    } catch (error) {
+      await this.recordVerificationUnavailable(
+        order,
+        reference,
+        source,
+        error,
+      );
+      throw error;
+    }
+    if (this.prisma?.enabled) {
+      try {
+        const payment = await this.prisma.payment.findUnique({
+          where: { paymentReference: reference },
+          select: { id: true, provider: true, status: true },
+        });
+        if (payment)
+          await this.prisma.paymentEvent.create({
+            data: {
+              orderId: order.id,
+              paymentId: payment.id,
+              provider: payment.provider,
+              eventType: "PAYMENT_STATUS_CHECKED",
+              source: source.toUpperCase(),
+              paymentReference: reference,
+              fromStatus: payment.status,
+              toStatus: result.status as never,
+              amount: result.amountNpr,
+              currency: result.currency ?? "NPR",
+              providerTransactionId: result.providerTransactionId ?? null,
+              evidence: {
+                providerOrderId: result.orderId,
+                matchedOrder: result.orderId === order.id,
+                matchedAmount: result.amountNpr === order.totalAmountNpr,
+              },
+            },
+          });
+      } catch (error) {
+        this.logger.error(
+          `Could not persist payment lookup evidence for ${order.id}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
     this.logger.debug({
       event: "payment_lookup",
       orderId: order.id,
@@ -643,6 +776,45 @@ export class PaymentsService {
       failureCategory: "PAYMENT_REFERENCE_AMOUNT_OR_CURRENCY_MISMATCH",
       availableActions: ["RECHECK_PAYMENT"],
     });
+  }
+
+  /**
+   * Append-only evidence that a status lookup was attempted but the provider
+   * could not be reached. The order is never moved on this path — provider
+   * unavailability is not treated as a failed payment — but Operations can see
+   * the outage in the provider-neutral payment history.
+   */
+  private async recordVerificationUnavailable(
+    order: DemoOrder,
+    reference: string,
+    source: VerifySource,
+    error: unknown,
+  ) {
+    if (!this.prisma?.enabled) return;
+    try {
+      await this.prisma.paymentEvent.create({
+        data: {
+          orderId: order.id,
+          provider: (order.payment?.provider ??
+            PaymentProvider.KHALTI) as never,
+          eventType: "PAYMENT_VERIFICATION_UNAVAILABLE",
+          source: source.toUpperCase(),
+          paymentReference: reference,
+          toStatus: order.payment?.status as never,
+          amount: order.totalAmountNpr,
+          currency: "NPR",
+          providerMessage: (error instanceof Error ? error.message : String(error)).slice(
+            0,
+            500,
+          ),
+          dedupeKey: `payment-verification-unavailable:${reference}:${new Date().getTime()}`,
+        },
+      });
+    } catch (persistError) {
+      this.logger.error(
+        `Could not persist verification-unavailable evidence for ${order.id}: ${persistError instanceof Error ? persistError.message : "unknown"}`,
+      );
+    }
   }
   async simulate(
     orderId: string,

@@ -17,6 +17,7 @@ import {
   OrderStatus,
   PaymentProvider,
   PaymentStatus,
+  declarePaymentRetry,
 } from "@visa-compass/shared";
 import type { AuthenticatedUser } from "../../common/auth.guard.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
@@ -59,6 +60,18 @@ export function rechargeView(order: DemoOrder) {
       : undefined,
     paymentState: order.payment?.status ?? "NOT_STARTED",
     rechargeState: order.status,
+    paymentRetry: declarePaymentRetry({
+      status: order.status,
+      payment: order.payment
+        ? {
+            status: order.payment.status,
+            ...(order.payment.expiresAt
+              ? { expiresAt: order.payment.expiresAt }
+              : {}),
+          }
+        : null,
+      now: Date.now(),
+    }),
     refundStatus: order.refundStatus,
     nextAction:
       order.status === OrderStatus.REFUNDED ||

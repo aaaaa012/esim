@@ -371,6 +371,9 @@ export class ProductionResilienceService {
           ? Math.floor((now - oldestPaymentReview.updatedAt.getTime()) / 1000)
           : 0,
         openDisputes,
+        lastReconcileSweepAt:
+          workers.find((worker) => worker.worker === "payment-reconcile")
+            ?.lastSeenAt ?? null,
       },
       orders: {
         stuckByState: Object.fromEntries(

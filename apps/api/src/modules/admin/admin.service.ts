@@ -27,6 +27,7 @@ import { ConnectivityService } from "../integration/connectivity.service.js";
 import { createClerkClient } from "@clerk/backend";
 import { tabularToRecords } from "../../common/tabular.util.js";
 import { KhaltiGateway } from "../payments/gateways/khalti.gateway.js";
+import { FonepayGateway } from "../payments/gateways/fonepay.gateway.js";
 import {
   EMAIL_CHANNEL,
   type EmailChannel,
@@ -129,6 +130,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
     private readonly khalti: KhaltiGateway = new KhaltiGateway(),
+    private readonly fonepay: FonepayGateway = new FonepayGateway(),
     @Optional() @Inject(EMAIL_CHANNEL) private readonly email?: EmailChannel,
   ) {}
 
@@ -835,6 +837,38 @@ export class AdminService {
           : "CONFIG_REQUIRED",
       },
       {
+        id: "fonepay",
+        name: "Fonepay Payment Gateway",
+        category: "PAYMENT",
+        provider: "FONEPAY",
+        enabled:
+          process.env.FONEPAY_ENABLED === "true" &&
+          configured([
+            "FONEPAY_BASE_URL",
+            "FONEPAY_USERNAME",
+            "FONEPAY_PASSWORD",
+            "FONEPAY_TERMINAL_ID",
+          ]) &&
+          Boolean(
+            process.env.FONEPAY_PRIVATE_KEY_PATH ||
+              process.env.FONEPAY_PRIVATE_KEY_BASE64,
+          ),
+        status:
+          process.env.FONEPAY_ENABLED === "true" &&
+          configured([
+            "FONEPAY_BASE_URL",
+            "FONEPAY_USERNAME",
+            "FONEPAY_PASSWORD",
+            "FONEPAY_TERMINAL_ID",
+          ]) &&
+          Boolean(
+            process.env.FONEPAY_PRIVATE_KEY_PATH ||
+              process.env.FONEPAY_PRIVATE_KEY_BASE64,
+          )
+            ? "HEALTHY"
+            : "CONFIG_REQUIRED",
+      },
+      {
         id: "transatel",
         name: "Transatel Connectivity",
         category: "CONNECTIVITY",
@@ -919,6 +953,53 @@ export class AdminService {
         ? `${item.name} configuration is available`
         : `${item.name} requires environment configuration`,
     };
+  }
+
+  fonepayBanks() {
+    return this.fonepay.bankDirectory();
+  }
+
+  syncFonepayBanks() {
+    return this.fonepay.syncBankDirectory();
+  }
+
+  /**
+   * Declared capabilities of every registered payment gateway, surfaced to
+   * Operations verbatim. Financial support that the provider does NOT have
+   * (for example Fonepay's QR-only checkout or manual-only refunds) is shown
+   * explicitly so Ops never mistakes brand presence for feature parity.
+   */
+  paymentProviderCapabilities() {
+    const fonepayConfigured = Boolean(
+      process.env.FONEPAY_ENABLED === "true" &&
+        process.env.FONEPAY_BASE_URL &&
+        process.env.FONEPAY_USERNAME &&
+        process.env.FONEPAY_PASSWORD &&
+        process.env.FONEPAY_TERMINAL_ID &&
+        (process.env.FONEPAY_PRIVATE_KEY_PATH ||
+          process.env.FONEPAY_PRIVATE_KEY_BASE64),
+    );
+    return [
+      {
+        provider: this.khalti.provider,
+        configured: true,
+        capabilities: this.khalti.capabilities(),
+        notes: [
+          "Wallet redirect checkout; confirmation is processed by the backend only.",
+        ],
+      },
+      {
+        provider: this.fonepay.provider,
+        configured: fonepayConfigured,
+        capabilities: this.fonepay.capabilities(),
+        notes: [
+          "QR checkout with banking-app deep links.",
+          "Bank list shown at checkout is indicative, not exhaustive.",
+          "Refunds are completed manually in the FinBridge portal and recorded here afterwards.",
+          "Dispute ingestion is not supported; raise disputes directly with Fonepay.",
+        ],
+      },
+    ];
   }
 
   private requireTransatel() {
