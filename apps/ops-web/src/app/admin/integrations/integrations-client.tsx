@@ -46,6 +46,7 @@ type Integration = {
   status: string;
   secretValue: string;
   checkedAt: string;
+  capabilities?: Record<string, boolean | string>;
 };
 type Plan = { id: string; countryCode: string; name: string };
 type IntegrationLog = {
@@ -116,7 +117,7 @@ export default function IntegrationsClient() {
   const [plansBusy, setPlansBusy] = useState(false);
   const [eligibilityMsisdn, setEligibilityMsisdn] = useState("");
   const [logsBusy, setLogsBusy] = useState(false);
-const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
+  const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
     banks: [],
     lastSyncedAt: null,
   });
@@ -176,9 +177,7 @@ const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
       setBusy("");
     }
   };
-  const transatelAction = async (
-    action: "sync-catalog" | "sync-usage",
-  ) => {
+  const transatelAction = async (action: "sync-catalog" | "sync-usage") => {
     setBusy(`transatel:${action}`);
     try {
       await request(`/admin/integrations/transatel/${action}`, {
@@ -236,9 +235,13 @@ const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
         { method: "POST" },
       );
       setFonepayDirectory(directory);
-      toast.success(`Fonepay bank directory updated (${directory.banks.length} active)`);
+      toast.success(
+        `Fonepay bank directory updated (${directory.banks.length} active)`,
+      );
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Bank directory sync failed");
+      toast.error(
+        e instanceof Error ? e.message : "Bank directory sync failed",
+      );
     } finally {
       setBusy("");
     }
@@ -298,6 +301,16 @@ const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
               <p className="mt-2 text-xs text-muted-foreground">
                 Last checked: {new Date(item.checkedAt).toLocaleString()}
               </p>
+              {item.capabilities ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {Object.entries(item.capabilities).map(([name, value]) => (
+                    <Badge key={name} variant="secondary">
+                      {name.replace(/([a-z])([A-Z])/g, "$1 $2")}:{" "}
+                      {String(value)}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button
                   size="sm"
@@ -358,7 +371,9 @@ const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
               {item.id === "transatel" && (
                 <div className="mt-4 space-y-3 rounded-lg border border-dashed p-4">
                   <div>
-                    <p className="text-sm font-medium">Provider notifications</p>
+                    <p className="text-sm font-medium">
+                      Provider notifications
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       Configure the callback URL and event subscriptions in the
                       Transatel Developer Console. Transatel no longer permits
@@ -418,13 +433,16 @@ const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
           ))}
         </div>
       )}
-<Panel
+      <Panel
         className="mt-6"
         title="Payment gateway capabilities"
         description="What each gateway can do today. A capability that is missing is shown explicitly — never implied by the provider's brand."
       >
         {!gateways.length ? (
-          <EmptyState title="No gateways" description="Payment gateways will appear once configured." />
+          <EmptyState
+            title="No gateways"
+            description="Payment gateways will appear once configured."
+          />
         ) : (
           <div className="space-y-4">
             {gateways.map((gateway) => (
@@ -432,7 +450,9 @@ const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-sm font-medium">{gateway.provider}</p>
                   <StatusBadge
-                    label={gateway.configured ? "Configured" : "Config required"}
+                    label={
+                      gateway.configured ? "Configured" : "Config required"
+                    }
                     tone={gateway.configured ? "success" : "warning"}
                   />
                 </div>
@@ -496,29 +516,51 @@ const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
             onClick={() => void syncFonepayBanks()}
             disabled={busy === "fonepay:banks"}
           >
-            {busy === "fonepay:banks" ? <Spinner /> : <RefreshCcw className="size-4" />}
+            {busy === "fonepay:banks" ? (
+              <Spinner />
+            ) : (
+              <RefreshCcw className="size-4" />
+            )}
             Refresh directory
           </Button>
         }
       >
         <p className="mb-3 text-xs text-muted-foreground">
-          Last successful sync: {fonepayDirectory.lastSyncedAt
+          Last successful sync:{" "}
+          {fonepayDirectory.lastSyncedAt
             ? new Date(fonepayDirectory.lastSyncedAt).toLocaleString()
             : "Not synced yet"}
         </p>
         {!fonepayDirectory.banks.length ? (
-          <EmptyState title="No cached banks" description="Refresh the directory after Fonepay is configured." />
+          <EmptyState
+            title="No cached banks"
+            description="Refresh the directory after Fonepay is configured."
+          />
         ) : (
           <div className="overflow-x-auto">
             <Table>
-              <TableHeader><TableRow><TableHead>Bank</TableHead><TableHead>Code</TableHead><TableHead>Mobile package</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Bank</TableHead>
+                  <TableHead>Code</TableHead>
+                  <TableHead>Mobile package</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
               <TableBody>
                 {fonepayDirectory.banks.map((bank) => (
                   <TableRow key={bank.bankCode}>
-                    <TableCell className="font-medium">{bank.bankName}</TableCell>
+                    <TableCell className="font-medium">
+                      {bank.bankName}
+                    </TableCell>
                     <TableCell>{bank.bankCode}</TableCell>
                     <TableCell>{bank.packageName || "Not supplied"}</TableCell>
-                    <TableCell><StatusBadge label={bank.active ? "Active" : "Inactive"} tone={bank.active ? "success" : "default"} /></TableCell>
+                    <TableCell>
+                      <StatusBadge
+                        label={bank.active ? "Active" : "Inactive"}
+                        tone={bank.active ? "success" : "default"}
+                      />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

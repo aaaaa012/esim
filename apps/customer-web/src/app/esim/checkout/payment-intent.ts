@@ -1,5 +1,11 @@
 const SAFE_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*$/;
-const BLOCKED_SCHEMES = new Set(["data", "file", "http", "https", "javascript"]);
+const BLOCKED_SCHEMES = new Set([
+  "data",
+  "file",
+  "http",
+  "https",
+  "javascript",
+]);
 const SAFE_PACKAGE = /^[A-Za-z0-9]+([A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 export function fonepayBankIntentUrl(
@@ -36,10 +42,9 @@ export function fonepayBankAndroidIntentUrl(
   return `intent://payment/?qrPayload=${encodeURIComponent(qrPayload)}#Intent;scheme=${scheme};package=${pkg};S.browser_fallback_url=${encodeURIComponent(store)};end`;
 }
 
-export function filterFonepayBanks<T extends { bankName: string; bankCode: string }>(
-  banks: T[] | undefined,
-  query: string,
-): T[] {
+export function filterFonepayBanks<
+  T extends { bankName: string; bankCode: string },
+>(banks: T[] | undefined, query: string): T[] {
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) return banks ?? [];
   return (banks ?? []).filter(
@@ -47,4 +52,31 @@ export function filterFonepayBanks<T extends { bankName: string; bankCode: strin
       bank.bankName.toLocaleLowerCase().includes(normalized) ||
       bank.bankCode.toLocaleLowerCase().includes(normalized),
   );
+}
+
+export type FonepaySocketSignal = "QR_VERIFIED" | "PAYMENT_RESULT" | "IGNORE";
+
+export function fonepaySocketSignal(raw: unknown): FonepaySocketSignal {
+  try {
+    const outer = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!outer || typeof outer !== "object") return "IGNORE";
+    const transactionStatus = (outer as { transactionStatus?: unknown })
+      .transactionStatus;
+    const status =
+      typeof transactionStatus === "string"
+        ? JSON.parse(transactionStatus)
+        : transactionStatus;
+    if (!status || typeof status !== "object") return "IGNORE";
+    const normalized = Object.fromEntries(
+      Object.entries(status as Record<string, unknown>).map(([key, value]) => [
+        key.replace(/\s+/g, "").toLowerCase(),
+        value,
+      ]),
+    );
+    if (typeof normalized.paymentsuccess === "boolean") return "PAYMENT_RESULT";
+    if (normalized.qrverified === true) return "QR_VERIFIED";
+    return "IGNORE";
+  } catch {
+    return "IGNORE";
+  }
 }

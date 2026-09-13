@@ -49,6 +49,7 @@ export class PartnerAdminService {
         _count: { select: { orders: true, quotes: true } },
       },
       orderBy: { createdAt: "desc" },
+      take: 200,
     });
     return partners.map((partner) => this.sanitizePartner(partner));
   }

@@ -28,6 +28,9 @@ export class RateLimitGuard implements CanActivate {
   private readonly authLimit = Number(
     process.env.AUTH_RATE_LIMIT_PER_MINUTE ?? 60,
   );
+  private readonly guestLimit = Number(
+    process.env.GUEST_RATE_LIMIT_PER_MINUTE ?? 30,
+  );
   private readonly windowMs = 60_000;
   private redisCircuitOpenUntil = 0;
   private readonly redisCircuitMs = 5_000;
@@ -58,7 +61,15 @@ export class RateLimitGuard implements CanActivate {
       path.startsWith("/api/v1/auth") ||
       path.startsWith("/api/v1/public") ||
       path.startsWith("/api/v1/staff-activation");
-    const configuredCapacity = sensitive ? this.authLimit : this.limit;
+    const guestCheckout =
+      path.startsWith("/api/v1/guest/orders") ||
+      path.startsWith("/api/v1/recharges") ||
+      path.startsWith("/api/v1/partner-checkout");
+    const configuredCapacity = guestCheckout
+      ? this.guestLimit
+      : sensitive
+        ? this.authLimit
+        : this.limit;
     // UUIDs and numeric ids must not form attacker-controlled fresh buckets.
     const route = path
       .replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, ":id")

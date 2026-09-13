@@ -3,6 +3,7 @@ import {
   filterFonepayBanks,
   fonepayBankAndroidIntentUrl,
   fonepayBankIntentUrl,
+  fonepaySocketSignal,
 } from "./payment-intent";
 
 describe("fonepayBankIntentUrl", () => {
@@ -22,6 +23,25 @@ describe("fonepayBankIntentUrl", () => {
     expect(
       fonepayBankIntentUrl("safe://attacker.example", "payload"),
     ).toBeNull();
+  });
+});
+
+describe("fonepaySocketSignal", () => {
+  it("distinguishes QR verification from the final payment result", () => {
+    expect(
+      fonepaySocketSignal(
+        JSON.stringify({
+          transactionStatus: JSON.stringify({
+            success: true,
+            QRVerified: true,
+          }),
+        }),
+      ),
+    ).toBe("QR_VERIFIED");
+    expect(
+      fonepaySocketSignal({ transactionStatus: { paymentSuccess: true } }),
+    ).toBe("PAYMENT_RESULT");
+    expect(fonepaySocketSignal("not-json")).toBe("IGNORE");
   });
 });
 
@@ -46,9 +66,9 @@ describe("fonepayBankAndroidIntentUrl", () => {
     expect(
       fonepayBankAndroidIntentUrl("javascript:bad", "payload", "com.bad.app"),
     ).toBeNull();
-    expect(
-      fonepayBankIntentUrl("LXBLNPKA://payment", "payload"),
-    ).toBe("LXBLNPKA://payment/?qrPayload=payload");
+    expect(fonepayBankIntentUrl("LXBLNPKA://payment", "payload")).toBe(
+      "LXBLNPKA://payment/?qrPayload=payload",
+    );
   });
 });
 

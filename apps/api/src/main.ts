@@ -15,6 +15,7 @@ import { MetricsService } from "./observability/metrics.service.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
 import { webhookIngressMiddleware } from "./common/webhook-ingress.middleware.js";
 import { requireProcessRole } from "./common/process-role.js";
+import { trustProxySetting } from "./common/trust-proxy.js";
 
 const BOOT_DB_RETRIES = Number(process.env.BOOT_DB_RETRIES ?? 12);
 const BOOT_DB_RETRY_BASE_MS = Number(process.env.BOOT_DB_RETRY_BASE_MS ?? 1500);
@@ -132,22 +133,6 @@ async function bootOnce() {
   }
 
   await app.listen(Number(process.env.PORT ?? 4000));
-}
-
-/**
- * Express `trust proxy` value. The app must only trust the IP hops it actually
- * sits behind (e.g. `1` for a single reverse proxy, or a comma-separated list
- * of proxy addresses). Leaving it unset disables proxy IP trust so clients
- * cannot spoof their address via `X-Forwarded-For`; set it when deploying
- * behind a reverse proxy or load balancer, otherwise rate limiting collapses
- * every client onto the proxy address.
- */
-function trustProxySetting(): boolean | string | number {
-  const value = process.env.TRUST_PROXY?.trim();
-  if (!value || value === "" || value === "false") return false;
-  if (value === "true") return true;
-  if (/^\d+$/.test(value)) return Number(value);
-  return value;
 }
 
 if (!process.env.NODE_ENV) {

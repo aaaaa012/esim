@@ -6,7 +6,12 @@ import {
   NestInterceptor,
 } from "@nestjs/common";
 import { ApiIdempotencyStatus, Prisma } from "@prisma/client";
-import { createHash } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "node:crypto";
 import {
   catchError,
   from,
@@ -103,7 +108,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
                 data: {
                   status: ApiIdempotencyStatus.COMPLETED,
                   responseStatus: response.statusCode ?? 200,
-                  response: toJson(body),
+                  response: sealReplayResponse(body),
                   claimExpiresAt: new Date(),
                 },
               }),
@@ -172,7 +177,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
       if (record.status === ApiIdempotencyStatus.COMPLETED)
         return {
           owned: false,
-          response: record.response,
+          response: openReplayResponse(record.response),
           responseStatus: record.responseStatus,
         };
       if (
@@ -230,4 +235,74 @@ function canonicalJson(value: unknown): string {
 
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
+const SEALED_RESPONSE = "visa-compass-aes-256-gcm-v1";
+
+function containsBearerMaterial(value: unknown, depth = 0): boolean {
+  if (depth > 8 || !value || typeof value !== "object") return false;
+  if (Array.isArray(value))
+    return value.some((item) => containsBearerMaterial(item, depth + 1));
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, item]) => {
+      const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+      return (
+        /(^token$|sessiontoken|recoverytoken|accesstoken|guesttoken|lookupToken)/i.test(
+          normalized,
+        ) || containsBearerMaterial(item, depth + 1)
+      );
+    },
+  );
+}
+
+function replayEncryptionKey() {
+  const secret = process.env.GUEST_ORDER_SECRET;
+  return secret
+    ? createHash("sha256").update(`idempotency-replay:${secret}`).digest()
+    : null;
+}
+
+export function sealReplayResponse(value: unknown): Prisma.InputJsonValue {
+  if (!containsBearerMaterial(value)) return toJson(value);
+  const key = replayEncryptionKey();
+  if (!key) return { _sealed: SEALED_RESPONSE, unavailable: true };
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(value ?? null), "utf8"),
+    cipher.final(),
+  ]);
+  return {
+    _sealed: SEALED_RESPONSE,
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+  };
+}
+
+export function openReplayResponse(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const sealed = value as Record<string, unknown>;
+  if (sealed._sealed !== SEALED_RESPONSE) return value;
+  const key = replayEncryptionKey();
+  if (!key || sealed.unavailable)
+    throw conflict(
+      "This protected response cannot be replayed; recover the guest order instead",
+    );
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      key,
+      Buffer.from(String(sealed.iv), "base64"),
+    );
+    decipher.setAuthTag(Buffer.from(String(sealed.tag), "base64"));
+    return JSON.parse(
+      Buffer.concat([
+        decipher.update(Buffer.from(String(sealed.ciphertext), "base64")),
+        decipher.final(),
+      ]).toString("utf8"),
+    );
+  } catch {
+    throw conflict("The protected replay response could not be authenticated");
+  }
 }

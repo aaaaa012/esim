@@ -41,8 +41,8 @@ import ErrorModal from "../../../components/error-modal";
 import { formatPlanDataText } from "../../../lib/format-data";
 import {
   filterFonepayBanks,
-  fonepayBankAndroidIntentUrl,
   fonepayBankIntentUrl,
+  fonepaySocketSignal,
 } from "../../esim/checkout/payment-intent";
 import { FonepayBankLogo } from "../../esim/checkout/fonepay-bank-logo";
 import "../../esim/checkout/checkout.css";
@@ -726,7 +726,19 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     if (payment.websocketUrl) {
       try {
         socket = new WebSocket(payment.websocketUrl);
-        socket.onmessage = () => void verifySilently();
+        socket.onmessage = (event) => {
+          const signal = fonepaySocketSignal(event.data);
+          if (signal === "QR_VERIFIED") {
+            setFonepayBankHint(
+              "QR recognized. Complete the payment in your banking app.",
+            );
+            return;
+          }
+          if (signal === "PAYMENT_RESULT") {
+            socket?.close();
+            void verifySilently();
+          }
+        };
       } catch {
         // The provider status endpoint remains authoritative.
       }
@@ -1199,9 +1211,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                             Choose &ldquo;Scan QR&rdquo; inside the app and scan
                             this code.
                           </li>
-                          <li>
-                            Approve the payment to confirm your order.
-                          </li>
+                          <li>Approve the payment to confirm your order.</li>
                         </ol>
                         <img
                           className="fonepay-qr"
@@ -1240,22 +1250,21 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 type="button"
                                 key={bank.bankCode}
                                 onClick={() => {
+                                  if (
+                                    !/Android|iPhone|iPad|iPod/i.test(
+                                      navigator.userAgent,
+                                    )
+                                  ) {
+                                    setError(
+                                      "Banking apps can only be opened from a mobile device. Scan the QR code with your banking app instead.",
+                                    );
+                                    return;
+                                  }
                                   const target = payment.qrPayload
-                                    ? /Android/i.test(navigator.userAgent) &&
-                                      bank.packageName
-                                      ? (fonepayBankAndroidIntentUrl(
-                                          bank.intentScheme,
-                                          payment.qrPayload,
-                                          bank.packageName,
-                                        ) ??
-                                          fonepayBankIntentUrl(
-                                            bank.intentScheme,
-                                            payment.qrPayload,
-                                          ))
-                                      : fonepayBankIntentUrl(
-                                          bank.intentScheme,
-                                          payment.qrPayload,
-                                        )
+                                    ? fonepayBankIntentUrl(
+                                        bank.intentScheme,
+                                        payment.qrPayload,
+                                      )
                                     : null;
                                   if (!target) {
                                     setError(

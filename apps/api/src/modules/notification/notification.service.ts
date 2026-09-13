@@ -182,7 +182,8 @@ export class NotificationService {
       ).map(({ recoveryUrlEncrypted: _secret, ...item }) => item);
     return [...this.memory.values()]
       .filter((item) => !orderIds || orderIds.includes(item.orderId))
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, 200);
   }
 
   async get(id: string) {

@@ -8,8 +8,8 @@ import ErrorModal from "../../../components/error-modal";
 import { formatPlanDataText } from "../../../lib/format-data";
 import {
   filterFonepayBanks,
-  fonepayBankAndroidIntentUrl,
   fonepayBankIntentUrl,
+  fonepaySocketSignal,
 } from "./payment-intent";
 import { FonepayBankLogo } from "./fonepay-bank-logo";
 import { paymentActionDisabled, retryDeclaredAllowed } from "./payment-gates";
@@ -633,7 +633,7 @@ export default function CheckoutClient({
               redirectUrl: "",
               expiresAt: "",
             });
-            void verifyPayment(value, hasGatewayReturnSignal());
+            if (hasGatewayReturnSignal()) void verifyPayment(value, true);
           }
           return;
         }
@@ -643,7 +643,7 @@ export default function CheckoutClient({
             redirectUrl: "",
             expiresAt: "",
           });
-          void verifyPayment(value, hasGatewayReturnSignal());
+          if (hasGatewayReturnSignal()) void verifyPayment(value, true);
         } else if (value.status === "PAYMENT_FAILED") {
           setPayment(null);
         }
@@ -1358,7 +1358,19 @@ export default function CheckoutClient({
       socket = new WebSocket(payment.websocketUrl);
       // A socket message can mean that the QR was merely scanned. Keep the QR
       // visible while the authoritative status endpoint still reports pending.
-      socket.onmessage = () => void verifyFonepaySilently();
+      socket.onmessage = (event) => {
+        const signal = fonepaySocketSignal(event.data);
+        if (signal === "QR_VERIFIED") {
+          setFonepayBankHint(
+            "QR recognized. Complete the payment in your banking app.",
+          );
+          return;
+        }
+        if (signal === "PAYMENT_RESULT") {
+          socket?.close();
+          void verifyFonepaySilently();
+        }
+      };
     } catch {
       /* Manual status verification remains available. */
     }
@@ -2380,10 +2392,12 @@ export default function CheckoutClient({
                           <button
                             type="button"
                             className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
-                            disabled={!retryDeclaredAllowed(
-                              order?.paymentRetry,
-                              "canChangeProvider",
-                            )}
+                            disabled={
+                              !retryDeclaredAllowed(
+                                order?.paymentRetry,
+                                "canChangeProvider",
+                              )
+                            }
                             onClick={() => {
                               setProvider(PaymentProvider.KHALTI);
                               setLockedProvider(PaymentProvider.KHALTI);
@@ -2392,19 +2406,21 @@ export default function CheckoutClient({
                             <img src="/brand/khalti-logo.png" alt="Khalti" />
                             <span className="gateway-copy">
                               <b>Khalti wallet</b>
-                              <small>
-                                Pay from your Khalti balance.
-                              </small>
+                              <small>Pay from your Khalti balance.</small>
                             </span>
                           </button>
-                          {availableProviders.includes(PaymentProvider.FONEPAY) ? (
+                          {availableProviders.includes(
+                            PaymentProvider.FONEPAY,
+                          ) ? (
                             <button
                               type="button"
                               className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
-                              disabled={!retryDeclaredAllowed(
-                                order?.paymentRetry,
-                                "canChangeProvider",
-                              )}
+                              disabled={
+                                !retryDeclaredAllowed(
+                                  order?.paymentRetry,
+                                  "canChangeProvider",
+                                )
+                              }
                               onClick={() => {
                                 setProvider(PaymentProvider.FONEPAY);
                                 setLockedProvider(PaymentProvider.FONEPAY);
@@ -2501,7 +2517,9 @@ export default function CheckoutClient({
                                 Choose &ldquo;Scan QR&rdquo; inside the app and
                                 scan this code.
                               </li>
-                              <li>Approve the payment to confirm your order.</li>
+                              <li>
+                                Approve the payment to confirm your order.
+                              </li>
                             </ol>
                             <img
                               className="fonepay-qr"
@@ -2543,22 +2561,21 @@ export default function CheckoutClient({
                                     type="button"
                                     key={bank.bankCode}
                                     onClick={() => {
+                                      if (
+                                        !/Android|iPhone|iPad|iPod/i.test(
+                                          navigator.userAgent,
+                                        )
+                                      ) {
+                                        setError(
+                                          "Banking apps can only be opened from a mobile device. Scan the QR code with your banking app instead.",
+                                        );
+                                        return;
+                                      }
                                       const target = payment.qrPayload
-                                        ? /Android/i.test(navigator.userAgent) &&
-                                          bank.packageName
-                                          ? (fonepayBankAndroidIntentUrl(
-                                              bank.intentScheme,
-                                              payment.qrPayload,
-                                              bank.packageName,
-                                            ) ??
-                                              fonepayBankIntentUrl(
-                                                bank.intentScheme,
-                                                payment.qrPayload,
-                                              ))
-                                          : fonepayBankIntentUrl(
-                                              bank.intentScheme,
-                                              payment.qrPayload,
-                                            )
+                                        ? fonepayBankIntentUrl(
+                                            bank.intentScheme,
+                                            payment.qrPayload,
+                                          )
                                         : null;
                                       if (!target) {
                                         setError(
@@ -2597,10 +2614,7 @@ export default function CheckoutClient({
                                 the QR above is the reliable option.
                               </small>
                               {fonepayBankHint ? (
-                                <p
-                                  className="fonepay-bank-hint"
-                                  role="status"
-                                >
+                                <p className="fonepay-bank-hint" role="status">
                                   {fonepayBankHint}
                                 </p>
                               ) : null}

@@ -835,6 +835,12 @@ export class AdminService {
         status: configured(["KHALTI_SECRET_KEY"])
           ? "HEALTHY"
           : "CONFIG_REQUIRED",
+        capabilities: {
+          checkout: true,
+          authoritativeStatusLookup: true,
+          automatedDisputeFeed: true,
+          refundMode: "MANUAL_IN_PROVIDER_PORTAL",
+        },
       },
       {
         id: "fonepay",
@@ -851,7 +857,7 @@ export class AdminService {
           ]) &&
           Boolean(
             process.env.FONEPAY_PRIVATE_KEY_PATH ||
-              process.env.FONEPAY_PRIVATE_KEY_BASE64,
+            process.env.FONEPAY_PRIVATE_KEY_BASE64,
           ),
         status:
           process.env.FONEPAY_ENABLED === "true" &&
@@ -863,10 +869,18 @@ export class AdminService {
           ]) &&
           Boolean(
             process.env.FONEPAY_PRIVATE_KEY_PATH ||
-              process.env.FONEPAY_PRIVATE_KEY_BASE64,
+            process.env.FONEPAY_PRIVATE_KEY_BASE64,
           )
             ? "HEALTHY"
             : "CONFIG_REQUIRED",
+        capabilities: {
+          checkout: true,
+          authoritativeStatusLookup: true,
+          bankDirectory: true,
+          websocketSignal: true,
+          automatedDisputeFeed: false,
+          refundMode: "MANUAL_IN_PROVIDER_PORTAL",
+        },
       },
       {
         id: "transatel",
@@ -945,6 +959,15 @@ export class AdminService {
         },
       };
     }
+    if (id === "fonepay") {
+      const directory = await this.fonepay.syncBankDirectory();
+      return {
+        id,
+        status: "HEALTHY",
+        checkedAt: new Date().toISOString(),
+        message: `Fonepay authenticated and returned ${directory.banks.length} active banking destinations.`,
+      };
+    }
     return {
       id,
       status: item.enabled ? "HEALTHY" : "CONFIG_REQUIRED",
@@ -972,12 +995,12 @@ export class AdminService {
   paymentProviderCapabilities() {
     const fonepayConfigured = Boolean(
       process.env.FONEPAY_ENABLED === "true" &&
-        process.env.FONEPAY_BASE_URL &&
-        process.env.FONEPAY_USERNAME &&
-        process.env.FONEPAY_PASSWORD &&
-        process.env.FONEPAY_TERMINAL_ID &&
-        (process.env.FONEPAY_PRIVATE_KEY_PATH ||
-          process.env.FONEPAY_PRIVATE_KEY_BASE64),
+      process.env.FONEPAY_BASE_URL &&
+      process.env.FONEPAY_USERNAME &&
+      process.env.FONEPAY_PASSWORD &&
+      process.env.FONEPAY_TERMINAL_ID &&
+      (process.env.FONEPAY_PRIVATE_KEY_PATH ||
+        process.env.FONEPAY_PRIVATE_KEY_BASE64),
     );
     return [
       {

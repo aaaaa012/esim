@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { lastValueFrom, of } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 import { IdempotencyInterceptor } from "./idempotency.interceptor.js";
+import {
+  openReplayResponse,
+  sealReplayResponse,
+} from "./idempotency.interceptor.js";
 
 function context(
   body: unknown,
@@ -31,6 +35,19 @@ function context(
 }
 
 describe("IdempotencyInterceptor", () => {
+  it("encrypts guest bearer material in persisted replay payloads", () => {
+    process.env.GUEST_ORDER_SECRET = "a-production-length-guest-secret-value";
+    const sealed = sealReplayResponse({
+      order: { id: "one" },
+      token: "bearer-secret",
+    });
+    expect(JSON.stringify(sealed)).not.toContain("bearer-secret");
+    expect(openReplayResponse(sealed)).toEqual({
+      order: { id: "one" },
+      token: "bearer-secret",
+    });
+    delete process.env.GUEST_ORDER_SECRET;
+  });
   it("accepts the documented Idempotency-Key header", async () => {
     const prisma = {
       enabled: true,

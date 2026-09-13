@@ -168,9 +168,10 @@ export class FonepayGateway implements PaymentGateway {
         key = createPrivateKey(raw);
       } else {
         const encoded = raw.replace(/\s+/g, "");
-        const bytes = /^[0-9a-f]+$/i.test(encoded) && encoded.length % 2 === 0
-          ? Buffer.from(encoded, "hex")
-          : Buffer.from(encoded, "base64");
+        const bytes =
+          /^[0-9a-f]+$/i.test(encoded) && encoded.length % 2 === 0
+            ? Buffer.from(encoded, "hex")
+            : Buffer.from(encoded, "base64");
         const decoded = bytes.toString("utf8").trim();
         key = decoded.includes("-----BEGIN PRIVATE KEY-----")
           ? createPrivateKey(decoded)
@@ -193,7 +194,8 @@ export class FonepayGateway implements PaymentGateway {
       username: process.env.FONEPAY_USERNAME!,
       password: process.env.FONEPAY_PASSWORD!,
     };
-    const path = `${this.basePath}/login`;
+    const path =
+      process.env.FONEPAY_LOGIN_PATH?.trim() || `${this.basePath}/login`;
     const signature = this.sign(body);
     const startedAt = Date.now();
     let response: Response;
@@ -314,7 +316,15 @@ export class FonepayGateway implements PaymentGateway {
 
   private validBank(bank: z.infer<typeof bankSchema>): FonepayBank | null {
     const intentScheme = bank.intentScheme.trim();
-    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(intentScheme)) return null;
+    const scheme =
+      intentScheme.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1] ?? intentScheme;
+    if (
+      !/^[a-z][a-z0-9+.-]*$/i.test(scheme) ||
+      ["data", "file", "http", "https", "javascript"].includes(
+        scheme.toLowerCase(),
+      )
+    )
+      return null;
     const bankIcon = bank.bankIcon?.trim();
     if (bankIcon) {
       try {
@@ -332,9 +342,9 @@ export class FonepayGateway implements PaymentGateway {
         : {}),
       intentScheme,
     };
-}
+  }
 
-private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
+  private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
     const raw = await this.request(
       `${this.basePath}/banks/list`,
       "GET",
@@ -346,12 +356,15 @@ private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
       correlationId,
     );
     const parsed = bankListSchema.safeParse(raw);
-    if (!parsed.success) return this.fail("Fonepay bank-list response was invalid");
+    if (!parsed.success)
+      return this.fail("Fonepay bank-list response was invalid");
     const banks = parsed.data.bankDetails
       .map((bank) => this.validBank(bank))
       .filter((bank): bank is FonepayBank => Boolean(bank));
     if (banks.length !== parsed.data.bankDetails.length)
-      this.logger.warn("Ignored one or more unsafe Fonepay bank directory entries");
+      this.logger.warn(
+        "Ignored one or more unsafe Fonepay bank directory entries",
+      );
     return banks;
   }
 
@@ -393,12 +406,13 @@ private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
           update: { ...bank, active: true, lastSeenAt: now },
         });
       }
-      const deactivated = await this.prisma.fonepayBankDirectoryEntry.updateMany({
-        where: incomingCodes.length
-          ? { active: true, bankCode: { notIn: incomingCodes } }
-          : { active: true },
-        data: { active: false },
-      });
+      const deactivated =
+        await this.prisma.fonepayBankDirectoryEntry.updateMany({
+          where: incomingCodes.length
+            ? { active: true, bankCode: { notIn: incomingCodes } }
+            : { active: true },
+          data: { active: false },
+        });
       await this.prisma.fonepayBankDirectorySync.update({
         where: { id: sync.id },
         data: {
@@ -416,7 +430,10 @@ private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
         where: { id: sync.id },
         data: {
           status: "FAILED",
-          errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+          errorMessage: (error instanceof Error
+            ? error.message
+            : String(error)
+          ).slice(0, 500),
           completedAt: new Date(),
         },
       });
@@ -424,7 +441,9 @@ private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
     }
   }
 
-private async banksForCheckout(correlationId: string): Promise<FonepayBank[]> {
+  private async banksForCheckout(
+    correlationId: string,
+  ): Promise<FonepayBank[]> {
     const cached = await this.bankDirectory();
     const toBank = (bank: {
       bankName: string;
@@ -439,8 +458,14 @@ private async banksForCheckout(correlationId: string): Promise<FonepayBank[]> {
       ...(bank.bankIcon ? { bankIcon: bank.bankIcon } : {}),
       ...(bank.packageName ? { packageName: bank.packageName } : {}),
     });
-    const ttlMs = Math.max(300, Number(process.env.FONEPAY_BANK_CACHE_TTL_SECONDS ?? 86_400)) * 1_000;
-    const fresh = cached.lastSyncedAt && Date.now() - new Date(cached.lastSyncedAt).getTime() < ttlMs;
+    const ttlMs =
+      Math.max(
+        300,
+        Number(process.env.FONEPAY_BANK_CACHE_TTL_SECONDS ?? 86_400),
+      ) * 1_000;
+    const fresh =
+      cached.lastSyncedAt &&
+      Date.now() - new Date(cached.lastSyncedAt).getTime() < ttlMs;
     const cachedBanks = cached.banks.map(toBank);
     if (fresh && cachedBanks.length) return cachedBanks;
     try {
@@ -448,10 +473,14 @@ private async banksForCheckout(correlationId: string): Promise<FonepayBank[]> {
       return synced.banks.map(toBank);
     } catch (error) {
       if (cachedBanks.length) {
-        this.logger.warn(`Using last-known-good Fonepay bank directory: ${error instanceof Error ? error.message : String(error)}`);
+        this.logger.warn(
+          `Using last-known-good Fonepay bank directory: ${error instanceof Error ? error.message : String(error)}`,
+        );
         return cachedBanks;
       }
-      this.logger.warn(`Fonepay bank directory unavailable; QR checkout remains available (${correlationId})`);
+      this.logger.warn(
+        `Fonepay bank directory unavailable; QR checkout remains available (${correlationId})`,
+      );
       return [];
     }
   }
@@ -470,7 +499,7 @@ private async banksForCheckout(correlationId: string): Promise<FonepayBank[]> {
       return this.fail(
         "Fonepay amount must be between NPR 1 and NPR 9,999,999",
       );
-if (!input.orderNumber.trim())
+    if (!input.orderNumber.trim())
       return this.fail("Fonepay billId must not be blank");
     const terminalId = this.terminalId();
     const reference = `VC${input.attemptId.replace(/[^A-Za-z0-9]/g, "").slice(0, 28)}`;
@@ -498,14 +527,21 @@ if (!input.orderNumber.trim())
       return this.fail(`Fonepay QR generation returned status: ${qr.status}`);
     if (qr.prn !== reference)
       return this.fail("Fonepay QR reference did not match the request");
-    const qrPayload = qr.qrMessage ?? qr.qrString!;
+    // V1.10 assigns distinct semantics: qrString is rendered for scanning,
+    // while qrMessage is passed to an issuer app through its deep link.
+    const qrPayload = (qr.qrMessage ?? qr.qrString!).trim();
+    const qrScanPayload = (qr.qrString ?? qr.qrMessage!).trim();
     return {
       reference,
       redirectUrl: "",
       expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
       correlationId: reference,
       qrPayload,
-      qrDataUrl: await QRCode.toDataURL(qrPayload, { margin: 1, width: 360 }),
+      qrDataUrl: await QRCode.toDataURL(qrScanPayload, {
+        margin: 4,
+        width: 480,
+        errorCorrectionLevel: "M",
+      }),
       ...(qr.websocketId ? { websocketUrl: qr.websocketId } : {}),
       banks,
     };
