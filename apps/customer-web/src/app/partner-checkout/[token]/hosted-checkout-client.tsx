@@ -39,12 +39,8 @@ import { useCheckoutTransition } from "../../esim/checkout/use-checkout-transiti
 import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
 import { formatPlanDataText } from "../../../lib/format-data";
-import {
-  filterFonepayBanks,
-  fonepayBankIntentUrl,
-  fonepaySocketSignal,
-} from "../../esim/checkout/payment-intent";
-import { FonepayBankLogo } from "../../esim/checkout/fonepay-bank-logo";
+import { fonepaySocketSignal } from "../../esim/checkout/payment-intent";
+import { FonepayBankPicker } from "../../esim/checkout/fonepay-bank-picker";
 import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -220,7 +216,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [provider, setProvider] = useState<PaymentProvider>(
     PaymentProvider.KHALTI,
   );
-  const [fonepayBankQuery, setFonepayBankQuery] = useState("");
   const [fonepayBankHint, setFonepayBankHint] = useState("");
   const [lockedProvider, setLockedProvider] = useState<PaymentProvider | null>(
     null,
@@ -1221,98 +1216,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       </div>
                       {provider === PaymentProvider.FONEPAY &&
                       payment.banks?.length ? (
-                        <div className="fonepay-bank-section">
-                          <div className="fonepay-bank-heading">
-                            <b>Prefer your banking app directly?</b>
-                            <small>
-                              The selected app opens on your phone. If your bank
-                              isn&apos;t listed, just scan the QR above — it
-                              works with any Fonepay-supported banking app.
-                            </small>
-                          </div>
-                          <label className="fonepay-bank-search">
-                            <span className="sr-only">Search banking apps</span>
-                            <input
-                              type="search"
-                              value={fonepayBankQuery}
-                              onChange={(event) =>
-                                setFonepayBankQuery(event.target.value)
-                              }
-                              placeholder="Search banking apps"
-                            />
-                          </label>
-                          <div className="fonepay-bank-list">
-                            {filterFonepayBanks(
-                              payment.banks,
-                              fonepayBankQuery,
-                            ).map((bank) => (
-                              <button
-                                type="button"
-                                key={bank.bankCode}
-                                onClick={() => {
-                                  if (
-                                    !/Android|iPhone|iPad|iPod/i.test(
-                                      navigator.userAgent,
-                                    )
-                                  ) {
-                                    setError(
-                                      "Banking apps can only be opened from a mobile device. Scan the QR code with your banking app instead.",
-                                    );
-                                    return;
-                                  }
-                                  const target = payment.qrPayload
-                                    ? fonepayBankIntentUrl(
-                                        bank.intentScheme,
-                                        payment.qrPayload,
-                                      )
-                                    : null;
-                                  if (!target) {
-                                    setError(
-                                      "This banking app could not be opened securely. Scan the QR code above instead.",
-                                    );
-                                    return;
-                                  }
-                                  setFonepayBankHint("");
-                                  window.location.assign(target);
-                                  window.setTimeout(() => {
-                                    if (document.visibilityState !== "hidden")
-                                      setFonepayBankHint(
-                                        "If your banking app didn\u2019t open, install it or scan the QR code above.",
-                                      );
-                                  }, 900);
-                                }}
-                              >
-                                <span className="fonepay-bank-identity">
-                                  <FonepayBankLogo
-                                    name={bank.bankName}
-                                    src={bank.bankIcon}
-                                  />
-                                  <b>{bank.bankName}</b>
-                                </span>
-                                <span className="fonepay-bank-open">
-                                  Open app
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                          <small className="fonepay-security-note">
-                            Banking-app links work on a phone with the selected
-                            app installed. On this device, scanning the QR above
-                            is the reliable option.
-                          </small>
-                          {fonepayBankHint ? (
-                            <p className="fonepay-bank-hint" role="status">
-                              {fonepayBankHint}
-                            </p>
-                          ) : null}
-                          {!filterFonepayBanks(payment.banks, fonepayBankQuery)
-                            .length ? (
-                            <p className="fonepay-bank-empty">
-                              No matching banking app. Try another name or scan
-                              the QR code above.
-                            </p>
-                          ) : null}
-                        </div>
+                        <FonepayBankPicker
+                          banks={payment.banks}
+                          qrPayload={payment.qrPayload}
+                          onError={setError}
+                        />
+                      ) : null}
+                      {fonepayBankHint ? (
+                        <p className="fonepay-bank-hint" role="status">
+                          {fonepayBankHint}
+                        </p>
                       ) : null}
                       <Action busy={busy} onClick={checkPayment}>
                         I&apos;ve completed payment - check status
