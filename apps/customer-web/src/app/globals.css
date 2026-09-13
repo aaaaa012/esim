@@ -897,6 +897,18 @@ button {
   max-width: 380px;
   line-height: 1.55;
 }
+.account-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+.account-empty > small {
+  max-width: 420px;
+  color: var(--text-3);
+  line-height: 1.5;
+  text-align: center;
+}
 
 .account-empty.compact {
   min-height: 140px;

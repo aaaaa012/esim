@@ -123,10 +123,10 @@ export default function OrderList() {
               <Wifi size={14} />
               Your account
             </span>
-            <h1>Purchases</h1>
+            <h1>My orders</h1>
             <p>
-              Purchases, top-ups, document reviews, payments, and activation
-              events.
+              Your eSIM purchases, recharges, document reviews, payments, and
+              activation events.
             </p>
           </div>
           <div className="account-head-actions">

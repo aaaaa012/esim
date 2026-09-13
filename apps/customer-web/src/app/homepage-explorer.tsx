@@ -2,11 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  ArrowRight,
-  RefreshCw,
-  Smartphone,
-} from "lucide-react";
+import { ArrowRight, RefreshCw, Smartphone } from "lucide-react";
 import {
   createContext,
   useContext,
@@ -48,7 +44,11 @@ function useHomepageExplorer() {
   return value;
 }
 
-export function HomepageExplorerProvider({ children }: { children: ReactNode }) {
+export function HomepageExplorerProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
   const [countries, setCountries] = useState<Country[]>([]);
   const [popularPlans, setPopularPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,7 +72,9 @@ export function HomepageExplorerProvider({ children }: { children: ReactNode }) 
           plansResponse.json(),
         ])) as [Envelope<Country[]>, Envelope<Plan[]>];
         setCountries(countryData.data);
-        setPopularPlans(planData.data.filter((plan) => plan.popular).slice(0, 6));
+        setPopularPlans(
+          planData.data.filter((plan) => plan.popular).slice(0, 6),
+        );
       })
       .catch((reason: unknown) => {
         if (!(reason instanceof DOMException && reason.name === "AbortError")) {
@@ -115,7 +117,13 @@ export function HeroDestinationSearch() {
     : "/destinations";
 
   return (
-    <div className="hero-discovery" aria-label="Find a travel eSIM plan">
+    <div
+      id="explore"
+      className="hero-discovery"
+      role="region"
+      aria-label="Find a travel eSIM plan"
+      tabIndex={-1}
+    >
       <CountryPicker
         countries={countries}
         value={selected}
@@ -132,7 +140,9 @@ export function HeroDestinationSearch() {
               type="button"
               key={country.code}
               onClick={() =>
-                router.push(`/destinations?country=${encodeURIComponent(country.code)}`)
+                router.push(
+                  `/destinations?country=${encodeURIComponent(country.code)}`,
+                )
               }
             >
               {flagEmoji(country.code)} <span>{country.name}</span>
@@ -170,7 +180,10 @@ export function PopularRightNow() {
   if (!loading && !popularPlans.length) return null;
 
   return (
-    <section className="homepage-popular section" aria-labelledby="popular-now-title">
+    <section
+      className="homepage-popular section"
+      aria-labelledby="popular-now-title"
+    >
       <div className="shell">
         <div className="homepage-popular-heading">
           <span>Popular right now</span>
@@ -189,7 +202,8 @@ export function PopularRightNow() {
                   </div>
                   <h3>{plan.name}</h3>
                   <p>
-                    {formatPlanDataText(plan.dataAllowance)} · {plan.validityDays}{" "}
+                    {formatPlanDataText(plan.dataAllowance)} ·{" "}
+                    {plan.validityDays}{" "}
                     {plan.validityDays === 1 ? "day" : "days"}
                   </p>
                   <div>

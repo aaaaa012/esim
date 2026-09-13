@@ -28,7 +28,7 @@ export default function OrderLoading() {
       <div className="shell">
         <div className="account-head">
           <div>
-            <h1>Purchases</h1>
+            <h1>My orders</h1>
             <p>Your purchases and top-ups.</p>
           </div>
         </div>

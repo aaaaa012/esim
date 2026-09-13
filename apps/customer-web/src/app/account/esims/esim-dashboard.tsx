@@ -610,9 +610,18 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
               Choose your first destination plan and we’ll add your reusable
               eSIM to this dashboard.
             </p>
-            <Link className="button" href="/destinations">
-              Browse plans
-            </Link>
+            <div className="account-empty-actions">
+              <Link className="button" href="/destinations">
+                Browse plans
+              </Link>
+              <Link className="button secondary" href="/account/orders">
+                View my orders
+              </Link>
+            </div>
+            <small>
+              Already placed an order or recharged another person’s existing
+              eSIM? Check your orders.
+            </small>
           </div>
         </div>
       </main>
