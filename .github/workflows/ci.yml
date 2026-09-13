@@ -61,7 +61,9 @@ jobs:
     if: github.repository == 'samirextra369/esim2.2' && ((github.event_name == 'push' && github.ref == 'refs/heads/with-fonepay') || github.event_name == 'workflow_dispatch')
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # EC2 builds are intentionally sequential to stay within the host's memory
+    # envelope. Keep enough headroom for installation, migrations and health checks.
+    timeout-minutes: 60
     environment: production
     concurrency:
       group: visacompass-production

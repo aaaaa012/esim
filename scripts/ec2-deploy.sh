@@ -6,6 +6,7 @@ APP_DIR="/home/ec2-user/visaCompass/esim2.2"
 BRANCH="with-fonepay"
 REPOSITORY="git@github.com:samirextra369/esim2.2.git"
 LOCK_FILE="/tmp/visacompass-production-deploy.lock"
+DEPLOYED_SHA_FILE="$APP_DIR/.visa-compass-deployed-sha"
 READY_URL="http://127.0.0.1:4000/api/v1/health/ready"
 CUSTOMER_URL="http://127.0.0.1:3000/"
 OPS_URL="http://127.0.0.1:3001/"
@@ -24,6 +25,7 @@ target_sha=""
 deployment_started=0
 runtime_changed=0
 rollback_started=0
+last_deployed_sha=""
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -78,8 +80,24 @@ build_release() {
     run_with_app_env pnpm test
   fi
 
-  log "Building all production applications"
-  run_with_app_env pnpm build
+  # Two concurrent Next.js production builds can exhaust a small EC2 host and
+  # appear hung until the outer Actions timeout kills SSH. Build deterministically
+  # and sequentially; CI has already tested the same commit in parallel.
+  log "Building shared package"
+  run_with_app_env pnpm --filter @visa-compass/shared build
+  log "Building API"
+  run_with_app_env pnpm --filter @visa-compass/api build
+  log "Building customer web"
+  run_with_app_env pnpm --filter @visa-compass/customer-web build
+  log "Building Ops web"
+  run_with_app_env pnpm --filter @visa-compass/ops-web build
+}
+
+record_deployed_sha() {
+  local sha="$1"
+  local temporary="${DEPLOYED_SHA_FILE}.tmp"
+  printf '%s\n' "$sha" > "$temporary"
+  mv -f "$temporary" "$DEPLOYED_SHA_FILE"
 }
 
 restore_known_generated_files() {
@@ -141,6 +159,14 @@ rollback() {
 
   rollback_started=1
   trap - ERR
+
+  # A previous attempt may have checked out this SHA without ever deploying it.
+  # In that case there is no known source revision to restore locally; leave the
+  # still-running services untouched and force the next attempt to rebuild.
+  if [[ "$previous_sha" == "$target_sha" && "$last_deployed_sha" != "$target_sha" ]]; then
+    show_failure_logs
+    die "deployment of $target_sha did not complete; successful deployment marker was not advanced"
+  fi
   log "Deployment failed; restoring code at $previous_sha"
 
   git reset --hard "$previous_sha"
@@ -153,6 +179,7 @@ rollback() {
   RUN_TESTS=0
   build_release
   restart_and_verify
+  record_deployed_sha "$previous_sha"
   show_failure_logs
   die "Deployment of $target_sha failed; application restored to $previous_sha"
 }
@@ -195,6 +222,12 @@ current_branch="$(git branch --show-current)"
 [[ "$current_branch" == "$BRANCH" ]] || die "EC2 checkout is on '$current_branch', expected '$BRANCH'"
 
 previous_sha="$(git rev-parse HEAD)"
+if [[ -f "$DEPLOYED_SHA_FILE" ]]; then
+  last_deployed_sha="$(tr -d '[:space:]' < "$DEPLOYED_SHA_FILE")"
+  if [[ ! "$last_deployed_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    die "deployed SHA marker is invalid: $DEPLOYED_SHA_FILE"
+  fi
+fi
 log "Fetching $BRANCH from $REPOSITORY"
 git fetch --prune "$REPOSITORY" "$BRANCH"
 branch_sha="$(git rev-parse FETCH_HEAD)"
@@ -204,24 +237,31 @@ git cat-file -e "$target_sha^{commit}" || die "target commit $target_sha was not
 git merge-base --is-ancestor "$target_sha" "$branch_sha" || \
   die "target $target_sha is not contained in $BRANCH"
 
-if [[ "$previous_sha" == "$target_sha" ]]; then
+if [[ "$previous_sha" == "$target_sha" && "$last_deployed_sha" == "$target_sha" ]]; then
   log "Already deployed at $target_sha"
   restart_and_verify
   exit 0
 fi
 
-if git merge-base --is-ancestor "$target_sha" "$previous_sha"; then
+if [[ "$previous_sha" == "$target_sha" ]]; then
+  log "Checkout is at $target_sha but no successful deployment is recorded; rebuilding"
+  deployment_started=1
+fi
+
+if [[ "$previous_sha" != "$target_sha" ]] && git merge-base --is-ancestor "$target_sha" "$previous_sha"; then
   log "Skipping stale deployment $target_sha; $previous_sha is already newer"
   wait_for_url "API readiness" "$READY_URL"
   exit 0
 fi
 
-git merge-base --is-ancestor "$previous_sha" "$target_sha" || \
-  die "target $target_sha is not a fast-forward from $previous_sha"
+if [[ "$previous_sha" != "$target_sha" ]]; then
+  git merge-base --is-ancestor "$previous_sha" "$target_sha" || \
+    die "target $target_sha is not a fast-forward from $previous_sha"
 
-log "Preparing $target_sha (current: $previous_sha)"
-git merge --ff-only "$target_sha"
-deployment_started=1
+  log "Preparing $target_sha (current: $previous_sha)"
+  git merge --ff-only "$target_sha"
+  deployment_started=1
+fi
 
 # Build before touching running processes. Prisma migrations are applied only
 # after every application has compiled successfully.
@@ -232,6 +272,7 @@ runtime_changed=1
 pnpm db:deploy
 
 restart_and_verify
+record_deployed_sha "$target_sha"
 deployment_started=0
 runtime_changed=0
 
