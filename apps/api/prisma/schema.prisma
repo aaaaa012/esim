@@ -744,15 +744,15 @@ model FonepayBankDirectoryEntry {
 }
 
 model FonepayBankDirectorySync {
-  id               String   @id @default(uuid()) @db.Uuid
+  id               String    @id @default(uuid()) @db.Uuid
   status           String
-  requestedById    String?  @db.Uuid
-  totalCount       Int      @default(0)
-  addedCount       Int      @default(0)
-  updatedCount     Int      @default(0)
-  deactivatedCount Int      @default(0)
+  requestedById    String?   @db.Uuid
+  totalCount       Int       @default(0)
+  addedCount       Int       @default(0)
+  updatedCount     Int       @default(0)
+  deactivatedCount Int       @default(0)
   errorMessage     String?
-  startedAt        DateTime @default(now())
+  startedAt        DateTime  @default(now())
   completedAt      DateTime?
 
   @@index([startedAt])
@@ -777,30 +777,31 @@ model InventoryBatch {
 }
 
 model EsimInventory {
-  id                      String                        @id @default(uuid()) @db.Uuid
-  batchId                 String                        @db.Uuid
-  batch                   InventoryBatch                @relation(fields: [batchId], references: [id])
-  iccid                   String                        @unique
-  eid                     String                        @unique
-  msisdn                  String                        @unique
-  status                  InventoryStatus               @default(IMPORTED)
-  assignedOrderId         String?                       @unique @db.Uuid
-  assignedOrder           Order?                        @relation(fields: [assignedOrderId], references: [id])
-  activationCodeEncrypted String?
-  smDpAddress             String?
-  providerSubscriptionId  String?
-  providerStatus          String?
-  lastProviderCheckedAt   DateTime?
-  providerCheckError      String?
-  quarantineReason        String?
-  activatedAt             DateTime?
-  expiresAt               DateTime?
-  rechargeOrders          Order[]                       @relation("RechargeTarget")
-  customerEsims           CustomerEsim[]
-  reconciliationItems     InventoryReconciliationItem[]
-  version                 Int                           @default(0)
-  createdAt               DateTime                      @default(now())
-  updatedAt               DateTime                      @updatedAt
+  id                           String                        @id @default(uuid()) @db.Uuid
+  batchId                      String                        @db.Uuid
+  batch                        InventoryBatch                @relation(fields: [batchId], references: [id])
+  iccid                        String                        @unique
+  eid                          String                        @unique
+  msisdn                       String                        @unique
+  status                       InventoryStatus               @default(IMPORTED)
+  assignedOrderId              String?                       @unique @db.Uuid
+  assignedOrder                Order?                        @relation(fields: [assignedOrderId], references: [id])
+  activationCodeEncrypted      String?
+  smDpAddress                  String?
+  providerSubscriptionId       String?
+  providerStatus               String?
+  lastProviderCheckedAt        DateTime?
+  providerCheckError           String?
+  quarantineReason             String?
+  activatedAt                  DateTime?
+  expiresAt                    DateTime?
+  rechargeOrders               Order[]                       @relation("RechargeTarget")
+  customerEsims                CustomerEsim[]
+  transatelLifecycleOperations TransatelLifecycleOperation[]
+  reconciliationItems          InventoryReconciliationItem[]
+  version                      Int                           @default(0)
+  createdAt                    DateTime                      @default(now())
+  updatedAt                    DateTime                      @updatedAt
 
   @@index([status])
 }
@@ -1280,6 +1281,8 @@ model TransatelLifecycleOperation {
   id                    String                   @id @default(uuid()) @db.Uuid
   orderId               String                   @db.Uuid
   order                 Order                    @relation(fields: [orderId], references: [id])
+  inventoryId           String                   @db.Uuid
+  inventory             EsimInventory            @relation(fields: [inventoryId], references: [id])
   action                TransatelLifecycleAction
   state                 TransatelLifecycleState  @default(CREATED)
   idempotencyKey        String                   @unique
@@ -1299,6 +1302,7 @@ model TransatelLifecycleOperation {
   updatedAt             DateTime                 @updatedAt
 
   @@index([orderId, createdAt])
+  @@index([inventoryId, createdAt])
   @@index([state, createdAt])
   @@index([approvedById])
 }
@@ -1511,48 +1515,48 @@ enum HomepageCampaignFormat {
 }
 
 model HomepageCampaign {
-  id          String                    @id @default(uuid()) @db.Uuid
-  title       String
-  altText     String
-  imageUrl    String
-  assetKey    String?
-  placement   HomepageCampaignPlacement
-  format      HomepageCampaignFormat
-  imageWidth  Int
-  imageHeight Int
-  countryCode String?
-  ctaLabel    String
-  eyebrow     String?
-  summary     String?
-  priceLabel  String?
-  termsLabel  String?
-  ctaHrefOverride String?
-  mobileImageUrl String?
-  mobileAssetKey String?
-  mobileImageWidth Int?
+  id                String                    @id @default(uuid()) @db.Uuid
+  title             String
+  altText           String
+  imageUrl          String
+  assetKey          String?
+  placement         HomepageCampaignPlacement
+  format            HomepageCampaignFormat
+  imageWidth        Int
+  imageHeight       Int
+  countryCode       String?
+  ctaLabel          String
+  eyebrow           String?
+  summary           String?
+  priceLabel        String?
+  termsLabel        String?
+  ctaHrefOverride   String?
+  mobileImageUrl    String?
+  mobileAssetKey    String?
+  mobileImageWidth  Int?
   mobileImageHeight Int?
-  mobileFormat HomepageCampaignFormat?
-  sortOrder   Int                       @default(0)
-  active      Boolean                   @default(true)
-  startsAt    DateTime?
-  endsAt      DateTime?
-  createdAt   DateTime                  @default(now())
-  updatedAt   DateTime                  @updatedAt
+  mobileFormat      HomepageCampaignFormat?
+  sortOrder         Int                       @default(0)
+  active            Boolean                   @default(true)
+  startsAt          DateTime?
+  endsAt            DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
 
   @@index([active, placement, sortOrder])
   @@index([placement, startsAt, endsAt])
 }
 
 model HomepageFeaturedPlan {
-  id        String   @id @default(uuid()) @db.Uuid
-  planId    String   @db.Uuid
-  plan      Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
-  sortOrder Int      @default(0)
-  active    Boolean  @default(true)
+  id        String    @id @default(uuid()) @db.Uuid
+  planId    String    @db.Uuid
+  plan      Plan      @relation(fields: [planId], references: [id], onDelete: Cascade)
+  sortOrder Int       @default(0)
+  active    Boolean   @default(true)
   startsAt  DateTime?
   endsAt    DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([active, sortOrder])
   @@index([planId, startsAt, endsAt])

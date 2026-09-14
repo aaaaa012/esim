@@ -130,6 +130,42 @@ describe("TransatelOperationsService lifecycle", () => {
     });
   });
 
+  it("suspends the physical eSIM when the selected order is a recharge", async () => {
+    const context = setup();
+    (
+      context.prisma.order.findUnique as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      id: "topup-order-1",
+      providerStatus: "ACTIVE",
+      providerSubscriptionId: "topup-sub-1",
+      inventory: null,
+      customerEsim: {
+        inventory: {
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          providerSubscriptionId: "initial-sub-1",
+          status: "ACTIVATED",
+        },
+        subscriptions: [{ providerSubscriptionId: "topup-sub-1" }],
+      },
+    });
+
+    await context.service.suspend({
+      orderId: "topup-order-1",
+      reason: "Customer requested a temporary data pause",
+      idempotencyKey: "ops:suspend:topup1234",
+      actorId: "actor-1",
+    });
+
+    expect(context.connectivity.suspend).toHaveBeenCalledWith(
+      "8988247076000000319",
+      "ops:suspend:topup1234",
+    );
+    expect(context.lifecycleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ inventoryId: "inventory-1" }),
+    });
+  });
+
   it("refuses to suspend an already terminated eSIM before calling Transatel", async () => {
     const context = setup();
     context.connectivity.getSubscriberDetails = vi

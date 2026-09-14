@@ -41,7 +41,7 @@ describe("LifecycleActions", () => {
     });
     render(
       <LifecycleActions
-        orderId="order-1"
+        inventoryId="inventory-1"
         iccid="8988247076000000319"
         providerStatus="ACTIVE"
         canTerminate
@@ -61,7 +61,7 @@ describe("LifecycleActions", () => {
     fireEvent.click(submit);
     await waitFor(() => expect(authFetch).toHaveBeenCalledOnce());
     expect(authFetch.mock.calls[0]?.[0]).toContain(
-      "/operations/transatel/orders/order-1/suspend",
+      "/operations/transatel/inventory/inventory-1/suspend",
     );
     expect(
       JSON.parse(String(authFetch.mock.calls[0]?.[1]?.body)),
@@ -71,7 +71,7 @@ describe("LifecycleActions", () => {
   it("hides irreversible termination from non-super-admin operators", async () => {
     render(
       <LifecycleActions
-        orderId="order-1"
+        inventoryId="inventory-1"
         iccid="8988247076000000319"
         providerStatus="ACTIVE"
         canTerminate={false}
@@ -93,7 +93,7 @@ describe("LifecycleActions", () => {
     });
     render(
       <LifecycleActions
-        orderId="order-1"
+        inventoryId="inventory-1"
         iccid="8988247076000000319"
         providerStatus="SUSPENDED"
         canTerminate

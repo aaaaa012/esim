@@ -31,6 +31,7 @@ import { LifecycleActions } from "../../transatel/lifecycle-actions";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = { "content-type": "application/json" };
 type Esim = {
+  id: string;
   iccid: string;
   status: string;
   providerStatus?: string | null;
@@ -709,7 +710,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                           ) : null}
                           {order.esim ? (
                             <LifecycleActions
-                              orderId={order.id}
+                              inventoryId={order.esim.id}
                               iccid={order.esim.iccid}
                               providerStatus={
                                 order.esim.providerStatus ?? order.esim.status

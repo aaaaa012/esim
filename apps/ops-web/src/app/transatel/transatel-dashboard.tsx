@@ -66,6 +66,24 @@ type Subscriber = {
   usageLastCheckedAt?: string | null;
   expiresAt?: string | null;
 };
+type EsimPlan = Omit<
+  Subscriber,
+  "ownerId" | "customer" | "email" | "iccid" | "msisdn" | "providerStatus"
+> & {
+  orderType: string;
+  source: string;
+  purchaser: string;
+};
+type CustomerEsim = {
+  inventoryId: string;
+  iccid: string;
+  msisdn?: string | null;
+  providerStatus?: string | null;
+  ownerId: string;
+  ownerName: string;
+  ownerEmail: string;
+  plans: EsimPlan[];
+};
 type Inventory = {
   id: string;
   iccid: string;
@@ -89,6 +107,9 @@ type Failure = {
 type LifecycleOperation = {
   id: string;
   orderNumber: string;
+  inventoryId: string;
+  iccid: string;
+  owner: string;
   action: string;
   state: string;
   reason: string;
@@ -120,6 +141,7 @@ type Dashboard = {
     webhookDeadLetters: number;
   };
   subscribers: Subscriber[];
+  esims: CustomerEsim[];
   inventory: Inventory[];
   failures: Failure[];
   lifecycleOperations: LifecycleOperation[];
@@ -267,7 +289,7 @@ export default function TransatelDashboard() {
       setBusy("");
     }
   };
-  const refreshUsage = async (subscriber: Subscriber) => {
+  const refreshUsage = async (subscriber: EsimPlan) => {
     setBusy(subscriber.orderId);
     try {
       const response = await authFetch(
@@ -463,22 +485,24 @@ export default function TransatelDashboard() {
           "Usage checked at",
           "Expires at",
         ],
-        data.subscribers.map((row) => [
-          row.customer,
-          row.email,
-          row.orderNumber,
-          row.iccid,
-          row.msisdn,
-          row.plan,
-          row.remainingMb,
-          row.usedMb,
-          row.totalMb,
-          row.providerStatus,
-          row.status,
-          row.providerSubscriptionId,
-          row.usageLastCheckedAt,
-          row.expiresAt,
-        ]),
+        data.esims.flatMap((esim) =>
+          esim.plans.map((plan) => [
+            esim.ownerName,
+            esim.ownerEmail,
+            plan.orderNumber,
+            esim.iccid,
+            esim.msisdn,
+            plan.plan,
+            plan.remainingMb,
+            plan.usedMb,
+            plan.totalMb,
+            esim.providerStatus,
+            plan.status,
+            plan.providerSubscriptionId,
+            plan.usageLastCheckedAt,
+            plan.expiresAt,
+          ]),
+        ),
       );
       return;
     }
@@ -510,6 +534,8 @@ export default function TransatelDashboard() {
       `transatel-lifecycle-actions-${date}.csv`,
       [
         "Time",
+        "Owner",
+        "ICCID / SIM serial",
         "Order",
         "Action",
         "State",
@@ -520,6 +546,8 @@ export default function TransatelDashboard() {
       ],
       data.lifecycleOperations.map((row) => [
         row.createdAt,
+        row.owner,
+        row.iccid,
         row.orderNumber,
         row.action,
         row.state,
@@ -687,7 +715,7 @@ export default function TransatelDashboard() {
               </Button>
             </div>
             <TabsList>
-              <TabsTrigger value="subscribers">Customer plans</TabsTrigger>
+              <TabsTrigger value="subscribers">Customer eSIMs</TabsTrigger>
               <TabsTrigger value="inventory">Unassigned eSIMs</TabsTrigger>
               <TabsTrigger value="actions">
                 Mobile data pause and eSIM closure history
@@ -695,115 +723,130 @@ export default function TransatelDashboard() {
             </TabsList>
             <TabsContent value="subscribers" className="mt-4">
               <Panel
-                title="Customer plans"
-                description="Balances and plan controls"
+                title="Customer eSIMs"
+                description="One network profile with its purchase and recharge plans"
                 actions={searchControl(
                   "subscribers",
                   "Search customer, order, ICCID or plan…",
                 )}
                 noPadding
               >
-                {data.subscribers.length ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Customer / Order</TableHead>
-                        <TableHead>SIM identifiers</TableHead>
-                        <TableHead>Plan</TableHead>
-                        <TableHead>Balance</TableHead>
-                        <TableHead>Network status / Subscription</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.subscribers.map((row) => (
-                        <TableRow key={row.providerSubscriptionId}>
-                          <TableCell>
-                            <p className="font-medium">{row.customer}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {row.orderNumber} · {row.email}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-[11px] text-muted-foreground">
-                              ICCID / SIM serial
-                            </p>
-                            <code className="text-xs">{row.iccid}</code>
-                            <p className="text-xs text-muted-foreground">
-                              MSISDN: {row.msisdn ?? "Not assigned"}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            {row.plan}
-                            <p className="text-xs text-muted-foreground">
-                              Expires {formatDate(row.expiresAt)}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            {row.usageLastCheckedAt ? (
-                              <>
-                                <p className="font-medium">
-                                  {row.status === "EXPIRED"
-                                    ? `${row.totalMb.toLocaleString()} MB allowance`
-                                    : `${row.remainingMb.toLocaleString()} MB left`}
-                                </p>
-                                <p className="text-xs text-muted-foreground">
-                                  {row.status === "EXPIRED"
-                                    ? "Plan expired"
-                                    : `${row.usedMb.toLocaleString()} / ${row.totalMb.toLocaleString()} MB used`}
-                                </p>
-                              </>
-                            ) : (
-                              <p className="text-xs text-muted-foreground">
-                                Usage not available yet
-                              </p>
-                            )}
-                            <Button
-                              className="mt-1 h-7 px-2 text-xs"
-                              variant="ghost"
-                              disabled={busy === row.orderId}
-                              onClick={() => void refreshUsage(row)}
-                            >
-                              <RefreshCcw className="size-3" /> Refresh
-                            </Button>
-                          </TableCell>
-                          <TableCell>
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className="text-muted-foreground">
-                                  eSIM
-                                </span>
-                                <StatusBadge
-                                  label={row.providerStatus ?? "UNKNOWN"}
-                                />
-                              </div>
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className="text-muted-foreground">
-                                  Plan
-                                </span>
-                                <StatusBadge label={row.status} />
-                              </div>
-                              <p className="break-all text-[11px] text-muted-foreground">
-                                Subscription ID: {row.providerSubscriptionId}
-                              </p>
+                {data.esims.length ? (
+                  <div className="space-y-4 p-4">
+                    {data.esims.map((esim) => (
+                      <section
+                        key={esim.inventoryId}
+                        className="overflow-hidden rounded-xl border bg-background"
+                      >
+                        <div className="flex flex-col gap-4 border-b bg-muted/30 p-4 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold">{esim.ownerName}</p>
+                              <StatusBadge
+                                label={esim.providerStatus ?? "UNKNOWN"}
+                              />
                             </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <LifecycleActions
-                              orderId={row.orderId}
-                              iccid={row.iccid}
-                              providerStatus={row.providerStatus}
-                              canTerminate={canTerminate}
-                              onCompleted={lifecycleCompleted}
-                            />
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                            <p className="text-sm text-muted-foreground">
+                              {esim.ownerEmail}
+                            </p>
+                            <p className="mt-1 break-all text-xs text-muted-foreground">
+                              ICCID {esim.iccid} · MSISDN{" "}
+                              {esim.msisdn ?? "Not assigned"}
+                            </p>
+                          </div>
+                          <LifecycleActions
+                            inventoryId={esim.inventoryId}
+                            iccid={esim.iccid}
+                            providerStatus={esim.providerStatus}
+                            canTerminate={canTerminate}
+                            onCompleted={lifecycleCompleted}
+                          />
+                        </div>
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Plan / order</TableHead>
+                                <TableHead>Purchase</TableHead>
+                                <TableHead>Balance</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="text-right">
+                                  Plan actions
+                                </TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {esim.plans.map((plan) => (
+                                <TableRow key={plan.providerSubscriptionId}>
+                                  <TableCell>
+                                    <p className="font-medium">{plan.plan}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {plan.orderNumber} · Expires{" "}
+                                      {formatDate(plan.expiresAt)}
+                                    </p>
+                                    <p className="break-all text-[11px] text-muted-foreground">
+                                      Subscription ID:{" "}
+                                      {plan.providerSubscriptionId}
+                                    </p>
+                                  </TableCell>
+                                  <TableCell>
+                                    <p className="text-sm">
+                                      {plan.orderType === "INITIAL_PURCHASE"
+                                        ? "Initial purchase"
+                                        : "Recharge"}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Purchased by {plan.purchaser}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {plan.source}
+                                    </p>
+                                  </TableCell>
+                                  <TableCell>
+                                    <p className="font-medium">
+                                      {plan.usageLastCheckedAt
+                                        ? `${plan.remainingMb.toLocaleString()} MB left`
+                                        : "Usage not available yet"}
+                                    </p>
+                                    {plan.usageLastCheckedAt ? (
+                                      <p className="text-xs text-muted-foreground">
+                                        {plan.usedMb.toLocaleString()} /{" "}
+                                        {plan.totalMb.toLocaleString()} MB used
+                                      </p>
+                                    ) : null}
+                                  </TableCell>
+                                  <TableCell>
+                                    <StatusBadge label={plan.status} />
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <div className="flex justify-end gap-1">
+                                      <Button asChild size="sm" variant="ghost">
+                                        <a href={`/orders/${plan.orderId}`}>
+                                          Open order
+                                        </a>
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={busy === plan.orderId}
+                                        onClick={() => void refreshUsage(plan)}
+                                      >
+                                        <RefreshCcw className="size-3" />{" "}
+                                        Refresh
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </section>
+                    ))}
+                  </div>
                 ) : (
                   <EmptyState
-                    title="No customer plans found"
+                    title="No customer eSIMs found"
                     description="Try another customer, order, ICCID, MSISDN, or plan."
                   />
                 )}
@@ -911,7 +954,7 @@ export default function TransatelDashboard() {
                 description="Audited suspension, reactivation and permanent termination requests"
                 actions={searchControl(
                   "actions",
-                  "Search order, actor, reason or reference…",
+                  "Search ICCID, order, actor, reason or reference…",
                 )}
                 noPadding
               >
@@ -920,7 +963,7 @@ export default function TransatelDashboard() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Time</TableHead>
-                        <TableHead>Order</TableHead>
+                        <TableHead>eSIM / initiating order</TableHead>
                         <TableHead>Action</TableHead>
                         <TableHead>State</TableHead>
                         <TableHead>Actor</TableHead>
@@ -933,7 +976,15 @@ export default function TransatelDashboard() {
                       {data.lifecycleOperations.map((row) => (
                         <TableRow key={row.id}>
                           <TableCell>{formatDate(row.createdAt)}</TableCell>
-                          <TableCell>{row.orderNumber}</TableCell>
+                          <TableCell>
+                            <p>{row.owner}</p>
+                            <p className="font-mono text-xs text-muted-foreground">
+                              {row.iccid}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Initiated from {row.orderNumber}
+                            </p>
+                          </TableCell>
                           <TableCell>{row.action}</TableCell>
                           <TableCell>
                             <StatusBadge

@@ -354,6 +354,11 @@ export class TransatelOperationsService {
                 },
               },
               {
+                inventory: {
+                  is: { iccid: { contains: query, mode: "insensitive" } },
+                },
+              },
+              {
                 performedBy: {
                   is: { email: { contains: query, mode: "insensitive" } },
                 },
@@ -384,7 +389,9 @@ export class TransatelOperationsService {
       this.prisma.esimInventory.count({ where: { status: "AVAILABLE" } }),
       this.prisma.esimInventory.count({ where: { status: "QUARANTINED" } }),
       this.prisma.subscription.count({ where: { status: "ACTIVE" } }),
-      this.prisma.order.count({ where: { providerStatus: "SUSPENDED" } }),
+      this.prisma.esimInventory.count({
+        where: { providerStatus: { equals: "SUSPENDED", mode: "insensitive" } },
+      }),
       this.prisma.provisioningOperation.count({
         where: { state: { in: [...attentionStates] } },
       }),
@@ -402,6 +409,8 @@ export class TransatelOperationsService {
                 include: {
                   plan: { include: { country: true } },
                   traveler: true,
+                  purchasedBy: { select: { email: true } },
+                  partner: { select: { name: true } },
                 },
               },
             },
@@ -424,7 +433,13 @@ export class TransatelOperationsService {
       this.prisma.transatelLifecycleOperation.findMany({
         where: lifecycleWhere,
         include: {
-          order: { select: { orderNumber: true } },
+          inventory: { select: { iccid: true } },
+          order: {
+            select: {
+              orderNumber: true,
+              customer: { select: { email: true } },
+            },
+          },
           performedBy: { select: { email: true } },
           approvedBy: { select: { email: true } },
         },
@@ -470,6 +485,104 @@ export class TransatelOperationsService {
           subscription.usageLastCheckedAt?.toISOString() ?? null,
         expiresAt: subscription.expiresAt?.toISOString() ?? null,
       })),
+      esims: Array.from(
+        subscribers
+          .reduce(
+            (groups, subscription) => {
+              const assignment = subscription.customerEsim;
+              const order = assignment.order;
+              const inventory = assignment.inventory;
+              const existing = groups.get(inventory.id);
+              const ownerEmail =
+                assignment.customer.user?.email ?? assignment.customer.email;
+              const ownerName =
+                order.orderType === "INITIAL_PURCHASE" && order.traveler
+                  ? `${order.traveler.firstName} ${order.traveler.surname}`
+                  : null;
+              const purchaser =
+                order.orderType === "INITIAL_PURCHASE"
+                  ? "Owner"
+                  : order.partner?.name
+                    ? `Partner · ${order.partner.name}`
+                    : order.purchasedBy?.email
+                      ? order.purchasedBy.email === ownerEmail
+                        ? "Owner"
+                        : order.purchasedBy.email
+                      : "Guest checkout";
+              const plan = {
+                orderId: assignment.orderId,
+                orderNumber: order.orderNumber,
+                orderType: order.orderType,
+                source: order.partner?.name
+                  ? `Partner · ${order.partner.name}`
+                  : order.channel,
+                purchaser,
+                providerSubscriptionId: subscription.providerSubscriptionId,
+                status: subscription.status,
+                plan: `${order.plan.country.isoCode} · ${order.plan.name}`,
+                usedMb: subscription.usedMb,
+                totalMb: subscription.totalMb,
+                remainingMb: Math.max(
+                  0,
+                  subscription.totalMb - subscription.usedMb,
+                ),
+                usageLastCheckedAt:
+                  subscription.usageLastCheckedAt?.toISOString() ?? null,
+                expiresAt: subscription.expiresAt?.toISOString() ?? null,
+              };
+              if (existing) {
+                existing.plans.push(plan);
+                if (ownerName) existing.ownerName = ownerName;
+              } else {
+                groups.set(inventory.id, {
+                  inventoryId: inventory.id,
+                  iccid: inventory.iccid,
+                  msisdn: inventory.msisdn,
+                  providerStatus: dashboardProviderStatus({
+                    orderStatus: null,
+                    inventoryProviderStatus: inventory.providerStatus,
+                    inventoryStatus: inventory.status,
+                  }),
+                  ownerId: assignment.customerId,
+                  ownerName: ownerName ?? ownerEmail ?? "Customer",
+                  ownerEmail: ownerEmail?.endsWith(".visacompass.invalid")
+                    ? "—"
+                    : (ownerEmail ?? "—"),
+                  plans: [plan],
+                });
+              }
+              return groups;
+            },
+            new Map<
+              string,
+              {
+                inventoryId: string;
+                iccid: string;
+                msisdn: string | null;
+                providerStatus: string | null;
+                ownerId: string;
+                ownerName: string;
+                ownerEmail: string;
+                plans: Array<{
+                  orderId: string;
+                  orderNumber: string;
+                  orderType: string;
+                  source: string;
+                  purchaser: string;
+                  providerSubscriptionId: string;
+                  status: SubscriptionStatus;
+                  plan: string;
+                  usedMb: number;
+                  totalMb: number;
+                  remainingMb: number;
+                  usageLastCheckedAt: string | null;
+                  expiresAt: string | null;
+                }>;
+              }
+            >(),
+          )
+          .values(),
+      ),
       inventory: inventory.map((profile) => ({
         id: profile.id,
         iccid: profile.iccid,
@@ -490,6 +603,11 @@ export class TransatelOperationsService {
         id: operation.id,
         orderId: operation.orderId,
         orderNumber: operation.order.orderNumber,
+        inventoryId: operation.inventoryId,
+        iccid: operation.inventory.iccid,
+        owner: operation.order.customer.email.endsWith(".visacompass.invalid")
+          ? "Guest checkout"
+          : operation.order.customer.email,
         action: operation.action,
         state: operation.state,
         reason: operation.reason,
@@ -510,11 +628,58 @@ export class TransatelOperationsService {
       action: TransatelLifecycleAction.SUSPEND,
     });
   }
+  async suspendInventory(
+    inventoryId: string,
+    input: Omit<LifecycleInput, "action" | "orderId">,
+  ) {
+    return this.suspend({
+      ...input,
+      orderId: await this.orderForInventory(inventoryId),
+    });
+  }
   terminate(input: Omit<LifecycleInput, "action">) {
     return this.lifecycle({
       ...input,
       action: TransatelLifecycleAction.TERMINATE,
     });
+  }
+  async terminateInventory(
+    inventoryId: string,
+    input: Omit<LifecycleInput, "action" | "orderId">,
+  ) {
+    return this.terminate({
+      ...input,
+      orderId: await this.orderForInventory(inventoryId),
+    });
+  }
+
+  async requestInventoryReactivation(
+    inventoryId: string,
+    input: Omit<LifecycleInput, "action" | "orderId">,
+  ) {
+    return this.requestReactivation({
+      ...input,
+      orderId: await this.orderForInventory(inventoryId),
+    });
+  }
+
+  private async orderForInventory(inventoryId: string) {
+    const inventory = await this.prisma.esimInventory.findUnique({
+      where: { id: inventoryId },
+      select: {
+        assignedOrderId: true,
+        customerEsims: {
+          orderBy: { assignedAt: "asc" },
+          take: 1,
+          select: { orderId: true },
+        },
+      },
+    });
+    const orderId =
+      inventory?.assignedOrderId ?? inventory?.customerEsims[0]?.orderId;
+    if (!orderId)
+      throw new NotFoundException("The eSIM does not have an assigned order");
+    return orderId;
   }
 
   async requestReactivation(input: Omit<LifecycleInput, "action">) {
@@ -563,7 +728,7 @@ export class TransatelOperationsService {
       );
     let existing = await this.prisma.transatelLifecycleOperation.findFirst({
       where: {
-        orderId: order.id,
+        inventoryId: inventory.id,
         state: {
           in: [
             TransatelLifecycleState.APPROVAL_REQUIRED,
@@ -596,13 +761,14 @@ export class TransatelOperationsService {
         const created = await tx.transatelLifecycleOperation.create({
           data: {
             orderId: order.id,
+            inventoryId: inventory.id,
             action: TransatelLifecycleAction.REACTIVATE,
             state: TransatelLifecycleState.APPROVAL_REQUIRED,
             idempotencyKey: input.idempotencyKey,
             reason,
             performedById: input.actorId,
             requestSnapshot: {
-              orderId: order.id,
+              inventoryId: inventory.id,
               iccid: inventory.iccid,
               observedSubscriberStatus: status,
               action: TransatelLifecycleAction.REACTIVATE,
@@ -645,7 +811,7 @@ export class TransatelOperationsService {
         const concurrent =
           await this.prisma.transatelLifecycleOperation.findFirst({
             where: {
-              orderId: order.id,
+              inventoryId: inventory.id,
               state: {
                 in: [
                   TransatelLifecycleState.APPROVAL_REQUIRED,
@@ -1331,16 +1497,17 @@ export class TransatelOperationsService {
       where: { id: input.orderId },
       include: {
         inventory: true,
-        customerEsim: { include: { subscriptions: true } },
+        customerEsim: { include: { subscriptions: true, inventory: true } },
       },
     });
-    if (!order?.inventory || !order.customerEsim)
+    const inventory = order?.inventory ?? order?.customerEsim?.inventory;
+    if (!order || !inventory || !order.customerEsim)
       throw new NotFoundException("The order does not have an assigned eSIM");
     let observedStatus = input.verifiedSubscriberStatus;
     if (!observedStatus) {
       try {
         const subscriber = await this.connectivity.getSubscriberDetails(
-          order.inventory.iccid,
+          inventory.iccid,
         );
         observedStatus = subscriber.status;
       } catch (error) {
@@ -1402,7 +1569,7 @@ export class TransatelOperationsService {
       );
     const inFlight = await this.prisma.transatelLifecycleOperation.findFirst({
       where: {
-        orderId: order.id,
+        inventoryId: inventory.id,
         state: {
           in: [
             TransatelLifecycleState.CREATED,
@@ -1431,12 +1598,12 @@ export class TransatelOperationsService {
       inFlight.state === TransatelLifecycleState.CREATED &&
       Boolean(inFlight.approvedById);
     if (inFlight && !approvedReactivation) return inFlight;
-    const reference = order.inventory.iccid;
+    const reference = inventory.iccid;
     const requestSnapshot = {
       orderId: order.id,
-      iccid: order.inventory.iccid,
+      iccid: inventory.iccid,
       providerSubscriptionId:
-        order.inventory.providerSubscriptionId ??
+        inventory.providerSubscriptionId ??
         order.providerSubscriptionId ??
         null,
       observedSubscriberStatus: lifecycleStatus,
@@ -1448,6 +1615,7 @@ export class TransatelOperationsService {
       operation ??= await this.prisma.transatelLifecycleOperation.create({
         data: {
           orderId: order.id,
+          inventoryId: inventory.id,
           action: input.action,
           idempotencyKey: input.idempotencyKey,
           reason,
@@ -1464,11 +1632,29 @@ export class TransatelOperationsService {
           await this.prisma.transatelLifecycleOperation.findUnique({
             where: { idempotencyKey: input.idempotencyKey },
           });
-        if (
-          !existing ||
-          existing.orderId !== order.id ||
-          existing.action !== input.action
-        )
+        if (!existing) {
+          const concurrent =
+            await this.prisma.transatelLifecycleOperation.findFirst({
+              where: {
+                inventoryId: inventory.id,
+                state: {
+                  in: [
+                    TransatelLifecycleState.APPROVAL_REQUIRED,
+                    TransatelLifecycleState.CREATED,
+                    TransatelLifecycleState.SUBMITTING,
+                    TransatelLifecycleState.ACCEPTED,
+                    TransatelLifecycleState.RECONCILE_REQUIRED,
+                  ],
+                },
+              },
+            });
+          throw new ConflictException(
+            concurrent
+              ? `A ${concurrent.action.toLowerCase()} operation is already pending for this eSIM`
+              : "Another lifecycle operation was created concurrently",
+          );
+        }
+        if (existing.orderId !== order.id || existing.action !== input.action)
           throw new ConflictException(
             "Idempotency key is already used for a different operation",
           );
@@ -1522,7 +1708,7 @@ export class TransatelOperationsService {
           data: { providerStatus: pendingStatus, version: { increment: 1 } },
         });
         await tx.esimInventory.update({
-          where: { id: order.inventory!.id },
+          where: { id: inventory.id },
           data: {
             providerStatus: pendingStatus,
             lastProviderCheckedAt: acceptedAt,

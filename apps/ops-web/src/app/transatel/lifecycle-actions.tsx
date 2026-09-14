@@ -37,13 +37,13 @@ export type LifecycleCompletion = {
 };
 
 export function LifecycleActions({
-  orderId,
+  inventoryId,
   iccid,
   providerStatus,
   canTerminate,
   onCompleted,
 }: {
-  orderId: string;
+  inventoryId: string;
   iccid: string;
   providerStatus?: string | null | undefined;
   canTerminate: boolean;
@@ -80,7 +80,7 @@ export function LifecycleActions({
     setBusy(true);
     try {
       const response = await authFetch(
-        `${API}/operations/transatel/orders/${orderId}/${action}`,
+        `${API}/operations/transatel/inventory/${inventoryId}/${action}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -118,7 +118,7 @@ export function LifecycleActions({
     setBusy(true);
     try {
       const response = await authFetch(
-        `${API}/operations/transatel/orders/${orderId}/reconcile`,
+        `${API}/operations/inventory/profiles/${inventoryId}/reconcile`,
         { method: "POST", headers: {} },
       );
       const value = await response.json();
@@ -166,7 +166,7 @@ export function LifecycleActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
-          <DropdownMenuLabel>Plan actions</DropdownMenuLabel>
+          <DropdownMenuLabel>eSIM network actions</DropdownMenuLabel>
           <DropdownMenuItem onSelect={() => void reconcile()}>
             <RefreshCcw className="size-4" />
             <span>
@@ -184,7 +184,7 @@ export function LifecycleActions({
             <span>
               Pause mobile data
               <small className="block text-xs text-muted-foreground">
-                Temporarily stops service
+                Stops connectivity for every plan
               </small>
             </span>
           </DropdownMenuItem>
@@ -240,10 +240,10 @@ export function LifecycleActions({
             </DialogTitle>
             <DialogDescription>
               {action === "terminate"
-                ? "This permanently removes the eSIM from the network and cannot be undone. Any remaining data will be lost."
+                ? "This permanently removes the complete eSIM from the network and cannot be undone. Every plan and any remaining data will be lost."
                 : action === "reactivate-request"
                   ? "This records a request to restore network service. A different Super Admin must approve it before anything is sent to Transatel."
-                  : "This asks Transatel to temporarily stop network service. Recurring provider charges may continue, and no cancellation or refund is performed."}
+                  : "This asks Transatel to stop network service for every plan on this eSIM. Plan validity and recurring provider charges continue, and no cancellation or refund is performed."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
