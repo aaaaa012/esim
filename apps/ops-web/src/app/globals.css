@@ -490,7 +490,8 @@
     padding-inline: 0.75rem;
   }
   .ops-content :is(p, dd, li, code, pre, a, span) {
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
+    word-break: normal;
   }
   .ops-content :is(.grid, [class*="grid-cols-"]) > * {
     min-width: 0;
@@ -1087,7 +1088,8 @@ body {
 
 .ops-content
   :where(h1, h2, h3, h4, p, li, dd, dt, a, label, small, strong, code) {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .ops-content :where(input, select, textarea, button) {

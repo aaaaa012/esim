@@ -2493,7 +2493,7 @@ export class PartnerService {
       where: { id: session.orderId },
       include: {
         plan: { include: { country: true } },
-        traveler: { select: { id: true } },
+        traveler: true,
         passportExtraction: true,
         documents: {
           select: {
@@ -2559,7 +2559,7 @@ export class PartnerService {
             where: { id: session.orderId },
             include: {
               plan: { include: { country: true } },
-              traveler: { select: { id: true } },
+              traveler: true,
               passportExtraction: true,
               documents: {
                 select: {
@@ -2610,6 +2610,7 @@ export class PartnerService {
           validityDays: order.plan.validityDays,
         },
         travelerComplete: Boolean(order.traveler),
+        traveler: order.traveler ? this.decryptTraveler(order.traveler) : null,
         passportExtraction: this.extractionPayload(
           "passportExtraction" in order ? order.passportExtraction : null,
         ),

@@ -15,6 +15,7 @@ import {
   type MrzField,
 } from "./mrz-parser.js";
 import type { DemoOrder } from "./orders.service.js";
+import { ISO3_TO_ISO2 } from "../integration/transatel.provider.js";
 
 export type PassportVerificationStatus =
   "VERIFIED" | "PARTIAL" | "FAILED" | "NOT_READY" | "SKIPPED";
@@ -42,6 +43,7 @@ export type PassportExtractedFields = Partial<
     | "dateOfBirth"
     | "passportNumber"
     | "passportExpiryDate"
+    | "nationality"
   >
 >;
 export type PassportExtractionResult = {
@@ -313,6 +315,7 @@ export class PassportVerificationService implements OnModuleDestroy {
       );
       const dateOfBirthRaw = fieldValue(mrz.dateOfBirth);
       const expiryRaw = fieldValue(mrz.expiryDate);
+      const nationality = ISO3_TO_ISO2[mrz.nationality.toUpperCase()];
       const fields: PassportExtractedFields = {
         ...(firstName ? { firstName } : {}),
         ...(middleName ? { middleName } : {}),
@@ -324,12 +327,11 @@ export class PassportVerificationService implements OnModuleDestroy {
         ...(expiryRaw && mrzDateToIso(expiryRaw)
           ? { passportExpiryDate: mrzDateToIso(expiryRaw)! }
           : {}),
+        ...(nationality ? { nationality } : {}),
       };
-      const fieldsRequiringInput = required.filter(
-        (field) => field === "nationality" || !fields[field],
-      );
+      const fieldsRequiringInput = required.filter((field) => !fields[field]);
       return {
-        status: fieldsRequiringInput.length === 1 ? "READY" : "PARTIAL",
+        status: fieldsRequiringInput.length === 0 ? "READY" : "PARTIAL",
         fields,
         fieldsRequiringInput,
         ...(recognized.confidence !== undefined

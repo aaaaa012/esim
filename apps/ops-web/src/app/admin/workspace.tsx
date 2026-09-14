@@ -1282,6 +1282,14 @@ export default function AdminWorkspace() {
 
         {tab === "Integrations" && (
           <TabsContent value="Integrations" className="mt-0 space-y-6">
+            <div className="flex justify-end">
+              <Button asChild variant="outline">
+                <Link href="/admin/integrations">
+                  <Building2 className="size-4" />
+                  Fonepay bank directory
+                </Link>
+              </Button>
+            </div>
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {integrations.map((item) => (
                 <div

@@ -514,9 +514,9 @@ export default function OrderReview({ id }: { id: string }) {
               }
             >
               <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
-                The payment provider confirms payment before this plan is added to the
-                customer&apos;s existing eSIM. The plan is then confirmed on the
-                network profile automatically.
+                The payment provider confirms payment before this plan is added
+                to the customer&apos;s existing eSIM. The plan is then confirmed
+                on the network profile automatically.
               </div>
               <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                 <InfoRow
@@ -948,15 +948,17 @@ export default function OrderReview({ id }: { id: string }) {
             {order.documents.map((document) => (
               <div
                 key={document.id}
-                className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3"
+                className="flex flex-col items-stretch gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
               >
                 <div className="min-w-0">
-                  <p className="font-medium">{humane(document.type)}</p>
+                  <p className="whitespace-nowrap font-medium">
+                    {humane(document.type)}
+                  </p>
                   <p className="truncate text-xs text-muted-foreground">
                     {document.fileName}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
                   <StatusBadge
                     label={documentReviewLabel(
                       document,

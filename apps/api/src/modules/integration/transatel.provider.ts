@@ -2225,7 +2225,7 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 }
 
-const ISO3_TO_ISO2: Record<string, string> = {
+export const ISO3_TO_ISO2: Readonly<Record<string, string>> = {
   AFG: "AF",
   ALB: "AL",
   DZA: "DZ",

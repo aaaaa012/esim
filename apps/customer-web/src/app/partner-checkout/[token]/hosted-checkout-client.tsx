@@ -69,6 +69,7 @@ type Session = {
       validityDays: number;
     };
     travelerComplete: boolean;
+    traveler?: Traveler | null;
     passportExtraction?: {
       status: string;
       fields?: Partial<
@@ -263,6 +264,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       .then((value) => {
         if (cancelled) return;
         setSession(value);
+        if (value.order.traveler)
+          setTraveler({ ...initial, ...value.order.traveler });
         if (value.order.status !== "DRAFT") {
           setOrderNumber(value.order.orderNumber);
           if (value.order.status === "PAYMENT_PENDING") {
@@ -476,18 +479,25 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         new Date(traveler.passportExpiryDate) <= new Date()
       )
         nextErrors.passportExpiryDate = "Passport must not be expired";
+      if (traveler.nationality.trim().length !== 2)
+        nextErrors.nationality = "Use a two-letter country code, such as NP";
+      if (traveler.countryOfResidence.trim().length !== 2)
+        nextErrors.countryOfResidence =
+          "Use a two-letter country code, such as NP";
       setFieldErrors(nextErrors);
-      if (Object.keys(nextErrors)[0])
-        throw new Error("Check the highlighted traveller details");
-      if (
-        traveler.nationality.length !== 2 ||
-        traveler.countryOfResidence.length !== 2
-      )
-        throw new Error(
-          "Nationality and country of residence must use two-letter codes",
+      const firstError = Object.keys(nextErrors)[0];
+      if (firstError) {
+        const field = document.querySelector<HTMLElement>(
+          `[name="${firstError}"]`,
         );
+        field?.scrollIntoView({ behavior: "smooth", block: "center" });
+        field?.focus();
+        throw new Error("Check the highlighted traveller details");
+      }
       const body = Object.fromEntries(
-        Object.entries(traveler).filter(([, v]) => v !== ""),
+        Object.entries(traveler)
+          .map(([key, value]) => [key, value.trim()])
+          .filter(([, value]) => value !== ""),
       );
       const refreshed = await api<Session>(
         `/partner-checkout/${token}/traveler`,
@@ -1877,7 +1887,7 @@ function Nav({
   return (
     <div className="form-actions">
       {!backHidden && (
-        <button className="button secondary" onClick={back}>
+        <button type="button" className="button secondary" onClick={back}>
           Back
         </button>
       )}
