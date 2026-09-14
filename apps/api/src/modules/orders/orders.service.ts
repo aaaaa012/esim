@@ -2024,6 +2024,18 @@ export class OrdersService implements OnModuleInit {
         "DOCUMENT_REUPLOAD_REQUIRED",
         document.type,
       );
+    else if (
+      order.partner &&
+      recordDecision &&
+      order.documentReviewStatus === "MANUALLY_APPROVED"
+    )
+      await this.emitPartnerDocumentEvent(
+        order,
+        "document.verification.verified",
+        null,
+        undefined,
+        "MANUALLY_APPROVED",
+      );
     if (recordDecision)
       await this.persistence.recordReview(
         order.id,
@@ -3612,8 +3624,9 @@ export class OrdersService implements OnModuleInit {
   private async emitPartnerDocumentEvent(
     order: DemoOrder,
     type: string,
-    failureCode: string,
+    failureCode: string | null,
     documentType?: DocumentType,
+    status?: "INVALID" | "REUPLOAD_REQUIRED" | "MANUALLY_APPROVED",
   ) {
     if (!order.partner) return;
     const verification =
@@ -3645,9 +3658,10 @@ export class OrdersService implements OnModuleInit {
           externalOrderId: order.externalOrderId ?? null,
           verificationId: verification.id,
           status:
-            failureCode === "DOCUMENTS_REJECTED"
+            status ??
+            (failureCode === "DOCUMENTS_REJECTED"
               ? "INVALID"
-              : "REUPLOAD_REQUIRED",
+              : "REUPLOAD_REQUIRED"),
           failureCode,
           ...(documentType ? { documentType } : {}),
         },
