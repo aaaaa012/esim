@@ -12,7 +12,7 @@ function service(
 ) {
   return new PartnerService(
     prisma as never,
-    {} as never,
+    { decrypt: vi.fn((value: string) => value) } as never,
     storage as never,
     {} as never,
     {} as never,
