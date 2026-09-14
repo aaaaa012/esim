@@ -4,11 +4,11 @@
 
 .campaign-featured,
 .campaign-gallery-section {
-  padding: 54px 0 0;
+  padding: 76px 0 0;
 }
 .campaign-gallery-section {
   position: relative;
-  padding-bottom: 58px;
+  padding-bottom: 78px;
   background:
     radial-gradient(
       circle at 92% 18%,
@@ -154,7 +154,7 @@
 .campaign-card-art {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 768 / 1376;
   height: auto;
   padding: 0;
   overflow: hidden;
@@ -170,8 +170,7 @@
 .campaign-card-art img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  object-position: top center;
+  object-fit: contain;
 }
 .campaign-image-unavailable {
   display: grid;

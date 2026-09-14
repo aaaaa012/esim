@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, ExternalLink, Pause, Play, Wifi, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, Wifi, X } from "lucide-react";
 import {
   createContext,
   useCallback,
@@ -165,8 +165,7 @@ function fallbackGroups(): CampaignGroups {
     FEATURED_BANNER: entries.filter(
       (item) => item.placement === "FEATURED_BANNER",
     ),
-    // Offers are deliberately API-only so an outage cannot revive an expired price.
-    OFFER_GALLERY: [],
+    OFFER_GALLERY: entries.filter((item) => item.placement === "OFFER_GALLERY"),
     HOW_GUIDE: entries.filter((item) => item.placement === "HOW_GUIDE"),
     WHY_ESIM_BANNER: entries.filter(
       (item) => item.placement === "WHY_ESIM_BANNER",
@@ -238,7 +237,23 @@ export function CampaignProvider({ children }: { children: ReactNode }) {
         if (!response.ok) throw new Error("Campaign service unavailable");
         return (await response.json()) as { data: CampaignGroups };
       })
-      .then((response) => setGroups(response.data))
+      .then((response) => {
+        const fallback = fallbackGroups();
+        setGroups({
+          FEATURED_BANNER: response.data.FEATURED_BANNER?.length
+            ? response.data.FEATURED_BANNER
+            : fallback.FEATURED_BANNER,
+          OFFER_GALLERY: response.data.OFFER_GALLERY?.length
+            ? response.data.OFFER_GALLERY
+            : fallback.OFFER_GALLERY,
+          HOW_GUIDE: response.data.HOW_GUIDE?.length
+            ? response.data.HOW_GUIDE
+            : fallback.HOW_GUIDE,
+          WHY_ESIM_BANNER: response.data.WHY_ESIM_BANNER?.length
+            ? response.data.WHY_ESIM_BANNER
+            : fallback.WHY_ESIM_BANNER,
+        });
+      })
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setGroups(fallbackGroups());
@@ -350,10 +365,6 @@ export function OfferGallery() {
   const railRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<number | null>(null);
   const pausedRef = useRef(false);
-  const visibleRef = useRef(false);
-  const sectionRef = useRef<HTMLElement>(null);
-  const [paused, setPaused] = useState(false);
-  const [announcement, setAnnouncement] = useState("");
   const campaigns = groups.OFFER_GALLERY;
   const move = useCallback((direction: -1 | 1) => {
     const rail = railRef.current;
@@ -408,26 +419,15 @@ export function OfferGallery() {
     const timer = reducedMotion
       ? null
       : window.setInterval(() => {
-          if (!paused && visibleRef.current && !pausedRef.current && document.visibilityState === "visible")
+          if (!pausedRef.current && document.visibilityState === "visible")
             move(1);
-        }, 5600);
+        }, 4200);
     return () => {
       window.cancelAnimationFrame(position);
       if (timer) window.clearInterval(timer);
       if (scrollEndRef.current) window.clearTimeout(scrollEndRef.current);
     };
-  }, [campaigns.length, loopMetrics, move, paused]);
-
-  useEffect(() => {
-    const section = sectionRef.current;
-    if (!section || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(
-      ([entry]) => { visibleRef.current = Boolean(entry?.isIntersecting && entry.intersectionRatio >= 0.45); },
-      { threshold: [0, 0.45, 1] },
-    );
-    observer.observe(section);
-    return () => observer.disconnect();
-  }, []);
+  }, [campaigns.length, loopMetrics, move]);
 
   if (!campaigns.length) return null;
   const loopedCampaigns = [0, 1, 2].flatMap((setIndex) =>
@@ -440,7 +440,6 @@ export function OfferGallery() {
   return (
     <section
       className="campaign-gallery-section"
-      ref={sectionRef}
       aria-labelledby="campaign-gallery-heading"
     >
       <div className="shell">
@@ -464,25 +463,20 @@ export function OfferGallery() {
           >
             <button
               type="button"
-              onClick={() => { move(-1); setAnnouncement("Showing previous offers"); }}
+              onClick={() => move(-1)}
               aria-label="Previous offers"
             >
               <ArrowLeft size={18} />
             </button>
             <button
               type="button"
-              onClick={() => { move(1); setAnnouncement("Showing next offers"); }}
+              onClick={() => move(1)}
               aria-label="Next offers"
             >
               <ArrowRight size={18} />
             </button>
-            <button type="button" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>
-              {paused ? <Play size={17} /> : <Pause size={17} />}
-              <span className="sr-only">{paused ? "Play offers" : "Pause offers"}</span>
-            </button>
           </div>
         </div>
-        <p className="sr-only" aria-live="polite">{announcement}</p>
         <div
           className="campaign-rail"
           ref={railRef}
@@ -526,9 +520,6 @@ export function OfferGallery() {
                   <small>{String(campaignIndex + 1).padStart(2, "0")}</small>
                 </div>
                 <h3>{campaign.title}</h3>
-                {campaign.summary ? <p>{campaign.summary}</p> : null}
-                {campaign.priceLabel ? <strong>{campaign.priceLabel}</strong> : null}
-                {campaign.termsLabel ? <small>{campaign.termsLabel}</small> : null}
                 <Link
                   href={campaign.ctaHref}
                   tabIndex={setIndex === 1 ? undefined : -1}

@@ -57,7 +57,7 @@ describe("homepage campaigns", () => {
     );
   });
 
-  it("keeps evergreen placements but suppresses stale offers when the API is unavailable", async () => {
+  it("keeps the original campaign artwork available when the API is unavailable", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementationOnce(
       () => new Promise(() => undefined),
     );
@@ -73,7 +73,10 @@ describe("homepage campaigns", () => {
     expect(
       screen.getByRole("heading", { name: /Visa Compass and Ubigi international eSIM/i }),
     ).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: /choose where/i })).toBeNull();
+    expect(screen.getByRole("heading", { name: /choose where/i })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /view full poster: Australia/i }),
+    ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /view full setup guide/i }),
     ).toBeTruthy();
@@ -87,11 +90,18 @@ describe("homepage campaigns", () => {
     render(
       <CampaignProvider>
         <OfferGallery />
+        <WhyCampaign />
       </CampaignProvider>,
     );
 
+    await waitFor(() =>
+      expect(screen.getAllByAltText("Australia campaign artwork")).toHaveLength(3),
+    );
+    expect(
+      screen.getByRole("button", { name: /Enlarge campaign banner/i }),
+    ).toBeTruthy();
     fireEvent.click(
-      await screen.findByRole("button", { name: /view full poster: Australia/i }),
+      screen.getByRole("button", { name: /view full poster: Australia/i }),
     );
     await waitFor(() =>
       expect(screen.getByRole("dialog").hasAttribute("open")).toBe(true),

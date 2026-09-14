@@ -1713,19 +1713,6 @@ export default function CheckoutClient({
                   Your phone must support eSIM and be carrier-unlocked. Coverage
                   starts after first connection at your destination.
                 </p>
-                <div className="checkout-disclosure" role="note">
-                  <FileCheck2 size={20} aria-hidden="true" />
-                  <div>
-                    <b>Passport verification is required before payment</b>
-                    <p>
-                      Visa Compass securely processes the passport information page and compares it with your traveller details; authorized operations staff review exceptions.
-                      Review normally takes a few minutes, but some orders need manual review. Records are retained only for applicable legal and operational requirements, as explained in our privacy notice.
-                      This checkout requires the same passport page for every destination. Incompatible devices and unmatched
-                      traveller documents are not refundable.
-                    </p>
-                    <span><Link href="/privacy">How we handle your data</Link> · <Link href="/refund-policy">Refund policy</Link></span>
-                  </div>
-                </div>
                 <CompatibilityConfirmation
                   checked={compatible}
                   invalid={Boolean(compatibilityError) && !compatible}
