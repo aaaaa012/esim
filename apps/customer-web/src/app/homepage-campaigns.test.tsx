@@ -107,6 +107,7 @@ describe("homepage campaigns", () => {
       expect(screen.getByRole("dialog").hasAttribute("open")).toBe(true),
     );
     const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Australia travel eSIM offer");
     expect(
       within(dialog).getByRole("heading", {
         name: "Australia travel eSIM offer",
@@ -122,5 +123,12 @@ describe("homepage campaigns", () => {
       screen.getByRole("button", { name: "Close poster viewer" }),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(
+      screen.getByRole("heading", { name: "Australia travel eSIM offer" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("dialog").hasAttribute("open")).toBe(true),
+    );
   });
 });

@@ -262,14 +262,16 @@ export function CampaignProvider({ children }: { children: ReactNode }) {
     return () => controller.abort();
   }, []);
 
-  useEffect(() => {
-    if (selected && !dialogRef.current?.open) dialogRef.current?.showModal();
-  }, [selected]);
+  const openCampaign = useCallback((campaign: HomepageCampaign) => {
+    setSelected(campaign);
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
 
   const close = useCallback(() => dialogRef.current?.close(), []);
 
   return (
-    <CampaignContext.Provider value={{ groups, openCampaign: setSelected }}>
+    <CampaignContext.Provider value={{ groups, openCampaign }}>
       {children}
       <dialog
         className="campaign-dialog"
@@ -501,6 +503,14 @@ export function OfferGallery() {
               data-loop-start={campaignIndex === 0 ? "true" : undefined}
               aria-hidden={setIndex === 1 ? undefined : true}
               inert={setIndex === 1 ? undefined : true}
+              onClick={(event) => {
+                if (
+                  event.target instanceof Element &&
+                  event.target.closest("a, button")
+                )
+                  return;
+                openCampaign(campaign);
+              }}
             >
               <button
                 className="campaign-card-art"
@@ -523,6 +533,7 @@ export function OfferGallery() {
                 <Link
                   href={campaign.ctaHref}
                   tabIndex={setIndex === 1 ? undefined : -1}
+                  onClick={(event) => event.stopPropagation()}
                 >
                   {campaign.ctaLabel} <ArrowRight size={15} />
                 </Link>
