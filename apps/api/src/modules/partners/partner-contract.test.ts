@@ -193,4 +193,44 @@ describe("simplified partner order contract", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("accepts the modern extraction-first session without traveler data", () => {
+    const document = (type: "PASSPORT" | "TICKET") => ({
+      type,
+      fileName: `${type.toLowerCase()}.pdf`,
+      contentType: "application/pdf" as const,
+      sizeBytes: 100,
+    });
+    expect(
+      uploadSessionSchema.safeParse({
+        mode: "EXTRACT_FIRST",
+        externalOrderId: "agency-order-extract-first",
+        documents: [document("PASSPORT"), document("TICKET")],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("does not accept traveler data in extraction-first mode", () => {
+    expect(
+      uploadSessionSchema.safeParse({
+        mode: "EXTRACT_FIRST",
+        externalOrderId: "agency-order-invalid-mix",
+        traveler,
+        documents: [
+          {
+            type: "PASSPORT",
+            fileName: "passport.pdf",
+            contentType: "application/pdf",
+            sizeBytes: 100,
+          },
+          {
+            type: "TICKET",
+            fileName: "ticket.pdf",
+            contentType: "application/pdf",
+            sizeBytes: 100,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
 });

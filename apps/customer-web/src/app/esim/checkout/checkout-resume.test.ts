@@ -39,16 +39,30 @@ describe("checkoutResumeDisposition", () => {
 describe("checkoutResumeStep", () => {
   const draft = { status: "DRAFT", purchaseType: "INITIAL_PURCHASE" };
 
-  it("returns to traveller details when they have not been saved", () => {
+  it("returns to documents when required uploads have not been saved", () => {
     expect(checkoutResumeStep(draft)).toBe(2);
   });
 
-  it("returns to documents when required verification is incomplete", () => {
+  it("returns to documents even when a legacy draft already has traveler data", () => {
     expect(
       checkoutResumeStep({
         ...draft,
         traveler: { firstName: "Samira" },
         documents: [],
+        documentReviewStatus: "NOT_STARTED",
+      }),
+    ).toBe(2);
+  });
+
+  it("returns to traveler confirmation after both uploads are confirmed", () => {
+    expect(
+      checkoutResumeStep({
+        ...draft,
+        documents: [
+          { type: "PASSPORT", uploadVerified: true },
+          { type: "TICKET", uploadVerified: true },
+        ],
+        passportExtraction: { status: "READY" },
         documentReviewStatus: "NOT_STARTED",
       }),
     ).toBe(3);

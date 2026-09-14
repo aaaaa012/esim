@@ -36,6 +36,7 @@ export type CheckoutOrderSnapshot = {
   traveler?: unknown;
   documents?: { type: string; uploadVerified?: boolean }[];
   documentReviewStatus?: string;
+  passportExtraction?: { status: string };
   payment?: { reference?: string; status?: string };
 };
 
@@ -55,18 +56,16 @@ export function checkoutResumeStep(order: CheckoutOrderSnapshot): number {
   )
     return 4;
 
-  if (!order.traveler) return 2;
-
   const hasRequiredDocuments = ["PASSPORT", "TICKET"].every((type) =>
     order.documents?.some(
       (document) => document.type === type && document.uploadVerified,
     ),
   );
 
-  return hasRequiredDocuments &&
-    DOCUMENT_GATE_PASSED.has(order.documentReviewStatus ?? "")
-    ? 4
-    : 3;
+  if (!hasRequiredDocuments) return 2;
+  if (order.documentReviewStatus === "REUPLOAD_REQUIRED") return 2;
+  if (!order.traveler) return 3;
+  return DOCUMENT_GATE_PASSED.has(order.documentReviewStatus ?? "") ? 4 : 3;
 }
 
 export function paymentStatusHeading(provider?: string): string {

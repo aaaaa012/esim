@@ -413,6 +413,8 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
           externalOrderId: true,
           updatedAt: true,
           consumedOrderId: true,
+          mode: true,
+          travelerSnapshot: true,
           documents: {
             where: { type: "PASSPORT" },
             select: { privateAssetId: true },
@@ -428,10 +430,42 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
           const updated = await tx.partnerDocumentVerification.updateMany({
             where: { id: verification.id, status: "PROCESSING" },
             data: {
-              status: "MANUAL_REVIEW",
+              status:
+                verification.mode === "EXTRACT_FIRST" &&
+                !verification.travelerSnapshot
+                  ? "MANUAL_ENTRY_REQUIRED"
+                  : "MANUAL_REVIEW",
               failureCode: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
             },
           });
+          if (
+            updated.count &&
+            verification.mode === "EXTRACT_FIRST" &&
+            !verification.travelerSnapshot &&
+            verification.documents[0]
+          )
+            await tx.passportExtraction.upsert({
+              where: { partnerVerificationId: verification.id },
+              update: {
+                passportAssetId: verification.documents[0].privateAssetId,
+                status: "MANUAL_ENTRY_REQUIRED",
+                failureCode: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
+              },
+              create: {
+                partnerVerificationId: verification.id,
+                passportAssetId: verification.documents[0].privateAssetId,
+                status: "MANUAL_ENTRY_REQUIRED",
+                fieldsRequiringInput: [
+                  "firstName",
+                  "surname",
+                  "dateOfBirth",
+                  "nationality",
+                  "passportNumber",
+                  "passportExpiryDate",
+                ],
+                failureCode: "OCR_UNAVAILABLE_AFTER_GRACE_PERIOD",
+              },
+            });
           if (!updated.count || !verification.consumedOrderId)
             return { verificationUpdated: updated.count, order: null };
           const linkedOrder = await tx.order.findFirst({

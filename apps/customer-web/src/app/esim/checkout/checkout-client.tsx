@@ -86,6 +86,23 @@ type Order = {
     method?: string;
     detail?: string;
   };
+  passportExtraction?: {
+    status:
+      "PROCESSING" | "READY" | "PARTIAL" | "MANUAL_ENTRY_REQUIRED" | "SKIPPED";
+    fields?: Partial<
+      Pick<
+        Traveler,
+        | "firstName"
+        | "middleName"
+        | "surname"
+        | "dateOfBirth"
+        | "passportNumber"
+        | "passportExpiryDate"
+      >
+    >;
+    fieldsRequiringInput?: string[];
+    failureCode?: string;
+  };
   documentReviewStatus?:
     | "NOT_STARTED"
     | "OCR_PENDING"
@@ -492,6 +509,8 @@ export default function CheckoutClient({
   const verifyRunToken = useRef(0);
   const paymentVerificationInFlight = useRef(false);
   const passportRetryNoBefore = useRef(0);
+  const appliedExtraction = useRef("");
+  const awaitingVerificationAdvance = useRef(false);
   const resendQrEmail = async () => {
     if (!order || uxResending) return;
     setUxResending(true);
@@ -618,6 +637,11 @@ export default function CheckoutClient({
           setLockedProvider(value.payment.provider);
         }
         if (value.traveler) setTraveler({ ...initial, ...value.traveler });
+        awaitingVerificationAdvance.current =
+          Boolean(value.traveler) &&
+          ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+            value.documentReviewStatus ?? "",
+          );
         const resumeStep = checkoutResumeStep(value);
         navigateStep(resumeStep, "replace");
         if (disposition === "POST_PAYMENT") return;
@@ -842,7 +866,17 @@ export default function CheckoutClient({
       target.documentReviewStatus ?? "",
     );
   useEffect(() => {
-    if (![3, 4].includes(step) || isTopUp || busy) return;
+    if (
+      step === 3 &&
+      awaitingVerificationAdvance.current &&
+      passportGatePassed(order)
+    ) {
+      awaitingVerificationAdvance.current = false;
+      advance(4);
+    }
+  }, [step, order?.documentReviewStatus]);
+  useEffect(() => {
+    if (![2, 3, 4].includes(step) || isTopUp || busy) return;
     if (!order || order.passportVerification) return;
     if (
       !["PASSPORT", "TICKET"].every((type) =>
@@ -853,7 +887,7 @@ export default function CheckoutClient({
     void verifyPassport();
   }, [step, order?.id, isTopUp]);
   useDocumentRefresh(
-    [3, 4].includes(step) &&
+    [2, 3, 4].includes(step) &&
       !isTopUp &&
       !busy &&
       !verifyingPassport &&
@@ -873,6 +907,30 @@ export default function CheckoutClient({
       ),
     order?.documentReviewStatus === "MANUAL_REVIEW",
   );
+  useEffect(() => {
+    const extraction = order?.passportExtraction;
+    if (
+      !extraction ||
+      !["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+        extraction.status,
+      )
+    )
+      return;
+    const key = `${order?.id}:${extraction.status}:${JSON.stringify(extraction.fields ?? {})}`;
+    if (appliedExtraction.current !== key) {
+      appliedExtraction.current = key;
+      setTraveler((current) => {
+        const updates: Partial<Traveler> = {};
+        for (const [field, value] of Object.entries(extraction.fields ?? {})) {
+          const key = field as keyof Traveler;
+          if (typeof value === "string" && !current[key])
+            Object.assign(updates, { [key]: value });
+        }
+        return { ...current, ...updates };
+      });
+    }
+    if (step === 2) advance(3);
+  }, [order?.id, order?.passportExtraction, step]);
   useEffect(() => {
     if (
       order?.status === "DRAFT" &&
@@ -1202,7 +1260,12 @@ export default function CheckoutClient({
         },
       );
       setOrder(updated);
-      advance(3);
+      awaitingVerificationAdvance.current = true;
+      const verified = await verifyPassport();
+      if (verified && passportGatePassed(verified)) {
+        awaitingVerificationAdvance.current = false;
+        advance(4);
+      }
     });
   const saveDocuments = () =>
     run(async () => {
@@ -1258,8 +1321,16 @@ export default function CheckoutClient({
         if (
           !refreshed.documentReviewStatus ||
           refreshed.documentReviewStatus === "NOT_STARTED"
-        )
-          await verifyPassport();
+        ) {
+          const extractionOrder = await verifyPassport();
+          if (
+            extractionOrder?.passportExtraction &&
+            ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+              extractionOrder.passportExtraction.status,
+            )
+          )
+            advance(3);
+        }
       } catch (cause) {
         setDocumentError(
           cause instanceof Error
@@ -1438,7 +1509,7 @@ export default function CheckoutClient({
             <div className="step-tabs">
               {(isTopUp
                 ? ["Payment"]
-                : ["Compatibility", "Traveller", "Documents", "Payment"]
+                : ["Compatibility", "Documents", "Traveller", "Payment"]
               ).map((label, index) => (
                 <div
                   key={label}
@@ -1675,11 +1746,12 @@ export default function CheckoutClient({
                 </Action>
               </div>
             )}
-            {!showAccountChoice && !resumingOrder && step === 2 && (
+            {!showAccountChoice && !resumingOrder && step === 3 && (
               <div className="form-section">
                 <h2>Traveller information</h2>
                 <p>
-                  Enter details exactly as shown on the passport. Use two-letter
+                  We used your passport to prefill what we could. Check every
+                  detail, complete the remaining fields, and use two-letter
                   country codes.
                 </p>
                 <div className="form-grid">
@@ -1879,12 +1951,18 @@ export default function CheckoutClient({
                 ) : null}
               </div>
             )}
-            {!showAccountChoice && !resumingOrder && step === 3 && (
+            {!showAccountChoice && !resumingOrder && step === 2 && (
               <div className="form-section">
                 <span className="form-icon">
                   <FileCheck2 />
                 </span>
                 <h2>Travel documents</h2>
+                <p>
+                  To meet customer identification requirements applicable to
+                  Visa Compass in Nepal, we verify the traveller using a valid
+                  passport. Your encrypted information is used only for
+                  verification, order fulfilment, and applicable record-keeping.
+                </p>
                 <DocumentProgress
                   status={
                     Object.values(files).some(Boolean) &&
@@ -1912,18 +1990,11 @@ export default function CheckoutClient({
                       <button
                         type="button"
                         className="button primary"
-                        onClick={() => advance(4)}
+                        onClick={() => advance(3)}
                       >
-                        Continue to payment
+                        Review traveller details
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      className="document-tertiary-action"
-                      onClick={() => jumpTo(2)}
-                    >
-                      Edit traveller details
-                    </button>
                   </>
                 ) : (
                   <>
@@ -2025,14 +2096,21 @@ export default function CheckoutClient({
                               visa: undefined,
                             });
                             setEditingVerifiedDocuments(false);
-                          } else jumpTo(2);
+                          } else if (
+                            order?.documentReviewStatus ===
+                              "REUPLOAD_REQUIRED" &&
+                            order.traveler
+                          )
+                            advance(3);
+                          else jumpTo(1);
                         }}
                       >
                         {editingVerifiedDocuments
                           ? "Cancel changes"
-                          : order?.documentReviewStatus === "REUPLOAD_REQUIRED"
+                          : order?.documentReviewStatus ===
+                                "REUPLOAD_REQUIRED" && order.traveler
                             ? "Check traveller details"
-                            : "Edit traveller details"}
+                            : "Back"}
                       </button>
                       <button
                         type="button"

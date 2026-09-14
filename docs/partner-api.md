@@ -94,6 +94,35 @@ Common status codes: `400` invalid input or unsupported state, `401` invalid/exp
 
 ### 1. Create a document-upload session
 
+New integrations must use the extraction-first sequence. Upload the passport
+and ticket together, wait for extraction, then present the complete traveler
+record for confirmation:
+
+```json
+{
+  "mode": "EXTRACT_FIRST",
+  "externalOrderId": "agency-order-1042",
+  "documents": [
+    {
+      "type": "PASSPORT",
+      "fileName": "passport.pdf",
+      "contentType": "application/pdf",
+      "sizeBytes": 483120
+    },
+    {
+      "type": "TICKET",
+      "fileName": "ticket.jpg",
+      "contentType": "image/jpeg",
+      "sizeBytes": 342991
+    }
+  ]
+}
+```
+
+The historical traveler-first request below remains available for compatibility
+by omitting `mode` or setting it to `TRAVELER_FIRST`. It is not recommended for
+new clients.
+
 `POST /partners/document-upload-sessions` — scope `documents:write`
 
 ```json
@@ -136,6 +165,19 @@ Supply 2–3 unique documents, always including `PASSPORT` and `TICKET`. Accepte
 The session expires after 24 hours. Repeating a still-valid request for the same partner and `externalOrderId` resumes the session and returns fresh upload targets (`resumed: true`).
 
 ### 2. Confirm uploads and check verification
+
+For an `EXTRACT_FIRST` session, the status response provides
+`suggestedTraveler` and `travelerConfirmationRequired`. Suggested fields are
+not authoritative: merge them without replacing user edits, collect every
+remaining required field, and have the traveler confirm the result. When the
+status is `AWAITING_TRAVELER_CONFIRMATION`, `MANUAL_ENTRY_REQUIRED`, or
+`SKIPPED`, submit the complete traveler object to:
+
+`POST /partners/document-verifications/{verificationId}/traveler` - scope `documents:write`
+
+This idempotent mutation starts passport matching (or the configured manual or
+no-review policy). `orderCreationAllowed` remains false until traveler
+confirmation.
 
 `POST /partners/document-verifications/{verificationId}/documents/{documentId}/confirm` — scope `documents:write`
 

@@ -167,6 +167,58 @@ describe("recharge checkout", () => {
 });
 
 describe("first-purchase document verification", () => {
+  it("prefills passport fields but leaves non-passport traveller data for confirmation", async () => {
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      return ok({
+        id: "extracted",
+        orderNumber: "VC-EXTRACTED",
+        status: "DRAFT",
+        purchaseType: "NEW",
+        plan,
+        totalAmountNpr: 100,
+        traveler: null,
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "READY",
+          fields: {
+            firstName: "ANISH",
+            surname: "GHIMIRE",
+            passportNumber: "PA1234567",
+          },
+          fieldsRequiringInput: ["nationality"],
+        },
+        documents: [
+          { type: "PASSPORT", uploadVerified: true },
+          { type: "TICKET", uploadVerified: true },
+        ],
+      });
+    });
+
+    render(<Checkout planId="plan" orderId="extracted" />);
+
+    await screen.findByRole("heading", { name: "Traveller information" });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "First name" }),
+      ).toHaveProperty("value", "ANISH"),
+    );
+    expect(screen.getByRole("textbox", { name: "Surname" })).toHaveProperty(
+      "value",
+      "GHIMIRE",
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Passport number" }),
+    ).toHaveProperty("value", "PA1234567");
+    expect(
+      screen.getByRole("textbox", { name: "City / district" }),
+    ).toHaveProperty("value", "");
+    expect(
+      screen.queryByRole("heading", { name: "Choose payment method" }),
+    ).toBeNull();
+  });
+
   it.each([false, true])(
     "focuses recovery on traveller details and passport while keeping other documents changeable (signed in: %s)",
     async (signedIn) => {
@@ -217,7 +269,7 @@ describe("first-purchase document verification", () => {
         screen.getByRole("button", { name: "Check traveller details" }),
       );
       await screen.findByRole("heading", { name: "Traveller information" });
-      expect(window.location.search).toContain("step=2");
+      expect(window.location.search).toContain("step=3");
     },
   );
 
@@ -259,27 +311,12 @@ describe("first-purchase document verification", () => {
         });
       });
       const { container } = render(<Checkout planId="plan" orderId="first" />);
-      await screen.findByRole("heading", { name: "Travel documents" });
-      expect(
-        screen.getByRole("list", { name: "Saved documents" }).textContent,
-      ).toContain("ticket.png");
-      expect(
-        screen.queryByRole("heading", { name: "Choose payment method" }),
-      ).toBeNull();
-      const next = await screen.findByRole(
-        "button",
-        { name: "Continue to payment" },
+      await screen.findByRole(
+        "heading",
+        { name: "Choose payment method" },
         { timeout: 5000 },
       );
-      expect(
-        screen.getByRole("list", { name: "Document summary" }),
-      ).toBeDefined();
-      expect(
-        screen.getByRole("button", { name: "Change documents" }),
-      ).toBeDefined();
       expect(container.querySelector('input[type="file"]')).toBeNull();
-      fireEvent.click(next);
-      await screen.findByRole("heading", { name: "Choose payment method" });
       expect(
         mocks.authFetch.mock.calls.some(([url]) =>
           url.endsWith("/verify-passport"),
@@ -341,12 +378,6 @@ describe("first-purchase document verification", () => {
     render(<Checkout planId="plan" orderId="first" />);
 
     await screen.findByRole("heading", { name: "Travel documents" });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Edit traveller details" }),
-    );
-    await screen.findByRole("heading", { name: "Traveller information" });
-    expect(new URLSearchParams(window.location.search).get("step")).toBe("2");
-
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByRole("heading", { name: "Confirm your device" });
     expect(

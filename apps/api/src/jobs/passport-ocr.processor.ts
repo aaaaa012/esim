@@ -83,6 +83,69 @@ export class PassportOcrProcessor implements OnModuleInit {
       return { skipped: true, alreadyVerified: true };
 
     const traveler = this.decryptTraveler(order.traveler);
+    if (!traveler) {
+      const extraction = await this.passportVerifier.extract({
+        id: order.id,
+        purchaseType: "INITIAL_PURCHASE",
+        documents: [
+          {
+            id: passport.id,
+            type: DocumentType.PASSPORT,
+            fileName: passport.fileName,
+            privateAssetId: passport.privateAssetId,
+            status: passport.status,
+            uploadVerified: true,
+          },
+        ],
+      } as never);
+      await this.prisma.$transaction(async (tx) => {
+        const current = await tx.travelerDocument.findUnique({
+          where: { id: passport.id },
+          select: { privateAssetId: true, uploadVerified: true },
+        });
+        if (
+          !current?.uploadVerified ||
+          current.privateAssetId !== passport.privateAssetId
+        )
+          return;
+        await tx.passportExtraction.upsert({
+          where: { orderId: order.id },
+          update: {
+            passportAssetId: passport.privateAssetId,
+            status: extraction.status,
+            payloadEncrypted: this.crypto.encrypt(
+              JSON.stringify(extraction.fields),
+            ),
+            fieldsRequiringInput:
+              extraction.fieldsRequiringInput as Prisma.InputJsonValue,
+            confidence: extraction.confidence ?? null,
+            method: extraction.method,
+            failureCode: extraction.failureCode ?? null,
+          },
+          create: {
+            orderId: order.id,
+            passportAssetId: passport.privateAssetId,
+            status: extraction.status,
+            payloadEncrypted: this.crypto.encrypt(
+              JSON.stringify(extraction.fields),
+            ),
+            fieldsRequiringInput:
+              extraction.fieldsRequiringInput as Prisma.InputJsonValue,
+            confidence: extraction.confidence ?? null,
+            method: extraction.method,
+            failureCode: extraction.failureCode ?? null,
+          },
+        });
+        await tx.order.updateMany({
+          where: { id: order.id, documentReviewStatus: "OCR_PENDING" },
+          data: {
+            documentReviewStatus: "NOT_STARTED",
+            version: { increment: 1 },
+          },
+        });
+      });
+      return extraction;
+    }
     const result = await this.passportVerifier.verify({
       id: order.id,
       purchaseType: order.orderType === "TOPUP" ? "TOPUP" : "INITIAL_PURCHASE",
@@ -280,6 +343,74 @@ export class PassportOcrProcessor implements OnModuleInit {
         });
         return { status: "INVALID" };
       }
+      if (
+        verification.mode === "EXTRACT_FIRST" &&
+        !verification.travelerSnapshot
+      ) {
+        const extraction = await this.passportVerifier.extract({
+          id: verification.id,
+          purchaseType: "INITIAL_PURCHASE",
+          documents: [
+            {
+              id: passport.id,
+              type: DocumentType.PASSPORT,
+              fileName: passport.fileName,
+              privateAssetId: passport.privateAssetId,
+              status: "PENDING",
+              uploadVerified: true,
+            },
+          ],
+        } as never);
+        const nextStatus =
+          extraction.status === "READY" || extraction.status === "PARTIAL"
+            ? "AWAITING_TRAVELER_CONFIRMATION"
+            : extraction.status;
+        await this.prisma.$transaction(async (tx) => {
+          const current = await tx.partnerDocumentVerification.findUnique({
+            where: { id: verification.id },
+            select: { travelerSnapshot: true, status: true },
+          });
+          if (current?.travelerSnapshot || current?.status !== "PROCESSING")
+            return;
+          await tx.passportExtraction.upsert({
+            where: { partnerVerificationId: verification.id },
+            update: {
+              passportAssetId: passport.privateAssetId,
+              status: extraction.status,
+              payloadEncrypted: this.crypto.encrypt(
+                JSON.stringify(extraction.fields),
+              ),
+              fieldsRequiringInput:
+                extraction.fieldsRequiringInput as Prisma.InputJsonValue,
+              confidence: extraction.confidence ?? null,
+              method: extraction.method,
+              failureCode: extraction.failureCode ?? null,
+              confirmedAt: null,
+            },
+            create: {
+              partnerVerificationId: verification.id,
+              passportAssetId: passport.privateAssetId,
+              status: extraction.status,
+              payloadEncrypted: this.crypto.encrypt(
+                JSON.stringify(extraction.fields),
+              ),
+              fieldsRequiringInput:
+                extraction.fieldsRequiringInput as Prisma.InputJsonValue,
+              confidence: extraction.confidence ?? null,
+              method: extraction.method,
+              failureCode: extraction.failureCode ?? null,
+            },
+          });
+          await tx.partnerDocumentVerification.update({
+            where: { id: verification.id },
+            data: {
+              status: nextStatus,
+              failureCode: extraction.failureCode ?? null,
+            },
+          });
+        });
+        return extraction;
+      }
       const traveler = this.decryptSnapshot(verification.travelerSnapshot);
       const result = await this.passportVerifier.verify({
         id: verification.id,
@@ -444,13 +575,60 @@ export class PassportOcrProcessor implements OnModuleInit {
         `Partner document verification ${verification.id} failed: ${error instanceof Error ? error.message : "unknown"}`,
       );
       const exhausted = job.attemptsMade + 1 >= Number(job.opts.attempts ?? 1);
+      const failedPassport = verification.documents.find(
+        (document) => document.type === DocumentType.PASSPORT,
+      );
+      if (
+        exhausted &&
+        verification.mode === "EXTRACT_FIRST" &&
+        !verification.travelerSnapshot &&
+        failedPassport
+      )
+        await this.prisma.passportExtraction.upsert({
+          where: { partnerVerificationId: verification.id },
+          update: {
+            passportAssetId: failedPassport.privateAssetId,
+            status: "MANUAL_ENTRY_REQUIRED",
+            payloadEncrypted: this.crypto.encrypt("{}"),
+            fieldsRequiringInput: [
+              "firstName",
+              "surname",
+              "dateOfBirth",
+              "nationality",
+              "passportNumber",
+              "passportExpiryDate",
+            ],
+            failureCode: "DOCUMENT_PROCESSING_FAILED",
+          },
+          create: {
+            partnerVerificationId: verification.id,
+            passportAssetId: failedPassport.privateAssetId,
+            status: "MANUAL_ENTRY_REQUIRED",
+            payloadEncrypted: this.crypto.encrypt("{}"),
+            fieldsRequiringInput: [
+              "firstName",
+              "surname",
+              "dateOfBirth",
+              "nationality",
+              "passportNumber",
+              "passportExpiryDate",
+            ],
+            failureCode: "DOCUMENT_PROCESSING_FAILED",
+          },
+        });
       await this.prisma.partnerDocumentVerification.update({
         where: { id: verification.id },
         data: exhausted
-          ? {
-              status: "MANUAL_REVIEW",
-              failureCode: "DOCUMENT_PROCESSING_FAILED",
-            }
+          ? verification.mode === "EXTRACT_FIRST" &&
+            !verification.travelerSnapshot
+            ? {
+                status: "MANUAL_ENTRY_REQUIRED",
+                failureCode: "DOCUMENT_PROCESSING_FAILED",
+              }
+            : {
+                status: "MANUAL_REVIEW",
+                failureCode: "DOCUMENT_PROCESSING_FAILED",
+              }
           : { status: "AWAITING_UPLOAD", failureCode: null },
       });
       if (exhausted)
@@ -505,7 +683,8 @@ export class PassportOcrProcessor implements OnModuleInit {
     );
   }
 
-  private decryptSnapshot(value: Prisma.JsonValue) {
+  private decryptSnapshot(value: Prisma.JsonValue | null) {
+    if (!value) throw new Error("Traveler confirmation is required");
     const snapshot = value as Record<string, string | null>;
     return {
       firstName: snapshot.firstName ?? "",

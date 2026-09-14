@@ -7,7 +7,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   DocumentStatus,
   DocumentType,
@@ -43,7 +43,10 @@ import { QrPdfService } from "../notification/qr-pdf.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { MetricsService } from "../../observability/metrics.service.js";
 import { normalizeMsisdn, msisdnVariants } from "../../common/msisdn.util.js";
-import type { PassportVerificationResult } from "./passport-verification.service.js";
+import type {
+  PassportExtractedFields,
+  PassportVerificationResult,
+} from "./passport-verification.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 
 type Timeline = {
@@ -102,6 +105,13 @@ export type DemoOrder = {
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   topUpMobile?: string;
   passportVerification?: PassportVerificationResult;
+  passportExtraction?: {
+    status:
+      "PROCESSING" | "READY" | "PARTIAL" | "MANUAL_ENTRY_REQUIRED" | "SKIPPED";
+    fields: PassportExtractedFields;
+    fieldsRequiringInput: string[];
+    failureCode?: string;
+  };
   documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
   documentReviewStatus?:
     | "NOT_STARTED"
@@ -861,12 +871,22 @@ export class OrdersService implements OnModuleInit {
       delete order.documentReviewStartedAt;
       delete order.documentCheckoutReleaseAt;
       delete order.passportVerification;
+      delete order.passportExtraction;
       const passport = order.documents.find(
         (document) => document.type === DocumentType.PASSPORT,
       );
       if (passport) passport.status = DocumentStatus.PENDING;
     }
     await this.persistence.save(order);
+    if (
+      this.prisma.enabled &&
+      order.passportExtraction &&
+      !retryExistingPassport
+    )
+      await this.prisma.passportExtraction.updateMany({
+        where: { orderId: order.id, confirmedAt: null },
+        data: { confirmedAt: new Date() },
+      });
     return this.redact(order);
   }
   async addDocument(
@@ -917,6 +937,7 @@ export class OrdersService implements OnModuleInit {
       delete order.documentReviewStartedAt;
       delete order.documentCheckoutReleaseAt;
       delete order.passportVerification;
+      delete order.passportExtraction;
     }
     await this.persistence.save(order);
     return { ...document, upload: signed.upload };
@@ -1052,10 +1073,8 @@ export class OrdersService implements OnModuleInit {
       (document) =>
         document.type === DocumentType.PASSPORT && document.uploadVerified,
     );
-    if (!passport || !order.traveler)
-      throw new BadRequestException(
-        "Confirmed passport and traveller details are required",
-      );
+    if (!passport)
+      throw new BadRequestException("A confirmed passport is required");
     const persistedPassportVerdict = order.passportVerification?.status;
     if (
       persistedPassportVerdict === "VERIFIED" ||
@@ -1087,6 +1106,13 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException(
         `Confirm all required documents before verification: ${missingRequiredDocuments.join(", ")}`,
       );
+    if (!order.traveler && order.passportExtraction?.status !== "PROCESSING") {
+      order.passportExtraction = {
+        status: "PROCESSING",
+        fields: {},
+        fieldsRequiringInput: [],
+      };
+    }
     const config = this.prisma.enabled
       ? await this.prisma.platformConfiguration.upsert({
           where: { id: "platform" },
@@ -1097,6 +1123,41 @@ export class OrdersService implements OnModuleInit {
     const now = new Date();
     order.documentReviewPolicy = config.documentReviewPolicy;
     order.documentReviewStartedAt ??= now.toISOString();
+    if (!order.traveler) {
+      order.documentReviewStatus = "OCR_PENDING";
+      order.documentReviewStartedAt = now.toISOString();
+      await this.persistence.save(order);
+      try {
+        await this.queues.add(
+          QUEUES.documents,
+          "extract-order-passport",
+          {
+            orderId: order.id,
+            documentId: passport.id,
+            privateAssetId: passport.privateAssetId,
+          },
+          `passport-extraction-${order.id}-${passport.id}-${createHash("sha256").update(passport.privateAssetId).digest("hex").slice(0, 16)}`,
+          ocrJobOptions(),
+        );
+      } catch (error) {
+        order.passportExtraction = {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: {},
+          fieldsRequiringInput: [
+            "firstName",
+            "surname",
+            "dateOfBirth",
+            "passportNumber",
+            "passportExpiryDate",
+            "nationality",
+          ],
+          failureCode: "QUEUE_UNAVAILABLE",
+        };
+        order.documentReviewStatus = "NOT_STARTED";
+        await this.persistence.save(order);
+      }
+      return this.redact(order);
+    }
     if (config.documentReviewPolicy === "NO_REVIEW") {
       order.documentReviewStatus = "SKIPPED";
       order.passportVerification = {

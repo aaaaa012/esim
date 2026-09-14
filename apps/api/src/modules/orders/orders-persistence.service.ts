@@ -57,6 +57,7 @@ export class OrdersPersistenceService {
         partner: { select: { id: true, code: true, name: true } },
         plan: { include: { country: true } },
         traveler: true,
+        passportExtraction: true,
         customerEsim: { include: { inventory: true, subscriptions: true } },
         documents: true,
         payments: { orderBy: { createdAt: "desc" }, take: 1 },
@@ -93,6 +94,49 @@ export class OrdersPersistenceService {
           }
         : undefined;
       const payment = row.payments[0];
+      let extractionPayloadCorrupt = false;
+      const passportExtraction = row.passportExtraction
+        ? {
+            status: row.passportExtraction.status as
+              | "PROCESSING"
+              | "READY"
+              | "PARTIAL"
+              | "MANUAL_ENTRY_REQUIRED"
+              | "SKIPPED",
+            fields: (() => {
+              if (!row.passportExtraction.payloadEncrypted) return {};
+              try {
+                const value = JSON.parse(
+                  this.crypto.decrypt(row.passportExtraction.payloadEncrypted),
+                ) as unknown;
+                return value &&
+                  typeof value === "object" &&
+                  !Array.isArray(value)
+                  ? (value as NonNullable<
+                      DemoOrder["passportExtraction"]
+                    >["fields"])
+                  : {};
+              } catch {
+                extractionPayloadCorrupt = true;
+                return {};
+              }
+            })(),
+            fieldsRequiringInput: Array.isArray(
+              row.passportExtraction.fieldsRequiringInput,
+            )
+              ? row.passportExtraction.fieldsRequiringInput.filter(
+                  (value): value is string => typeof value === "string",
+                )
+              : [],
+            ...(row.passportExtraction.failureCode
+              ? { failureCode: row.passportExtraction.failureCode }
+              : {}),
+          }
+        : undefined;
+      if (passportExtraction && extractionPayloadCorrupt) {
+        passportExtraction.status = "MANUAL_ENTRY_REQUIRED";
+        passportExtraction.failureCode = "EXTRACTION_PAYLOAD_UNAVAILABLE";
+      }
       return {
         id: row.id,
         refundStatus: row.manualRefunds?.[0]?.status,
@@ -120,6 +164,7 @@ export class OrdersPersistenceService {
         pricingSnapshot: row.pricingSnapshot as object,
         compatibilityAcceptedAt: row.compatibilityAcceptedAt.toISOString(),
         ...(traveler ? { traveler } : {}),
+        ...(passportExtraction ? { passportExtraction } : {}),
         documents: row.documents.map((doc) => ({
           id: doc.id,
           type: doc.type as DocumentType,
@@ -554,6 +599,40 @@ export class OrdersPersistenceService {
                 status: order.payment.status as DbPaymentStatus,
               },
             });
+            if (order.passportExtraction) {
+              const passport = order.documents.find(
+                (document) => document.type === DocumentType.PASSPORT,
+              );
+              if (passport)
+                await tx.passportExtraction.upsert({
+                  where: { orderId: order.id },
+                  update: {
+                    passportAssetId: passport.privateAssetId,
+                    status: order.passportExtraction.status,
+                    payloadEncrypted: this.crypto.encrypt(
+                      JSON.stringify(order.passportExtraction.fields),
+                    ),
+                    fieldsRequiringInput: order.passportExtraction
+                      .fieldsRequiringInput as Prisma.InputJsonValue,
+                    failureCode: order.passportExtraction.failureCode ?? null,
+                  },
+                  create: {
+                    orderId: order.id,
+                    passportAssetId: passport.privateAssetId,
+                    status: order.passportExtraction.status,
+                    payloadEncrypted: this.crypto.encrypt(
+                      JSON.stringify(order.passportExtraction.fields),
+                    ),
+                    fieldsRequiringInput: order.passportExtraction
+                      .fieldsRequiringInput as Prisma.InputJsonValue,
+                    failureCode: order.passportExtraction.failureCode ?? null,
+                  },
+                });
+            } else {
+              await tx.passportExtraction.deleteMany({
+                where: { orderId: order.id },
+              });
+            }
             await tx.paymentEvent.createMany({
               data: [
                 {

@@ -69,6 +69,22 @@ type Session = {
       validityDays: number;
     };
     travelerComplete: boolean;
+    passportExtraction?: {
+      status: string;
+      fields?: Partial<
+        Pick<
+          Traveler,
+          | "firstName"
+          | "middleName"
+          | "surname"
+          | "dateOfBirth"
+          | "passportNumber"
+          | "passportExpiryDate"
+        >
+      >;
+      fieldsRequiringInput?: string[];
+      failureCode?: string;
+    } | null;
     documentReviewStatus?: string;
     documents: {
       id: string;
@@ -88,6 +104,7 @@ type Verification = {
   checkedAt?: string;
   method?: string;
   detail?: string;
+  passportExtraction?: Session["order"]["passportExtraction"];
 };
 
 type Payment = {
@@ -224,6 +241,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     PaymentProvider[]
   >([PaymentProvider.KHALTI]);
   const paymentVerificationInFlight = useRef(false);
+  const appliedExtraction = useRef("");
+  const awaitingVerificationAdvance = useRef(false);
 
   useEffect(() => {
     void api<{ providers: PaymentProvider[] }>("/payments/providers")
@@ -280,15 +299,23 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             method: "tesseract-ocr",
           });
         }
-        const resumeStep =
-          allUploaded &&
-          ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        awaitingVerificationAdvance.current =
+          value.order.travelerComplete &&
+          ["OCR_PENDING", "OCR_BACKGROUND"].includes(
             value.order.documentReviewStatus ?? "",
-          )
-            ? 4
-            : uploaded.length > 0 || value.order.travelerComplete
-              ? 3
-              : 2;
+          );
+        const resumeStep =
+          value.order.documentReviewStatus === "REUPLOAD_REQUIRED"
+            ? 2
+            : !allUploaded
+              ? 2
+              : value.order.travelerComplete
+                ? ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+                    value.order.documentReviewStatus ?? "",
+                  )
+                  ? 4
+                  : 3
+                : 3;
         setResumeAfterConsent(resumeStep);
         let accepted = false;
         try {
@@ -473,9 +500,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       setVerification({
         status: refreshed.order.documentReviewStatus ?? "NOT_STARTED",
       });
-      nextStep();
-      if (refreshed.order.documentReviewStatus === "NOT_STARTED")
-        await runVerification();
+      awaitingVerificationAdvance.current = true;
+      const verified = await runVerification();
+      if (verified) {
+        awaitingVerificationAdvance.current = false;
+        stepPush(4);
+      }
     });
 
   const runVerification = async (): Promise<boolean> => {
@@ -495,6 +525,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             order: {
               ...s.order,
               documentReviewStatus: result.status,
+              ...(result.passportExtraction !== undefined
+                ? { passportExtraction: result.passportExtraction }
+                : {}),
               documents: s.order.documents.map((d) =>
                 d.type === "PASSPORT"
                   ? { ...d, passportVerificationStatus: result.status }
@@ -609,7 +642,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     });
 
   useDocumentRefresh(
-    step === 3 &&
+    [2, 3].includes(step) &&
       !busy &&
       !verifying &&
       ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
@@ -631,12 +664,44 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     verification?.status === "MANUAL_REVIEW",
   );
 
+  useEffect(() => {
+    const extraction = session?.order.passportExtraction;
+    if (
+      !extraction ||
+      !["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+        extraction.status,
+      )
+    )
+      return;
+    const key = `${session?.order.id}:${extraction.status}:${JSON.stringify(extraction.fields ?? {})}`;
+    if (appliedExtraction.current !== key) {
+      appliedExtraction.current = key;
+      setTraveler((current) => {
+        const updates: Partial<Traveler> = {};
+        for (const [field, value] of Object.entries(extraction.fields ?? {})) {
+          const key = field as keyof Traveler;
+          if (typeof value === "string" && !current[key])
+            Object.assign(updates, { [key]: value });
+        }
+        return { ...current, ...updates };
+      });
+    }
+    if (step === 2) stepPush(3);
+  }, [session?.order.id, session?.order.passportExtraction, step]);
+
   const gatePassed =
     !session ||
     session.order.orderType === "TOPUP" ||
     verification?.status === "VERIFIED" ||
     verification?.status === "MANUALLY_APPROVED" ||
     verification?.status === "SKIPPED";
+
+  useEffect(() => {
+    if (step === 3 && awaitingVerificationAdvance.current && gatePassed) {
+      awaitingVerificationAdvance.current = false;
+      stepPush(4);
+    }
+  }, [step, gatePassed]);
 
   useEffect(() => {
     if (
@@ -878,7 +943,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               <div className="step-tabs">
                 {(isTopUp
                   ? ["Recharge", "Payment"]
-                  : ["Compatibility", "Traveller", "Documents", "Payment"]
+                  : ["Compatibility", "Documents", "Traveller", "Payment"]
                 ).map((label, index) => {
                   const value = isTopUp ? (index === 0 ? 1 : 4) : index + 1;
                   return (
@@ -1072,7 +1137,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           status={verification.status}
                           busy={false}
                           onRecheck={() => void verifyPassport()}
-                          onEdit={() => stepJump(2)}
+                          onEdit={() => stepJump(3)}
                         />
                       ))}
                     {isTopUp && (
@@ -1265,7 +1330,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           onClick={() => stepJump(isTopUp ? 1 : 3)}
                         >
                           <ChevronLeft size={16} />{" "}
-                          {isTopUp ? "Back" : "Documents"}
+                          {isTopUp ? "Back" : "Traveller details"}
                         </button>
                       </div>
                     )}
@@ -1349,14 +1414,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     />
                   </div>
                 )}
-                {step === 2 && (
+                {step === 3 && (
                   <div className="form-section">
                     <span className="form-icon">
                       <UserRound />
                     </span>
                     <h1>Traveller information</h1>
                     <p>
-                      Enter details exactly as shown on the passport. Use
+                      We used your passport to prefill what we could. Check
+                      every detail, complete the remaining fields, and use
                       two-letter country codes.
                     </p>
                     <div className="form-grid">
@@ -1518,12 +1584,19 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     />
                   </div>
                 )}
-                {step === 3 && (
+                {step === 2 && (
                   <div className="form-section">
                     <span className="form-icon">
                       <FileCheck2 />
                     </span>
                     <h2>Travel documents</h2>
+                    <p>
+                      To meet customer identification requirements applicable to
+                      Visa Compass in Nepal, we verify the traveller using a
+                      valid passport. Your encrypted information is used only
+                      for verification, order fulfilment, and applicable
+                      record-keeping.
+                    </p>
                     <DocumentProgress
                       status={
                         Object.values(files).some(Boolean) &&
@@ -1551,18 +1624,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           <button
                             type="button"
                             className="button primary"
-                            onClick={() => stepPush(4)}
+                            onClick={() => stepPush(3)}
                           >
-                            Continue to payment
+                            Review traveller details
                           </button>
                         </div>
-                        <button
-                          type="button"
-                          className="document-tertiary-action"
-                          onClick={() => stepJump(2)}
-                        >
-                          Edit traveller details
-                        </button>
                       </>
                     ) : (
                       <>
@@ -1639,14 +1705,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                               if (editingVerifiedDocuments) {
                                 setFiles({});
                                 setEditingVerifiedDocuments(false);
-                              } else stepJump(2);
+                              } else if (
+                                verification?.status === "REUPLOAD_REQUIRED" &&
+                                session?.order.travelerComplete
+                              )
+                                stepPush(3);
+                              else stepJump(1);
                             }}
                           >
                             {editingVerifiedDocuments
                               ? "Cancel changes"
-                              : verification?.status === "REUPLOAD_REQUIRED"
+                              : verification?.status === "REUPLOAD_REQUIRED" &&
+                                  session?.order.travelerComplete
                                 ? "Check traveller details"
-                                : "Edit traveller details"}
+                                : "Back"}
                           </button>
                           <button
                             type="button"

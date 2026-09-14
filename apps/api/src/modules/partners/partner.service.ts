@@ -111,16 +111,28 @@ type CompleteOrderInput = {
   metadata?: Record<string, string> | undefined;
 };
 
-type UploadSessionInput = {
-  externalOrderId: string;
-  traveler: TravelerInput;
-  documents: Array<{
-    type: DocumentType;
-    fileName: string;
-    contentType: string;
-    sizeBytes: number;
-  }>;
-};
+type UploadSessionInput =
+  | {
+      mode: "EXTRACT_FIRST";
+      externalOrderId: string;
+      documents: Array<{
+        type: DocumentType;
+        fileName: string;
+        contentType: string;
+        sizeBytes: number;
+      }>;
+    }
+  | {
+      mode?: "TRAVELER_FIRST" | undefined;
+      externalOrderId: string;
+      traveler: TravelerInput;
+      documents: Array<{
+        type: DocumentType;
+        fileName: string;
+        contentType: string;
+        sizeBytes: number;
+      }>;
+    };
 
 const PARTNER_ORDER_INCLUDE = {
   plan: { include: { country: true } },
@@ -196,6 +208,11 @@ export class PartnerService {
       },
       idempotencyRequiredForMutations: true,
       outboundWebhooks: true,
+      documentVerification: {
+        recommendedMode: "EXTRACT_FIRST",
+        travelerConfirmationRequired: true,
+        compatibilityModes: ["TRAVELER_FIRST"],
+      },
     };
   }
 
@@ -269,6 +286,16 @@ export class PartnerService {
             !existing.consumedAt &&
             existing.expiresAt > now &&
             !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
+          if (
+            resumable &&
+            (existing.mode ?? "TRAVELER_FIRST") !==
+              (input.mode ?? "TRAVELER_FIRST")
+          )
+            throw new ConflictException({
+              code: "DOCUMENT_SESSION_MODE_MISMATCH",
+              message:
+                "The active document session uses a different verification mode",
+            });
           if (resumable)
             return await this.uploadSessionResponse(existing, true);
           await tx.partnerDocumentVerification.update({
@@ -285,17 +312,24 @@ export class PartnerService {
             partnerId,
             externalOrderId: input.externalOrderId,
             activeExternalOrderKey,
-            travelerSnapshot: this.travelerData(
-              input.traveler,
-            ) as unknown as Prisma.InputJsonValue,
+            mode: input.mode ?? "TRAVELER_FIRST",
+            ...(input.mode === "EXTRACT_FIRST"
+              ? {}
+              : {
+                  travelerSnapshot: this.travelerData(
+                    input.traveler,
+                  ) as unknown as Prisma.InputJsonValue,
+                }),
             expiresAt,
             reviewPolicy: config.documentReviewPolicy,
             checkoutReleaseAt,
-            ...(config.documentReviewPolicy === "MANUAL_REVIEW"
-              ? { status: "MANUAL_REVIEW" }
-              : config.documentReviewPolicy === "NO_REVIEW"
-                ? { status: "SKIPPED" }
-                : {}),
+            ...(input.mode === "EXTRACT_FIRST"
+              ? { status: "AWAITING_UPLOAD" }
+              : config.documentReviewPolicy === "MANUAL_REVIEW"
+                ? { status: "MANUAL_REVIEW" }
+                : config.documentReviewPolicy === "NO_REVIEW"
+                  ? { status: "SKIPPED" }
+                  : {}),
           },
         });
         const items = [];
@@ -330,13 +364,16 @@ export class PartnerService {
         }
         return {
           verificationId,
+          mode: input.mode ?? "TRAVELER_FIRST",
           externalOrderId: input.externalOrderId,
           status:
-            config.documentReviewPolicy === "MANUAL_REVIEW"
-              ? "MANUAL_REVIEW"
-              : config.documentReviewPolicy === "NO_REVIEW"
-                ? "SKIPPED"
-                : "AWAITING_UPLOAD",
+            input.mode === "EXTRACT_FIRST"
+              ? "AWAITING_UPLOAD"
+              : config.documentReviewPolicy === "MANUAL_REVIEW"
+                ? "MANUAL_REVIEW"
+                : config.documentReviewPolicy === "NO_REVIEW"
+                  ? "SKIPPED"
+                  : "AWAITING_UPLOAD",
           expiresAt,
           checkoutReleaseAt,
           documents: items,
@@ -369,6 +406,7 @@ export class PartnerService {
       status: string;
       expiresAt: Date;
       checkoutReleaseAt: Date | null;
+      mode: string;
       documents: Array<{
         id: string;
         type: DocumentType;
@@ -381,6 +419,7 @@ export class PartnerService {
   ) {
     return {
       verificationId: verification.id,
+      mode: verification.mode,
       externalOrderId: verification.externalOrderId,
       status: verification.status,
       expiresAt: verification.expiresAt,
@@ -408,7 +447,7 @@ export class PartnerService {
     const verification =
       await this.prisma.partnerDocumentVerification.findFirst({
         where: { id: verificationId, partnerId },
-        include: { documents: true },
+        include: { documents: true, passportExtraction: true },
       });
     if (!verification)
       throw new NotFoundException({
@@ -423,8 +462,10 @@ export class PartnerService {
         (document) => document.type === type && document.uploadVerified,
       ),
     );
+    const travelerConfirmed = Boolean(verification.travelerSnapshot);
     const draftCreationAllowed =
       allRequiredUploadsConfirmed &&
+      travelerConfirmed &&
       verification.status !== "EXPIRED" &&
       verification.failureCode !== "DOCUMENTS_REJECTED";
     const linkedOrder = verification.consumedOrderId
@@ -455,12 +496,18 @@ export class PartnerService {
       id: verification.id,
       externalOrderId: verification.externalOrderId,
       status: verification.status,
+      mode: verification.mode,
       reviewPolicy: verification.reviewPolicy,
       failureCode: verification.failureCode,
       expiresAt: verification.expiresAt,
       consumedAt: verification.consumedAt,
       linkedOrderId: verification.consumedOrderId,
       requiredDocuments: [DocumentType.PASSPORT, DocumentType.TICKET],
+      travelerConfirmationRequired:
+        verification.mode === "EXTRACT_FIRST" && !travelerConfirmed,
+      suggestedTraveler: this.extractionPayload(
+        verification.passportExtraction,
+      ),
       draftCreationAllowed,
       orderCreationAllowed: draftCreationAllowed,
       fulfillmentAllowed,
@@ -612,7 +659,10 @@ export class PartnerService {
         verificationQueued: false,
         remaining,
       };
-    if (verification.reviewPolicy !== "AUTO_OCR") {
+    if (
+      verification.reviewPolicy !== "AUTO_OCR" &&
+      verification.mode !== "EXTRACT_FIRST"
+    ) {
       const status =
         verification.reviewPolicy === "NO_REVIEW" ? "SKIPPED" : "MANUAL_REVIEW";
       await this.prisma.partnerDocumentVerification.update({
@@ -730,6 +780,151 @@ export class PartnerService {
       uploadVerified: true,
       verificationQueued: true,
       remaining: 0,
+    };
+  }
+
+  async confirmExtractedTraveler(
+    partnerId: string,
+    verificationId: string,
+    traveler: TravelerInput,
+  ) {
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { id: verificationId, partnerId },
+        include: { documents: true, passportExtraction: true },
+      });
+    if (!verification)
+      throw new NotFoundException({
+        code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+        message: "Document verification not found",
+      });
+    if (verification.mode !== "EXTRACT_FIRST")
+      throw new ApiException({
+        code: "TRAVELER_CONFIRMATION_NOT_APPLICABLE",
+        message: "This verification uses the traveler-first compatibility flow",
+        status: 409,
+      });
+    if (verification.expiresAt <= new Date() || verification.consumedAt)
+      throw new GoneException({
+        code: "DOCUMENT_VERIFICATION_EXPIRED",
+        message: "This document verification can no longer be updated",
+      });
+    if (
+      !verification.passportExtraction ||
+      !["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+        verification.passportExtraction.status,
+      )
+    )
+      throw new ApiException({
+        code: "PASSPORT_EXTRACTION_NOT_READY",
+        message:
+          "Wait for passport extraction before confirming traveler details",
+        status: 409,
+      });
+    const requiredUploadsPresent = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].every((type) =>
+      verification.documents.some(
+        (document) => document.type === type && document.uploadVerified,
+      ),
+    );
+    if (!requiredUploadsPresent)
+      throw new ApiException({
+        code: "DOCUMENT_UPLOADS_INCOMPLETE",
+        message: "Passport and ticket uploads must be confirmed first",
+        status: 409,
+      });
+
+    const confirmedAt = new Date();
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.partnerDocumentVerification.updateMany({
+        where: {
+          id: verification.id,
+          partnerId,
+          mode: "EXTRACT_FIRST",
+          travelerSnapshot: { equals: Prisma.DbNull },
+          status: {
+            in: [
+              "AWAITING_TRAVELER_CONFIRMATION",
+              "MANUAL_ENTRY_REQUIRED",
+              "SKIPPED",
+            ],
+          },
+        },
+        data: {
+          travelerSnapshot: this.travelerData(
+            traveler,
+          ) as unknown as Prisma.InputJsonValue,
+          status:
+            verification.reviewPolicy === "AUTO_OCR"
+              ? "PROCESSING"
+              : verification.reviewPolicy === "NO_REVIEW"
+                ? "SKIPPED"
+                : "MANUAL_REVIEW",
+          failureCode: null,
+        },
+      });
+      if (claim.count)
+        await tx.passportExtraction.update({
+          where: { partnerVerificationId: verification.id },
+          data: { confirmedAt },
+        });
+      return claim.count === 1;
+    });
+    if (!claimed) {
+      const current = await this.prisma.partnerDocumentVerification.findUnique({
+        where: { id: verification.id },
+        select: { travelerSnapshot: true, status: true },
+      });
+      if (current?.travelerSnapshot)
+        return { id: verification.id, status: current.status, confirmed: true };
+      throw new ConflictException({
+        code: "TRAVELER_CONFIRMATION_CONFLICT",
+        message: "The verification changed; retrieve it before trying again",
+      });
+    }
+    if (verification.reviewPolicy === "AUTO_OCR") {
+      try {
+        const attemptKey = createHash("sha256")
+          .update(
+            `${verification.passportExtraction.passportAssetId}:${confirmedAt.toISOString()}`,
+          )
+          .digest("hex")
+          .slice(0, 16);
+        await this.queues.add(
+          QUEUES.documents,
+          "verify-partner-documents",
+          { verificationId },
+          `document-verification-${verificationId}-${attemptKey}`,
+          ocrJobOptions(),
+        );
+      } catch (error) {
+        await this.prisma.partnerDocumentVerification.updateMany({
+          where: { id: verification.id, status: "PROCESSING" },
+          data: { failureCode: "QUEUE_UNAVAILABLE" },
+        });
+        this.logger.error(
+          `Could not queue confirmed traveler verification ${verificationId}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+        return {
+          id: verification.id,
+          status: "PROCESSING",
+          confirmed: true,
+          verificationQueued: false,
+        };
+      }
+    }
+    return {
+      id: verification.id,
+      status:
+        verification.reviewPolicy === "AUTO_OCR"
+          ? "PROCESSING"
+          : verification.reviewPolicy === "NO_REVIEW"
+            ? "SKIPPED"
+            : "MANUAL_REVIEW",
+      confirmed: true,
+      verificationQueued: verification.reviewPolicy === "AUTO_OCR",
     };
   }
 
@@ -949,6 +1144,13 @@ export class PartnerService {
       throw new ConflictException({
         code: "VERIFICATION_ALREADY_CONSUMED",
         message: "Document verification was already consumed",
+      });
+    if (!verification.travelerSnapshot)
+      throw new ApiException({
+        code: "TRAVELER_CONFIRMATION_REQUIRED",
+        message:
+          "Confirm the complete traveler record before placing the order",
+        status: 409,
       });
     if (
       verification.status === "EXPIRED" ||
@@ -2058,6 +2260,10 @@ export class PartnerService {
             documentCheckoutReleaseAt: null,
           },
         });
+      if (input.type === DocumentType.PASSPORT)
+        await tx.passportExtraction.deleteMany({
+          where: { orderId: order.id },
+        });
       return saved;
     });
     return {
@@ -2288,6 +2494,7 @@ export class PartnerService {
       include: {
         plan: { include: { country: true } },
         traveler: { select: { id: true } },
+        passportExtraction: true,
         documents: {
           select: {
             id: true,
@@ -2353,6 +2560,7 @@ export class PartnerService {
             include: {
               plan: { include: { country: true } },
               traveler: { select: { id: true } },
+              passportExtraction: true,
               documents: {
                 select: {
                   id: true,
@@ -2402,6 +2610,9 @@ export class PartnerService {
           validityDays: order.plan.validityDays,
         },
         travelerComplete: Boolean(order.traveler),
+        passportExtraction: this.extractionPayload(
+          "passportExtraction" in order ? order.passportExtraction : null,
+        ),
         documents: order.documents,
         documentReviewStatus: order.documentReviewStatus,
         requiredDocuments,
@@ -2528,6 +2739,11 @@ export class PartnerService {
         update: this.travelerData(traveler),
         create: { orderId: order.id, ...this.travelerData(traveler) },
       });
+      if (!retryExistingPassport)
+        await tx.passportExtraction.updateMany({
+          where: { orderId: order.id, confirmedAt: null },
+          data: { confirmedAt: new Date() },
+        });
       const normalizedEmail = traveler.email.trim().toLowerCase();
       const emailOwner = await tx.customer.findUnique({
         where: { email: normalizedEmail },
@@ -2616,6 +2832,10 @@ export class PartnerService {
             documentCheckoutReleaseAt: null,
           },
         });
+      if (input.type === DocumentType.PASSPORT)
+        await tx.passportExtraction.deleteMany({
+          where: { orderId: order.id },
+        });
       return saved;
     });
     return {
@@ -2703,111 +2923,12 @@ export class PartnerService {
         message: `Confirm all required documents before verification: ${missingRequiredDocuments.map(documentTypeLabel).join(", ")}`,
         status: 409,
       });
-    const passport = order.documents.find(
-      (document) => document.type === DocumentType.PASSPORT,
-    );
-    if (!passport)
-      throw new BadRequestException({
-        code: "PASSPORT_REQUIRED",
-        message: "Upload a passport before verification",
-      });
-    if (!this.decryptTraveler(order.traveler))
-      throw new BadRequestException({
-        code: "TRAVELER_REQUIRED",
-        message: "Traveller details are required before verification",
-      });
-    if (
-      ["MANUAL_REVIEW", "OCR_BACKGROUND", "REUPLOAD_REQUIRED"].includes(
-        order.documentReviewStatus,
-      )
-    )
-      return {
-        status: order.documentReviewStatus,
-        checkedAt: new Date().toISOString(),
-        method: "asynchronous",
-      };
-    const config = await this.prisma.platformConfiguration.upsert({
-      where: { id: "platform" },
-      update: {},
-      create: { id: "platform" },
-    });
-    const now = new Date();
-    if (config.documentReviewPolicy === "MANUAL_REVIEW") {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: {
-          documentReviewPolicy: config.documentReviewPolicy,
-          documentReviewStatus: "MANUAL_REVIEW",
-          documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-          documentCheckoutReleaseAt: null,
-          version: { increment: 1 },
-        },
-      });
-      return {
-        status: "MANUAL_REVIEW",
-        checkedAt: now.toISOString(),
-        method: "manual",
-      };
-    }
-    if (config.documentReviewPolicy === "NO_REVIEW") {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: {
-          documentReviewPolicy: config.documentReviewPolicy,
-          documentReviewStatus: "SKIPPED",
-          documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-          documentCheckoutReleaseAt: null,
-          version: { increment: 1 },
-        },
-      });
-      return {
-        status: "SKIPPED",
-        checkedAt: now.toISOString(),
-        method: "policy",
-      };
-    }
-    await this.prisma.order.update({
-      where: { id: order.id },
-      data: {
-        documentReviewPolicy: config.documentReviewPolicy,
-        documentReviewStatus: "OCR_PENDING",
-        documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-        documentCheckoutReleaseAt: null,
-        version: { increment: 1 },
-      },
-    });
-    try {
-      await this.queues.add(
-        QUEUES.documents,
-        "verify-order-passport",
-        {
-          orderId: order.id,
-          documentId: passport.id,
-          privateAssetId: passport.privateAssetId,
-        },
-        orderPassportOcrJobId(
-          order.id,
-          passport.id,
-          passport.privateAssetId,
-          now.toISOString(),
-        ),
-        ocrJobOptions(),
-      );
-      return {
-        status: "OCR_PENDING",
-        checkedAt: now.toISOString(),
-        method: "asynchronous",
-      };
-    } catch {
-      // Preserve OCR_PENDING during the recovery window. The workflow
-      // reconciler retries the handoff and performs the eventual strict manual
-      // fallback even if the dedicated OCR process is completely offline.
-      return {
-        status: "OCR_PENDING",
-        checkedAt: now.toISOString(),
-        method: "recovery-pending",
-      };
-    }
+    const updated = await this.applicationOrders.verifyPassport(order.id, null);
+    return {
+      status: updated.documentReviewStatus ?? "NOT_STARTED",
+      passportExtraction: updated.passportExtraction ?? null,
+      ...(updated.passportVerification ?? {}),
+    };
   }
 
   async completeHostedCheckout(
@@ -3815,6 +3936,7 @@ export class PartnerService {
         plan: { include: { country: true } },
         traveler: true,
         documents: true,
+        passportExtraction: true,
         partner: { select: { name: true, slug: true, brand: true } },
       },
     });
@@ -4112,6 +4234,58 @@ export class PartnerService {
       passportNumberHash: this.crypto.blindIndex(traveler.passportNumber),
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),
       pointOfSaleCode: traveler.pointOfSaleCode ?? null,
+    };
+  }
+
+  private extractionPayload(
+    extraction: {
+      status: string;
+      payloadEncrypted: string | null;
+      fieldsRequiringInput: Prisma.JsonValue;
+      failureCode: string | null;
+    } | null,
+  ) {
+    if (!extraction) return null;
+    let fields: Record<string, string> = {};
+    if (extraction.payloadEncrypted) {
+      try {
+        const parsed = JSON.parse(
+          this.crypto.decrypt(extraction.payloadEncrypted),
+        ) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+          fields = Object.fromEntries(
+            Object.entries(parsed).filter(
+              ([, value]) => typeof value === "string",
+            ),
+          ) as Record<string, string>;
+      } catch (error) {
+        this.logger.error(
+          `Could not decrypt passport extraction: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+        return {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: {},
+          fieldsRequiringInput: [
+            "firstName",
+            "surname",
+            "dateOfBirth",
+            "nationality",
+            "passportNumber",
+            "passportExpiryDate",
+          ],
+          failureCode: "EXTRACTION_PAYLOAD_UNAVAILABLE",
+        };
+      }
+    }
+    return {
+      status: extraction.status,
+      fields,
+      fieldsRequiringInput: Array.isArray(extraction.fieldsRequiringInput)
+        ? extraction.fieldsRequiringInput.filter(
+            (field): field is string => typeof field === "string",
+          )
+        : [],
+      failureCode: extraction.failureCode,
     };
   }
 

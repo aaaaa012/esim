@@ -263,7 +263,7 @@ describe("hosted checkout payment flow", () => {
           : ok(session(status)),
       );
       render(<HostedCheckoutClient token="private-token" />);
-      await screen.findByRole("heading", { name: "Travel documents" });
+      await screen.findByRole("heading", { name: "Traveller information" });
       expect(
         screen.queryByRole("button", { name: "Continue to Khalti" }),
       ).toBeNull();
@@ -276,7 +276,7 @@ describe("hosted checkout payment flow", () => {
   );
 
   it.each([false, true])(
-    "continues from compatibility to traveller details (signed in: %s)",
+    "continues from compatibility to documents (signed in: %s)",
     async (signedIn) => {
       sessionStorage.clear();
       mocks.signedIn = signedIn;
@@ -301,7 +301,7 @@ describe("hosted checkout payment flow", () => {
           screen.getByRole("button", { name: "Continue as guest" }),
         );
       }
-      await screen.findByRole("heading", { name: /Traveller/ });
+      await screen.findByRole("heading", { name: "Travel documents" });
       expect(screen.queryByText("How would you like to continue?")).toBeNull();
       expect(mocks.authFetch).toHaveBeenCalledTimes(signedIn ? 1 : 0);
       if (signedIn)
@@ -312,7 +312,7 @@ describe("hosted checkout payment flow", () => {
     },
   );
 
-  it("advances from document verification to payment and updates the URL", async () => {
+  it("advances from document verification to traveller confirmation", async () => {
     const partial = session();
     partial.order.documents = [partial.order.documents[0]!];
     fetchMock.mockImplementation(async (url: string) => {
@@ -338,10 +338,14 @@ describe("hosted checkout payment flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel changes" }));
     expect(container.querySelector('input[type="file"]')).toBeNull();
     fireEvent.click(
-      await screen.findByRole("button", { name: "Continue to payment" }),
+      (
+        await screen.findAllByRole("button", {
+          name: "Review traveller details",
+        })
+      )[0]!,
     );
-    await screen.findByRole("heading", { name: "Pay NPR 2" });
-    expect(window.location.search).toBe("?step=4");
+    await screen.findByRole("heading", { name: "Traveller information" });
+    expect(window.location.search).toBe("?step=3");
     expect(
       fetchMock.mock.calls.some(
         ([url]) => url.endsWith("/complete") || url.endsWith("/payment"),
@@ -380,6 +384,47 @@ describe("hosted checkout payment flow", () => {
 });
 
 describe("hosted document progress", () => {
+  it("prefills extracted passport fields before traveller confirmation", async () => {
+    const extracted = session("NOT_STARTED");
+    extracted.order.travelerComplete = false;
+    Object.assign(extracted.order, {
+      passportExtraction: {
+        status: "READY",
+        fields: {
+          firstName: "ANISH",
+          surname: "GHIMIRE",
+          passportNumber: "PA1234567",
+        },
+        fieldsRequiringInput: ["nationality"],
+      },
+    });
+    fetchMock.mockImplementation(async (url: string) =>
+      url.endsWith("/payments/providers")
+        ? ok({ providers: ["KHALTI"] })
+        : ok(extracted),
+    );
+
+    render(<HostedCheckoutClient token="private-token" />);
+
+    await screen.findByRole("heading", { name: "Traveller information" });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "First name" }),
+      ).toHaveProperty("value", "ANISH"),
+    );
+    expect(screen.getByRole("textbox", { name: "Surname" })).toHaveProperty(
+      "value",
+      "GHIMIRE",
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Passport number" }),
+    ).toHaveProperty("value", "PA1234567");
+    expect(
+      screen.getByRole("textbox", { name: "City / district" }),
+    ).toHaveProperty("value", "");
+    expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+  });
+
   it.each([false, true])(
     "uses the same verification journey and explicit payment action (signed in: %s)",
     async (signedIn) => {
@@ -392,22 +437,12 @@ describe("hosted document progress", () => {
         return ok(session(reads === 1 ? "OCR_PENDING" : "VERIFIED"));
       });
       render(<HostedCheckoutClient token="private-token" />);
-      await screen.findByText("Checking your passport");
-      expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
-      const next = await screen.findByRole(
-        "button",
-        { name: "Continue to payment" },
+      await screen.findByRole(
+        "heading",
+        { name: "Pay NPR 2" },
         { timeout: 5000 },
       );
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(
-        screen.getByRole("list", { name: "Document summary" }),
-      ).toBeDefined();
-      expect(
-        screen.getByRole("button", { name: "Change documents" }),
-      ).toBeDefined();
-      fireEvent.click(next);
-      await screen.findByRole("heading", { name: "Pay NPR 2" });
       expect(
         fetchMock.mock.calls.some(([url]) => url.endsWith("/verify-passport")),
       ).toBe(false);
@@ -415,13 +450,16 @@ describe("hosted document progress", () => {
   );
 
   it("keeps saved files and shows a connection error when checking fails", async () => {
+    const pending = session("NOT_STARTED");
     fetchMock.mockImplementation(async (url: string) => {
       if (url.endsWith("/payments/providers"))
         return ok({ providers: ["KHALTI"] });
       if (url.endsWith("/verify-passport")) throw new Error("Disconnected");
-      return ok(session("NOT_STARTED"));
+      return ok(pending);
     });
     render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByRole("heading", { name: "Traveller information" });
+    fireEvent.click(screen.getByRole("button", { name: "Documents" }));
     await screen.findByRole("heading", { name: "Travel documents" });
     fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
     await screen.findByText(/Check your connection and try again/);
@@ -471,13 +509,14 @@ it("retries a failed ticket without uploading the confirmed passport again", asy
     screen.getByRole("list", { name: "Saved documents" }).textContent,
   ).toContain("Passport.png");
   fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
-  await screen.findByRole("button", { name: "Continue to payment" });
+  await screen.findAllByRole("button", { name: "Review traveller details" });
   expect(authorized).toEqual(["PASSPORT", "TICKET", "TICKET"]);
 });
 
 it("uses the current order review status instead of an old passport verdict on resume", async () => {
   const replaced = session("NOT_STARTED");
   replaced.order.documents[0]!.passportVerificationStatus = "VERIFIED";
+  replaced.order.documents[1]!.uploadVerified = false;
   fetchMock.mockImplementation(async (url: string) =>
     url.endsWith("/payments/providers")
       ? ok({ providers: ["KHALTI"] })
@@ -557,6 +596,6 @@ it.each([false, true])(
       screen.getByRole("button", { name: "Check traveller details" }),
     );
     await screen.findByRole("heading", { name: "Traveller information" });
-    expect(window.location.search).toContain("step=2");
+    expect(window.location.search).toContain("step=3");
   },
 );

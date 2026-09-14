@@ -10,8 +10,12 @@ function processor(
     prisma as never,
     {
       decrypt: vi.fn((value: string) => value),
+      encrypt: vi.fn((value: string) => `encrypted:${value}`),
     } as never,
-    { verify: vi.fn().mockResolvedValue(result) } as never,
+    {
+      verify: vi.fn().mockResolvedValue(result),
+      extract: vi.fn().mockResolvedValue(result),
+    } as never,
     {
       verifyDocument: vi.fn().mockResolvedValue({ bytes: 500, format: "png" }),
     } as never,
@@ -54,6 +58,64 @@ const verification = {
 };
 
 describe("PassportOcrProcessor partner verification synchronization", () => {
+  it("extracts partner passport fields before traveler confirmation", async () => {
+    const extractionUpsert = vi.fn();
+    const verificationUpdate = vi.fn();
+    const extractFirst = {
+      ...verification,
+      mode: "EXTRACT_FIRST",
+      travelerSnapshot: null,
+    };
+    const tx = {
+      partnerDocumentVerification: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ travelerSnapshot: null, status: "PROCESSING" }),
+        update: verificationUpdate,
+      },
+      passportExtraction: { upsert: extractionUpsert },
+    };
+    const prisma = {
+      partnerDocumentVerification: {
+        findUnique: vi.fn().mockResolvedValue(extractFirst),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      partnerDocumentUploadIntent: { update: vi.fn() },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const result = {
+      status: "PARTIAL",
+      fields: { firstName: "Test", surname: "Traveler" },
+      fieldsRequiringInput: ["nationality"],
+      method: "tesseract-ocr",
+      checkedAt: new Date().toISOString(),
+    };
+    const instance = processor(prisma, result);
+
+    await expect(
+      instance.process({
+        data: { verificationId: "verification-1" },
+        attemptsMade: 0,
+        opts: { attempts: 1 },
+      } as never),
+    ).resolves.toEqual(result);
+    expect(extractionUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          partnerVerificationId: "verification-1",
+          status: "PARTIAL",
+        }),
+      }),
+    );
+    expect(verificationUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "AWAITING_TRAVELER_CONFIRMATION",
+        }),
+      }),
+    );
+  });
+
   it("does not overwrite a manual decision that wins the OCR race", async () => {
     const intentUpdate = vi.fn();
     const orderUpdate = vi.fn();
@@ -216,20 +278,18 @@ it("ignores an OCR job for a replaced passport asset", async () => {
   const instance = processor(
     {
       order: {
-        findUnique: vi
-          .fn()
-          .mockResolvedValue({
-            id: "order",
-            documentReviewStatus: "OCR_PENDING",
-            documents: [
-              {
-                id: "passport",
-                type: "PASSPORT",
-                privateAssetId: "new-asset",
-                uploadVerified: true,
-              },
-            ],
-          }),
+        findUnique: vi.fn().mockResolvedValue({
+          id: "order",
+          documentReviewStatus: "OCR_PENDING",
+          documents: [
+            {
+              id: "passport",
+              type: "PASSPORT",
+              privateAssetId: "new-asset",
+              uploadVerified: true,
+            },
+          ],
+        }),
       },
       $transaction: tx,
     },

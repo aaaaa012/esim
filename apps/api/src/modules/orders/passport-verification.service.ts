@@ -7,7 +7,13 @@ import {
 import { createWorker, type Worker } from "tesseract.js";
 import { DocumentType, type TravelerInput } from "@visa-compass/shared";
 import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
-import { confusableNormalize, editDistance, parseMrz } from "./mrz-parser.js";
+import {
+  confusableNormalize,
+  editDistance,
+  mrzDateToIso,
+  parseMrz,
+  type MrzField,
+} from "./mrz-parser.js";
 import type { DemoOrder } from "./orders.service.js";
 
 export type PassportVerificationStatus =
@@ -26,6 +32,26 @@ export type PassportVerificationResult = {
   method:
     "tesseract-ocr" | "simulator" | "pdf-unreadable" | "ocr-error" | "policy";
   detail?: string;
+};
+export type PassportExtractedFields = Partial<
+  Pick<
+    TravelerInput,
+    | "firstName"
+    | "middleName"
+    | "surname"
+    | "dateOfBirth"
+    | "passportNumber"
+    | "passportExpiryDate"
+  >
+>;
+export type PassportExtractionResult = {
+  status: "READY" | "PARTIAL" | "MANUAL_ENTRY_REQUIRED" | "SKIPPED";
+  fields: PassportExtractedFields;
+  fieldsRequiringInput: Array<keyof PassportExtractedFields | "nationality">;
+  confidence?: number;
+  method: PassportVerificationResult["method"];
+  checkedAt: string;
+  failureCode?: string;
 };
 
 /** Uppercases and strips every non-alphanumeric character so OCR noise like
@@ -148,11 +174,8 @@ export const verdictFor = (
     return matchedFields.length >= 2 ? "VERIFIED" : "PARTIAL";
   const nameMatch =
     matchedFields.includes("surname") || matchedFields.includes("givenNames");
-  const strongIdentityPair =
-    nameMatch && matchedFields.includes("dateOfBirth");
-  return strongIdentityPair && matchedFields.length >= 2
-    ? "PARTIAL"
-    : "FAILED";
+  const strongIdentityPair = nameMatch && matchedFields.includes("dateOfBirth");
+  return strongIdentityPair && matchedFields.length >= 2 ? "PARTIAL" : "FAILED";
 };
 
 /** Reads JPEG (SOF marker) or PNG (IHDR) pixel dimensions without pulling in
@@ -223,6 +246,112 @@ export class PassportVerificationService implements OnModuleDestroy {
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
 
   constructor(private readonly storage: S3StorageService) {}
+
+  async extract(order: DemoOrder): Promise<PassportExtractionResult> {
+    const checkedAt = new Date().toISOString();
+    const required: PassportExtractionResult["fieldsRequiringInput"] = [
+      "firstName",
+      "surname",
+      "dateOfBirth",
+      "passportNumber",
+      "passportExpiryDate",
+      "nationality",
+    ];
+    const passport = order.documents.find(
+      (document) =>
+        document.type === DocumentType.PASSPORT && document.uploadVerified,
+    );
+    if (!passport)
+      return {
+        status: "MANUAL_ENTRY_REQUIRED",
+        fields: {},
+        fieldsRequiringInput: required,
+        method: "ocr-error",
+        checkedAt,
+        failureCode: "PASSPORT_NOT_READY",
+      };
+    if (!this.storage.isConfigured())
+      return {
+        status: "SKIPPED",
+        fields: {},
+        fieldsRequiringInput: required,
+        method: "simulator",
+        checkedAt,
+        failureCode: "OCR_SIMULATOR",
+      };
+    try {
+      const image = await this.storage.downloadDocumentImage(
+        passport.privateAssetId,
+      );
+      const recognized = await this.recognize(image.bytes);
+      const mrz = parseMrz(recognized.text);
+      if (!mrz)
+        return {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: {},
+          fieldsRequiringInput: required,
+          ...(recognized.confidence !== undefined
+            ? { confidence: recognized.confidence }
+            : {}),
+          method: "tesseract-ocr",
+          checkedAt,
+          failureCode: "MRZ_NOT_READABLE",
+        };
+
+      const fieldValue = (field: MrzField) =>
+        field.valid
+          ? field.value
+          : field.corrections?.length === 1
+            ? field.corrections[0]
+            : undefined;
+      const names = mrz.givenNames.split(/\s+/).filter(Boolean);
+      const firstName = names.shift();
+      const middleName = names.length ? names.join(" ") : undefined;
+      const passportNumber = fieldValue(mrz.passportNumber)?.replace(
+        /<+$/g,
+        "",
+      );
+      const dateOfBirthRaw = fieldValue(mrz.dateOfBirth);
+      const expiryRaw = fieldValue(mrz.expiryDate);
+      const fields: PassportExtractedFields = {
+        ...(firstName ? { firstName } : {}),
+        ...(middleName ? { middleName } : {}),
+        ...(mrz.surname ? { surname: mrz.surname } : {}),
+        ...(dateOfBirthRaw && mrzDateToIso(dateOfBirthRaw)
+          ? { dateOfBirth: mrzDateToIso(dateOfBirthRaw)! }
+          : {}),
+        ...(passportNumber ? { passportNumber } : {}),
+        ...(expiryRaw && mrzDateToIso(expiryRaw)
+          ? { passportExpiryDate: mrzDateToIso(expiryRaw)! }
+          : {}),
+      };
+      const fieldsRequiringInput = required.filter(
+        (field) => field === "nationality" || !fields[field],
+      );
+      return {
+        status: fieldsRequiringInput.length === 1 ? "READY" : "PARTIAL",
+        fields,
+        fieldsRequiringInput,
+        ...(recognized.confidence !== undefined
+          ? { confidence: recognized.confidence }
+          : {}),
+        method: "tesseract-ocr",
+        checkedAt,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Passport extraction failed for order ${order.id}: ${error instanceof Error ? error.message : "unknown"}`,
+      );
+      return {
+        status: "MANUAL_ENTRY_REQUIRED",
+        fields: {},
+        fieldsRequiringInput: required,
+        method: "ocr-error",
+        checkedAt,
+        failureCode: "OCR_UNAVAILABLE",
+      };
+    }
+  }
 
   async verify(order: DemoOrder): Promise<PassportVerificationResult> {
     if (order.purchaseType === "TOPUP") {
@@ -387,7 +516,9 @@ export class PassportVerificationService implements OnModuleDestroy {
     if (!dimensions || dimensions.height < 60) return "";
     const bandHeight = Math.max(
       40,
-      Math.round(dimensions.height * PassportVerificationService.MRZ_BAND_RATIO),
+      Math.round(
+        dimensions.height * PassportVerificationService.MRZ_BAND_RATIO,
+      ),
     );
     try {
       await worker.setParameters({

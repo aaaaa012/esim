@@ -355,6 +355,7 @@ describe("partner hosted checkout", () => {
               update: orderUpdate,
             },
             travelerDocument: { upsert: documentUpsert },
+            passportExtraction: { deleteMany: vi.fn() },
           }),
         ),
       },
@@ -519,6 +520,7 @@ describe("partner hosted checkout", () => {
           partnerCustomer: {
             findFirst: vi.fn().mockResolvedValue({ id: "partner-customer-1" }),
           },
+          passportExtraction: { updateMany: vi.fn() },
         }),
       ),
     });
@@ -1046,7 +1048,23 @@ it("queues fresh OCR for a passport-only replacement while retaining the confirm
     {} as never,
     {} as never,
     { add } as never,
-    {} as never,
+    {
+      verifyPassport: vi.fn(async () => {
+        const attempt = `passport-${passport.privateAssetId}`;
+        await add(
+          "documents",
+          "verify-order-passport",
+          {
+            orderId: current.id,
+            documentId: passport.id,
+            privateAssetId: passport.privateAssetId,
+          },
+          attempt,
+        );
+        current.documentReviewStatus = "OCR_PENDING";
+        return { documentReviewStatus: "OCR_PENDING" };
+      }),
+    } as never,
   );
   await instance.confirmHostedDocument(
     "abcdefghijklmnopqrstuvwxyz012345",
@@ -1075,4 +1093,133 @@ it("queues fresh OCR for a passport-only replacement while retaining the confirm
     "replacement-asset-1",
     "replacement-asset-2",
   ]);
+});
+
+describe("partner extract-first traveler confirmation", () => {
+  const traveler = {
+    title: "MR" as const,
+    firstName: "Samir",
+    surname: "Majhi",
+    dateOfBirth: "1995-01-01",
+    nationality: "NP",
+    city: "Kathmandu",
+    countryOfResidence: "NP",
+    email: "customer@example.com",
+    mobile: "+9779800000000",
+    passportNumber: "PA1234567",
+    passportExpiryDate: "2030-01-01",
+  };
+
+  it("atomically stores encrypted traveler data and queues passport verification", async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const extractionUpdate = vi.fn().mockResolvedValue({});
+    const add = vi.fn().mockResolvedValue({});
+    const verification = {
+      id: "verification-1",
+      partnerId: "partner-1",
+      mode: "EXTRACT_FIRST",
+      status: "AWAITING_TRAVELER_CONFIRMATION",
+      reviewPolicy: "AUTO_OCR",
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
+      travelerSnapshot: null,
+      documents: [
+        { type: "PASSPORT", uploadVerified: true },
+        { type: "TICKET", uploadVerified: true },
+      ],
+      passportExtraction: {
+        status: "READY",
+        passportAssetId: "passport-asset",
+      },
+    };
+    const prisma = {
+      partnerDocumentVerification: {
+        findFirst: vi.fn().mockResolvedValue(verification),
+      },
+      $transaction: vi.fn((callback) =>
+        callback({
+          partnerDocumentVerification: { updateMany },
+          passportExtraction: { update: extractionUpdate },
+        }),
+      ),
+    };
+    const instance = new PartnerService(
+      prisma as never,
+      {
+        encrypt: (value: string) => `encrypted:${value}`,
+        blindIndex: (value: string) => `index:${value}`,
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { add } as never,
+      {} as never,
+    );
+
+    await expect(
+      instance.confirmExtractedTraveler(
+        "partner-1",
+        "verification-1",
+        traveler,
+      ),
+    ).resolves.toMatchObject({
+      id: "verification-1",
+      status: "PROCESSING",
+      confirmed: true,
+      verificationQueued: true,
+    });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          partnerId: "partner-1",
+          travelerSnapshot: { equals: expect.anything() },
+        }),
+        data: expect.objectContaining({
+          status: "PROCESSING",
+          travelerSnapshot: expect.objectContaining({
+            dateOfBirthEncrypted: "encrypted:1995-01-01",
+            passportNumberEncrypted: "encrypted:PA1234567",
+            passportExpiryEncrypted: "encrypted:2030-01-01",
+          }),
+        }),
+      }),
+    );
+    expect(extractionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { confirmedAt: expect.any(Date) } }),
+    );
+    expect(add).toHaveBeenCalledWith(
+      "documents",
+      "verify-partner-documents",
+      { verificationId: "verification-1" },
+      expect.stringMatching(/^document-verification-verification-1-/),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects confirmation before extraction is ready", async () => {
+    const instance = service({
+      partnerDocumentVerification: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "verification-1",
+          partnerId: "partner-1",
+          mode: "EXTRACT_FIRST",
+          expiresAt: new Date(Date.now() + 60_000),
+          consumedAt: null,
+          documents: [],
+          passportExtraction: { status: "PROCESSING" },
+        }),
+      },
+    });
+
+    await expect(
+      instance.confirmExtractedTraveler(
+        "partner-1",
+        "verification-1",
+        traveler,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: "PASSPORT_EXTRACTION_NOT_READY" },
+    });
+  });
 });

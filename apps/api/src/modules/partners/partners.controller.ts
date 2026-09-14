@@ -44,37 +44,51 @@ const legacyCreateSchema = z.object({
   compatibilityAccepted: z.literal(true),
   metadata: z.record(z.string(), z.string().max(500)).optional(),
 });
-export const uploadSessionSchema = z.object({
-  externalOrderId: z.string().trim().min(1).max(120),
-  traveler: travelerSchema,
-  documents: z
-    .array(
-      z.object({
-        type: z.enum(DocumentType),
-        fileName: z.string().trim().min(1).max(180),
-        contentType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
-        sizeBytes: z
-          .number()
-          .int()
-          .min(1)
-          .max(10 * 1024 * 1024),
-      }),
-    )
-    .min(2)
-    .max(3)
-    .refine(
-      (documents) =>
-        new Set(documents.map((item) => item.type)).size === documents.length,
-      "Document types must be unique",
-    )
-    .refine(
-      (documents) =>
-        [DocumentType.PASSPORT, DocumentType.TICKET].every((type) =>
-          documents.some((document) => document.type === type),
-        ),
-      "Passport and ticket are required",
-    ),
-});
+const uploadDocumentsSchema = z
+  .array(
+    z.object({
+      type: z.enum(DocumentType),
+      fileName: z.string().trim().min(1).max(180),
+      contentType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
+      sizeBytes: z
+        .number()
+        .int()
+        .min(1)
+        .max(10 * 1024 * 1024),
+    }),
+  )
+  .min(2)
+  .max(3)
+  .refine(
+    (documents) =>
+      new Set(documents.map((item) => item.type)).size === documents.length,
+    "Document types must be unique",
+  )
+  .refine(
+    (documents) =>
+      [DocumentType.PASSPORT, DocumentType.TICKET].every((type) =>
+        documents.some((document) => document.type === type),
+      ),
+    "Passport and ticket are required",
+  );
+
+export const uploadSessionSchema = z.union([
+  z
+    .object({
+      mode: z.literal("EXTRACT_FIRST"),
+      externalOrderId: z.string().trim().min(1).max(120),
+      documents: uploadDocumentsSchema,
+    })
+    .strict(),
+  z.object({
+    mode: z.literal("TRAVELER_FIRST").optional(),
+    externalOrderId: z.string().trim().min(1).max(120),
+    traveler: travelerSchema,
+    documents: uploadDocumentsSchema,
+  }),
+]);
+
+export const confirmExtractedTravelerSchema = travelerSchema;
 export const completeCreateSchema = z
   .object({
     externalOrderId: z.string().trim().min(1).max(120),
@@ -268,13 +282,18 @@ export class PartnersController {
   @ApiBody({
     schema: {
       type: "object",
-      required: ["externalOrderId", "traveler", "documents"],
+      required: ["mode", "externalOrderId", "documents"],
       properties: {
+        mode: {
+          type: "string",
+          enum: ["EXTRACT_FIRST", "TRAVELER_FIRST"],
+          description:
+            "Use EXTRACT_FIRST for new integrations. TRAVELER_FIRST is retained for compatibility.",
+        },
         externalOrderId: { type: "string", example: "agency-order-1042" },
         traveler: {
           type: "object",
-          description:
-            "Traveller identity used for automatic passport OCR matching",
+          description: "Required only by the compatibility TRAVELER_FIRST flow",
         },
         documents: {
           type: "array",
@@ -328,6 +347,26 @@ export class PartnersController {
       request.partner!.id,
       verificationId,
       documentId,
+    );
+  }
+
+  @Post("document-verifications/:verificationId/traveler")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  @ApiOperation({
+    summary: "Confirm the traveler after passport extraction",
+    description:
+      "Required for EXTRACT_FIRST sessions after all documents have been uploaded and passport extraction has completed.",
+  })
+  confirmExtractedTraveler(
+    @Param("verificationId") verificationId: string,
+    @Body() body: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.confirmExtractedTraveler(
+      request.partner!.id,
+      verificationId,
+      confirmExtractedTravelerSchema.parse(body),
     );
   }
 
