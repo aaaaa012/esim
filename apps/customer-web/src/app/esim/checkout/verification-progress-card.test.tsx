@@ -40,7 +40,7 @@ it("does not show automated verification for manual review or re-upload requests
   view.rerender(<DocumentProgress status="REUPLOAD_REQUIRED" />);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(
-    screen.getByText("Passport and traveller details need checking"),
+    screen.getByText("One or more documents need replacement"),
   ).toBeDefined();
 });
 it("uses accurate labels for each accepted review outcome", () => {

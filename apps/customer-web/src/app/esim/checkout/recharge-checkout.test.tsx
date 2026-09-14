@@ -308,8 +308,13 @@ describe("first-purchase document verification", () => {
       render(<Checkout planId="plan" orderId="recovery" />);
       await screen.findByRole("heading", { name: "Travel documents" });
       expect(
-        screen.getByText("Passport and traveller details need checking"),
+        await screen.findByRole("alertdialog", {
+          name: "Document check needs attention",
+        }),
       ).toBeDefined();
+      expect(
+        screen.queryByText("One or more documents need replacement"),
+      ).toBeNull();
       expect(
         screen.getByRole("button", { name: "Check traveller details" }),
       ).toBeDefined();

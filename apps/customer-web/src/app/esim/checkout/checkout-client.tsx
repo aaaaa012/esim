@@ -515,6 +515,7 @@ export default function CheckoutClient({
   const awaitingVerificationAdvance = useRef(false);
   const previousDocumentReviewStatus = useRef<string | undefined>(undefined);
   const [successMessage, setSuccessMessage] = useState("");
+  const [documentAttentionMessage, setDocumentAttentionMessage] = useState("");
   const resendQrEmail = async () => {
     if (!order || uxResending) return;
     setUxResending(true);
@@ -919,6 +920,32 @@ export default function CheckoutClient({
           ? "Our team approved your documents. You can continue to payment."
           : "Your passport was matched with your traveller details. You can continue to payment.",
       );
+    if (
+      current &&
+      current !== previous &&
+      ["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(current)
+    ) {
+      if (current === "CORRECTION_REQUIRED") {
+        setDocumentAttentionMessage(
+          "We could not confirm that the passport matches all traveller details. Review the marked fields and save again.",
+        );
+      } else {
+        const rejected = (order?.documents ?? [])
+          .filter((document) => document.status === "REUPLOAD_REQUIRED")
+          .map((document) =>
+            document.type === "PASSPORT"
+              ? "passport"
+              : document.type === "TICKET"
+                ? "travel ticket"
+                : "document",
+          );
+        setDocumentAttentionMessage(
+          rejected.length
+            ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
+            : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
+        );
+      }
+    }
   }, [order?.documentReviewStatus]);
   useEffect(() => {
     if (
@@ -1617,6 +1644,13 @@ export default function CheckoutClient({
                 onClose={() => setSuccessMessage("")}
               />
             )}
+            {documentAttentionMessage && (
+              <ErrorModal
+                error={documentAttentionMessage}
+                title="Document check needs attention"
+                onClose={() => setDocumentAttentionMessage("")}
+              />
+            )}
             {showAccountChoice && (
               <div
                 className="form-section account-choice"
@@ -1986,7 +2020,6 @@ export default function CheckoutClient({
                   [
                     "OCR_PENDING",
                     "OCR_BACKGROUND",
-                    "CORRECTION_REQUIRED",
                     "MANUAL_REVIEW",
                   ].includes(
                     order.documentReviewStatus ?? "",
@@ -2062,16 +2095,19 @@ export default function CheckoutClient({
                   passport. Your encrypted information is used only for
                   verification, order fulfilment, and applicable record-keeping.
                 </p>
-                <DocumentProgress
-                  status={
-                    Object.values(files).some(Boolean) &&
-                    order?.documentReviewStatus !== "REUPLOAD_REQUIRED"
-                      ? "NOT_STARTED"
-                      : order?.documentReviewStatus
-                  }
-                  busy={busy || verifyingPassport}
-                  message={documentError || documentMessage}
-                />
+                {!["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(
+                  order?.documentReviewStatus ?? "",
+                ) && (
+                  <DocumentProgress
+                    status={
+                      Object.values(files).some(Boolean)
+                        ? "NOT_STARTED"
+                        : order?.documentReviewStatus
+                    }
+                    busy={busy || verifyingPassport}
+                    message={documentError || documentMessage}
+                  />
+                )}
                 {passportGatePassed(order) && !editingVerifiedDocuments ? (
                   <>
                     <VerifiedDocumentsSummary

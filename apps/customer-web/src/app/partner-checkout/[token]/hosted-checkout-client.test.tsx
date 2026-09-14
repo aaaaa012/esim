@@ -626,8 +626,13 @@ it.each([false, true])(
     render(<HostedCheckoutClient token="private-token" />);
     await screen.findByRole("heading", { name: "Travel documents" });
     expect(
-      screen.getByText("Passport and traveller details need checking"),
+      await screen.findByRole("alertdialog", {
+        name: "Document check needs attention",
+      }),
     ).toBeDefined();
+    expect(
+      screen.queryByText("One or more documents need replacement"),
+    ).toBeNull();
     expect(
       screen.getByRole("button", { name: "Check traveller details" }),
     ).toBeDefined();

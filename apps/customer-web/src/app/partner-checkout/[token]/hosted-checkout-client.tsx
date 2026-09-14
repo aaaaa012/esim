@@ -203,6 +203,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [verification, setVerification] = useState<Verification | null>(null);
   const previousVerificationStatus = useRef<string | undefined>(undefined);
   const [successMessage, setSuccessMessage] = useState("");
+  const [documentAttentionMessage, setDocumentAttentionMessage] = useState("");
   const [compatibilityConsent, setCompatibilityConsent] = useState(false);
   const [legalConsent, setLegalConsent] = useState(false);
   const [resumeAfterConsent, setResumeAfterConsent] = useState(2);
@@ -748,6 +749,32 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           ? "Our team approved your documents. You can continue to payment."
           : "Your passport was matched with your traveller details. You can continue to payment.",
       );
+    if (
+      current &&
+      current !== previous &&
+      ["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(current)
+    ) {
+      if (current === "CORRECTION_REQUIRED") {
+        setDocumentAttentionMessage(
+          "We could not confirm that the passport matches all traveller details. Review the marked fields and save again.",
+        );
+      } else {
+        const rejected = (session?.order.documents ?? [])
+          .filter((document) => document.status === "REUPLOAD_REQUIRED")
+          .map((document) =>
+            document.type === "PASSPORT"
+              ? "passport"
+              : document.type === "TICKET"
+                ? "travel ticket"
+                : "document",
+          );
+        setDocumentAttentionMessage(
+          rejected.length
+            ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
+            : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
+        );
+      }
+    }
   }, [verification?.status]);
 
   useEffect(() => {
@@ -937,6 +964,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           title="Verification complete"
           tone="success"
           onClose={() => setSuccessMessage("")}
+        />
+      )}
+      {documentAttentionMessage && (
+        <ErrorModal
+          error={documentAttentionMessage}
+          title="Document check needs attention"
+          onClose={() => setDocumentAttentionMessage("")}
         />
       )}
       <div className="checkout-shell">
@@ -1654,7 +1688,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       [
                         "OCR_PENDING",
                         "OCR_BACKGROUND",
-                        "CORRECTION_REQUIRED",
                         "MANUAL_REVIEW",
                       ].includes(
                         verification?.status ?? "",
@@ -1695,16 +1728,19 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       for verification, order fulfilment, and applicable
                       record-keeping.
                     </p>
-                    <DocumentProgress
-                      status={
-                        Object.values(files).some(Boolean) &&
-                        verification?.status !== "REUPLOAD_REQUIRED"
-                          ? "NOT_STARTED"
-                          : verification?.status
-                      }
-                      busy={busy || verifying}
-                      message={documentError || documentMessage}
-                    />
+                    {!["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(
+                      verification?.status ?? "",
+                    ) && (
+                      <DocumentProgress
+                        status={
+                          Object.values(files).some(Boolean)
+                            ? "NOT_STARTED"
+                            : verification?.status
+                        }
+                        busy={busy || verifying}
+                        message={documentError || documentMessage}
+                      />
+                    )}
                     {gatePassed && !editingVerifiedDocuments ? (
                       <>
                         <VerifiedDocumentsSummary

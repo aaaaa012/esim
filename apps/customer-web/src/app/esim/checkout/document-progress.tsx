@@ -26,6 +26,8 @@ export function DocumentProgress({
   );
   const manual = status === "MANUAL_REVIEW";
   const pending = ["OCR_PENDING", "OCR_BACKGROUND"].includes(status ?? "");
+  const replacementRequired = status === "REUPLOAD_REQUIRED";
+  const correctionRequired = status === "CORRECTION_REQUIRED";
   const failed = [
     "FAILED",
     "PARTIAL",
@@ -95,9 +97,13 @@ export function DocumentProgress({
                 ? "Documents awaiting review"
                 : pending
                   ? "Checking your passport"
-                  : failed
-                    ? "Passport and traveller details need checking"
-                    : "Upload your travel documents"}
+                  : replacementRequired
+                    ? "One or more documents need replacement"
+                    : correctionRequired
+                      ? "Passport and traveller details need checking"
+                      : failed
+                        ? "Passport verification needs attention"
+                        : "Upload your travel documents"}
         </b>
         <small>
           {message ||
@@ -109,9 +115,13 @@ export function DocumentProgress({
                   ? "Your documents are saved and awaiting review. This page updates automatically. Payment becomes available after approval."
                   : pending
                     ? "Your documents are saved. We’re checking them against your traveller details. This page updates automatically."
-                    : failed
-                      ? "We couldn’t confirm that your passport matches your traveller details. Check the details you entered or upload a clearer passport information page."
-                      : "PDF, JPG or PNG, up to 10 MB per file. Payment becomes available after verification.")}
+                    : replacementRequired
+                      ? "A saved file could not be confirmed as the required document. Replace the item marked below before continuing."
+                      : correctionRequired
+                        ? "We couldn’t confirm that your passport matches your traveller details. Check the details you entered before continuing."
+                        : failed
+                          ? "We couldn’t read or verify the passport reliably. Review the document guidance below before continuing."
+                          : "PDF, JPG or PNG, up to 10 MB per file. Payment becomes available after verification.")}
         </small>
       </span>
     </div>
