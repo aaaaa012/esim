@@ -72,23 +72,21 @@ const uploadDocumentsSchema = z
     "Passport and ticket are required",
   );
 
-export const uploadSessionSchema = z.union([
-  z
-    .object({
-      mode: z.literal("EXTRACT_FIRST"),
-      externalOrderId: z.string().trim().min(1).max(120),
-      documents: uploadDocumentsSchema,
-    })
-    .strict(),
-  z.object({
-    mode: z.literal("TRAVELER_FIRST").optional(),
+export const uploadSessionSchema = z
+  .object({
+    mode: z.literal("EXTRACT_FIRST"),
     externalOrderId: z.string().trim().min(1).max(120),
-    traveler: travelerSchema,
     documents: uploadDocumentsSchema,
-  }),
-]);
+  })
+  .strict();
 
 export const confirmExtractedTravelerSchema = travelerSchema;
+export const correctExtractedTravelerSchema = z
+  .object({
+    traveler: travelerSchema,
+    reason: z.string().trim().min(10).max(500),
+  })
+  .strict();
 export const completeCreateSchema = z
   .object({
     externalOrderId: z.string().trim().min(1).max(120),
@@ -286,15 +284,10 @@ export class PartnersController {
       properties: {
         mode: {
           type: "string",
-          enum: ["EXTRACT_FIRST", "TRAVELER_FIRST"],
-          description:
-            "Use EXTRACT_FIRST for new integrations. TRAVELER_FIRST is retained for compatibility.",
+          enum: ["EXTRACT_FIRST"],
+          description: "Passport extraction must precede traveller confirmation.",
         },
         externalOrderId: { type: "string", example: "agency-order-1042" },
-        traveler: {
-          type: "object",
-          description: "Required only by the compatibility TRAVELER_FIRST flow",
-        },
         documents: {
           type: "array",
           minItems: 2,
@@ -367,6 +360,25 @@ export class PartnersController {
       request.partner!.id,
       verificationId,
       confirmExtractedTravelerSchema.parse(body),
+    );
+  }
+
+  @Post("document-verifications/:verificationId/traveler-corrections")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  @ApiOperation({ summary: "Submit an audited traveller-data correction" })
+  correctExtractedTraveler(
+    @Param("verificationId") verificationId: string,
+    @Headers() headers: Record<string, string | undefined>,
+    @Body() body: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    const input = correctExtractedTravelerSchema.parse(body);
+    return this.partners.correctExtractedTraveler(
+      request.partner!.id,
+      verificationId,
+      input,
+      headers["idempotency-key"] ?? headers["x-idempotency-key"] ?? "",
     );
   }
 

@@ -928,7 +928,7 @@ model PartnerDocumentVerification {
   externalOrderId        String
   activeExternalOrderKey String?                       @unique
   status                 String                        @default("AWAITING_UPLOAD")
-  mode                   String                        @default("TRAVELER_FIRST")
+  mode                   String                        @default("EXTRACT_FIRST")
   travelerSnapshot       Json?
   expiresAt              DateTime
   consumedAt             DateTime?
@@ -940,9 +940,25 @@ model PartnerDocumentVerification {
   updatedAt              DateTime                      @updatedAt
   documents              PartnerDocumentUploadIntent[]
   passportExtraction     PassportExtraction?
+  travelerRevisions      PartnerTravelerRevision[]
 
   @@index([partnerId, externalOrderId])
   @@index([status, expiresAt])
+}
+
+model PartnerTravelerRevision {
+  id                 String                       @id @default(uuid()) @db.Uuid
+  verificationId     String                       @db.Uuid
+  verification       PartnerDocumentVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+  version            Int
+  idempotencyKeyHash String
+  reason             String
+  travelerSnapshot   Json
+  createdAt          DateTime                     @default(now())
+
+  @@unique([verificationId, version])
+  @@unique([verificationId, idempotencyKeyHash])
+  @@index([verificationId, createdAt])
 }
 
 model PartnerCredential {

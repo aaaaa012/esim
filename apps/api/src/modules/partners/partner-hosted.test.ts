@@ -54,6 +54,7 @@ describe("partner hosted checkout", () => {
     const existing = {
       id: "verification-1",
       externalOrderId: "ext-1",
+      mode: "EXTRACT_FIRST",
       status: "AWAITING_UPLOAD",
       expiresAt: new Date(Date.now() + 60_000),
       checkoutReleaseAt: new Date(Date.now() + 10_000),
@@ -101,20 +102,8 @@ describe("partner hosted checkout", () => {
     );
 
     const result = await instance.createUploadSessions("partner-1", {
+      mode: "EXTRACT_FIRST",
       externalOrderId: "ext-1",
-      traveler: {
-        title: "MR",
-        firstName: "Samir",
-        surname: "Majhi",
-        dateOfBirth: "1995-01-01",
-        nationality: "NP",
-        city: "Kathmandu",
-        countryOfResidence: "NP",
-        email: "customer@example.com",
-        mobile: "+9779800000000",
-        passportNumber: "PA1234567",
-        passportExpiryDate: "2030-01-01",
-      },
       documents: [
         {
           type: "PASSPORT",
@@ -1141,6 +1130,7 @@ describe("partner extract-first traveler confirmation", () => {
         callback({
           partnerDocumentVerification: { updateMany },
           passportExtraction: { update: extractionUpdate },
+          partnerTravelerRevision: { create: vi.fn().mockResolvedValue({}) },
         }),
       ),
     };
@@ -1221,6 +1211,281 @@ describe("partner extract-first traveler confirmation", () => {
       ),
     ).rejects.toMatchObject({
       response: { code: "PASSPORT_EXTRACTION_NOT_READY" },
+    });
+  });
+
+  it("requires an idempotency key for a traveler correction", async () => {
+    const instance = service({});
+    await expect(
+      instance.correctExtractedTraveler(
+        "partner-1",
+        "verification-1",
+        { traveler, reason: "Passport expiration was transcribed with a typo" },
+        "",
+      ),
+    ).rejects.toMatchObject({
+      response: { code: "INVALID_IDEMPOTENCY_KEY" },
+    });
+  });
+
+  it("writes an immutable revision and flips MANUAL_REVIEW to PROCESSING", async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const revisionCreate = vi
+      .fn()
+      .mockResolvedValue({ id: "revision-2", version: 2 });
+    const findFirst = vi.fn().mockResolvedValue({
+      id: "verification-1",
+      partnerId: "partner-1",
+      mode: "EXTRACT_FIRST",
+      status: "MANUAL_REVIEW",
+      failureCode: "TRAVELLER_DETAILS_UNCONFIRMED",
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
+      passportExtraction: { passportAssetId: "passport-asset" },
+      travelerRevisions: [{ version: 1, idempotencyKeyHash: "initial" }],
+    });
+    const add = vi.fn().mockResolvedValue({});
+    const prisma = {
+      $transaction: vi.fn((callback) =>
+        callback({
+          partnerDocumentVerification: { findFirst, updateMany },
+          partnerTravelerRevision: { findUnique: vi.fn(), create: revisionCreate },
+        }),
+      ),
+      passportExtraction: {
+        findUnique: vi.fn().mockResolvedValue({
+          partnerVerificationId: "verification-1",
+          passportAssetId: "passport-asset",
+        }),
+      },
+    };
+    const instance = new PartnerService(
+      prisma as never,
+      {
+        encrypt: (value: string) => `encrypted:${value}`,
+        blindIndex: (value: string) => `index:${value}`,
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { add } as never,
+      {} as never,
+    );
+
+    await expect(
+      instance.correctExtractedTraveler(
+        "partner-1",
+        "verification-1",
+        { traveler, reason: "Passport expiration was transcribed with a typo" },
+        "correction-key-001",
+      ),
+    ).resolves.toEqual({
+      verificationId: "verification-1",
+      revision: 2,
+      status: "PROCESSING",
+      replayed: false,
+    });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "verification-1",
+        partnerId: "partner-1",
+        status: "MANUAL_REVIEW",
+        failureCode: "TRAVELLER_DETAILS_UNCONFIRMED",
+      },
+      data: {
+        travelerSnapshot: expect.objectContaining({
+          firstName: "Samir",
+          passportNumberEncrypted: "encrypted:PA1234567",
+        }),
+        status: "PROCESSING",
+        failureCode: null,
+      },
+    });
+    expect(revisionCreate).toHaveBeenCalledWith({
+      data: {
+        verificationId: "verification-1",
+        version: 2,
+        idempotencyKeyHash: expect.any(String),
+        reason: "Passport expiration was transcribed with a typo",
+        travelerSnapshot: expect.objectContaining({
+          firstName: "Samir",
+          passportNumberEncrypted: "encrypted:PA1234567",
+        }),
+      },
+    });
+    expect(add).toHaveBeenCalledWith(
+      "documents",
+      "verify-partner-documents",
+      { verificationId: "verification-1" },
+      expect.stringMatching(/revision-2/),
+      expect.any(Object),
+    );
+  });
+
+  it("replays an existing idempotency key without creating another revision", async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const revisionCreate = vi.fn().mockResolvedValue({ id: "revision-2" });
+    const existing = { id: "revision-2", version: 2, reason: "previous" };
+    const findFirst = vi.fn().mockResolvedValue({
+      id: "verification-1",
+      partnerId: "partner-1",
+      mode: "EXTRACT_FIRST",
+      status: "MANUAL_REVIEW",
+      failureCode: "TRAVELLER_DETAILS_UNCONFIRMED",
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
+      passportExtraction: { passportAssetId: "passport-asset" },
+      travelerRevisions: [{ version: 1, idempotencyKeyHash: "initial" }],
+    });
+    const prisma = {
+      $transaction: vi.fn((callback) =>
+        callback({
+          partnerDocumentVerification: { findFirst, updateMany },
+          partnerTravelerRevision: {
+            findUnique: vi.fn().mockResolvedValue(existing),
+            create: revisionCreate,
+          },
+        }),
+      ),
+      passportExtraction: { findUnique: vi.fn() },
+    };
+    const instance = new PartnerService(
+      prisma as never,
+      {
+        encrypt: (value: string) => `encrypted:${value}`,
+        blindIndex: (value: string) => `index:${value}`,
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { add: vi.fn() } as never,
+      {} as never,
+    );
+
+    await expect(
+      instance.correctExtractedTraveler(
+        "partner-1",
+        "verification-1",
+        { traveler, reason: "Passport expiration was transcribed with a typo" },
+        "correction-key-001",
+      ),
+    ).resolves.toEqual({
+      verificationId: "verification-1",
+      revision: 2,
+      status: "PROCESSING",
+      replayed: true,
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(revisionCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects simultaneous corrections once the first wins the atomic claim", async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const prisma = {
+      $transaction: vi.fn((callback) =>
+        callback({
+          partnerDocumentVerification: {
+            findFirst: vi.fn().mockResolvedValue({
+              id: "verification-1",
+              partnerId: "partner-1",
+              mode: "EXTRACT_FIRST",
+              status: "MANUAL_REVIEW",
+              failureCode: "TRAVELLER_DETAILS_UNCONFIRMED",
+              expiresAt: new Date(Date.now() + 60_000),
+              consumedAt: null,
+              passportExtraction: { passportAssetId: "passport-asset" },
+              travelerRevisions: [{ version: 2, idempotencyKeyHash: "other" }],
+            }),
+            updateMany,
+          },
+          partnerTravelerRevision: {
+            findUnique: vi.fn().mockResolvedValue(null),
+            create: vi.fn(),
+          },
+        }),
+      ),
+      passportExtraction: { findUnique: vi.fn() },
+    };
+    const instance = new PartnerService(
+      prisma as never,
+      {
+        encrypt: (value: string) => `encrypted:${value}`,
+        blindIndex: (value: string) => `index:${value}`,
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { add: vi.fn() } as never,
+      {} as never,
+    );
+
+    await expect(
+      instance.correctExtractedTraveler(
+        "partner-1",
+        "verification-1",
+        { traveler, reason: "Passport expiration was transcribed with a typo" },
+        "correction-key-002",
+      ),
+    ).rejects.toMatchObject({
+      response: { code: "TRAVELER_CORRECTION_CONFLICT" },
+    });
+    expect(updateMany).toHaveBeenCalled();
+  });
+
+  it("enforces the four revision cap", async () => {
+    const prisma = {
+      $transaction: vi.fn((callback) =>
+        callback({
+          partnerDocumentVerification: {
+            findFirst: vi.fn().mockResolvedValue({
+              id: "verification-1",
+              partnerId: "partner-1",
+              mode: "EXTRACT_FIRST",
+              status: "MANUAL_REVIEW",
+              failureCode: "TRAVELLER_DETAILS_UNCONFIRMED",
+              expiresAt: new Date(Date.now() + 60_000),
+              consumedAt: null,
+              passportExtraction: { passportAssetId: "passport-asset" },
+              travelerRevisions: [
+                { version: 4, idempotencyKeyHash: "initial" },
+              ],
+            }),
+            updateMany: vi.fn(),
+          },
+          partnerTravelerRevision: {
+            findUnique: vi.fn().mockResolvedValue(null),
+            create: vi.fn(),
+          },
+        }),
+      ),
+      passportExtraction: { findUnique: vi.fn() },
+    };
+    const instance = new PartnerService(
+      prisma as never,
+      {
+        encrypt: (value: string) => `encrypted:${value}`,
+        blindIndex: (value: string) => `index:${value}`,
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { add: vi.fn() } as never,
+      {} as never,
+    );
+
+    await expect(
+      instance.correctExtractedTraveler(
+        "partner-1",
+        "verification-1",
+        { traveler, reason: "Passport expiration was transcribed with a typo" },
+        "correction-key-003",
+      ),
+    ).rejects.toMatchObject({
+      response: { code: "TRAVELER_CORRECTION_LIMIT_REACHED" },
     });
   });
 });

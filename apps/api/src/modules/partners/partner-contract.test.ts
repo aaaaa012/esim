@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   completeCreateSchema,
+  correctExtractedTravelerSchema,
   ledgerSchema,
   listSchema,
   uploadSessionSchema,
@@ -129,8 +130,8 @@ describe("simplified partner order contract", () => {
   it("rejects unsafe upload declarations", () => {
     expect(
       uploadSessionSchema.safeParse({
+        mode: "EXTRACT_FIRST",
         externalOrderId: "agency-order-1042",
-        traveler,
         documents: [
           {
             type: "PASSPORT",
@@ -146,8 +147,8 @@ describe("simplified partner order contract", () => {
   it("rejects duplicate document types", () => {
     expect(
       uploadSessionSchema.safeParse({
+        mode: "EXTRACT_FIRST",
         externalOrderId: "agency-order-1042",
-        traveler,
         documents: [
           {
             type: "PASSPORT",
@@ -173,7 +174,7 @@ describe("simplified partner order contract", () => {
       contentType: "application/pdf" as const,
       sizeBytes: 100,
     });
-    const base = { externalOrderId: "agency-order-1045", traveler };
+    const base = { mode: "EXTRACT_FIRST" as const, externalOrderId: "agency-order-1045" };
     expect(
       uploadSessionSchema.safeParse({
         ...base,
@@ -230,6 +231,62 @@ describe("simplified partner order contract", () => {
             sizeBytes: 100,
           },
         ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("correctExtractedTraveler schema", () => {
+  it("accepts a valid correction with a reason", () => {
+    expect(
+      correctExtractedTravelerSchema.safeParse({
+        traveler,
+        reason: "Passport number was transposed during extraction",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an empty reason", () => {
+    expect(
+      correctExtractedTravelerSchema.safeParse({
+        traveler,
+        reason: "",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a reason shorter than 10 characters", () => {
+    expect(
+      correctExtractedTravelerSchema.safeParse({
+        traveler,
+        reason: "short",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a reason longer than 500 characters", () => {
+    expect(
+      correctExtractedTravelerSchema.safeParse({
+        traveler,
+        reason: "x".repeat(501),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a correction without traveler data", () => {
+    expect(
+      correctExtractedTravelerSchema.safeParse({
+        reason: "Passport number was transposed during extraction",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects extra fields", () => {
+    expect(
+      correctExtractedTravelerSchema.safeParse({
+        traveler,
+        reason: "Passport number was transposed during extraction",
+        version: 5,
       }).success,
     ).toBe(false);
   });

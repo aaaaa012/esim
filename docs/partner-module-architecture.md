@@ -64,6 +64,9 @@ The operator flow is **create partner → top up balance → issue credential �
 - `PartnerCustomer` — maps a partner's `externalCustomerId` to our internal `Customer`.
 - `PartnerDocumentUploadIntent` — a signed upload promise that links `partnerId`+`externalOrderId`
   to a Amazon S3 `privateAssetId`, with `expiresAt` and a `consumedAt` (one-time use).
+- `PartnerTravelerRevision` — one immutable row per accepted traveler-details state change on a
+  `PartnerDocumentVerification` (`verificationId`+`version` unique, `verificationId`+`idempotencyKeyHash`
+  unique). Version 1 is written by the initial traveler confirmation; corrections append versions 2–4.
 - `PartnerEvent` / `PartnerWebhookDelivery` / `PartnerWebhookEndpoint` — the durable webhook outbox.
 - `PartnerIdempotencyRecord` — dedupe for mutations (`partnerId+method+route+key` unique).
 - `PartnerRateBucket` — per-minute per-partner request counting for rate limits.
@@ -122,6 +125,30 @@ size and format for later verification.
 
 The partner PUTs the raw bytes directly to Amazon S3 at `endpoint` using the exact returned headers.
 The bytes are not proxied through us, but the intent remembers the expected size/content type.
+
+### Step 2.5 — Extract-first traveler confirmation and audited corrections
+
+Sessions use `mode: EXTRACT_FIRST`. After every required upload is confirmed, the passport is
+extracted; the partner then confirms the traveler object
+(`POST /partners/document-verifications/{verificationId}/traveler`).
+
+Passport matching runs again. If the extracted traveler record does not match the submitted details,
+the verification reaches `MANUAL_REVIEW` with `failureCode TRAVELLER_DETAILS_UNCONFIRMED`. The
+partner submits corrected traveler data through
+`POST /partners/document-verifications/{verificationId}/traveler-corrections`, which records an
+immutable `PartnerTravelerRevision` and re-queues passport matching.
+
+Correction semantics (`correctExtractedTraveler`):
+
+- A valid `Idempotency-Key` (8–200 chars) is required; the SHA-256 hash becomes
+  `PartnerTravelerRevision.idempotencyKeyHash`.
+- The full body runs in one transaction. It reads the current latest revision, replays the stored
+  response for a repeated key, then atomically claims the verification with an `updateMany` from
+  `MANUAL_REVIEW + TRAVELLER_DETAILS_UNCONFIRMED` → `PROCESSING`. Only one concurrent correction can
+  win that claim; the loser gets `409 TRAVELER_CORRECTION_CONFLICT`.
+- Versions grow monotonically; a verification supports the initial confirmation plus three
+  corrections (four versions total). Past the cap, further attempts return
+  `409 TRAVELER_CORRECTION_LIMIT_REACHED`.
 
 ### Step 3 — Resolve the order (`createCompleteOrder`)
 
@@ -218,4 +245,4 @@ simulated**, so real outbound delivery should be validated once Redis is on.
   in-process execution.
 
 _Coverage on `API-integratedv1` @ `ec0e90f`; 116 tests pass (16 files), including
-`partner-contract.test.ts` and `partner-prepaid.test.ts`._
+`partner-contract.test.ts`, `partner-hosted.test.ts`, and `partner-prepaid.test.ts`._

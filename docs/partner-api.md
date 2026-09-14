@@ -11,7 +11,7 @@ This document describes the API exposed to commercial/reseller partners. It is b
 The recommended initial-purchase flow is:
 
 1. Read capabilities and plans.
-2. Create a document-upload session with the traveller and required documents.
+2. Create an extraction-first document-upload session with the passport and ticket.
 3. Upload each document to its returned signed upload target, then confirm each upload.
 4. Poll the document verification until `orderCreationAllowed` is `true`.
 5. Create the order using the same `externalOrderId` and the returned `verificationId`.
@@ -119,46 +119,11 @@ record for confirmation:
 }
 ```
 
-The historical traveler-first request below remains available for compatibility
-by omitting `mode` or setting it to `TRAVELER_FIRST`. It is not recommended for
-new clients.
+The `mode` field is required and must be `EXTRACT_FIRST`. Traveler details are
+collected from the passport extraction and confirmed separately; do not attach a
+`traveler` object to this request.
 
 `POST /partners/document-upload-sessions` — scope `documents:write`
-
-```json
-{
-  "externalOrderId": "agency-order-1042",
-  "traveler": {
-    "title": "MS",
-    "firstName": "Asha",
-    "surname": "Shrestha",
-    "dateOfBirth": "1990-05-14",
-    "nationality": "NP",
-    "city": "Kathmandu",
-    "countryOfResidence": "NP",
-    "email": "asha@example.com",
-    "mobile": "+9779812345678",
-    "passportNumber": "PA1234567",
-    "passportExpiryDate": "2030-05-14"
-  },
-  "documents": [
-    {
-      "type": "PASSPORT",
-      "fileName": "passport.pdf",
-      "contentType": "application/pdf",
-      "sizeBytes": 483120
-    },
-    {
-      "type": "TICKET",
-      "fileName": "ticket.jpg",
-      "contentType": "image/jpeg",
-      "sizeBytes": 342991
-    }
-  ]
-}
-```
-
-`traveler.middleName`, `traveler.employerOrBusinessName`, and `traveler.pointOfSaleCode` are optional. `title` is `MR`, `MS`, or `MRS`; `nationality` and `countryOfResidence` are two-character codes. `dateOfBirth` must be in the past and `passportExpiryDate` in the future. `mobile` must be 7–20 characters and valid phone-like digits.
 
 Supply 2–3 unique documents, always including `PASSPORT` and `TICKET`. Accepted content types are `application/pdf`, `image/jpeg`, and `image/png`; each document must be no larger than 10 MiB. The response includes `verificationId`, expiry times, a status, and a signed `upload` object for each document. Upload the raw document using the method, URL, and headers in that signed object. Do not send document bytes to this API endpoint.
 
@@ -186,6 +151,49 @@ No request body is required. Confirm every document after its signed upload fini
 `GET /partners/document-verifications/{verificationId}` — scope `documents:write`
 
 Poll this endpoint. Its response includes `status`, `failureCode`, `expiresAt`, `consumedAt`, `orderCreationAllowed`, and document-level status/code fields. Create an order only when `orderCreationAllowed` is `true`; allowable statuses are `VERIFIED`, `MANUAL_REVIEW`, `PROCESSING_BACKGROUND`, or `SKIPPED`. A verification can only be consumed by one order.
+
+#### Corrections after a traveler-details mismatch
+
+When the status is `MANUAL_REVIEW` with `failureCode`
+`TRAVELLER_DETAILS_UNCONFIRMED`, the extracted traveler record did not match. The
+partner may submit a corrected traveler object with a human-readable reason:
+
+`POST /partners/document-verifications/{verificationId}/traveler-corrections` — scope `documents:write`
+
+```json
+{
+  "traveler": {
+    "title": "MR",
+    "firstName": "Asha",
+    "surname": "Shrestha",
+    "dateOfBirth": "1990-05-14",
+    "nationality": "NP",
+    "city": "Kathmandu",
+    "countryOfResidence": "NP",
+    "email": "asha@example.com",
+    "mobile": "+9779812345678",
+    "passportNumber": "PA2233445",
+    "passportExpiryDate": "2030-05-14"
+  },
+  "reason": "The passport number was transcribed incorrectly during extraction"
+}
+```
+
+This is a mutation and therefore requires the `Idempotency-Key` header. `reason`
+must be 10–500 characters. The field contract for `traveler` is the same as the
+confirmation endpoint above.
+
+Each accepted correction is recorded as an immutable revision. A verification
+supports the initial confirmation plus at most three corrections — four
+immutable versions in total. When the limit is reached, further attempts return
+`409 TRAVELER_CORRECTION_LIMIT_REACHED` and the case must be reviewed manually.
+
+The transaction is atomic: the first accepted correction changes the
+verification from `MANUAL_REVIEW` to `PROCESSING`, so simultaneous different
+corrections cannot both win. Re-sending a correction with the same
+`Idempotency-Key` returns the previously stored revision unchanged (`replayed:
+true`) instead of creating a new one. The re-queued verification runs passport
+matching again against the corrected traveler data.
 
 ### 3. Create an order
 

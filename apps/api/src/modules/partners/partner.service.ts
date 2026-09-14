@@ -111,28 +111,16 @@ type CompleteOrderInput = {
   metadata?: Record<string, string> | undefined;
 };
 
-type UploadSessionInput =
-  | {
-      mode: "EXTRACT_FIRST";
-      externalOrderId: string;
-      documents: Array<{
-        type: DocumentType;
-        fileName: string;
-        contentType: string;
-        sizeBytes: number;
-      }>;
-    }
-  | {
-      mode?: "TRAVELER_FIRST" | undefined;
-      externalOrderId: string;
-      traveler: TravelerInput;
-      documents: Array<{
-        type: DocumentType;
-        fileName: string;
-        contentType: string;
-        sizeBytes: number;
-      }>;
-    };
+type UploadSessionInput = {
+  mode: "EXTRACT_FIRST";
+  externalOrderId: string;
+  documents: Array<{
+    type: DocumentType;
+    fileName: string;
+    contentType: string;
+    sizeBytes: number;
+  }>;
+};
 
 const PARTNER_ORDER_INCLUDE = {
   plan: { include: { country: true } },
@@ -211,7 +199,7 @@ export class PartnerService {
       documentVerification: {
         recommendedMode: "EXTRACT_FIRST",
         travelerConfirmationRequired: true,
-        compatibilityModes: ["TRAVELER_FIRST"],
+        compatibilityModes: [],
       },
     };
   }
@@ -288,8 +276,7 @@ export class PartnerService {
             !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
           if (
             resumable &&
-            (existing.mode ?? "TRAVELER_FIRST") !==
-              (input.mode ?? "TRAVELER_FIRST")
+            existing.mode !== "EXTRACT_FIRST"
           )
             throw new ConflictException({
               code: "DOCUMENT_SESSION_MODE_MISMATCH",
@@ -312,24 +299,11 @@ export class PartnerService {
             partnerId,
             externalOrderId: input.externalOrderId,
             activeExternalOrderKey,
-            mode: input.mode ?? "TRAVELER_FIRST",
-            ...(input.mode === "EXTRACT_FIRST"
-              ? {}
-              : {
-                  travelerSnapshot: this.travelerData(
-                    input.traveler,
-                  ) as unknown as Prisma.InputJsonValue,
-                }),
+            mode: "EXTRACT_FIRST",
             expiresAt,
             reviewPolicy: config.documentReviewPolicy,
             checkoutReleaseAt,
-            ...(input.mode === "EXTRACT_FIRST"
-              ? { status: "AWAITING_UPLOAD" }
-              : config.documentReviewPolicy === "MANUAL_REVIEW"
-                ? { status: "MANUAL_REVIEW" }
-                : config.documentReviewPolicy === "NO_REVIEW"
-                  ? { status: "SKIPPED" }
-                  : {}),
+            status: "AWAITING_UPLOAD",
           },
         });
         const items = [];
@@ -364,16 +338,9 @@ export class PartnerService {
         }
         return {
           verificationId,
-          mode: input.mode ?? "TRAVELER_FIRST",
+          mode: "EXTRACT_FIRST",
           externalOrderId: input.externalOrderId,
-          status:
-            input.mode === "EXTRACT_FIRST"
-              ? "AWAITING_UPLOAD"
-              : config.documentReviewPolicy === "MANUAL_REVIEW"
-                ? "MANUAL_REVIEW"
-                : config.documentReviewPolicy === "NO_REVIEW"
-                  ? "SKIPPED"
-                  : "AWAITING_UPLOAD",
+          status: "AWAITING_UPLOAD",
           expiresAt,
           checkoutReleaseAt,
           documents: items,
@@ -866,10 +833,25 @@ export class PartnerService {
         },
       });
       if (claim.count)
-        await tx.passportExtraction.update({
-          where: { partnerVerificationId: verification.id },
-          data: { confirmedAt },
-        });
+        await Promise.all([
+          tx.passportExtraction.update({
+            where: { partnerVerificationId: verification.id },
+            data: { confirmedAt },
+          }),
+          tx.partnerTravelerRevision.create({
+            data: {
+              verificationId: verification.id,
+              version: 1,
+              idempotencyKeyHash: createHash("sha256")
+                .update(`initial:${verification.id}`)
+                .digest("hex"),
+              reason: "Initial traveller confirmation",
+              travelerSnapshot: this.travelerData(
+                traveler,
+              ) as unknown as Prisma.InputJsonValue,
+            },
+          }),
+        ]);
       return claim.count === 1;
     });
     if (!claimed) {
@@ -925,6 +907,115 @@ export class PartnerService {
             : "MANUAL_REVIEW",
       confirmed: true,
       verificationQueued: verification.reviewPolicy === "AUTO_OCR",
+    };
+  }
+
+async correctExtractedTraveler(
+    partnerId: string,
+    verificationId: string,
+    input: { traveler: TravelerInput; reason: string },
+    idempotencyKey: string,
+  ) {
+    if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 200)
+      throw new BadRequestException({
+        code: "INVALID_IDEMPOTENCY_KEY",
+        message: "Idempotency-Key is required for a traveler correction",
+      });
+    const keyHash = createHash("sha256").update(idempotencyKey).digest("hex");
+    const snapshot = this.travelerData(
+      input.traveler,
+    ) as unknown as Prisma.InputJsonValue;
+    const revision = await this.prisma.$transaction(async (tx) => {
+      const verification = await tx.partnerDocumentVerification.findFirst({
+        where: { id: verificationId, partnerId },
+        include: {
+          passportExtraction: true,
+          travelerRevisions: { orderBy: { version: "desc" }, take: 1 },
+        },
+      });
+      if (!verification)
+        throw new NotFoundException({
+          code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+          message: "Document verification not found",
+        });
+      const replay = await tx.partnerTravelerRevision.findUnique({
+        where: {
+          verificationId_idempotencyKeyHash: {
+            verificationId,
+            idempotencyKeyHash: keyHash,
+          },
+        },
+      });
+      if (replay) return { ...replay, replayed: true };
+      if (verification.expiresAt <= new Date() || verification.consumedAt)
+        throw new GoneException({
+          code: "DOCUMENT_VERIFICATION_EXPIRED",
+          message: "This document verification can no longer be corrected",
+        });
+      if (
+        verification.mode !== "EXTRACT_FIRST" ||
+        verification.status !== "MANUAL_REVIEW" ||
+        verification.failureCode !== "TRAVELLER_DETAILS_UNCONFIRMED"
+      )
+throw new ConflictException({
+          code: "TRAVELER_CORRECTION_NOT_ALLOWED",
+          message: "Corrections are accepted only after a details mismatch",
+        });
+      const latestVersion = verification.travelerRevisions[0]?.version ?? 0;
+      if (latestVersion >= 4)
+        throw new ApiException({
+          code: "TRAVELER_CORRECTION_LIMIT_REACHED",
+          message: "The correction limit has been reached; manual review is required",
+          status: 409,
+        });
+      const claim = await tx.partnerDocumentVerification.updateMany({
+        where: {
+          id: verificationId,
+          partnerId,
+          status: "MANUAL_REVIEW",
+          failureCode: "TRAVELLER_DETAILS_UNCONFIRMED",
+        },
+        data: {
+          travelerSnapshot: snapshot,
+          status: "PROCESSING",
+          failureCode: null,
+        },
+      });
+      if (claim.count !== 1)
+        throw new ConflictException({
+          code: "TRAVELER_CORRECTION_CONFLICT",
+          message: "Another correction or review decision was accepted first",
+        });
+      return {
+        ...(await tx.partnerTravelerRevision.create({
+          data: {
+            verificationId,
+            version: latestVersion + 1,
+            idempotencyKeyHash: keyHash,
+            reason: input.reason,
+            travelerSnapshot: snapshot,
+          },
+        })),
+        replayed: false,
+      };
+    });
+    if (!revision.replayed) {
+      const extraction = await this.prisma.passportExtraction.findUnique({
+        where: { partnerVerificationId: verificationId },
+      });
+      await this.queues.add(
+        QUEUES.documents,
+        "verify-partner-documents",
+        { verificationId },
+        `document-verification-${verificationId}-revision-${revision.version}-${createHash("sha256").update(extraction?.passportAssetId ?? verificationId).digest("hex").slice(0, 16)}`,
+ocrJobOptions(),
+      );
+    }
+    return {
+      verificationId,
+      revision: revision.version,
+      status: "PROCESSING",
+      replayed: revision.replayed,
     };
   }
 
