@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { DocumentType, OrderStatus, type Prisma } from "@prisma/client";
+import { DocumentStatus, DocumentType, type Prisma } from "@prisma/client";
 import type { Job } from "bullmq";
 import { randomUUID } from "node:crypto";
 import { CryptoService } from "../infrastructure/crypto.service.js";
@@ -63,12 +63,6 @@ export class PassportOcrProcessor implements OnModuleInit {
       },
     });
     if (!order) return { skipped: true };
-    if (
-      ["MANUAL_REVIEW", "MANUALLY_APPROVED", "REUPLOAD_REQUIRED"].includes(
-        order.documentReviewStatus,
-      )
-    )
-      return { skipped: true, reviewAlreadyDecided: true };
     const passport = order.documents.find(
       (document) =>
         document.type === DocumentType.PASSPORT && document.id === documentId,
@@ -80,41 +74,93 @@ export class PassportOcrProcessor implements OnModuleInit {
         job.data.privateAssetId !== passport.privateAssetId)
     )
       return { skipped: true, supersededUpload: true };
-    // A terminal verdict already exists from a previous run; do not overwrite.
+    // Human decisions are authoritative; never auto-restart underneath them.
     if (
-      passport.passportVerificationStatus === "VERIFIED" ||
-      passport.passportVerificationStatus === "SKIPPED"
+      ["MANUAL_REVIEW", "MANUALLY_APPROVED"].includes(
+        order.documentReviewStatus,
+      )
     )
-      return { skipped: true, alreadyVerified: true };
-
+      return { skipped: true, reviewAlreadyDecided: true };
+    // A confirmed travel ticket awaiting approval. Tickets are validated on
+    // basic upload evidence (the declared size/format/type and the stored file
+    // were confirmed at upload time), not OCR. Re-approving it here restarts
+    // validation reliably even when a ticket-only replacement is confirmed
+    // after the passport already received a terminal verdict.
     const ticket = order.documents.find(
       (document) =>
-        document.type === DocumentType.TICKET && document.uploadVerified,
+        document.type === DocumentType.TICKET &&
+        document.uploadVerified &&
+        document.status === DocumentStatus.PENDING,
     );
-    if (ticket && ticket.status !== "APPROVED") {
-      const inspection = await this.passportVerifier.inspectTravelTicket(
-        ticket.privateAssetId,
-      );
-      if (["WRONG_DOCUMENT", "UNREADABLE"].includes(inspection.status)) {
-        await this.markOrderDocumentForReupload(
-          order.id,
-          ticket.id,
-          order.status,
-          "TICKET_DOCUMENT_INVALID",
-          inspection.detail,
-        );
-        return { status: "REUPLOAD_REQUIRED", documentType: "TICKET" };
-      }
-      if (inspection.status === "TECHNICAL_FAILURE")
-        throw new Error(inspection.detail);
-      await this.prisma.travelerDocument.updateMany({
+    // A terminal passport verdict exists from a previous run; do not overwrite
+    // it. A replacement ticket is the only open item, so approve it and replay
+    // the verdict onto the order instead of leaving it stranded.
+    const terminalVerdict =
+      passport.passportVerificationStatus === "VERIFIED" ||
+      passport.passportVerificationStatus === "SKIPPED"
+        ? passport.passportVerificationStatus
+        : null;
+    if (terminalVerdict) {
+      if (!ticket) return { skipped: true, alreadyVerified: true };
+      const ticketClaim = await this.prisma.travelerDocument.updateMany({
         where: {
           id: ticket.id,
           privateAssetId: ticket.privateAssetId,
           uploadVerified: true,
+          status: DocumentStatus.PENDING,
         },
-        data: { status: "APPROVED" },
+        data: { status: DocumentStatus.APPROVED },
       });
+      if (ticketClaim.count === 0)
+        return { skipped: true, supersededTicketUpload: true };
+      const verdictReplayed = await this.prisma.$transaction(async (tx) => {
+        const orderClaim = await tx.order.updateMany({
+          where: {
+            id: order.id,
+            documentReviewStatus: {
+              in: ["NOT_STARTED", "OCR_PENDING", "REUPLOAD_REQUIRED"],
+            },
+          },
+          data: {
+            documentReviewStatus: terminalVerdict,
+            version: { increment: 1 },
+          },
+        });
+        if (orderClaim.count === 0) return false;
+        await tx.orderEvent.create({
+          data: {
+            orderId: order.id,
+            fromStatus: order.status,
+            toStatus: order.status,
+            reason: "Travel ticket re-validated after replacement",
+            metadata: {
+              documentType: DocumentType.TICKET,
+              documentReviewStatus: terminalVerdict,
+            },
+          },
+        });
+        return true;
+      });
+      if (!verdictReplayed) return { skipped: true, reviewAlreadyDecided: true };
+      return {
+        status: terminalVerdict,
+        documentType: "TICKET",
+        ticketRevalidated: true,
+      };
+    }
+    // A re-uploaded ticket satisfies an earlier resubmission request; resume
+    // the review so the current passport is re-verified against it.
+    if (order.documentReviewStatus === "REUPLOAD_REQUIRED") {
+      if (!ticket) return { skipped: true, reviewAlreadyDecided: true };
+      const resumed = await this.prisma.order.updateMany({
+        where: { id: order.id, documentReviewStatus: "REUPLOAD_REQUIRED" },
+        data: {
+          documentReviewStatus: "OCR_PENDING",
+          version: { increment: 1 },
+        },
+      });
+      if (resumed.count === 0)
+        return { skipped: true, reviewAlreadyDecided: true };
     }
 
     const traveler = this.decryptTraveler(order.traveler);
@@ -285,6 +331,17 @@ export class PassportOcrProcessor implements OnModuleInit {
         });
         if (documentClaim.count === 0) throw new ManualDocumentDecisionWon();
 
+        if (verified)
+          await tx.travelerDocument.updateMany({
+            where: {
+              orderId: order.id,
+              type: DocumentType.TICKET,
+              uploadVerified: true,
+              status: DocumentStatus.PENDING,
+            },
+            data: { status: DocumentStatus.APPROVED },
+          });
+
         await tx.orderEvent.create({
           data: {
             orderId: order.id,
@@ -396,19 +453,9 @@ export class PassportOcrProcessor implements OnModuleInit {
           return { status: "INVALID" };
         }
         if (document.type === DocumentType.TICKET) {
-          const inspection = await this.passportVerifier.inspectTravelTicket(
-            document.privateAssetId,
-          );
-          if (["WRONG_DOCUMENT", "UNREADABLE"].includes(inspection.status)) {
-            await this.markInvalid(
-              verification.id,
-              document.id,
-              "TICKET_DOCUMENT_INVALID",
-            );
-            return { status: "REUPLOAD_REQUIRED", documentType: "TICKET" };
-          }
-          if (inspection.status === "TECHNICAL_FAILURE")
-            throw new Error(inspection.detail);
+          // Tickets are validated on the basic upload checks above (declared
+          // size, content-type and the stored file) plus field existence, not
+          // OCR, matching the earlier document validation flow.
         }
         if (document.type !== DocumentType.PASSPORT) {
           await this.prisma.partnerDocumentUploadIntent.update({
@@ -849,49 +896,6 @@ export class PassportOcrProcessor implements OnModuleInit {
         "document.verification.reupload_required",
         verification.consumedOrderId,
       );
-  }
-
-  private async markOrderDocumentForReupload(
-    orderId: string,
-    documentId: string,
-    orderStatus: OrderStatus,
-    code: string,
-    detail: string,
-  ) {
-    await this.prisma.$transaction(async (tx) => {
-      await tx.order.update({
-        where: { id: orderId },
-        data: {
-          documentReviewStatus: "REUPLOAD_REQUIRED",
-          version: { increment: 1 },
-        },
-      });
-      await tx.travelerDocument.update({
-        where: { id: documentId },
-        data: { status: "REUPLOAD_REQUIRED" },
-      });
-      await tx.orderEvent.create({
-        data: {
-          orderId,
-          fromStatus: orderStatus,
-          toStatus: orderStatus,
-          reason: detail,
-          metadata: { code, documentId },
-        },
-      });
-    });
-    await this.resilience.attention({
-      dedupeKey: `document-review:${orderId}`,
-      category: "DOCUMENT_REUPLOAD",
-      entityType: "Order",
-      entityId: orderId,
-      orderId,
-      summary: "Travel document must be replaced",
-      detail,
-      failureCategory: code,
-      lastSuccessfulStep: "DOCUMENTS_UPLOADED",
-      availableActions: [],
-    });
   }
 
   private async emitPreOrderEvent(

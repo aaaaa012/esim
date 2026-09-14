@@ -19,6 +19,7 @@ import type { QrPdfService } from "../notification/qr-pdf.service.js";
 import { PaymentsService } from "../payments/payments.service.js";
 import { PaymentSimulatorGateway } from "../payments/gateways/simulator.gateway.js";
 import type { KhaltiGateway } from "../payments/gateways/khalti.gateway.js";
+import { orderPassportOcrJobId } from "../../jobs/ocr-recovery.config.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -1345,6 +1346,71 @@ it("starts OCR after confirming only a replacement passport with a saved ticket"
   expect(instance.get("passport-only", "customer-1").documentReviewStatus).toBe(
     "OCR_PENDING",
   );
+});
+
+it("restarts validation after confirming only a replacement ticket with a verified passport", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "ticket-only",
+        ownerId: "customer-1",
+        status: OrderStatus.AWAITING_CUSTOMER,
+        traveler: customerTraveler(),
+        documentReviewPolicy: "AUTO_OCR",
+        documentReviewStatus: "REUPLOAD_REQUIRED",
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.APPROVED,
+            uploadVerified: true,
+          },
+          {
+            id: "replacement-ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "replacement-ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: false,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+    { verifyDocument: vi.fn().mockResolvedValue({}) },
+  );
+  await instance.refreshFromPersistence();
+  await instance.confirmDocument(
+    "ticket-only",
+    "replacement-ticket",
+    "customer-1",
+  );
+  expect(add).toHaveBeenCalledTimes(1);
+  expect(add.mock.calls[0]![1]).toBe("verify-order-passport");
+  expect(add.mock.calls[0]![2]).toMatchObject({
+    documentId: "passport",
+    privateAssetId: "passport-asset",
+  });
+  expect(add.mock.calls[0]![3]).toBe(
+    orderPassportOcrJobId(
+      "ticket-only",
+      "passport",
+      "passport-asset",
+      "replacement:replacement-ticket:replacement-ticket-asset",
+    ),
+  );
+  const restarted = instance.get("ticket-only", "customer-1");
+  expect(restarted.documentReviewStatus).toBe("OCR_PENDING");
+  expect(restarted.status).toBe(OrderStatus.REVIEW_PENDING);
 });
 
 it.each([

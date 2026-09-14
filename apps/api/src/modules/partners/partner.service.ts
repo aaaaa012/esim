@@ -2387,9 +2387,15 @@ ocrJobOptions(),
     // Any required evidence replacement invalidates the order verdict. When a
     // ticket is the replaced file, rerun verification against the current
     // passport as well; otherwise the order can remain at NOT_STARTED forever.
+    // Use a distinct OCR job key for the ticket so the run is never deduplicated
+    // against the earlier passport job and the replacement ticket is
+    // re-validated.
     await this.enqueuePassportOcr(
       orderId,
       document.type === DocumentType.PASSPORT ? documentId : undefined,
+      document.type === DocumentType.TICKET
+        ? `replacement:${document.id}:${document.privateAssetId}`
+        : undefined,
     );
     return {
       id: document.id,
@@ -4577,7 +4583,11 @@ ocrJobOptions(),
     });
   }
 
-  private async enqueuePassportOcr(orderId: string, documentId?: string) {
+  private async enqueuePassportOcr(
+    orderId: string,
+    documentId?: string,
+    attemptKey = "initial",
+  ) {
     const document = await this.prisma.travelerDocument.findFirst({
       where: {
         orderId,
@@ -4593,7 +4603,12 @@ ocrJobOptions(),
         QUEUES.documents,
         "verify-passport",
         { orderId, documentId: id, privateAssetId: document.privateAssetId },
-        orderPassportOcrJobId(orderId, id, document.privateAssetId),
+        orderPassportOcrJobId(
+          orderId,
+          id,
+          document.privateAssetId,
+          attemptKey,
+        ),
         ocrJobOptions(),
       );
     } catch (error) {

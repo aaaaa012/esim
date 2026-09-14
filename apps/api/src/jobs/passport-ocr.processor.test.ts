@@ -63,49 +63,64 @@ const verification = {
 };
 
 describe("PassportOcrProcessor partner verification synchronization", () => {
-  it("rejects a passport uploaded in the travel-ticket slot", async () => {
+  it("validates a travel ticket on basic upload evidence without OCR", async () => {
     const intentUpdate = vi.fn().mockResolvedValue({});
-    const verificationUpdate = vi.fn().mockResolvedValue({});
+    const verificationUpdate = vi.fn().mockResolvedValue({ count: 1 });
+    const tx = {
+      partnerDocumentUploadIntent: { update: vi.fn() },
+      partnerDocumentVerification: {
+        updateMany: verificationUpdate,
+        findUnique: vi.fn().mockResolvedValue({ consumedOrderId: null }),
+      },
+      order: { updateMany: vi.fn() },
+      travelerDocument: { updateMany: vi.fn() },
+    };
     const prisma = {
       partnerDocumentVerification: {
         findUnique: vi.fn().mockResolvedValue(verification),
-        update: verificationUpdate,
+        update: vi.fn().mockResolvedValue({}),
       },
-      partnerDocumentUploadIntent: {
-        findUnique: vi.fn().mockResolvedValue({ type: "TICKET" }),
-        update: intentUpdate,
-      },
+      partnerDocumentUploadIntent: { update: intentUpdate },
+      $transaction: vi.fn((callback) => callback(tx)),
       partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
       partnerEvent: { upsert: vi.fn().mockResolvedValue({}) },
-      $transaction: vi.fn().mockResolvedValue([]),
     };
-    const instance = processor(
-      prisma,
-      {},
+    const inspectTravelTicket = vi.fn();
+    const instance = new PassportOcrProcessor(
+      { registerWorker: vi.fn() } as never,
+      prisma as never,
       {
-        status: "WRONG_DOCUMENT",
-        detail: "The travel-ticket upload appears to be a passport",
-      },
+        decrypt: vi.fn((value: string) => value),
+        encrypt: vi.fn((value: string) => `encrypted:${value}`),
+      } as never,
+      {
+        verify: vi.fn().mockResolvedValue({
+          status: "VERIFIED",
+          matchedFields: ["passportNumber"],
+          confidence: 0.99,
+          method: "ocr",
+          checkedAt: new Date().toISOString(),
+        }),
+        extract: vi.fn(),
+        inspectTravelTicket,
+      } as never,
+      {
+        verifyDocument: vi.fn().mockResolvedValue({ bytes: 500, format: "png" }),
+      } as never,
+      { attention: vi.fn(), resolve: vi.fn() } as never,
     );
 
-    await expect(
-      instance.process({
-        data: { verificationId: "verification-1" },
-        attemptsMade: 0,
-        opts: { attempts: 1 },
-      } as never),
-    ).resolves.toEqual({
-      status: "REUPLOAD_REQUIRED",
-      documentType: "TICKET",
-    });
-    expect(prisma.$transaction).toHaveBeenCalled();
+    await instance.process({
+      data: { verificationId: "verification-1" },
+      attemptsMade: 0,
+      opts: { attempts: 1 },
+    } as never);
+
+    expect(inspectTravelTicket).not.toHaveBeenCalled();
     expect(intentUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "ticket-1" },
-        data: expect.objectContaining({
-          verificationStatus: "INVALID",
-          verificationCode: "TICKET_DOCUMENT_INVALID",
-        }),
+        data: expect.objectContaining({ verificationStatus: "VERIFIED" }),
       }),
     );
   });
@@ -357,4 +372,130 @@ it("ignores an OCR job for a replaced passport asset", async () => {
     } as never),
   ).resolves.toMatchObject({ skipped: true, supersededUpload: true });
   expect(tx).not.toHaveBeenCalled();
+});
+
+it("re-approves a replacement ticket and replays a terminal passport verdict", async () => {
+  const orderUpdate = vi.fn().mockResolvedValue({ count: 1 });
+  const ticketUpdate = vi.fn().mockResolvedValue({ count: 1 });
+  const eventCreate = vi.fn();
+  const instance = processor(
+    {
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "order",
+          status: "REVIEW_PENDING",
+          documentReviewStatus: "REUPLOAD_REQUIRED",
+          documents: [
+            {
+              id: "passport",
+              type: "PASSPORT",
+              privateAssetId: "passport-asset",
+              uploadVerified: true,
+              passportVerificationStatus: "VERIFIED",
+            },
+            {
+              id: "ticket",
+              type: "TICKET",
+              privateAssetId: "ticket-asset",
+              uploadVerified: true,
+              status: "PENDING",
+            },
+          ],
+        }),
+      },
+      travelerDocument: { updateMany: ticketUpdate },
+      $transaction: vi.fn((callback) =>
+        callback({
+          order: { updateMany: orderUpdate },
+          orderEvent: { create: eventCreate },
+        }),
+      ),
+    },
+    {},
+  );
+
+  await expect(
+    instance.process({
+      data: {
+        orderId: "order",
+        documentId: "passport",
+        privateAssetId: "passport-asset",
+      },
+    } as never),
+  ).resolves.toEqual({
+    status: "VERIFIED",
+    documentType: "TICKET",
+    ticketRevalidated: true,
+  });
+  expect(ticketUpdate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        id: "ticket",
+        privateAssetId: "ticket-asset",
+        status: "PENDING",
+      }),
+      data: expect.objectContaining({ status: "APPROVED" }),
+    }),
+  );
+  expect(orderUpdate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      data: expect.objectContaining({ documentReviewStatus: "VERIFIED" }),
+    }),
+  );
+  expect(eventCreate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      data: expect.objectContaining({ orderId: "order" }),
+    }),
+  );
+});
+
+it("does not approve a ticket that was replaced during the run", async () => {
+  const orderUpdate = vi.fn();
+  const ticketUpdate = vi.fn().mockResolvedValue({ count: 0 });
+  const instance = processor(
+    {
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "order",
+          status: "REVIEW_PENDING",
+          documentReviewStatus: "REUPLOAD_REQUIRED",
+          documents: [
+            {
+              id: "passport",
+              type: "PASSPORT",
+              privateAssetId: "passport-asset",
+              uploadVerified: true,
+              passportVerificationStatus: "VERIFIED",
+            },
+            {
+              id: "ticket",
+              type: "TICKET",
+              privateAssetId: "old-ticket-asset",
+              uploadVerified: true,
+              status: "PENDING",
+            },
+          ],
+        }),
+      },
+      travelerDocument: { updateMany: ticketUpdate },
+      $transaction: vi.fn((callback) =>
+        callback({
+          order: { updateMany: orderUpdate },
+          orderEvent: { create: vi.fn() },
+        }),
+      ),
+    },
+    {},
+  );
+
+  await expect(
+    instance.process({
+      data: {
+        orderId: "order",
+        documentId: "passport",
+        privateAssetId: "passport-asset",
+      },
+    } as never),
+  ).resolves.toEqual({ skipped: true, supersededTicketUpload: true });
+  expect(orderUpdate).not.toHaveBeenCalled();
 });

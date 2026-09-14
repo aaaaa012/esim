@@ -987,16 +987,26 @@ export class OrdersService implements OnModuleInit {
       OrderStatus.COMPLETED,
     ].includes(order.status);
     let queueReplacementOcr = false;
-    if (reviewResubmission && order.documentReviewStatus === "NOT_STARTED") {
-      order.documentReviewStartedAt = new Date().toISOString();
+    // A replacement document must restart review. A confirmed ticket counts
+    // too (not just a passport), so a ticket-only replacement reliably starts
+    // a fresh validation run against the current confirmed passport.
+    const restartingReplacement =
+      reviewResubmission &&
+      ["NOT_STARTED", "OCR_PENDING", "REUPLOAD_REQUIRED"].includes(
+        order.documentReviewStatus ?? "",
+      );
+    if (restartingReplacement) {
+      order.documentReviewStartedAt ??= new Date().toISOString();
       if (order.documentReviewPolicy === "NO_REVIEW") {
         order.documentReviewStatus = "SKIPPED";
-      } else if (
-        order.documentReviewPolicy === "AUTO_OCR" &&
-        document.type === DocumentType.PASSPORT
-      ) {
+      } else if (order.documentReviewPolicy === "AUTO_OCR") {
         order.documentReviewStatus = "OCR_PENDING";
-        queueReplacementOcr = true;
+        const passportConfirmed = order.documents.some(
+          (item) =>
+            item.type === DocumentType.PASSPORT && item.uploadVerified,
+        );
+        queueReplacementOcr =
+          document.type === DocumentType.PASSPORT || passportConfirmed;
       } else {
         order.documentReviewStatus = "MANUAL_REVIEW";
       }
@@ -1015,15 +1025,36 @@ export class OrdersService implements OnModuleInit {
     await this.persistence.save(order);
     if (queueReplacementOcr) {
       try {
+        // A ticket confirms with a distinct job key referencing the current
+        // confirmed passport so the run is never deduplicated against an
+        // earlier passport job and validates the replacement ticket.
+        const ocrDocument =
+          document.type === DocumentType.PASSPORT
+            ? document
+            : order.documents.find(
+                (item) =>
+                  item.type === DocumentType.PASSPORT && item.uploadVerified,
+              );
+        if (!ocrDocument)
+          throw new Error("A confirmed passport is required for validation");
+        const attemptKey =
+          document.type === DocumentType.TICKET
+            ? `replacement:${document.id}:${document.privateAssetId}`
+            : "initial";
         await this.queues.add(
           QUEUES.documents,
           "verify-order-passport",
           {
             orderId: order.id,
-            documentId: document.id,
-            privateAssetId: document.privateAssetId,
+            documentId: ocrDocument.id,
+            privateAssetId: ocrDocument.privateAssetId,
           },
-          orderPassportOcrJobId(order.id, document.id, document.privateAssetId),
+          orderPassportOcrJobId(
+            order.id,
+            ocrDocument.id,
+            ocrDocument.privateAssetId,
+            attemptKey,
+          ),
           ocrJobOptions(),
         );
       } catch (error) {
