@@ -179,9 +179,7 @@ describe("OrdersService document decision invariants", () => {
       undefined,
       {
         enabled: true,
-        $transaction: vi.fn((items: Promise<unknown>[]) =>
-          Promise.all(items),
-        ),
+        $transaction: vi.fn((items: Promise<unknown>[]) => Promise.all(items)),
         partnerDocumentVerification: {
           findFirst: vi.fn().mockResolvedValue({ id: "verification-1" }),
           update: verificationUpdate,
@@ -1430,6 +1428,69 @@ it.each([
     expect(add).not.toHaveBeenCalled();
   },
 );
+
+it("routes a partial extraction with no readable name to manual review", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "missing-ocr-name",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: customerTraveler(),
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "PARTIAL",
+          fields: {
+            dateOfBirth: "1990-01-01",
+            nationality: "NP",
+            passportNumber: "P1234567",
+            passportExpiryDate: "2030-01-01",
+          },
+          fieldsRequiringInput: ["firstName", "surname"],
+          passportAssetId: "passport-asset",
+          confidence: 48,
+          correctionAttempts: 0,
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "missing-ocr-name",
+    "customer-1",
+  );
+
+  expect(result.documentReviewStatus).toBe("MANUAL_REVIEW");
+  expect(result.passportVerification?.status).toBe("PARTIAL");
+  expect(add).not.toHaveBeenCalled();
+});
 
 describe("OrdersService cancellation attribution", () => {
   it("records the acting staff on an operations cancellation and hides it from customers", async () => {

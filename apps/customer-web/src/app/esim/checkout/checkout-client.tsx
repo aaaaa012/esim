@@ -46,6 +46,7 @@ import { useCheckoutTransition } from "./use-checkout-transition";
 import DatePicker from "./date-picker";
 import { submitCheckoutDocumentsSequentially } from "./document-submission";
 import {
+  checkoutDetailsLocked,
   checkoutResumeDisposition,
   checkoutResumeStep,
   paymentStatusHeading,
@@ -512,6 +513,8 @@ export default function CheckoutClient({
   const passportRetryNoBefore = useRef(0);
   const appliedExtraction = useRef("");
   const awaitingVerificationAdvance = useRef(false);
+  const previousDocumentReviewStatus = useRef<string | undefined>(undefined);
+  const [successMessage, setSuccessMessage] = useState("");
   const resendQrEmail = async () => {
     if (!order || uxResending) return;
     setUxResending(true);
@@ -538,7 +541,11 @@ export default function CheckoutClient({
     return Number.isInteger(value) && value >= 1 && value <= 4 ? value : 1;
   };
   const navigateStep = (next: number, mode: "push" | "replace") => {
-    const normalized = Math.min(4, Math.max(1, next));
+    // A pending provider reference locks the identity, documents, plan and
+    // price snapshot that the provider may still confirm.
+    const paymentSnapshotLocked = checkoutDetailsLocked(order);
+    const requested = Math.min(4, Math.max(1, next));
+    const normalized = paymentSnapshotLocked && requested < 4 ? 4 : requested;
     if (typeof window === "undefined") {
       setStep(normalized);
       return;
@@ -565,7 +572,13 @@ export default function CheckoutClient({
     const onPop = () => {
       const requested = Math.min(4, Math.max(1, stepFromUrl()));
       const furthest = order ? checkoutResumeStep(order) : step;
-      setStep(Math.min(requested, furthest));
+      const paymentSnapshotLocked = checkoutDetailsLocked(order);
+      const resolved = Math.min(requested, furthest);
+      if (paymentSnapshotLocked && resolved < 4) {
+        navigateStep(4, "replace");
+        return;
+      }
+      setStep(resolved);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -892,6 +905,21 @@ export default function CheckoutClient({
     ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
       target.documentReviewStatus ?? "",
     );
+  useEffect(() => {
+    const current = order?.documentReviewStatus;
+    const previous = previousDocumentReviewStatus.current;
+    previousDocumentReviewStatus.current = current;
+    if (
+      previous &&
+      !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(previous) &&
+      ["VERIFIED", "MANUALLY_APPROVED"].includes(current ?? "")
+    )
+      setSuccessMessage(
+        current === "MANUALLY_APPROVED"
+          ? "Our team approved your documents. You can continue to payment."
+          : "Your passport was matched with your traveller details. You can continue to payment.",
+      );
+  }, [order?.documentReviewStatus]);
   useEffect(() => {
     if (
       step === 3 &&
@@ -1565,7 +1593,10 @@ export default function CheckoutClient({
                   {!isTopUp && step > index + 1 ? (
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={
+                        busy ||
+                        checkoutDetailsLocked(order)
+                      }
                       onClick={() => jumpTo(index + 1)}
                       title={`Go back to ${label}`}
                     >
@@ -1578,6 +1609,14 @@ export default function CheckoutClient({
               ))}
             </div>
             {error && <ErrorModal error={error} onClose={() => setError("")} />}
+            {successMessage && (
+              <ErrorModal
+                error={successMessage}
+                title="Verification complete"
+                tone="success"
+                onClose={() => setSuccessMessage("")}
+              />
+            )}
             {showAccountChoice && (
               <div
                 className="form-section account-choice"
@@ -2247,7 +2286,8 @@ export default function CheckoutClient({
                         : "Payment issue"
                       : "Choose payment method"}
                 </h2>
-                {!isTopUp ? (
+                {!isTopUp &&
+                !checkoutDetailsLocked(order) ? (
                   <button
                     className="button secondary"
                     type="button"
@@ -2454,7 +2494,7 @@ export default function CheckoutClient({
                   </div>
                 ) : (
                   <>
-                    {order && !isTopUp && (
+                    {order && !isTopUp && !passportGatePassed(order) && (
                       <PassportCheck
                         result={order.passportVerification}
                         reviewStatus={order.documentReviewStatus}

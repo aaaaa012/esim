@@ -63,6 +63,11 @@ export type PassportExtractionResult = {
   failureCode?: string;
 };
 
+export type TravelTicketInspection = {
+  status: "VALID" | "WRONG_DOCUMENT" | "UNREADABLE" | "TECHNICAL_FAILURE";
+  detail: string;
+};
+
 /** Uppercases and strips every non-alphanumeric character so OCR noise like
  *  spaces, dashes and slashes cannot break exact-match comparison. */
 export const normalizeText = (value: string) =>
@@ -153,10 +158,7 @@ export const comparePassport = (
     if (!code) return false;
     const prefixForm = code + candidate;
     const suffixForm = candidate + code;
-    return (
-      rawTokens.has(prefixForm) ||
-      rawTokens.has(suffixForm)
-    );
+    return rawTokens.has(prefixForm) || rawTokens.has(suffixForm);
   };
   const matchesMrzNameZone = (
     candidate: string,
@@ -166,8 +168,7 @@ export const comparePassport = (
     const normalized = confusableNormalize(candidate);
     if (!normalized) return false;
     return (
-      zoneTokens.has(normalized) ||
-      confusableNormalize(zone) === normalized
+      zoneTokens.has(normalized) || confusableNormalize(zone) === normalized
     );
   };
   const matchesName = (
@@ -220,13 +221,9 @@ export const comparePassport = (
     matchesPassportNumber(traveler.passportNumber)
   )
     matchedFields.push("passportNumber");
-if (
+  if (
     traveler.surname &&
-    matchesName(
-      traveler.surname,
-      mrzSurnameTokens,
-      mrz?.surname ?? "",
-    )
+    matchesName(traveler.surname, mrzSurnameTokens, mrz?.surname ?? "")
   )
     matchedFields.push("surname");
   // The first name is the stable identity signal. An optional middle name must
@@ -283,14 +280,13 @@ export const compareExtractedPassport = (
   const sameText = (left?: string, right?: string) =>
     Boolean(
       left &&
-        right &&
-        confusableNormalize(normalizeText(left)) ===
-          confusableNormalize(normalizeText(right)),
+      right &&
+      confusableNormalize(normalizeText(left)) ===
+        confusableNormalize(normalizeText(right)),
     );
   if (sameText(fields.passportNumber, traveler.passportNumber))
     matchedFields.push("passportNumber");
-  if (sameText(fields.surname, traveler.surname))
-    matchedFields.push("surname");
+  if (sameText(fields.surname, traveler.surname)) matchedFields.push("surname");
   if (sameText(fields.firstName, traveler.firstName))
     matchedFields.push("givenNames");
   // Middle names are optional. Record positive evidence when both sides carry
@@ -301,9 +297,7 @@ export const compareExtractedPassport = (
     matchedFields.push("dateOfBirth");
   if (fields.passportExpiryDate === traveler.passportExpiryDate)
     matchedFields.push("passportExpiryDate");
-  if (
-    fields.nationality?.toUpperCase() === traveler.nationality.toUpperCase()
-  )
+  if (fields.nationality?.toUpperCase() === traveler.nationality.toUpperCase())
     matchedFields.push("nationality");
   return { matchedFields };
 };
@@ -323,21 +317,16 @@ export const verifyStoredExtraction = (
   };
 };
 
-/** The passport number is the primary signal; the order only passes when at
- *  least one more field (name, date of birth or expiry) also matches. When the
- *  number could not be read but a strong identity pair did match (a name plus
- *  the date of birth), the verdict is PARTIAL so ops can review instead of
- *  trapping the traveller in a reupload loop their details cannot fix. */
+/** A machine-readable passport number and an authoritative MRZ name are mandatory identity
+ *  signals. A date alone must never corroborate a deliberately wrong name.
+ *  Other strong combinations remain PARTIAL for human review. */
 export const verdictFor = (
   matchedFields: PassportField[],
 ): PassportVerificationStatus => {
   if (matchedFields.includes("passportNumber")) {
-    const corroboratingIdentityMatch = matchedFields.some((field) =>
-      ["surname", "givenNames", "dateOfBirth", "passportExpiryDate"].includes(
-        field,
-      ),
-    );
-    return corroboratingIdentityMatch ? "VERIFIED" : "PARTIAL";
+    const nameMatch =
+      matchedFields.includes("surname") || matchedFields.includes("givenNames");
+    return nameMatch ? "VERIFIED" : "PARTIAL";
   }
   const nameMatch =
     matchedFields.includes("surname") || matchedFields.includes("givenNames");
@@ -516,6 +505,51 @@ export class PassportVerificationService implements OnModuleDestroy {
         method: "ocr-error",
         checkedAt,
         failureCode: "OCR_UNAVAILABLE",
+      };
+    }
+  }
+
+  async inspectTravelTicket(
+    privateAssetId: string,
+  ): Promise<TravelTicketInspection> {
+    if (!this.storage.isConfigured())
+      return {
+        status: "VALID",
+        detail: "Document validation is disabled in this environment",
+      };
+    try {
+      const image = await this.storage.downloadDocumentImage(privateAssetId);
+      const recognized = await this.recognize(image.bytes);
+      if (parseMrz(recognized.text))
+        return {
+          status: "WRONG_DOCUMENT",
+          detail: "The travel-ticket upload appears to be a passport",
+        };
+      const text = recognized.text.toUpperCase();
+      const strongSignal =
+        /\b(E-?TICKET|BOARDING\s*PASS|FLIGHT\s+ITINERARY|ITINERARY\s+RECEIPT|AIRLINE\s+TICKET)\b/.test(
+          text,
+        );
+      const supportingSignals = [
+        /\b(FLIGHT|AIRLINE|BOOKING|RESERVATION|PNR)\b/,
+        /\b(PASSENGER|TRAVELL?ER)\b/,
+        /\b(DEPARTURE|ARRIVAL|BOARDING|GATE)\b/,
+        /\b[A-Z]{2}\s?\d{2,4}\b/,
+        /\b[A-Z]{3}\s*(?:-|TO|>)\s*[A-Z]{3}\b/,
+      ].filter((pattern) => pattern.test(text)).length;
+      if (strongSignal || supportingSignals >= 2)
+        return { status: "VALID", detail: "Travel-ticket evidence detected" };
+      return {
+        status: "UNREADABLE",
+        detail: "The upload does not contain readable travel-ticket evidence",
+      };
+    } catch (error) {
+      this.logger.error(
+        `Travel-ticket inspection failed: ${error instanceof Error ? error.message : "unknown"}`,
+      );
+      return {
+        status: "TECHNICAL_FAILURE",
+        detail: "Travel-ticket validation is temporarily unavailable",
       };
     }
   }

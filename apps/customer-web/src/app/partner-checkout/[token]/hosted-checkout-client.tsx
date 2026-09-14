@@ -201,6 +201,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [editingVerifiedDocuments, setEditingVerifiedDocuments] =
     useState(false);
   const [verification, setVerification] = useState<Verification | null>(null);
+  const previousVerificationStatus = useRef<string | undefined>(undefined);
+  const [successMessage, setSuccessMessage] = useState("");
   const [compatibilityConsent, setCompatibilityConsent] = useState(false);
   const [legalConsent, setLegalConsent] = useState(false);
   const [resumeAfterConsent, setResumeAfterConsent] = useState(2);
@@ -733,6 +735,22 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     verification?.status === "SKIPPED";
 
   useEffect(() => {
+    const current = verification?.status;
+    const previous = previousVerificationStatus.current;
+    previousVerificationStatus.current = current;
+    if (
+      previous &&
+      !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(previous) &&
+      ["VERIFIED", "MANUALLY_APPROVED"].includes(current ?? "")
+    )
+      setSuccessMessage(
+        current === "MANUALLY_APPROVED"
+          ? "Our team approved your documents. You can continue to payment."
+          : "Your passport was matched with your traveller details. You can continue to payment.",
+      );
+  }, [verification?.status]);
+
+  useEffect(() => {
     if (step === 3 && awaitingVerificationAdvance.current && gatePassed) {
       awaitingVerificationAdvance.current = false;
       stepPush(4);
@@ -913,6 +931,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   return (
     <main className="checkout-page">
       <ErrorModal error={error || null} onClose={() => setError("")} />
+      {successMessage && (
+        <ErrorModal
+          error={successMessage}
+          title="Verification complete"
+          tone="success"
+          onClose={() => setSuccessMessage("")}
+        />
+      )}
       <div className="checkout-shell">
         <div className="checkout-heading">
           {session?.partner?.name && (
@@ -1156,6 +1182,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                 {!submitted && (
                   <>
                     {!isTopUp &&
+                      !gatePassed &&
                       (verification === null && !verifying ? (
                         <PassportCheck
                           status={undefined}

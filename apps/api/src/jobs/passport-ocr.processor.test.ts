@@ -4,6 +4,10 @@ import { PassportOcrProcessor } from "./passport-ocr.processor.js";
 function processor(
   prisma: Record<string, unknown>,
   result: Record<string, unknown>,
+  ticketInspection: Record<string, unknown> = {
+    status: "VALID",
+    detail: "Travel-ticket evidence detected",
+  },
 ) {
   return new PassportOcrProcessor(
     { registerWorker: vi.fn() } as never,
@@ -15,6 +19,7 @@ function processor(
     {
       verify: vi.fn().mockResolvedValue(result),
       extract: vi.fn().mockResolvedValue(result),
+      inspectTravelTicket: vi.fn().mockResolvedValue(ticketInspection),
     } as never,
     {
       verifyDocument: vi.fn().mockResolvedValue({ bytes: 500, format: "png" }),
@@ -58,6 +63,53 @@ const verification = {
 };
 
 describe("PassportOcrProcessor partner verification synchronization", () => {
+  it("rejects a passport uploaded in the travel-ticket slot", async () => {
+    const intentUpdate = vi.fn().mockResolvedValue({});
+    const verificationUpdate = vi.fn().mockResolvedValue({});
+    const prisma = {
+      partnerDocumentVerification: {
+        findUnique: vi.fn().mockResolvedValue(verification),
+        update: verificationUpdate,
+      },
+      partnerDocumentUploadIntent: {
+        findUnique: vi.fn().mockResolvedValue({ type: "TICKET" }),
+        update: intentUpdate,
+      },
+      partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
+      partnerEvent: { upsert: vi.fn().mockResolvedValue({}) },
+      $transaction: vi.fn().mockResolvedValue([]),
+    };
+    const instance = processor(
+      prisma,
+      {},
+      {
+        status: "WRONG_DOCUMENT",
+        detail: "The travel-ticket upload appears to be a passport",
+      },
+    );
+
+    await expect(
+      instance.process({
+        data: { verificationId: "verification-1" },
+        attemptsMade: 0,
+        opts: { attempts: 1 },
+      } as never),
+    ).resolves.toEqual({
+      status: "REUPLOAD_REQUIRED",
+      documentType: "TICKET",
+    });
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(intentUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "ticket-1" },
+        data: expect.objectContaining({
+          verificationStatus: "INVALID",
+          verificationCode: "TICKET_DOCUMENT_INVALID",
+        }),
+      }),
+    );
+  });
+
   it("extracts partner passport fields before traveler confirmation", async () => {
     const extractionUpsert = vi.fn();
     const verificationUpdate = vi.fn();
@@ -136,7 +188,7 @@ describe("PassportOcrProcessor partner verification synchronization", () => {
       partnerDocumentUploadIntent: { update: vi.fn() },
       $transaction: vi.fn((callback) => callback(tx)),
       partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
-      partnerEvent: { create: vi.fn().mockResolvedValue({}) },
+      partnerEvent: { upsert: vi.fn().mockResolvedValue({}) },
     };
     const instance = processor(prisma, {
       status: "VERIFIED",
@@ -155,7 +207,7 @@ describe("PassportOcrProcessor partner verification synchronization", () => {
     ).resolves.toEqual({ skipped: true, reviewAlreadyDecided: true });
     expect(intentUpdate).not.toHaveBeenCalled();
     expect(orderUpdate).not.toHaveBeenCalled();
-    expect(prisma.partnerEvent.create).not.toHaveBeenCalled();
+    expect(prisma.partnerEvent.upsert).not.toHaveBeenCalled();
   });
 
   it("updates an order linked after the OCR job loaded its verification", async () => {
@@ -177,7 +229,7 @@ describe("PassportOcrProcessor partner verification synchronization", () => {
       partnerDocumentUploadIntent: { update: vi.fn() },
       $transaction: vi.fn((callback) => callback(tx)),
       partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
-      partnerEvent: { create: vi.fn().mockResolvedValue({}) },
+      partnerEvent: { upsert: vi.fn().mockResolvedValue({}) },
     };
     const instance = processor(prisma, {
       status: "VERIFIED",
@@ -225,7 +277,7 @@ describe("PassportOcrProcessor partner verification synchronization", () => {
       partnerDocumentUploadIntent: { update: vi.fn() },
       $transaction: vi.fn((callback) => callback(tx)),
       partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
-      partnerEvent: { create: vi.fn().mockResolvedValue({}) },
+      partnerEvent: { upsert: vi.fn().mockResolvedValue({}) },
     };
     const instance = processor(prisma, {
       status: "FAILED",

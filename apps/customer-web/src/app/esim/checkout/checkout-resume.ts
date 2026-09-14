@@ -40,6 +40,15 @@ export type CheckoutOrderSnapshot = {
   payment?: { reference?: string; status?: string };
 };
 
+export function checkoutDetailsLocked(order?: CheckoutOrderSnapshot | null) {
+  return Boolean(
+    order &&
+      (order.status === "PAYMENT_PENDING" ||
+        order.payment?.status === "PENDING" ||
+        order.payment?.status === "COMPLETED"),
+  );
+}
+
 const DOCUMENT_GATE_PASSED = new Set([
   "VERIFIED",
   "MANUALLY_APPROVED",

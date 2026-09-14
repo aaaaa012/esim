@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { DocumentType, type Prisma } from "@prisma/client";
+import { DocumentType, OrderStatus, type Prisma } from "@prisma/client";
 import type { Job } from "bullmq";
 import { randomUUID } from "node:crypto";
 import { CryptoService } from "../infrastructure/crypto.service.js";
@@ -87,6 +87,36 @@ export class PassportOcrProcessor implements OnModuleInit {
     )
       return { skipped: true, alreadyVerified: true };
 
+    const ticket = order.documents.find(
+      (document) =>
+        document.type === DocumentType.TICKET && document.uploadVerified,
+    );
+    if (ticket && ticket.status !== "APPROVED") {
+      const inspection = await this.passportVerifier.inspectTravelTicket(
+        ticket.privateAssetId,
+      );
+      if (["WRONG_DOCUMENT", "UNREADABLE"].includes(inspection.status)) {
+        await this.markOrderDocumentForReupload(
+          order.id,
+          ticket.id,
+          order.status,
+          "TICKET_DOCUMENT_INVALID",
+          inspection.detail,
+        );
+        return { status: "REUPLOAD_REQUIRED", documentType: "TICKET" };
+      }
+      if (inspection.status === "TECHNICAL_FAILURE")
+        throw new Error(inspection.detail);
+      await this.prisma.travelerDocument.updateMany({
+        where: {
+          id: ticket.id,
+          privateAssetId: ticket.privateAssetId,
+          uploadVerified: true,
+        },
+        data: { status: "APPROVED" },
+      });
+    }
+
     const traveler = this.decryptTraveler(order.traveler);
     if (!traveler) {
       const extraction = await this.passportVerifier.extract({
@@ -103,6 +133,7 @@ export class PassportOcrProcessor implements OnModuleInit {
           },
         ],
       } as never);
+      const passportInvalid = extraction.failureCode === "MRZ_NOT_READABLE";
       await this.prisma.$transaction(async (tx) => {
         const current = await tx.travelerDocument.findUnique({
           where: { id: passport.id },
@@ -144,11 +175,37 @@ export class PassportOcrProcessor implements OnModuleInit {
         await tx.order.updateMany({
           where: { id: order.id, documentReviewStatus: "OCR_PENDING" },
           data: {
-            documentReviewStatus: "NOT_STARTED",
+            documentReviewStatus: passportInvalid
+              ? "REUPLOAD_REQUIRED"
+              : "NOT_STARTED",
             version: { increment: 1 },
           },
         });
+        if (passportInvalid)
+          await tx.travelerDocument.update({
+            where: { id: passport.id },
+            data: {
+              status: "REUPLOAD_REQUIRED",
+              passportVerificationStatus: "FAILED",
+              passportVerificationMethod: extraction.method,
+              passportVerifiedAt: new Date(extraction.checkedAt),
+            },
+          });
       });
+      if (passportInvalid)
+        await this.resilience.attention({
+          dedupeKey: `document-review:${order.id}`,
+          category: "DOCUMENT_REUPLOAD",
+          entityType: "Order",
+          entityId: order.id,
+          orderId: order.id,
+          summary: "Passport image must be replaced",
+          detail:
+            "The uploaded passport does not contain a readable machine-readable zone",
+          failureCategory: "PASSPORT_MRZ_NOT_READABLE",
+          lastSuccessfulStep: "DOCUMENTS_UPLOADED",
+          availableActions: [],
+        });
       return extraction;
     }
     const storedFields = this.readyExtractionFields(
@@ -338,6 +395,21 @@ export class PassportOcrProcessor implements OnModuleInit {
           );
           return { status: "INVALID" };
         }
+        if (document.type === DocumentType.TICKET) {
+          const inspection = await this.passportVerifier.inspectTravelTicket(
+            document.privateAssetId,
+          );
+          if (["WRONG_DOCUMENT", "UNREADABLE"].includes(inspection.status)) {
+            await this.markInvalid(
+              verification.id,
+              document.id,
+              "TICKET_DOCUMENT_INVALID",
+            );
+            return { status: "REUPLOAD_REQUIRED", documentType: "TICKET" };
+          }
+          if (inspection.status === "TECHNICAL_FAILURE")
+            throw new Error(inspection.detail);
+        }
         if (document.type !== DocumentType.PASSPORT) {
           await this.prisma.partnerDocumentUploadIntent.update({
             where: { id: document.id },
@@ -374,9 +446,11 @@ export class PassportOcrProcessor implements OnModuleInit {
           ],
         } as never);
         const nextStatus =
-          extraction.status === "READY" || extraction.status === "PARTIAL"
-            ? "AWAITING_TRAVELER_CONFIRMATION"
-            : extraction.status;
+          extraction.failureCode === "MRZ_NOT_READABLE"
+            ? "REUPLOAD_REQUIRED"
+            : extraction.status === "READY" || extraction.status === "PARTIAL"
+              ? "AWAITING_TRAVELER_CONFIRMATION"
+              : extraction.status;
         await this.prisma.$transaction(async (tx) => {
           const current = await tx.partnerDocumentVerification.findUnique({
             where: { id: verification.id },
@@ -420,6 +494,15 @@ export class PassportOcrProcessor implements OnModuleInit {
               failureCode: extraction.failureCode ?? null,
             },
           });
+          if (extraction.failureCode === "MRZ_NOT_READABLE")
+            await tx.partnerDocumentUploadIntent.update({
+              where: { id: passport.id },
+              data: {
+                verificationStatus: "REUPLOAD_REQUIRED",
+                verificationCode: "PASSPORT_MRZ_NOT_READABLE",
+                verifiedAt: new Date(),
+              },
+            });
         });
         return extraction;
       }
@@ -707,11 +790,20 @@ export class PassportOcrProcessor implements OnModuleInit {
     documentId: string,
     code: string,
   ) {
-    const verification =
-      await this.prisma.partnerDocumentVerification.findUnique({
+    const [verification, invalidDocument] = await Promise.all([
+      this.prisma.partnerDocumentVerification.findUnique({
         where: { id: verificationId },
-        select: { consumedOrderId: true },
-      });
+        select: {
+          consumedOrderId: true,
+          partnerId: true,
+          externalOrderId: true,
+        },
+      }),
+      this.prisma.partnerDocumentUploadIntent.findUnique({
+        where: { id: documentId },
+        select: { type: true },
+      }),
+    ]);
     await this.prisma.$transaction([
       this.prisma.partnerDocumentUploadIntent.update({
         where: { id: documentId },
@@ -735,16 +827,71 @@ export class PassportOcrProcessor implements OnModuleInit {
                 version: { increment: 1 },
               },
             }),
-            this.prisma.travelerDocument.updateMany({
-              where: {
-                orderId: verification.consumedOrderId,
-                type: DocumentType.PASSPORT,
-              },
-              data: { status: "REUPLOAD_REQUIRED" },
-            }),
+            ...(invalidDocument
+              ? [
+                  this.prisma.travelerDocument.updateMany({
+                    where: {
+                      orderId: verification.consumedOrderId,
+                      type: invalidDocument.type,
+                    },
+                    data: { status: "REUPLOAD_REQUIRED" },
+                  }),
+                ]
+              : []),
           ]
         : []),
     ]);
+    if (verification)
+      await this.emitPreOrderEvent(
+        verification.partnerId,
+        verificationId,
+        verification.externalOrderId,
+        "document.verification.reupload_required",
+        verification.consumedOrderId,
+      );
+  }
+
+  private async markOrderDocumentForReupload(
+    orderId: string,
+    documentId: string,
+    orderStatus: OrderStatus,
+    code: string,
+    detail: string,
+  ) {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          documentReviewStatus: "REUPLOAD_REQUIRED",
+          version: { increment: 1 },
+        },
+      });
+      await tx.travelerDocument.update({
+        where: { id: documentId },
+        data: { status: "REUPLOAD_REQUIRED" },
+      });
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          fromStatus: orderStatus,
+          toStatus: orderStatus,
+          reason: detail,
+          metadata: { code, documentId },
+        },
+      });
+    });
+    await this.resilience.attention({
+      dedupeKey: `document-review:${orderId}`,
+      category: "DOCUMENT_REUPLOAD",
+      entityType: "Order",
+      entityId: orderId,
+      orderId,
+      summary: "Travel document must be replaced",
+      detail,
+      failureCategory: code,
+      lastSuccessfulStep: "DOCUMENTS_UPLOADED",
+      availableActions: [],
+    });
   }
 
   private async emitPreOrderEvent(
@@ -763,10 +910,14 @@ export class PassportOcrProcessor implements OnModuleInit {
         : [];
       return types.includes("*") || types.includes(type);
     });
-    await this.prisma.partnerEvent.create({
-      data: {
+    const dedupeKey = `document-verification:${verificationId}:${type}`;
+    await this.prisma.partnerEvent.upsert({
+      where: { dedupeKey },
+      update: {},
+      create: {
         partnerId,
         ...(orderId ? { orderId } : {}),
+        dedupeKey,
         type,
         resourceId: verificationId,
         correlationId: randomUUID(),
@@ -797,10 +948,14 @@ export class PassportOcrProcessor implements OnModuleInit {
         : [];
       return types.includes("*") || types.includes("document.verified");
     });
-    await this.prisma.partnerEvent.create({
-      data: {
+    const dedupeKey = `order-document-verification:${orderId}:${documentId}:${verificationStatus}`;
+    await this.prisma.partnerEvent.upsert({
+      where: { dedupeKey },
+      update: {},
+      create: {
         partnerId,
         orderId,
+        dedupeKey,
         type: "document.verified",
         resourceId: orderId,
         correlationId: randomUUID(),
@@ -853,7 +1008,8 @@ export class PassportOcrProcessor implements OnModuleInit {
     currentAssetId: string,
   ): PassportExtractedFields | null {
     if (
-      extraction?.status !== "READY" ||
+      !extraction ||
+      !["READY", "PARTIAL"].includes(extraction.status) ||
       extraction.passportAssetId !== currentAssetId ||
       !extraction.payloadEncrypted
     )

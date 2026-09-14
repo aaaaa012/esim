@@ -216,7 +216,8 @@ describe("hosted checkout payment flow", () => {
       expect(
         screen.queryByRole("button", { name: "Complete order" }),
       ).toBeNull();
-      expect(screen.getByText("Passport verified")).toBeDefined();
+      expect(screen.queryByText("Passport verified")).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
       expect(
         fetchMock.mock.calls.some(
           ([url]) => url.endsWith("/complete") || url.endsWith("/payment"),
@@ -505,7 +506,14 @@ describe("hosted document progress", () => {
         { name: "Pay NPR 2" },
         { timeout: 5000 },
       );
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(
+        screen.getByRole("dialog", { name: "Verification complete" }),
+      ).toBeDefined();
+      expect(
+        screen.getByText(
+          "Your passport was matched with your traveller details. You can continue to payment.",
+        ),
+      ).toBeDefined();
       expect(
         fetchMock.mock.calls.some(([url]) => url.endsWith("/verify-passport")),
       ).toBe(false);

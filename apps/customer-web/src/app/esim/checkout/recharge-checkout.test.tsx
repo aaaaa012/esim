@@ -167,6 +167,59 @@ describe("recharge checkout", () => {
 });
 
 describe("first-purchase document verification", () => {
+  it("restores saved traveller names when a partial extraction omitted them", async () => {
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      return ok({
+        id: "partial-extraction",
+        orderNumber: "VC-PARTIAL",
+        status: "DRAFT",
+        purchaseType: "INITIAL_PURCHASE",
+        plan,
+        totalAmountNpr: 100,
+        traveler: {
+          firstName: "Anish",
+          surname: "Ghimire",
+          dateOfBirth: "1983-07-30",
+          passportNumber: "PA0319064",
+          passportExpiryDate: "2032-05-03",
+          nationality: "NP",
+        },
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "PARTIAL",
+          fields: {
+            dateOfBirth: "1983-07-30",
+            passportNumber: "PA0319064",
+            passportExpiryDate: "2032-05-03",
+            nationality: "NP",
+          },
+          fieldsRequiringInput: ["firstName", "surname"],
+        },
+        documents: [
+          { type: "PASSPORT", uploadVerified: true },
+          { type: "TICKET", uploadVerified: true },
+        ],
+      });
+    });
+
+    render(<Checkout planId="plan" orderId="partial-extraction" />);
+
+    await screen.findByRole("heading", { name: "Traveller information" });
+    expect(screen.getByRole("textbox", { name: "First name" })).toHaveProperty(
+      "value",
+      "Anish",
+    );
+    expect(screen.getByRole("textbox", { name: "Surname" })).toHaveProperty(
+      "value",
+      "Ghimire",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Choose payment method" }),
+    ).toBeNull();
+  });
+
   it("prefills passport fields but leaves non-passport traveller data for confirmation", async () => {
     mocks.authFetch.mockImplementation(async (url: string) => {
       if (url.endsWith("/payments/providers"))

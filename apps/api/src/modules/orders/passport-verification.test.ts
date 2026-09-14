@@ -274,14 +274,25 @@ describe("imageDimensions", () => {
 });
 
 describe("verdictFor", () => {
-  it("verifies when the passport number and another field match", () => {
+  it("verifies when the passport number and an MRZ name match", () => {
     expect(verdictFor(["passportNumber", "surname"])).toBe("VERIFIED");
+    expect(verdictFor(["passportNumber", "givenNames"])).toBe("VERIFIED");
   });
   it("is partial when only the passport number matches", () => {
     expect(verdictFor(["passportNumber"])).toBe("PARTIAL");
   });
   it("does not treat nationality alone as corroborating identity evidence", () => {
     expect(verdictFor(["passportNumber", "nationality"])).toBe("PARTIAL");
+  });
+  it("does not accept passport number plus dates when the name is wrong", () => {
+    expect(
+      verdictFor([
+        "passportNumber",
+        "dateOfBirth",
+        "passportExpiryDate",
+        "nationality",
+      ]),
+    ).toBe("PARTIAL");
   });
   it("is partial when a name plus the date of birth match but the number is unreadable", () => {
     expect(verdictFor(["surname", "givenNames", "dateOfBirth"])).toBe(

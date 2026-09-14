@@ -115,17 +115,27 @@ export const extractMrz = (
 ): { line1?: string; line2: string } | null => {
   const lines = ocrText
     .split(/\r?\n/)
-    .map((line) => line.replace(/[^A-Z0-9<]/g, ""))
-    .filter(isMrzLine);
+    .map((line) => line.toUpperCase().replace(/[^A-Z0-9<]/g, ""))
+    .filter(Boolean);
   const index = lines.findIndex(
-    (line) => line[9] !== undefined && /^\d$/.test(line[9]),
+    (line) => isMrzLine(line) && line[9] !== undefined && /^\d$/.test(line[9]),
   );
   if (index < 0) return null;
   const line2 = lines[index] as string;
   const neighbour = lines[index - 1];
-  return neighbour && isMrzLine(neighbour)
-    ? { line1: neighbour, line2 }
-    : { line2 };
+  if (!neighbour) return { line2 };
+  if (isMrzLine(neighbour)) return { line1: neighbour, line2 };
+  // OCR commonly drops a few trailing '<' fillers from line 1 even when its
+  // name zone is readable. Recover only an unmistakable TD3 passport line;
+  // the check-digit-bearing line 2 remains strict and authoritative.
+  if (
+    neighbour.length >= 20 &&
+    neighbour.length < 44 &&
+    /^P[A-Z0-9<]/.test(neighbour) &&
+    neighbour.includes("<<")
+  )
+    return { line1: neighbour.padEnd(44, "<"), line2 };
+  return { line2 };
 };
 
 /** Parses a TD3 passport MRZ. Returns null when no line 2 is present. Names
@@ -163,7 +173,8 @@ export const parseMrz = (ocrText: string): ParsedMrz | null => {
 
   const splitName = (zone: string): { surname: string; givenNames: string } => {
     const separator = zone.indexOf("<<");
-    if (separator < 0) return { surname: zone.replace(/<+$/g, "").trim(), givenNames: "" };
+    if (separator < 0)
+      return { surname: zone.replace(/<+$/g, "").trim(), givenNames: "" };
     // ICAO fillers between name components stand for spaces; trailing fillers
     // are padding only.
     const clean = (value: string) => value.replace(/<+/g, " ").trim();

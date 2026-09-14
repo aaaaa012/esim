@@ -120,6 +120,13 @@ describe("parseMrz", () => {
   it("returns null for non-passport or garbled input", () => {
     expect(parseMrz("not an MRZ at all, just some words")).toBeNull();
   });
+
+  it("recovers names when OCR drops trailing fillers from passport line 1", () => {
+    const shortenedLine1 = LINE1.replace(/<+$/g, "");
+    const mrz = parseMrz(`${shortenedLine1}\n${LINE2}`);
+    expect(mrz?.surname).toBe("ERIKSSON");
+    expect(mrz?.givenNames).toBe("ANNA MARIA");
+  });
 });
 
 describe("confusableNormalize", () => {

@@ -1202,7 +1202,8 @@ export class OrdersService implements OnModuleInit {
     }
     const extraction = order.passportExtraction;
     if (
-      extraction?.status === "READY" &&
+      extraction &&
+      ["READY", "PARTIAL"].includes(extraction.status) &&
       extraction.passportAssetId === passport.privateAssetId &&
       Object.keys(extraction.fields).length > 0
     ) {
@@ -1212,6 +1213,9 @@ export class OrdersService implements OnModuleInit {
         extraction.confidence,
       );
       const verified = result.status === "VERIFIED";
+      const extractionHasName = Boolean(
+        extraction.fields.firstName || extraction.fields.surname,
+      );
       const correctionAttempts = verified
         ? (extraction.correctionAttempts ?? 0)
         : (extraction.correctionAttempts ?? 0) + 1;
@@ -1219,7 +1223,7 @@ export class OrdersService implements OnModuleInit {
       order.passportVerification = result;
       order.documentReviewStatus = verified
         ? "VERIFIED"
-        : correctionAttempts >= 3
+        : !extractionHasName || correctionAttempts >= 3
           ? "MANUAL_REVIEW"
           : "CORRECTION_REQUIRED";
       passport.status = verified
@@ -3645,10 +3649,9 @@ export class OrdersService implements OnModuleInit {
   ) {
     if (!order.partner) return;
     const dedupeKey = `document-verification:${order.id}:manually-approved`;
-    const endpoints =
-      await this.prisma.partnerWebhookEndpoint.findMany({
-        where: { partnerId: order.partner.id, active: true },
-      });
+    const endpoints = await this.prisma.partnerWebhookEndpoint.findMany({
+      where: { partnerId: order.partner.id, active: true },
+    });
     const eligible = endpoints.filter((endpoint) => {
       const types = Array.isArray(endpoint.eventTypes)
         ? endpoint.eventTypes.filter(
