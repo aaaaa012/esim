@@ -4,11 +4,13 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  ArrowLeft,
   Bell,
   CircleHelp,
   ClipboardList,
   Globe2,
   RefreshCw,
+  ShieldCheck,
   Smartphone,
 } from "lucide-react";
 import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
@@ -111,6 +113,18 @@ export default function CustomerHeader() {
       {label}
     </Link>
   );
+
+  if (path.startsWith("/esim/checkout")) {
+    return (
+      <header className="site-header checkout-focus-header">
+        <div className="shell checkout-focus-inner">
+          <Link href="/destinations" aria-label="Back to plans"><ArrowLeft size={18} /> <span>Plans</span></Link>
+          <strong><ShieldCheck size={18} /> Secure checkout</strong>
+          <Link href="/help">Support</Link>
+        </div>
+      </header>
+    );
+  }
 
   return (
     <>
@@ -239,7 +253,7 @@ export default function CustomerHeader() {
             aria-current={path === "/recharge/recover" ? "page" : undefined}
           >
             <ClipboardList size={20} />
-            <span>Orders</span>
+            <span>Track order</span>
           </Link>
         </SignedOut>
         <SignedIn>

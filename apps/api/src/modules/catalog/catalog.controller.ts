@@ -68,6 +68,29 @@ export function parseDataAllowanceMb(value: string): number | null {
           : 1;
   return Math.round(amount * multiplier);
 }
+export function normalizePlanName(name: string, dataAllowance: string) {
+  let normalized = name
+    .replace(/\bUsa\b/g, "USA")
+    .replace(/\bSim\b/g, "eSIM")
+    .replace(/(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)\b/gi, "$1 $2");
+  if (/unlimited\s+data/i.test(normalized) && parseDataAllowanceMb(dataAllowance)) {
+    const allowance = dataAllowance
+      .trim()
+      .replace(/(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)\b/gi, "$1 $2");
+    const withoutClaim = normalized.replace(/unlimited\s+data/gi, "").trim();
+    const compact = (value: string) => value.replace(/\s+/g, "").toLowerCase();
+    normalized = compact(withoutClaim).includes(compact(allowance))
+      ? withoutClaim
+      : normalized.replace(/unlimited\s+data/gi, allowance);
+  }
+  return normalized.replace(/\s+/g, " ").trim();
+}
+
+const CANONICAL_COUNTRY_NAMES: Record<string, string> = {
+  CI: "Côte d’Ivoire",
+  US: "United States",
+  GB: "United Kingdom",
+};
 const isoCodeFilter = (country?: string) => {
   const filter: Record<string, string | string[]> = {};
   if (RESTRICTED_PLAN_COUNTRY_CODES.length)
@@ -91,8 +114,8 @@ export class CatalogService {
     return {
       id: plan.id,
       countryCode: plan.country.isoCode,
-      countryName: plan.country.name,
-      name: plan.name,
+      countryName: CANONICAL_COUNTRY_NAMES[plan.country.isoCode] ?? plan.country.name,
+      name: normalizePlanName(plan.name, plan.dataAllowance),
       dataAllowance: plan.dataAllowance,
       allowanceMb: parseDataAllowanceMb(plan.dataAllowance),
       validityDays: plan.validityDays,
@@ -175,7 +198,7 @@ export class CatalogService {
     });
     return countries.map((country) => ({
       code: country.isoCode,
-      name: country.name,
+      name: CANONICAL_COUNTRY_NAMES[country.isoCode] ?? country.name,
       popular: country.plans.length > 0,
     }));
   }

@@ -57,7 +57,7 @@ describe("homepage campaigns", () => {
     );
   });
 
-  it("keeps all seeded placements available when the API is unavailable", async () => {
+  it("keeps evergreen placements but suppresses stale offers when the API is unavailable", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementationOnce(
       () => new Promise(() => undefined),
     );
@@ -71,21 +71,19 @@ describe("homepage campaigns", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: /travel connected/i }),
+      screen.getByRole("heading", { name: /Visa Compass and Ubigi international eSIM/i }),
     ).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /choose where/i })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: /view full poster: Australia/i }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /choose where/i })).toBeNull();
     expect(
       screen.getByRole("button", { name: /view full setup guide/i }),
     ).toBeTruthy();
   });
 
   it("opens a labelled full-size viewer and provides the matching country CTA", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementationOnce(
-      () => new Promise(() => undefined),
-    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ data: { FEATURED_BANNER: [], HOW_GUIDE: [], WHY_ESIM_BANNER: [], OFFER_GALLERY: [{ id: "au", title: "Australia travel eSIM offer", altText: "Australia campaign artwork", imageUrl: "/campaigns/australia.webp", placement: "OFFER_GALLERY", format: "PORTRAIT", imageWidth: 1000, imageHeight: 1400, countryCode: "AU", ctaLabel: "View plans", ctaHref: "/destinations?country=AU", sortOrder: 0 }] } }),
+    } as Response);
     render(
       <CampaignProvider>
         <OfferGallery />
@@ -93,7 +91,7 @@ describe("homepage campaigns", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: /view full poster: Australia/i }),
+      await screen.findByRole("button", { name: /view full poster: Australia/i }),
     );
     await waitFor(() =>
       expect(screen.getByRole("dialog").hasAttribute("open")).toBe(true),

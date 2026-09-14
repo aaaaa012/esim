@@ -35,20 +35,20 @@ describe("customer catalog initial destination", () => {
     expect(initialCatalogDestination(countries, "sg")).toBe("SG");
   });
 
-  it("falls back to the first popular destination", () => {
-    expect(initialCatalogDestination(countries)).toBe("JP");
+  it("does not force a popular destination without an explicit selection", () => {
+    expect(initialCatalogDestination(countries)).toBe("");
   });
 
-  it("falls back to the first available destination when none is popular", () => {
+  it("does not force the first available destination", () => {
     expect(
       initialCatalogDestination([
         { code: "AU", name: "Australia" },
         { code: "DE", name: "Germany" },
       ]),
-    ).toBe("AU");
+    ).toBe("");
   });
 
-  it("returns an empty selection only when the catalog has no countries", () => {
+  it("returns an empty selection when the catalog has no countries", () => {
     expect(initialCatalogDestination([], "JP")).toBe("");
   });
 });

@@ -12,6 +12,7 @@ const expectedRoutes = [
   "/account-unavailable",
   "/admin",
   "/admin/homepage-campaigns",
+  "/admin/homepage-featured-plans",
   "/admin/integrations",
   "/admin/partners/[id]",
   "/admin/partners-showcase",

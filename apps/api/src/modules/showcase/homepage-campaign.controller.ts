@@ -39,6 +39,11 @@ const commonSchema = {
     .nullable()
     .optional(),
   ctaLabel: z.string().trim().min(2).max(80),
+  eyebrow: z.string().trim().max(80).nullable().optional(),
+  summary: z.string().trim().max(320).nullable().optional(),
+  priceLabel: z.string().trim().max(120).nullable().optional(),
+  termsLabel: z.string().trim().max(160).nullable().optional(),
+  ctaHrefOverride: z.string().trim().regex(/^\/(?!\/)/, "Use an internal path").max(240).nullable().optional(),
   sortOrder: z.number().int().min(0).max(9999).optional(),
   active: z.boolean().optional(),
   startsAt: dateSchema.optional(),
@@ -48,6 +53,7 @@ const commonSchema = {
 const createSchema = z.object({
   ...commonSchema,
   assetKey: z.string().min(1).max(500),
+  mobileAssetKey: z.string().min(1).max(500).nullable().optional(),
 });
 
 const updateSchema = z.object({
@@ -56,11 +62,17 @@ const updateSchema = z.object({
   placement: commonSchema.placement.optional(),
   countryCode: commonSchema.countryCode,
   ctaLabel: commonSchema.ctaLabel.optional(),
+  eyebrow: commonSchema.eyebrow,
+  summary: commonSchema.summary,
+  priceLabel: commonSchema.priceLabel,
+  termsLabel: commonSchema.termsLabel,
+  ctaHrefOverride: commonSchema.ctaHrefOverride,
   sortOrder: commonSchema.sortOrder,
   active: commonSchema.active,
   startsAt: commonSchema.startsAt,
   endsAt: commonSchema.endsAt,
   assetKey: z.string().min(1).max(500).optional(),
+  mobileAssetKey: z.string().min(1).max(500).nullable().optional(),
 });
 
 function dates<
@@ -143,6 +155,37 @@ export class HomepageCampaignPublicController {
   @Get()
   list() {
     return this.campaigns.listActive();
+  }
+}
+
+const featuredPlanSchema = z.object({
+  planId: z.string().uuid(),
+  sortOrder: z.number().int().min(0).max(9999).optional(),
+  active: z.boolean().optional(),
+  startsAt: dateSchema.optional(),
+  endsAt: dateSchema.optional(),
+});
+
+@Controller("public/homepage-featured-plans")
+export class HomepageFeaturedPlanPublicController {
+  constructor(private readonly campaigns: HomepageCampaignService) {}
+  @Get() list() { return this.campaigns.listFeaturedPlans(); }
+}
+
+@Controller("admin/homepage-featured-plans")
+@UseGuards(AuthGuard, AccountGuard)
+@AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+export class HomepageFeaturedPlanAdminController {
+  constructor(private readonly campaigns: HomepageCampaignService) {}
+  @Get() list() { return this.campaigns.listAllFeaturedPlans(); }
+  @Post() create(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    return this.campaigns.createFeaturedPlan(dates(featuredPlanSchema.parse(body)), req.user!.id);
+  }
+  @Patch(":id") update(@Param("id") id: string, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    return this.campaigns.updateFeaturedPlan(id, dates(featuredPlanSchema.partial().parse(body)), req.user!.id);
+  }
+  @Delete(":id") remove(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
+    return this.campaigns.removeFeaturedPlan(id, req.user!.id);
   }
 }
 

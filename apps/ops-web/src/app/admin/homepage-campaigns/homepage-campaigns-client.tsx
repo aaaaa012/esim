@@ -56,6 +56,11 @@ type Campaign = {
   imageHeight: number;
   countryCode: string | null;
   ctaLabel: string;
+  eyebrow: string | null;
+  summary: string | null;
+  priceLabel: string | null;
+  termsLabel: string | null;
+  ctaHrefOverride: string | null;
   sortOrder: number;
   active: boolean;
   startsAt: string | null;
@@ -77,6 +82,11 @@ export type FormState = {
   placement: Placement;
   countryCode: string;
   ctaLabel: string;
+  eyebrow: string;
+  summary: string;
+  priceLabel: string;
+  termsLabel: string;
+  ctaHrefOverride: string;
   sortOrder: string;
   active: boolean;
   startsAt: string;
@@ -114,6 +124,11 @@ const initialForm: FormState = {
   placement: "OFFER_GALLERY",
   countryCode: "",
   ctaLabel: "Browse travel plans",
+  eyebrow: "",
+  summary: "",
+  priceLabel: "",
+  termsLabel: "",
+  ctaHrefOverride: "",
   sortOrder: "0",
   active: true,
   startsAt: "",
@@ -230,6 +245,7 @@ export default function HomepageCampaignsClient() {
   const [countries, setCountries] = useState<Country[]>([]);
   const [form, setForm] = useState<FormState>(initialForm);
   const [file, setFile] = useState<File | null>(null);
+  const [mobileFile, setMobileFile] = useState<File | null>(null);
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [previewing, setPreviewing] = useState<Campaign | null>(null);
   const [busy, setBusy] = useState(false);
@@ -305,6 +321,7 @@ export default function HomepageCampaignsClient() {
   const reset = () => {
     setEditing(null);
     setFile(null);
+    setMobileFile(null);
     setForm(initialForm);
     setUploadProgress(0);
     setUploadPhase("");
@@ -314,12 +331,18 @@ export default function HomepageCampaignsClient() {
   const edit = (campaign: Campaign) => {
     setEditing(campaign);
     setFile(null);
+    setMobileFile(null);
     setForm({
       title: campaign.title,
       altText: campaign.altText,
       placement: campaign.placement,
       countryCode: campaign.countryCode ?? "",
       ctaLabel: campaign.ctaLabel,
+      eyebrow: campaign.eyebrow ?? "",
+      summary: campaign.summary ?? "",
+      priceLabel: campaign.priceLabel ?? "",
+      termsLabel: campaign.termsLabel ?? "",
+      ctaHrefOverride: campaign.ctaHrefOverride ?? "",
       sortOrder: String(campaign.sortOrder),
       active: campaign.active,
       startsAt: utcToKathmanduInput(campaign.startsAt),
@@ -349,9 +372,9 @@ export default function HomepageCampaignsClient() {
       return;
     }
     if (
-      file &&
-      (file.size > 3 * 1024 * 1024 ||
-        !["image/jpeg", "image/png"].includes(file.type))
+      [file, mobileFile].some((candidate) => candidate &&
+        (candidate.size > 3 * 1024 * 1024 ||
+          !["image/jpeg", "image/png"].includes(candidate.type)))
     ) {
       toast.error("Artwork must be a JPG or PNG up to 3 MB");
       return;
@@ -361,6 +384,7 @@ export default function HomepageCampaignsClient() {
     setUploadPhase(file ? "Validating artwork" : "Saving campaign");
     try {
       let assetKey: string | undefined;
+      let mobileAssetKey: string | undefined;
       if (file) {
         const body = new FormData();
         body.append("artwork", file);
@@ -374,17 +398,30 @@ export default function HomepageCampaignsClient() {
         setUploadPhase("Artwork verified");
         assetKey = uploaded.assetKey;
       }
+      if (mobileFile) {
+        const mobileBody = new FormData();
+        mobileBody.append("artwork", mobileFile);
+        setUploadPhase("Uploading mobile artwork");
+        const uploaded = await request<UploadedArtwork>("/admin/homepage-campaigns/uploads", { method: "POST", body: mobileBody });
+        mobileAssetKey = uploaded.assetKey;
+      }
       const payload = {
         title: form.title.trim(),
         altText: form.altText.trim(),
         placement: form.placement,
         countryCode: form.countryCode || null,
         ctaLabel: form.ctaLabel.trim(),
+        eyebrow: form.eyebrow.trim() || null,
+        summary: form.summary.trim() || null,
+        priceLabel: form.priceLabel.trim() || null,
+        termsLabel: form.termsLabel.trim() || null,
+        ctaHrefOverride: form.ctaHrefOverride.trim() || null,
         sortOrder: Number(form.sortOrder) || 0,
         active: form.active,
         startsAt: kathmanduInputToUtc(form.startsAt),
         endsAt: kathmanduInputToUtc(form.endsAt),
         ...(assetKey ? { assetKey } : {}),
+        ...(mobileAssetKey ? { mobileAssetKey } : {}),
       };
       setUploadProgress(94);
       setUploadPhase("Saving campaign");
@@ -458,6 +495,16 @@ export default function HomepageCampaignsClient() {
                 busy={busy}
                 onFileSelected={setFile}
               />
+              <div>
+                <p className="mb-2 text-sm font-medium">Mobile artwork (optional)</p>
+                <FileUploader
+                  accept="image/jpeg,image/png"
+                  hint="Dedicated mobile crop · JPG or PNG · up to 3 MB"
+                  value={mobileFile}
+                  busy={busy}
+                  onFileSelected={setMobileFile}
+                />
+              </div>
               {(filePreview || editing) && (
                 <button
                   type="button"
@@ -564,6 +611,24 @@ export default function HomepageCampaignsClient() {
                     </option>
                   ))}
                 </select>
+              </Field>
+              <Field label="Eyebrow (optional)">
+                <Input value={form.eyebrow} onChange={(event) => updateForm("eyebrow", event.target.value)} placeholder="Current offers" />
+              </Field>
+              <Field label="Native summary (optional)" hint="Displayed as readable website text outside the artwork.">
+                <textarea
+                  className="flex min-h-20 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                  value={form.summary}
+                  onChange={(event) => updateForm("summary", event.target.value)}
+                  maxLength={320}
+                />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Price label (optional)"><Input value={form.priceLabel} onChange={(event) => updateForm("priceLabel", event.target.value)} placeholder="From NPR 824" /></Field>
+                <Field label="Terms label (optional)"><Input value={form.termsLabel} onChange={(event) => updateForm("termsLabel", event.target.value)} placeholder="Selected plans only" /></Field>
+              </div>
+              <Field label="CTA path override (optional)" hint="Internal path only, for example /destinations?country=AE">
+                <Input value={form.ctaHrefOverride} onChange={(event) => updateForm("ctaHrefOverride", event.target.value)} placeholder="/destinations" />
               </Field>
               <div className="grid grid-cols-2 gap-3">
                 <Field

@@ -86,6 +86,8 @@ import {
   HomepageCampaignAdminController,
   HomepageMarketingAssetController,
   HomepageCampaignPublicController,
+  HomepageFeaturedPlanAdminController,
+  HomepageFeaturedPlanPublicController,
 } from "./modules/showcase/homepage-campaign.controller.js";
 import { HomepageCampaignService } from "./modules/showcase/homepage-campaign.service.js";
 import { ManualRefundsController } from "./modules/payments/manual-refunds.controller.js";
@@ -132,6 +134,8 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     PartnerShowcasePublicController,
     HomepageCampaignAdminController,
     HomepageCampaignPublicController,
+    HomepageFeaturedPlanAdminController,
+    HomepageFeaturedPlanPublicController,
     HomepageMarketingAssetController,
     ManualRefundsController,
     PaymentDisputesController,

@@ -423,6 +423,7 @@ model Plan {
   orders         Order[]
   partnerPrices  PartnerPriceListItem[]
   partnerQuotes  PartnerQuote[]
+  homepageFeatures HomepageFeaturedPlan[]
   updatedAt      DateTime               @updatedAt
 
   @@unique([countryId, providerPlanId])
@@ -1328,6 +1329,16 @@ model HomepageCampaign {
   imageHeight Int
   countryCode String?
   ctaLabel    String
+  eyebrow     String?
+  summary     String?
+  priceLabel  String?
+  termsLabel  String?
+  ctaHrefOverride String?
+  mobileImageUrl String?
+  mobileAssetKey String?
+  mobileImageWidth Int?
+  mobileImageHeight Int?
+  mobileFormat HomepageCampaignFormat?
   sortOrder   Int                       @default(0)
   active      Boolean                   @default(true)
   startsAt    DateTime?
@@ -1337,6 +1348,21 @@ model HomepageCampaign {
 
   @@index([active, placement, sortOrder])
   @@index([placement, startsAt, endsAt])
+}
+
+model HomepageFeaturedPlan {
+  id        String   @id @default(uuid()) @db.Uuid
+  planId    String   @db.Uuid
+  plan      Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, sortOrder])
+  @@index([planId, startsAt, endsAt])
 }
 
 model AuditLog {

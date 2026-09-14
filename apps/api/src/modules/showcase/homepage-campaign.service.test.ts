@@ -68,7 +68,7 @@ describe("HomepageCampaignService", () => {
     const grouped = await subject.listActive();
 
     expect(grouped.OFFER_GALLERY).toEqual([
-      expect.objectContaining({ ctaHref: "/?country=AU#plans" }),
+      expect.objectContaining({ ctaHref: "/destinations?country=AU" }),
     ]);
     expect(prisma.homepageCampaign.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

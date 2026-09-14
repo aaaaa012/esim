@@ -5,7 +5,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
   Globe2,
   MapPin,
 } from "lucide-react";
@@ -41,11 +40,7 @@ export function initialCatalogDestination(
   const normalized = requested?.trim().toUpperCase();
   if (normalized && countries.some((country) => country.code === normalized))
     return normalized;
-  return (
-    countries.find((country) => country.popular)?.code ??
-    countries[0]?.code ??
-    ""
-  );
+  return "";
 }
 
 function npr(amount: number) {
@@ -91,7 +86,6 @@ export default function CatalogPlans() {
   const [countriesError, setCountriesError] = useState<string | null>(null);
   const [plansError, setPlansError] = useState<string | null>(null);
   const error = countriesError || plansError;
-  const [showAllDestinations, setShowAllDestinations] = useState(false);
   const revealResultsFor = useRef<string | null>(null);
 
   useEffect(() => {
@@ -234,7 +228,6 @@ export default function CatalogPlans() {
       revealResultsFor.current = null;
     }
     setSelected(code);
-    setShowAllDestinations(false);
     router.replace(
       catalogDestinationHref(pathname, searchParams.toString(), code),
       { scroll: false },
@@ -286,51 +279,8 @@ export default function CatalogPlans() {
           </div>
         ) : null}
 
-        {plans && supported.length ? (
-          <div className="all-destinations">
-            <button
-              type="button"
-              className="all-destinations-toggle"
-              aria-expanded={showAllDestinations}
-              aria-controls="all-destinations-grid"
-              onClick={() => setShowAllDestinations((current) => !current)}
-            >
-              <span>
-                {showAllDestinations
-                  ? "Hide destination directory"
-                  : `Browse all ${supported.length} destinations`}
-              </span>
-              <ChevronDown
-                size={17}
-                className={showAllDestinations ? "is-open" : ""}
-              />
-            </button>
-            {showAllDestinations ? (
-              <div
-                className="destination-grid directory-grid"
-                id="all-destinations-grid"
-              >
-                {supported.map((country) => (
-                  <button
-                    key={country.code}
-                    type="button"
-                    className={selected === country.code ? "selected" : ""}
-                    aria-pressed={selected === country.code}
-                    onClick={() => selectDestination(country.code)}
-                  >
-                    <span className="destination-flag">
-                      {flagEmoji(country.code)}
-                    </span>
-                    <b>{country.name}</b>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : !error && plans ? (
-          <p className="catalog-empty">
-            No supported destinations are currently available.
-          </p>
+        {!countriesBusy && !error && !supported.length ? (
+          <p className="catalog-empty">No supported destinations are currently available.</p>
         ) : null}
       </section>
       {error ? (

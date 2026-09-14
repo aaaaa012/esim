@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, RefreshCw, Smartphone } from "lucide-react";
+import { ArrowLeft, ArrowRight, Pause, Play, RefreshCw, Smartphone } from "lucide-react";
 import {
   createContext,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -28,6 +29,7 @@ type Plan = {
   popular: boolean;
 };
 type Envelope<T> = { data: T };
+type FeaturedPlan = { plan: Plan };
 type ExplorerState = {
   countries: Country[];
   popularPlans: Plan[];
@@ -61,7 +63,7 @@ export function HomepageExplorerProvider({
     setError(false);
     Promise.all([
       fetch(`${API}/public/countries`, { signal: controller.signal }),
-      fetch(`${API}/public/plans?popular=true&limit=6`, {
+      fetch(`${API}/public/homepage-featured-plans`, {
         signal: controller.signal,
       }),
     ])
@@ -70,10 +72,13 @@ export function HomepageExplorerProvider({
         const [countryData, planData] = (await Promise.all([
           countriesResponse.json(),
           plansResponse.json(),
-        ])) as [Envelope<Country[]>, Envelope<Plan[]>];
+        ])) as [Envelope<Country[]>, Envelope<FeaturedPlan[]>];
         setCountries(countryData.data);
         setPopularPlans(
-          planData.data.filter((plan) => plan.popular).slice(0, 6),
+          planData.data
+            .map((feature) => feature?.plan)
+            .filter((plan): plan is Plan => Boolean(plan))
+            .slice(0, 24),
         );
       })
       .catch((reason: unknown) => {
@@ -177,6 +182,42 @@ function npr(amount: number) {
 
 export function PopularRightNow() {
   const { popularPlans, loading } = useHomepageExplorer();
+  const railRef = useRef<HTMLDivElement>(null);
+  const interactionPaused = useRef(false);
+  const [paused, setPaused] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  const canRotate = popularPlans.length > 3;
+  const move = (direction: -1 | 1, announce = true) => {
+    const rail = railRef.current;
+    const card = rail?.querySelector<HTMLElement>(".homepage-plan-card");
+    if (!rail || !card) return;
+    const distance = card.getBoundingClientRect().width + 14;
+    const requested = rail.scrollLeft + direction * distance;
+    const max = rail.scrollWidth - rail.clientWidth;
+    rail.scrollTo({
+      left: requested > max - 2 ? 0 : Math.max(0, requested),
+      behavior: "smooth",
+    });
+    if (announce)
+      setAnnouncement(
+        direction > 0
+          ? "Showing later recommendations"
+          : "Showing earlier recommendations",
+      );
+  };
+  useEffect(() => {
+    if (
+      !canRotate ||
+      paused ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    const timer = window.setInterval(() => {
+      if (!interactionPaused.current && document.visibilityState === "visible")
+        move(1, false);
+    }, 7000);
+    return () => window.clearInterval(timer);
+  }, [canRotate, paused, popularPlans.length]);
   if (!loading && !popularPlans.length) return null;
 
   return (
@@ -186,21 +227,49 @@ export function PopularRightNow() {
     >
       <div className="shell">
         <div className="homepage-popular-heading">
-          <span>Popular right now</span>
-          <h2 id="popular-now-title">Traveller favourites</h2>
+          <div>
+            <span>Recommended for your next trip</span>
+            <h2 id="popular-now-title">Traveller favourites</h2>
+          </div>
+          {canRotate ? (
+            <div className="homepage-popular-controls" aria-label="Traveller favourites controls">
+              <button type="button" aria-label="Previous recommendations" onClick={() => move(-1)}><ArrowLeft size={17} /></button>
+              <button type="button" aria-label="Next recommendations" onClick={() => move(1)}><ArrowRight size={17} /></button>
+              <button type="button" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>
+                {paused ? <Play size={16} /> : <Pause size={16} />}
+                <span>{paused ? "Play" : "Pause"}</span>
+              </button>
+            </div>
+          ) : null}
         </div>
-        <div className="homepage-popular-rail" aria-busy={loading}>
+        <p className="sr-only" aria-live="polite">{announcement}</p>
+        <div
+          className="homepage-popular-rail"
+          ref={railRef}
+          aria-busy={loading}
+          onMouseEnter={() => (interactionPaused.current = true)}
+          onMouseLeave={() => (interactionPaused.current = false)}
+          onFocusCapture={() => (interactionPaused.current = true)}
+          onBlurCapture={() => (interactionPaused.current = false)}
+          onPointerDown={() => (interactionPaused.current = true)}
+          onPointerUp={() => (interactionPaused.current = false)}
+        >
           {loading
             ? [0, 1, 2].map((item) => (
                 <div className="homepage-plan-card is-loading" key={item} />
               ))
             : popularPlans.map((plan) => (
-                <article className="homepage-plan-card" key={plan.id}>
+                <Link
+                  className="homepage-plan-card"
+                  href={`/destinations?country=${plan.countryCode}`}
+                  aria-label={`View ${plan.countryName} plans`}
+                  key={plan.id}
+                >
                   <div className="homepage-plan-country">
                     <span>{flagEmoji(plan.countryCode)}</span>
                     <small>{plan.countryName}</small>
                   </div>
-                  <h3>{plan.name}</h3>
+                  <h3>{plan.countryName}</h3>
                   <p>
                     {formatPlanDataText(plan.dataAllowance)} ·{" "}
                     {plan.validityDays}{" "}
@@ -208,11 +277,11 @@ export function PopularRightNow() {
                   </p>
                   <div>
                     <b>{npr(plan.sellingPriceNpr)}</b>
-                    <Link href={`/destinations?country=${plan.countryCode}`}>
-                      View plan <ArrowRight size={15} />
-                    </Link>
+                    <span className="homepage-plan-link">
+                      View plans <ArrowRight size={15} />
+                    </span>
                   </div>
-                </article>
+                </Link>
               ))}
         </div>
       </div>

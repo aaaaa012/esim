@@ -37,7 +37,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) =>
-      Promise.resolve(ok(url.includes("countries") ? countries : plans)),
+      Promise.resolve(ok(url.includes("countries") ? countries : plans.map((plan) => ({ id: `feature-${plan.id}`, plan })))),
     ),
   );
 });
@@ -74,7 +74,7 @@ describe("homepage destination discovery", () => {
     renderExplorer();
     fireEvent.click(await screen.findByRole("button", { name: /India/i }));
     expect(navigation.push).toHaveBeenCalledWith("/destinations?country=IN");
-    expect(await screen.findByText("India Essential")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "India" })).toBeTruthy();
     expect(screen.getByText("NPR 999")).toBeTruthy();
   });
 
@@ -84,7 +84,7 @@ describe("homepage destination discovery", () => {
       "fetch",
       vi.fn((url: string) => {
         if (failures-- > 0) return Promise.reject(new Error("offline"));
-        return Promise.resolve(ok(url.includes("countries") ? countries : plans));
+        return Promise.resolve(ok(url.includes("countries") ? countries : plans.map((plan) => ({ id: `feature-${plan.id}`, plan }))));
       }),
     );
     renderExplorer();

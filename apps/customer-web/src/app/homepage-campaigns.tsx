@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, ExternalLink, Wifi, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, Pause, Play, Wifi, X } from "lucide-react";
 import {
   createContext,
   useCallback,
@@ -39,6 +39,13 @@ export type HomepageCampaign = {
   countryCode: string | null;
   ctaLabel: string;
   ctaHref: string;
+  eyebrow?: string | null;
+  summary?: string | null;
+  priceLabel?: string | null;
+  termsLabel?: string | null;
+  mobileImageUrl?: string | null;
+  mobileImageWidth?: number | null;
+  mobileImageHeight?: number | null;
   sortOrder: number;
 };
 
@@ -63,7 +70,7 @@ const entries: Array<
     imageHeight: 477,
     countryCode: null,
     ctaLabel: "Browse travel plans",
-    ctaHref: "/#plans",
+    ctaHref: "/destinations",
     sortOrder: 0,
   },
   ...[
@@ -101,7 +108,7 @@ const entries: Array<
     imageHeight: 1600,
     countryCode: null,
     ctaLabel: "Browse destinations",
-    ctaHref: "/#plans",
+    ctaHref: "/destinations",
     sortOrder: 20,
   },
   ...[
@@ -118,7 +125,7 @@ const entries: Array<
     imageHeight: Number(height),
     countryCode: null,
     ctaLabel: "Browse travel plans",
-    ctaHref: "/#plans",
+    ctaHref: "/destinations",
     sortOrder: 30 + index,
   })),
   {
@@ -148,7 +155,7 @@ const entries: Array<
     imageHeight: 477,
     countryCode: null,
     ctaLabel: "Browse travel plans",
-    ctaHref: "/#plans",
+    ctaHref: "/destinations",
     sortOrder: 0,
   },
 ];
@@ -158,7 +165,8 @@ function fallbackGroups(): CampaignGroups {
     FEATURED_BANNER: entries.filter(
       (item) => item.placement === "FEATURED_BANNER",
     ),
-    OFFER_GALLERY: entries.filter((item) => item.placement === "OFFER_GALLERY"),
+    // Offers are deliberately API-only so an outage cannot revive an expired price.
+    OFFER_GALLERY: [],
     HOW_GUIDE: entries.filter((item) => item.placement === "HOW_GUIDE"),
     WHY_ESIM_BANNER: entries.filter(
       (item) => item.placement === "WHY_ESIM_BANNER",
@@ -201,15 +209,20 @@ function CampaignImage({
       </span>
     );
   return (
-    <Image
-      src={resolveCampaignImageUrl(campaign.imageUrl)}
-      alt={campaign.altText}
-      width={campaign.imageWidth}
-      height={campaign.imageHeight}
-      sizes={sizes}
-      priority={priority}
-      onError={() => setBroken(true)}
-    />
+    <picture>
+      {campaign.mobileImageUrl ? (
+        <source media="(max-width: 640px)" srcSet={resolveCampaignImageUrl(campaign.mobileImageUrl)} />
+      ) : null}
+      <Image
+        src={resolveCampaignImageUrl(campaign.imageUrl)}
+        alt={campaign.altText}
+        width={campaign.imageWidth}
+        height={campaign.imageHeight}
+        sizes={sizes}
+        priority={priority}
+        onError={() => setBroken(true)}
+      />
+    </picture>
   );
 }
 
@@ -301,10 +314,11 @@ export function FeaturedCampaign() {
       <div className="shell">
         <div className="campaign-section-heading">
           <div>
-            <span className="eyebrow">Featured partnership</span>
+            <span className="eyebrow">{campaign.eyebrow || "Featured partnership"}</span>
             <h2 id="featured-campaign-heading">
-              Travel connected, wherever you land.
+              {campaign.title || "Travel connected, wherever you land."}
             </h2>
+            {campaign.summary ? <p>{campaign.summary}</p> : null}
           </div>
           <span className="campaign-section-note">Visa Compass × Ubigi</span>
         </div>
@@ -336,6 +350,10 @@ export function OfferGallery() {
   const railRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<number | null>(null);
   const pausedRef = useRef(false);
+  const visibleRef = useRef(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  const [paused, setPaused] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
   const campaigns = groups.OFFER_GALLERY;
   const move = useCallback((direction: -1 | 1) => {
     const rail = railRef.current;
@@ -390,15 +408,26 @@ export function OfferGallery() {
     const timer = reducedMotion
       ? null
       : window.setInterval(() => {
-          if (!pausedRef.current && document.visibilityState === "visible")
+          if (!paused && visibleRef.current && !pausedRef.current && document.visibilityState === "visible")
             move(1);
-        }, 4200);
+        }, 5600);
     return () => {
       window.cancelAnimationFrame(position);
       if (timer) window.clearInterval(timer);
       if (scrollEndRef.current) window.clearTimeout(scrollEndRef.current);
     };
-  }, [campaigns.length, loopMetrics, move]);
+  }, [campaigns.length, loopMetrics, move, paused]);
+
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!section || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { visibleRef.current = Boolean(entry?.isIntersecting && entry.intersectionRatio >= 0.45); },
+      { threshold: [0, 0.45, 1] },
+    );
+    observer.observe(section);
+    return () => observer.disconnect();
+  }, []);
 
   if (!campaigns.length) return null;
   const loopedCampaigns = [0, 1, 2].flatMap((setIndex) =>
@@ -411,6 +440,7 @@ export function OfferGallery() {
   return (
     <section
       className="campaign-gallery-section"
+      ref={sectionRef}
       aria-labelledby="campaign-gallery-heading"
     >
       <div className="shell">
@@ -434,20 +464,25 @@ export function OfferGallery() {
           >
             <button
               type="button"
-              onClick={() => move(-1)}
+              onClick={() => { move(-1); setAnnouncement("Showing previous offers"); }}
               aria-label="Previous offers"
             >
               <ArrowLeft size={18} />
             </button>
             <button
               type="button"
-              onClick={() => move(1)}
+              onClick={() => { move(1); setAnnouncement("Showing next offers"); }}
               aria-label="Next offers"
             >
               <ArrowRight size={18} />
             </button>
+            <button type="button" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>
+              {paused ? <Play size={17} /> : <Pause size={17} />}
+              <span className="sr-only">{paused ? "Play offers" : "Pause offers"}</span>
+            </button>
           </div>
         </div>
+        <p className="sr-only" aria-live="polite">{announcement}</p>
         <div
           className="campaign-rail"
           ref={railRef}
@@ -471,6 +506,7 @@ export function OfferGallery() {
               data-loop-set={setIndex}
               data-loop-start={campaignIndex === 0 ? "true" : undefined}
               aria-hidden={setIndex === 1 ? undefined : true}
+              inert={setIndex === 1 ? undefined : true}
             >
               <button
                 className="campaign-card-art"
@@ -490,6 +526,9 @@ export function OfferGallery() {
                   <small>{String(campaignIndex + 1).padStart(2, "0")}</small>
                 </div>
                 <h3>{campaign.title}</h3>
+                {campaign.summary ? <p>{campaign.summary}</p> : null}
+                {campaign.priceLabel ? <strong>{campaign.priceLabel}</strong> : null}
+                {campaign.termsLabel ? <small>{campaign.termsLabel}</small> : null}
                 <Link
                   href={campaign.ctaHref}
                   tabIndex={setIndex === 1 ? undefined : -1}

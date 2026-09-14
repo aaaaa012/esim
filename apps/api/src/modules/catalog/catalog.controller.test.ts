@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CatalogController,
   type CatalogService,
+  normalizePlanName,
   parseDataAllowanceMb,
 } from "./catalog.controller.js";
 
@@ -16,6 +17,15 @@ describe("catalog allowance normalization", () => {
   it("leaves non-comparable allowances explicit", () => {
     expect(parseDataAllowanceMb("Unlimited")).toBeNull();
     expect(parseDataAllowanceMb("")).toBeNull();
+  });
+
+  it("canonicalizes provider labels and removes unexplained Unlimited claims", () => {
+    expect(normalizePlanName("One-Off Usa 500MB 1 day Sim", "500 MB")).toBe(
+      "One-Off USA 500 MB 1 day eSIM",
+    );
+    expect(normalizePlanName("Unlimited data 10GB", "10 GB")).toBe(
+      "10 GB",
+    );
   });
 });
 

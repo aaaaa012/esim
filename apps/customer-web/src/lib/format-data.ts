@@ -8,7 +8,7 @@ export function formatDataMb(megabytes: number) {
 }
 
 export function formatPlanDataText(value: string) {
-  return value.replace(
+  return value.replace(/(\d+(?:\.\d+)?)\s*GB\b/gi, "$1 GB").replace(
     /(\d+(?:\.\d+)?)\s*MB\b/gi,
     (_, amount: string) => formatDataMb(Number(amount)),
   );

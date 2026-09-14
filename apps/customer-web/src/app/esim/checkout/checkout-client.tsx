@@ -1035,6 +1035,7 @@ export default function CheckoutClient({
           }),
         });
         setOrder(created.order);
+        setShowAccountChoice(false);
         guestRef.current = isSignedIn !== true;
         setGuest(isSignedIn !== true);
         storeGuestToken(created.token, created.order.id);
@@ -1071,6 +1072,7 @@ export default function CheckoutClient({
           }),
         });
         setOrder(created.order);
+        setShowAccountChoice(false);
         storeGuestToken(created.token, created.order.id);
         storeRecovery(
           created.order.id,
@@ -1115,6 +1117,7 @@ export default function CheckoutClient({
         ? (payload as { order: Order }).order
         : (payload as Order);
       setOrder(finalOrder);
+      setShowAccountChoice(false);
       if (finalOrder.traveler)
         setTraveler({ ...initial, ...finalOrder.traveler });
       if (isGuestPayload) {
@@ -1573,11 +1576,10 @@ export default function CheckoutClient({
                           className="button wide"
                           disabled={busy}
                           onClick={() => {
-                            setShowAccountChoice(false);
                             void createOrder(false);
                           }}
                         >
-                          Continue with my account <ChevronRight size={18} />
+                          {busy ? <><LoaderCircle className="spin" size={18} /> Creating your secure order…</> : <>Continue with my account <ChevronRight size={18} /></>}
                         </button>
                       ) : (
                         <SignInButton mode="modal">
@@ -1601,11 +1603,12 @@ export default function CheckoutClient({
                       className="button secondary wide"
                       disabled={busy}
                       onClick={() => {
-                        setShowAccountChoice(false);
                         void createOrder(true);
                       }}
                     >
-                      Continue as guest
+                      {busy ? (
+                        <><LoaderCircle className="spin" size={18} /> Creating your secure order…</>
+                      ) : "Continue as guest"}
                     </button>
                   </div>
                 </div>
@@ -1706,6 +1709,19 @@ export default function CheckoutClient({
                   Your phone must support eSIM and be carrier-unlocked. Coverage
                   starts after first connection at your destination.
                 </p>
+                <div className="checkout-disclosure" role="note">
+                  <FileCheck2 size={20} aria-hidden="true" />
+                  <div>
+                    <b>Passport verification is required before payment</b>
+                    <p>
+                      Visa Compass securely processes the passport information page and compares it with your traveller details; authorized operations staff review exceptions.
+                      Review normally takes a few minutes, but some orders need manual review. Records are retained only for applicable legal and operational requirements, as explained in our privacy notice.
+                      This checkout requires the same passport page for every destination. Incompatible devices and unmatched
+                      traveller documents are not refundable.
+                    </p>
+                    <span><Link href="/privacy">How we handle your data</Link> · <Link href="/refund-policy">Refund policy</Link></span>
+                  </div>
+                </div>
                 <CompatibilityConfirmation
                   checked={compatible}
                   invalid={Boolean(compatibilityError) && !compatible}
@@ -1754,6 +1770,10 @@ export default function CheckoutClient({
                   detail, complete the remaining fields, and use two-letter
                   country codes.
                 </p>
+                <div className="checkout-disclosure compact" role="note">
+                  <LockKeyhole size={19} aria-hidden="true" />
+                  <p>Your passport details are encrypted and used to verify this purchase before payment. <Link href="/privacy">Read the privacy policy</Link>.</p>
+                </div>
                 <div className="form-grid">
                   <Field label="Title">
                     <select

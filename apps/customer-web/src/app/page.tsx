@@ -1,6 +1,6 @@
-import { Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
   CheckCircle2,
   Globe2,
@@ -14,7 +14,6 @@ import {
   Wifi,
   Zap,
 } from "lucide-react";
-import CatalogPlans from "./catalog-plans";
 import Faq from "./faq";
 import PartnersShowcase from "./partners-showcase";
 import {
@@ -31,7 +30,14 @@ import {
 } from "./homepage-explorer";
 import "./home.css";
 
-export default function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ country?: string }>;
+}) {
+  const { country } = await searchParams;
+  if (country && /^[A-Za-z]{2}$/.test(country))
+    redirect(`/destinations?country=${country.toUpperCase()}`);
   return (
     <CampaignProvider>
       <HomepageExplorerProvider>
@@ -155,66 +161,15 @@ export default function Home() {
           <PopularRightNow />
           <FeaturedCampaign />
           <OfferGallery />
-
-        <section className="section" id="plans">
-          <div className="shell">
-            <div className="plans-intro">
-              <div className="section-title">
-                <span className="eyebrow">
-                  <Globe2 size={14} />
-                  Popular destinations
-                </span>
-                <h2>One plan. Zero roaming surprises.</h2>
-                <p>
-                  Clear NPR pricing, trusted coverage, and a secure digital
-                  delivery experience from checkout to activation.
-                </p>
-              </div>
+          <section className="trust-strip" aria-label="Why travellers choose Visa Compass">
+            <div className="shell trust-strip-grid">
+              <span><ShieldCheck size={18} /><b>Secure NPR payment</b><small>Khalti and Fonepay</small></span>
+              <span><Wifi size={18} /><b>Ubigi connectivity</b><small>Global network partner</small></span>
+              <span><QrCode size={18} /><b>Digital delivery</b><small>QR after verification</small></span>
+              <span><Headset size={18} /><b>Local support</b><small>Help from Kathmandu</small></span>
+              <Link href="/compatibility"><Smartphone size={18} /><b>Check compatibility</b><small>Review before payment</small></Link>
             </div>
-            <Suspense fallback={<p className="catalog-empty" role="status">Loading destinations…</p>}>
-              <CatalogPlans />
-            </Suspense>
-          </div>
-        </section>
-
-        <section
-          className="recharge-section recharge-teaser"
-          id="recharge"
-          aria-labelledby="recharge-title"
-        >
-          <div className="shell">
-            <div className="recharge-panel">
-              <div className="recharge-marker" aria-hidden="true">
-                <span>02</span><i /><small>Recharge</small>
-              </div>
-              <div className="recharge-content">
-                <span className="recharge-icon" aria-hidden="true">
-                  <QrCode size={21} />
-                </span>
-                <p className="recharge-kicker">Keep your eSIM installed</p>
-                <h2 id="recharge-title">Ready for your next trip?</h2>
-                <p className="recharge-description">
-                  Signed-in customers can choose their eSIM and go straight to
-                  plans. You can also securely recharge an eSIM for a friend.
-                </p>
-                <Link className="button recharge-teaser-action" href="/recharge">
-                  Recharge an eSIM <span aria-hidden="true">→</span>
-                </Link>
-                <Link className="recharge-recovery-link" href="/recharge/recover">
-                  Already paid? Track an existing recharge
-                </Link>
-              </div>
-              <aside className="recharge-note" aria-label="How recharge works">
-                <span>No reinstall</span>
-                <strong>Your existing eSIM stays on your phone.</strong>
-                <p>
-                  Choose a new data plan, pay securely in NPR, and keep
-                  travelling.
-                </p>
-              </aside>
-            </div>
-          </div>
-        </section>
+          </section>
 
         <section className="section" id="how">
           <div className="shell">
@@ -354,6 +309,40 @@ export default function Home() {
                   whenever you need a quick top-up decision.
                 </p>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section
+          className="recharge-section recharge-teaser"
+          id="recharge"
+          aria-labelledby="recharge-title"
+        >
+          <div className="shell">
+            <div className="recharge-panel">
+              <div className="recharge-marker" aria-hidden="true">
+                <span>02</span><i /><small>Recharge</small>
+              </div>
+              <div className="recharge-content">
+                <span className="recharge-icon" aria-hidden="true"><QrCode size={21} /></span>
+                <p className="recharge-kicker">Keep your eSIM installed</p>
+                <h2 id="recharge-title">Ready for your next trip?</h2>
+                <p className="recharge-description">
+                  Signed-in customers can choose their eSIM and go straight to plans.
+                  You can also securely recharge an eSIM for a friend.
+                </p>
+                <Link className="button recharge-teaser-action" href="/recharge">
+                  Recharge an eSIM <span aria-hidden="true">→</span>
+                </Link>
+                <Link className="recharge-recovery-link" href="/recharge/recover">
+                  Already paid? Track an existing recharge
+                </Link>
+              </div>
+              <aside className="recharge-note" aria-label="How recharge works">
+                <span>No reinstall</span>
+                <strong>Your existing eSIM stays on your phone.</strong>
+                <p>Choose a new data plan, pay securely in NPR, and keep travelling.</p>
+              </aside>
             </div>
           </div>
         </section>
