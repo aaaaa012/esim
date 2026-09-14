@@ -132,6 +132,94 @@ describe("comparePassport", () => {
     expect(matchedFields).not.toContain("passportNumber");
   });
 
+  it("does not accept a name that only appears outside the MRZ name zone", () => {
+    // The MRZ name zone declares SHRESTHA / ASHA KUMARI, but "NEPAL" is on the
+    // page (human-readable country/issuer text). Before the MRZ-first fix the
+    // whole-page substring search let a traveller with a wrong name pass when
+    // that word happened to appear anywhere in the OCR.
+    const line1 = `P<NPLSHRESTHA<<ASHA<<<KUMARI`.padEnd(44, "<");
+    const line2 = `PA12345677NPL9008150F30010100000000000000000`;
+    expect(line1).toHaveLength(44);
+    expect(line2).toHaveLength(44);
+    const ocr = [
+      "EMBASSY OF NEPAL",
+      "PASSPORT",
+      "No PA1234567",
+      "Date of birth 15 AUG 1990",
+      line1,
+      line2,
+    ].join("\n");
+    const wrongName: TravelerInput = {
+      ...traveler,
+      surname: "Nepal",
+      firstName: "Bharat",
+      middleName: "Das",
+      dateOfBirth: "1988-03-02",
+      passportExpiryDate: "2032-05-06",
+    };
+    const { matchedFields } = comparePassport(ocr, wrongName);
+    expect(matchedFields).not.toContain("surname");
+    expect(matchedFields).not.toContain("givenNames");
+    expect(verdictFor(matchedFields)).not.toBe("VERIFIED");
+  });
+
+  it("matches names against the MRZ name zone when it is readable", () => {
+    const line1 = `P<NPLSHRESTHA<<ASHA<<<KUMARI`.padEnd(44, "<");
+    const line2 = `PA12345677NPL9008150F30010100000000000000000`;
+    const ocr = [
+      "REPUBLIC OF NEPAL",
+      "PASSPORT",
+      "No PA1234567",
+      "SHRI AShA KUMARI SHRESTHA",
+      "Date of birth 15 AUG 1990",
+      "EXPIRY 30/01/2030",
+      line1,
+      line2,
+    ].join("\n");
+    const { matchedFields } = comparePassport(ocr, traveler);
+    expect(matchedFields).toContain("passportNumber");
+    expect(matchedFields).toContain("surname");
+    expect(matchedFields).toContain("givenNames");
+    expect(matchedFields).toContain("middleName");
+    expect(verdictFor(matchedFields)).toBe("VERIFIED");
+  });
+
+  it("rejects a first name that is only a substring of an MRZ word", () => {
+    // "Shre" is a substring of the MRZ surname "SHRESTHA". The old whole-text
+    // substring search treated that as a matching given name; the MRZ-first
+    // logic must not.
+    const line1 = `P<NPLSHRESTHA<<ASHA<<<KUMARI`.padEnd(44, "<");
+    const line2 = `PA12345677NPL9008150F30010100000000000000000`;
+    const ocr = [line1, line2].join("\n");
+    const wrongName: TravelerInput = {
+      ...traveler,
+      firstName: "Shre",
+    };
+    const { matchedFields } = comparePassport(ocr, wrongName);
+    expect(matchedFields).not.toContain("givenNames");
+  });
+
+  it("composes a multi-part MRZ surname from its zone", () => {
+    const line1 = `P<NPLVAN<DER<BERG<<JOHN`.padEnd(44, "<");
+    const line2 = `PJ12345672NPL8501010M31010100000000000000000`;
+    expect(line1).toHaveLength(44);
+    expect(line2).toHaveLength(44);
+    const ocr = [line1, line2].join("\n");
+    const multiPart: TravelerInput = {
+      ...traveler,
+      surname: "Van Der Berg",
+      firstName: "John",
+      middleName: "",
+      dateOfBirth: "1985-01-01",
+      passportNumber: "PJ1234567",
+      nationality: "NP",
+      passportExpiryDate: "2031-01-01",
+    };
+    const { matchedFields } = comparePassport(ocr, multiPart);
+    expect(matchedFields).toContain("surname");
+    expect(matchedFields).toContain("givenNames");
+  });
+
   it("matches the MRZ date form (DDMMYY) without separators", () => {
     const { matchedFields } = comparePassport(
       "PA1234567<<SHRESTHA<<ASHA<<<KUMARI 900815 7 010130",

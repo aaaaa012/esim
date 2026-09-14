@@ -64,6 +64,7 @@ export class FonepayGateway implements PaymentGateway {
   readonly provider = "FONEPAY";
   private readonly logger = new Logger(FonepayGateway.name);
   private token?: { value: string; expiresAt: number };
+  private pendingAuth: Promise<string> | undefined;
   constructor(@Optional() private readonly prisma?: PrismaService) {}
 
   capabilities() {
@@ -190,6 +191,16 @@ export class FonepayGateway implements PaymentGateway {
       return this.fail("Fonepay is not enabled or fully configured");
     if (this.token && this.token.expiresAt > Date.now() + 30_000)
       return this.token.value;
+    // Single-flight: concurrent callers share one in-flight authentication so
+    // an expired token cannot trigger a stampede of duplicate OAuth requests
+    // that race to overwrite the cached token.
+    if (this.pendingAuth) return this.pendingAuth;
+    this.pendingAuth = this.obtainToken(correlationId).finally(() => {
+      this.pendingAuth = undefined;
+    });
+    return this.pendingAuth;
+  }
+  private async obtainToken(correlationId?: string) {
     const body = {
       username: process.env.FONEPAY_USERNAME!,
       password: process.env.FONEPAY_PASSWORD!,

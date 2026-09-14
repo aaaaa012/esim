@@ -120,6 +120,73 @@ export const comparePassport = (
     ? [mrzPassportNumber.value, ...(mrzPassportNumber.corrections ?? [])]
     : [];
 
+  // A name on a passport only counts when it is really the traveller's name,
+  // so the machine-readable zone is authoritative whenever it can be read.
+  // Falling back to raw substring search over the whole page lets unrelated
+  // OCR words (cities, issuing authority, addresses) satisfy a name and is the
+  // source of the "any name is accepted" false positives. The MRZ name zone
+  // also carries the canonical spelling, so comparisons use its components.
+  const rawTokens = new Set<string>();
+  for (const token of ocrText.toUpperCase().split(/[^A-Z0-9]+/)) {
+    if (token) rawTokens.add(confusableNormalize(token));
+  }
+  const hasMrzNameZone = Boolean(mrz && (mrz.surname || mrz.givenNames));
+  const mrzNameTokens = (zone: string) => {
+    if (!zone) return new Set<string>();
+    const tokens = new Set<string>();
+    // The zone is space-separated (the parser replaced '<' filler with spaces),
+    // so tokenize first and confusable-normalize each component afterwards.
+    for (const token of zone.toUpperCase().split(/[^A-Z0-9]+/)) {
+      if (token) tokens.add(confusableNormalize(token));
+    }
+    return tokens;
+  };
+  const mrzSurnameTokens = mrzNameTokens(mrz?.surname ?? "");
+  const mrzGivenTokens = mrzNameTokens(mrz?.givenNames ?? "");
+  // OCR frequently drops the '<' after the issuing country code and glues it
+  // to the surname (e.g. "USATRAVELER"). Recover that form by splitting the
+  // token at the nationality code, so the name still counts only when it sits
+  // against a recognised MRZ component instead of anywhere in the page.
+  const matchesNationalityGlue = (candidate: string) => {
+    if (!mrz?.nationality || !candidate) return false;
+    const code = confusableNormalize(mrz.nationality);
+    if (!code) return false;
+    const prefixForm = code + candidate;
+    const suffixForm = candidate + code;
+    return (
+      rawTokens.has(prefixForm) ||
+      rawTokens.has(suffixForm)
+    );
+  };
+  const matchesMrzNameZone = (
+    candidate: string,
+    zoneTokens: Set<string>,
+    zone: string,
+  ) => {
+    const normalized = confusableNormalize(candidate);
+    if (!normalized) return false;
+    return (
+      zoneTokens.has(normalized) ||
+      confusableNormalize(zone) === normalized
+    );
+  };
+  const matchesName = (
+    candidate: string,
+    zoneTokens: Set<string>,
+    zone: string,
+    allowGlue = true,
+  ) => {
+    const normalized = confusableNormalize(candidate);
+    if (!normalized) return false;
+    // A readable MRZ name zone is the only acceptable source. The whole-page
+    // token search below is only for passports whose MRZ name zone could not
+    // be OCR'd, so unrelated words can never satisfy a name when the zone is
+    // available.
+    if (hasMrzNameZone) return matchesMrzNameZone(candidate, zoneTokens, zone);
+    if (rawTokens.has(normalized)) return true;
+    return allowGlue && matchesNationalityGlue(normalized);
+  };
+
   const matchesPassportNumber = (candidate: string) => {
     const normalized = normalizeText(candidate);
     if (!normalized) return false;
@@ -153,18 +220,30 @@ export const comparePassport = (
     matchesPassportNumber(traveler.passportNumber)
   )
     matchedFields.push("passportNumber");
-  if (traveler.surname && matchesAny(normalizeText(traveler.surname)))
+if (
+    traveler.surname &&
+    matchesName(
+      traveler.surname,
+      mrzSurnameTokens,
+      mrz?.surname ?? "",
+    )
+  )
     matchedFields.push("surname");
   // The first name is the stable identity signal. An optional middle name must
   // not make the entire given-name comparison fail when OCR omits or joins it.
   if (
     traveler.firstName &&
-    matchesAny(normalizeText(traveler.firstName))
+    matchesName(traveler.firstName, mrzGivenTokens, mrz?.givenNames ?? "")
   )
     matchedFields.push("givenNames");
   if (
     traveler.middleName?.trim() &&
-    matchesAny(normalizeText(traveler.middleName))
+    matchesName(
+      traveler.middleName,
+      mrzGivenTokens,
+      mrz?.givenNames ?? "",
+      false,
+    )
   )
     matchedFields.push("middleName");
   const mrzNationality = mrz?.nationality

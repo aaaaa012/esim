@@ -62,6 +62,14 @@ export class PaymentsService {
     const parsed = Number(process.env.PAYMENT_VERIFY_ATTEMPTS);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
   })();
+  // Backoff for the fast reconciliation sweep. An order that has been looked
+  // up and is still pending (no transaction found yet, or still being paid)
+  // is not queried again until this interval has passed, so an unpaid QR does
+  // not cause the provider to be hammered every sweep for the whole window.
+  private readonly recentReconcileState = new Map<
+    string,
+    { lastCheckedAt: number; consecutivePending: number }
+  >();
   constructor(
     private orders: OrdersService,
     private khalti: KhaltiGateway,
@@ -399,6 +407,128 @@ evidence: {
     return this.applyVerdict(orderId, null, reference, verdict);
   }
 
+  private async reconcileRecentPendingPaymentsInner(): Promise<{
+    confirmed: string[];
+    stillPending: string[];
+    terminal: string[];
+    errored: string[];
+  }> {
+    const confirmed: string[] = [];
+    const stillPending: string[] = [];
+    const terminal: string[] = [];
+    const errored: string[] = [];
+    const now = Date.now();
+    const sweepBaseMs = Math.max(
+      (Number(process.env.PAYMENT_RECONCILE_INTERVAL_SECONDS) || 45) * 1000,
+      1000,
+    );
+    const maxBackoffMs = Math.max(
+      (Number(process.env.PAYMENT_RECONCILE_MAX_BACKOFF_SECONDS) || 300) *
+        1000,
+      1000,
+    );
+    // Consecutive "no transaction yet" results grow the poll interval so an
+    // unpaid QR is not re-queried every sweep for the whole payment window.
+    const backoffMs = (consecutivePending: number) => {
+      if (consecutivePending <= 1) return sweepBaseMs;
+      const exponent = Math.min(consecutivePending - 1, 4);
+      return Math.min(sweepBaseMs * 2 ** exponent, maxBackoffMs);
+    };
+    for (const order of this.orders.list()) {
+      if (
+        order.status !== OrderStatus.PAYMENT_PENDING ||
+        !order.payment ||
+        order.payment.status !== PaymentStatus.PENDING ||
+        !order.payment.reference
+      ) {
+        // Backoff state is only meaningful while the order is a candidate for
+        // this sweep. Drop it as soon as the order moves out of the candidate
+        // shape so the map cannot grow without bound.
+        this.recentReconcileState.delete(order.id);
+        continue;
+      }
+      const reference = order.payment.reference;
+      const expiry =
+        order.payment.expiresAt ??
+        new Date(
+          new Date(order.createdAt).getTime() + 30 * 60_000,
+        ).toISOString();
+      if (now >= new Date(expiry).getTime()) {
+        // Hand off to the expiry-phase reconcile; it tracks its own attempts,
+        // so the fast-sweep entry is no longer needed.
+        this.recentReconcileState.delete(order.id);
+        continue;
+      }
+      const state = this.recentReconcileState.get(order.id);
+      const lastCheckedAt = state?.lastCheckedAt ?? 0;
+      if (now - lastCheckedAt < backoffMs(state?.consecutivePending ?? 0))
+        continue; // not due yet; skip without a provider call
+      try {
+        const verdict = await this.lookup(order, reference, "recent-reconcile");
+        if (verdict.outcome === "CONFIRMED") {
+          this.recentReconcileState.delete(order.id);
+          await this.orders.confirmPayment(order.id, reference);
+          confirmed.push(order.id);
+        } else if (verdict.outcome === "TERMINAL") {
+          this.recentReconcileState.delete(order.id);
+          if (verdict.resolve) {
+            await this.orders.resolvePaymentFailure(
+              order.id,
+              null,
+              verdict.reason,
+              verdict.paymentStatus,
+            );
+          } else {
+            // A provider-reported COMPLETED that does not match this order
+            // (amount/order/currency) must not keep polling forever — the
+            // customer may have been charged. Flag it and move the order to
+            // operational review so an operator or the expiry sweep can
+            // settle the truth instead of re-querying every sweep.
+            if (
+              verdict.code === ApiErrorCode.PAYMENT_REFERENCE_MISMATCH ||
+              verdict.reason.toLowerCase().includes("mismatch")
+            )
+              await this.flagPaymentMismatch(order, verdict.reason);
+            await this.markReviewRequired(order, verdict.reason);
+          }
+          if (verdict.code === ApiErrorCode.PAYMENT_REFERENCE_MISMATCH)
+            this.logger.warn(
+              JSON.stringify({
+                event: "payment_mismatch",
+                orderId: order.id,
+                source: "recent-reconcile",
+              }),
+            );
+          terminal.push(order.id);
+        } else {
+          this.recentReconcileState.set(order.id, {
+            lastCheckedAt: Date.now(),
+            consecutivePending: (state?.consecutivePending ?? 0) + 1,
+          });
+          stillPending.push(order.id);
+        }
+      } catch (error) {
+        // Preserve the growing backoff on provider errors: a provider outage
+        // is exactly when you do NOT want to re-query every sweep. Each
+        // consecutive failure still counts toward the exponential interval.
+        this.recentReconcileState.set(order.id, {
+          lastCheckedAt: Date.now(),
+          consecutivePending: (state?.consecutivePending ?? 0) + 1,
+        });
+        errored.push(order.id);
+        this.logger.warn(
+          JSON.stringify({
+            event: "payment_reconcile_error",
+            orderId: order.id,
+            source: "recent-reconcile",
+            error: error instanceof Error ? error.message : "unknown",
+          }),
+        );
+      }
+    }
+    return { confirmed, stillPending, terminal, errored };
+  }
+
   /**
    * Fast reconciliation sweep for orders still inside their payment window.
    * Runs on its own short timer (PAYMENT_RECONCILE_INTERVAL_SECONDS); it only
@@ -410,6 +540,11 @@ evidence: {
    * With persistence enabled the candidate set is read from the canonical
    * store (Payment rows in PENDING under a PAYMENT_PENDING order) so every
    * replica reconciles the same set regardless of its in-memory cache.
+   *
+   * Individual orders are polled with a backoff that grows while repeated
+   * lookups keep returning pending (no transaction found yet), so an unpaid QR
+   * is not re-queried on every sweep. The FonePay WebSocket is the primary
+   * "the customer paid" signal; this sweep is only a bounded backstop.
    */
   async reconcileRecentPendingPayments(): Promise<{
     confirmed: string[];
@@ -432,64 +567,7 @@ evidence: {
         orderIds.map((orderId) => this.orders.refreshOne?.(orderId, true)),
       );
     }
-    const confirmed: string[] = [];
-    const stillPending: string[] = [];
-    const terminal: string[] = [];
-    const errored: string[] = [];
-    const now = Date.now();
-    for (const order of this.orders.list()) {
-      if (
-        order.status !== OrderStatus.PAYMENT_PENDING ||
-        !order.payment ||
-        order.payment.status !== PaymentStatus.PENDING ||
-        !order.payment.reference
-      )
-        continue;
-      const reference = order.payment.reference;
-      const expiry =
-        order.payment.expiresAt ??
-        new Date(
-          new Date(order.createdAt).getTime() + 30 * 60_000,
-        ).toISOString();
-      if (now >= new Date(expiry).getTime()) continue; // hand-off to the expiry-phase reconcile
-      try {
-        const verdict = await this.lookup(order, reference, "recent-reconcile");
-        if (verdict.outcome === "CONFIRMED") {
-          await this.orders.confirmPayment(order.id, reference);
-          confirmed.push(order.id);
-        } else if (verdict.outcome === "TERMINAL") {
-          if (verdict.resolve)
-            await this.orders.resolvePaymentFailure(
-              order.id,
-              null,
-              verdict.reason,
-              verdict.paymentStatus,
-            );
-          if (verdict.code === ApiErrorCode.PAYMENT_REFERENCE_MISMATCH)
-            this.logger.warn(
-              JSON.stringify({
-                event: "payment_mismatch",
-                orderId: order.id,
-                source: "recent-reconcile",
-              }),
-            );
-          terminal.push(order.id);
-        } else {
-          stillPending.push(order.id);
-        }
-      } catch (error) {
-        errored.push(order.id);
-        this.logger.warn(
-          JSON.stringify({
-            event: "payment_reconcile_error",
-            orderId: order.id,
-            source: "recent-reconcile",
-            error: error instanceof Error ? error.message : "unknown",
-          }),
-        );
-      }
-    }
-    return { confirmed, stillPending, terminal, errored };
+    return this.reconcileRecentPendingPaymentsInner();
   }
 
   private async applyVerdict(

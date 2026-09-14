@@ -497,6 +497,179 @@ describe("PaymentsService.reconcileRecentPendingPayments", () => {
     expect(confirmedCalls).toHaveLength(0);
     expect(failedCalls).toHaveLength(0);
   });
+
+  it("backs off an order that keeps returning pending (no transaction yet)", async () => {
+    const order = orderFor();
+    const calls: string[] = [];
+    const svc = new PaymentsService(
+      {
+        get: () => order,
+        view: () => order,
+        list: () => [order],
+        confirmPayment: vi.fn(async () => order),
+        resolvePaymentFailure: vi.fn(async () => order),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    const gateway = {
+      provider: "KHALTI",
+      async verify(reference: string) {
+        calls.push(reference);
+        return {
+          reference,
+          orderId: order.id,
+          amountNpr: order.totalAmountNpr,
+          status: PaymentStatus.PENDING,
+        };
+      },
+    };
+    (svc as unknown as { gateway: () => typeof gateway }).gateway = () =>
+      gateway;
+
+    const first = await svc.reconcileRecentPendingPayments();
+    expect(calls).toEqual(["pidx-1"]);
+    expect(first.stillPending).toEqual(["order-1"]);
+
+    // A second sweep in the same window must not re-query an order that was
+    // just checked and is still pending.
+    const second = await svc.reconcileRecentPendingPayments();
+    expect(calls).toEqual(["pidx-1"]);
+    expect(second.stillPending).toEqual([]);
+    expect(second.confirmed).toHaveLength(0);
+    expect(second.errored).toHaveLength(0);
+  });
+
+  it("escalates a completed-but-mismatched lookup to operational review", async () => {
+    const order = orderFor();
+    const requirePaymentReview = vi.fn(async (id: string) => {
+      order.status = OrderStatus.PAYMENT_REVIEW_REQUIRED;
+      return order;
+    });
+    const attention = vi.fn(async () => undefined);
+    const svc = new PaymentsService(
+      {
+        get: () => order,
+        view: () => order,
+        list: () => [order],
+        confirmPayment: vi.fn(async () => order),
+        resolvePaymentFailure: vi.fn(async () => order),
+        requirePaymentReview,
+      } as never,
+      {} as never,
+      {} as never,
+      undefined,
+      { attention } as never,
+    );
+    const gateway = {
+      provider: "KHALTI",
+      verify: vi.fn(async (reference: string) => ({
+        reference,
+        orderId: order.id,
+        amountNpr: order.totalAmountNpr + 1, // provider reports a different amount
+        status: PaymentStatus.COMPLETED,
+      })),
+    };
+    (svc as unknown as { gateway: () => typeof gateway }).gateway = () =>
+      gateway;
+
+    const result = await svc.reconcileRecentPendingPayments();
+    expect(result.terminal).toEqual(["order-1"]);
+    expect(result.confirmed).toHaveLength(0);
+    expect(requirePaymentReview).toHaveBeenCalledWith(
+      "order-1",
+      expect.stringContaining("mismatch"),
+    );
+    expect(attention).toHaveBeenCalledWith(
+      expect.objectContaining({ category: "PAYMENT_SECURITY" }),
+    );
+
+    // The order is now in review, so a second sweep must not re-query it.
+    const second = await svc.reconcileRecentPendingPayments();
+    expect(gateway.verify).toHaveBeenCalledTimes(1);
+    expect(second.terminal).toHaveLength(0);
+  });
+
+  it("does not reset the poll backoff when the provider errors", async () => {
+    const order = orderFor();
+    const calls: string[] = [];
+    const svc = new PaymentsService(
+      {
+        get: () => order,
+        view: () => order,
+        list: () => [order],
+        confirmPayment: vi.fn(async () => order),
+        resolvePaymentFailure: vi.fn(async () => order),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    const gateway = {
+      provider: "KHALTI",
+      verify: vi.fn(async (reference: string) => {
+        calls.push(reference);
+        throw new ApiException({
+          code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
+          message: "unavailable",
+          status: 502,
+        });
+      }),
+    };
+    (svc as unknown as { gateway: () => typeof gateway }).gateway = () =>
+      gateway;
+
+    const first = await svc.reconcileRecentPendingPayments();
+    expect(first.errored).toEqual(["order-1"]);
+    expect(calls).toEqual(["pidx-1"]);
+
+    // The error counts toward the backoff: a second sweep in the same window
+    // must not hammer the provider again.
+    const second = await svc.reconcileRecentPendingPayments();
+    expect(calls).toEqual(["pidx-1"]);
+    expect(second.errored).toEqual([]);
+  });
+
+  it("prunes backoff state once an order is no longer a sweep candidate", async () => {
+    const order = orderFor();
+    const svc = new PaymentsService(
+      {
+        get: () => order,
+        view: () => order,
+        list: () => [order],
+        confirmPayment: vi.fn(async () => order),
+        resolvePaymentFailure: vi.fn(async () => order),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    const gateway = {
+      provider: "KHALTI",
+      verify: vi.fn(async (reference: string) => ({
+        reference,
+        orderId: order.id,
+        amountNpr: order.totalAmountNpr,
+        status: PaymentStatus.PENDING,
+      })),
+    };
+    (svc as unknown as { gateway: () => typeof gateway }).gateway = () =>
+      gateway;
+    const state = (
+      svc as unknown as {
+        recentReconcileState: Map<string, { consecutivePending: number }>;
+      }
+    ).recentReconcileState;
+
+    const first = await svc.reconcileRecentPendingPayments();
+    expect(first.stillPending).toEqual(["order-1"]);
+    expect(state.size).toBe(1);
+
+    // The order leaves the candidate set (cancelled externally); the stale
+    // backoff entry must be dropped, not retained forever.
+    order.status = OrderStatus.CANCELLED;
+    order.payment.status = PaymentStatus.CANCELLED;
+    await svc.reconcileRecentPendingPayments();
+    expect(state.size).toBe(0);
+  });
 });
 
 describe("PaymentsService durable verification attempts", () => {
