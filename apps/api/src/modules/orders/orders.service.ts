@@ -1153,7 +1153,10 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException(
         `Confirm all required documents before verification: ${missingRequiredDocuments.join(", ")}`,
       );
-    if (!order.traveler && order.passportExtraction?.status !== "PROCESSING") {
+    const storedExtraction = order.passportExtraction;
+    const extractionMatchesPassport =
+      storedExtraction?.passportAssetId === passport.privateAssetId;
+    if (!order.traveler && !extractionMatchesPassport) {
       order.passportExtraction = {
         status: "PROCESSING",
         fields: {},
@@ -1171,6 +1174,17 @@ export class OrdersService implements OnModuleInit {
     order.documentReviewPolicy = config.documentReviewPolicy;
     order.documentReviewStartedAt ??= now.toISOString();
     if (!order.traveler) {
+      // A completed extraction for this exact passport already holds the
+      // fields used to prefill the traveller form. Reuse it instead of
+      // overwriting it with a bare PROCESSING placeholder, which the
+      // asset-hashed extraction job would never run again to restore.
+      if (
+        extractionMatchesPassport &&
+        ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+          storedExtraction?.status ?? "",
+        )
+      )
+        return this.redact(order);
       order.documentReviewStatus = "OCR_PENDING";
       order.documentReviewStartedAt = now.toISOString();
       await this.persistence.save(order);

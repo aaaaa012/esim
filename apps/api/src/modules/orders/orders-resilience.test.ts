@@ -1495,6 +1495,66 @@ it.each([
   },
 );
 
+it("reuses a completed passport extraction when re-checked before traveller details", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "extract-before-traveler",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "READY",
+          fields: { firstName: "ANNA", surname: "ERIKSSON" },
+          fieldsRequiringInput: [],
+          passportAssetId: "passport-asset",
+          confidence: 96,
+          correctionAttempts: 0,
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    { enabled: false },
+    undefined,
+    undefined,
+    {},
+    { add },
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "extract-before-traveler",
+    "customer-1",
+  );
+
+  expect(result.passportExtraction?.status).toBe("READY");
+  expect(result.passportExtraction?.fields).toMatchObject({
+    firstName: "ANNA",
+    surname: "ERIKSSON",
+  });
+  expect(add).not.toHaveBeenCalled();
+});
+
 it("routes a partial extraction with no readable name to manual review", async () => {
   const add = vi.fn().mockResolvedValue({});
   const instance = ordersService(
