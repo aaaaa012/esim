@@ -1455,7 +1455,7 @@ describe("OrdersService cancellation attribution", () => {
       "Cancelled by operations",
       "staff-clerk-9",
     );
-    const persisted = save.mock.calls[0][0] as DemoOrder;
+    const persisted = save.mock.calls[0]![0] as DemoOrder;
     const cancelled = persisted.timeline.at(-1)!;
     expect(cancelled.to).toBe(OrderStatus.CANCELLED);
     expect(cancelled.reason).toBe("Cancelled by operations");

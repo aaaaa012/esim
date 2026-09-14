@@ -195,7 +195,7 @@ describe("ManualRefundsService", () => {
       orderId: "order-1",
       paymentId: "payment-1",
       status: ManualRefundStatus.APPROVED,
-      reason: ManualRefundReason.COMPANY_FAULT,
+      reason: ManualRefundReason.PROVIDER_SERVICE_FAILURE,
       amount: 2499,
       order: { status: "REFUND_PENDING" },
       payment: { status: PaymentStatus.COMPLETED, amount: 2499 },

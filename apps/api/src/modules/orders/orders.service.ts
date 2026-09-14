@@ -3794,7 +3794,7 @@ export class OrdersService implements OnModuleInit {
             reason:
               event.reason
                 .replace(
-                  /\s+\(?(requested by|approved by|assigned by)\s+user_[A-Za-z0-9_]+\)?\.?$/i,
+                  /\s+\(?(requested by|approved by|assigned by|received .+ from)\s+user_[A-Za-z0-9_]+\.?\)?$/i,
                   "",
                 )
                 .trim() || undefined,

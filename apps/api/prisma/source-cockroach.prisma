@@ -965,6 +965,7 @@ model PartnerEvent {
   resourceId    String
   correlationId String
   payload       Json
+  dedupeKey     String?                  @unique
   occurredAt    DateTime                 @default(now())
   deliveries    PartnerWebhookDelivery[]
 
