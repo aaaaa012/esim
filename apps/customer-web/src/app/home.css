@@ -3579,6 +3579,17 @@
 }
 
 @media (max-width: 540px) {
+  .campaign-gallery-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .campaign-gallery-head > div:first-child {
+    max-width: none;
+  }
+  .campaign-gallery-controls {
+    align-self: flex-end;
+    flex: none;
+  }
   .section.destinations-page {
     padding: 48px 0 64px;
   }
