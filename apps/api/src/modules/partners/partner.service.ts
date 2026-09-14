@@ -2711,7 +2711,12 @@ export class PartnerService {
   async setHostedTraveler(token: string, traveler: TravelerInput) {
     const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
     const retryExistingPassport =
-      order.documentReviewStatus === "REUPLOAD_REQUIRED";
+      order.documentReviewStatus === "REUPLOAD_REQUIRED" ||
+      (order.documentReviewStatus === "MANUAL_REVIEW" &&
+        ["PARTIAL", "FAILED"].includes(
+          order.documents.find((document) => document.type === "PASSPORT")
+            ?.passportVerificationStatus ?? "",
+        ));
     await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
       if (retryExistingPassport) {

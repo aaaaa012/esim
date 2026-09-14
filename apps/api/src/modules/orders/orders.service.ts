@@ -863,15 +863,21 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id, ownerId ?? undefined);
     if (order.status !== OrderStatus.DRAFT)
       throw new BadRequestException("Submitted order is immutable");
-    const retryExistingPassport =
+    const replacingPassport =
       order.documentReviewStatus === "REUPLOAD_REQUIRED";
+    const correctingMismatch =
+      order.documentReviewStatus === "MANUAL_REVIEW" &&
+      ["PARTIAL", "FAILED"].includes(
+        order.passportVerification?.status ?? "",
+      );
+    const retryExistingPassport = replacingPassport || correctingMismatch;
     order.traveler = traveler;
     if (retryExistingPassport) {
       order.documentReviewStatus = "NOT_STARTED";
       delete order.documentReviewStartedAt;
       delete order.documentCheckoutReleaseAt;
       delete order.passportVerification;
-      delete order.passportExtraction;
+      if (replacingPassport) delete order.passportExtraction;
       const passport = order.documents.find(
         (document) => document.type === DocumentType.PASSPORT,
       );

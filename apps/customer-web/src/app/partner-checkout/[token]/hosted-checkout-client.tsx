@@ -1928,6 +1928,24 @@ function PassportCheck({
         </span>
       </div>
     );
+  if (status === "MANUAL_REVIEW")
+    return (
+      <div className="passport-check manual" role="status">
+        <ShieldCheck size={20} />
+        <span>
+          <b>Traveller details need checking</b>
+          <small>
+            Review the information you entered, or wait for our team to review
+            the saved document.
+          </small>
+        </span>
+        {onEdit && (
+          <button type="button" className="button secondary" onClick={onEdit}>
+            Review traveller details
+          </button>
+        )}
+      </div>
+    );
   if (status === "SKIPPED")
     return (
       <div className="passport-check skipped">

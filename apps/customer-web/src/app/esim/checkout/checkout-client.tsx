@@ -1610,9 +1610,7 @@ export default function CheckoutClient({
                         void createOrder(true);
                       }}
                     >
-                      {busy ? (
-                        <><LoaderCircle className="spin" size={18} /> Creating your secure order…</>
-                      ) : "Continue as guest"}
+                      {busy ? <><LoaderCircle className="spin" size={18} /> Creating your secure order…</> : "Continue as guest"}
                     </button>
                   </div>
                 </div>
@@ -2837,12 +2835,17 @@ function PassportCheck({
       <div className="passport-check manual" role="status">
         <ShieldCheck size={20} />
         <span>
-          <b>Documents saved for review</b>
+          <b>Traveller details need checking</b>
           <small>
             Our team needs to review your document before payment. We will
             notify you once it is approved — this page updates automatically.
           </small>
         </span>
+        {onEdit && (
+          <button type="button" className="button secondary" onClick={onEdit}>
+            Review traveller details
+          </button>
+        )}
         <span className="passport-check-tag">{paymentLabel}</span>
       </div>
     );

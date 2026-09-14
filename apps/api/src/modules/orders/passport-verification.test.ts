@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { TravelerInput } from "@visa-compass/shared";
 import {
   comparePassport,
+  compareExtractedPassport,
   dateVariants,
   imageDimensions,
   normalizeText,
+  verifyStoredExtraction,
   verdictFor,
 } from "./passport-verification.service.js";
 
@@ -26,6 +28,50 @@ const traveler: TravelerInput = {
 describe("normalizeText", () => {
   it("uppercases and strips every non-alphanumeric character", () => {
     expect(normalizeText("P A 123-4567 / abc")).toBe("PA1234567ABC");
+  });
+});
+
+describe("stored passport extraction comparison", () => {
+  it("deterministically compares customer corrections without another OCR pass", () => {
+    const evidence = {
+      firstName: "ASHA",
+      surname: "SHRESTHA",
+      dateOfBirth: "1990-08-15",
+      nationality: "NP",
+      passportNumber: "PA1234567",
+      passportExpiryDate: "2030-01-01",
+    };
+    expect(compareExtractedPassport(evidence, traveler).matchedFields).toEqual(
+      expect.arrayContaining([
+        "passportNumber",
+        "surname",
+        "givenNames",
+        "dateOfBirth",
+        "nationality",
+        "passportExpiryDate",
+      ]),
+    );
+    expect(verifyStoredExtraction(evidence, traveler, 91)).toMatchObject({
+      status: "VERIFIED",
+      method: "stored-extraction",
+      confidence: 91,
+    });
+  });
+
+  it("routes a corrected value that conflicts with stored evidence for review", () => {
+    const result = verifyStoredExtraction(
+      {
+        firstName: "ASHA",
+        surname: "SHRESTHA",
+        dateOfBirth: "1990-08-15",
+        nationality: "NP",
+        passportNumber: "PA7654321",
+        passportExpiryDate: "2030-01-01",
+      },
+      traveler,
+    );
+    expect(result.status).toBe("PARTIAL");
+    expect(result.matchedFields).not.toContain("passportNumber");
   });
 });
 
@@ -101,6 +147,7 @@ describe("comparePassport", () => {
       dateOfBirth: "1965-02-05",
       passportNumber: "E00007730",
       passportExpiryDate: "2030-10-14",
+      nationality: "US",
     };
     const ocr = [
       "UNITED STATES OF AMERICA",
@@ -114,6 +161,7 @@ describe("comparePassport", () => {
     expect(matchedFields).toContain("surname");
     expect(matchedFields).toContain("dateOfBirth");
     expect(matchedFields).toContain("passportExpiryDate");
+    expect(matchedFields).toContain("nationality");
     expect(verdictFor(matchedFields)).toBe("VERIFIED");
   });
 });
@@ -139,6 +187,9 @@ describe("verdictFor", () => {
   });
   it("is partial when only the passport number matches", () => {
     expect(verdictFor(["passportNumber"])).toBe("PARTIAL");
+  });
+  it("does not treat nationality alone as corroborating identity evidence", () => {
+    expect(verdictFor(["passportNumber", "nationality"])).toBe("PARTIAL");
   });
   it("is partial when a name plus the date of birth match but the number is unreadable", () => {
     expect(verdictFor(["surname", "givenNames", "dateOfBirth"])).toBe(

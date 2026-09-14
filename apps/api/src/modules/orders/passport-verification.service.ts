@@ -23,6 +23,7 @@ export type PassportField =
   | "passportNumber"
   | "surname"
   | "givenNames"
+  | "nationality"
   | "dateOfBirth"
   | "passportExpiryDate";
 export type PassportVerificationResult = {
@@ -31,7 +32,12 @@ export type PassportVerificationResult = {
   confidence?: number;
   checkedAt: string;
   method:
-    "tesseract-ocr" | "simulator" | "pdf-unreadable" | "ocr-error" | "policy";
+    | "tesseract-ocr"
+    | "stored-extraction"
+    | "simulator"
+    | "pdf-unreadable"
+    | "ocr-error"
+    | "policy";
   detail?: string;
 };
 export type PassportExtractedFields = Partial<
@@ -148,11 +154,21 @@ export const comparePassport = (
     matchedFields.push("passportNumber");
   if (traveler.surname && matchesAny(normalizeText(traveler.surname)))
     matchedFields.push("surname");
-  const given = [traveler.firstName, traveler.middleName]
-    .filter(Boolean)
-    .join(" ");
-  if (given && matchesAny(normalizeText(given)))
+  // The first name is the stable identity signal. An optional middle name must
+  // not make the entire given-name comparison fail when OCR omits or joins it.
+  if (
+    traveler.firstName &&
+    matchesAny(normalizeText(traveler.firstName))
+  )
     matchedFields.push("givenNames");
+  const mrzNationality = mrz?.nationality
+    ? ISO3_TO_ISO2[mrz.nationality.toUpperCase()]
+    : undefined;
+  if (
+    mrzNationality &&
+    mrzNationality === traveler.nationality.trim().toUpperCase()
+  )
+    matchedFields.push("nationality");
   if (dateVariants(traveler.dateOfBirth).some((variant) => matchesAny(variant)))
     matchedFields.push("dateOfBirth");
   if (
@@ -163,6 +179,60 @@ export const comparePassport = (
     matchedFields.push("passportExpiryDate");
   return { matchedFields };
 };
+type PassportComparisonTraveler = Pick<
+  TravelerInput,
+  | "firstName"
+  | "middleName"
+  | "surname"
+  | "dateOfBirth"
+  | "nationality"
+  | "passportNumber"
+  | "passportExpiryDate"
+>;
+
+export const compareExtractedPassport = (
+  fields: PassportExtractedFields,
+  traveler: PassportComparisonTraveler,
+): { matchedFields: PassportField[] } => {
+  const matchedFields: PassportField[] = [];
+  const sameText = (left?: string, right?: string) =>
+    Boolean(
+      left &&
+        right &&
+        confusableNormalize(normalizeText(left)) ===
+          confusableNormalize(normalizeText(right)),
+    );
+  if (sameText(fields.passportNumber, traveler.passportNumber))
+    matchedFields.push("passportNumber");
+  if (sameText(fields.surname, traveler.surname))
+    matchedFields.push("surname");
+  if (sameText(fields.firstName, traveler.firstName))
+    matchedFields.push("givenNames");
+  if (fields.dateOfBirth === traveler.dateOfBirth)
+    matchedFields.push("dateOfBirth");
+  if (fields.passportExpiryDate === traveler.passportExpiryDate)
+    matchedFields.push("passportExpiryDate");
+  if (
+    fields.nationality?.toUpperCase() === traveler.nationality.toUpperCase()
+  )
+    matchedFields.push("nationality");
+  return { matchedFields };
+};
+
+export const verifyStoredExtraction = (
+  fields: PassportExtractedFields,
+  traveler: PassportComparisonTraveler,
+  confidence?: number | null,
+): PassportVerificationResult => {
+  const { matchedFields } = compareExtractedPassport(fields, traveler);
+  return {
+    status: verdictFor(matchedFields),
+    matchedFields,
+    ...(confidence != null ? { confidence } : {}),
+    checkedAt: new Date().toISOString(),
+    method: "stored-extraction",
+  };
+};
 
 /** The passport number is the primary signal; the order only passes when at
  *  least one more field (name, date of birth or expiry) also matches. When the
@@ -172,8 +242,14 @@ export const comparePassport = (
 export const verdictFor = (
   matchedFields: PassportField[],
 ): PassportVerificationStatus => {
-  if (matchedFields.includes("passportNumber"))
-    return matchedFields.length >= 2 ? "VERIFIED" : "PARTIAL";
+  if (matchedFields.includes("passportNumber")) {
+    const corroboratingIdentityMatch = matchedFields.some((field) =>
+      ["surname", "givenNames", "dateOfBirth", "passportExpiryDate"].includes(
+        field,
+      ),
+    );
+    return corroboratingIdentityMatch ? "VERIFIED" : "PARTIAL";
+  }
   const nameMatch =
     matchedFields.includes("surname") || matchedFields.includes("givenNames");
   const strongIdentityPair = nameMatch && matchedFields.includes("dateOfBirth");

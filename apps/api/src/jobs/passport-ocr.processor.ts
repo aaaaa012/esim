@@ -5,7 +5,11 @@ import { randomUUID } from "node:crypto";
 import { CryptoService } from "../infrastructure/crypto.service.js";
 import { S3StorageService } from "../infrastructure/s3-storage.service.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
-import { PassportVerificationService } from "../modules/orders/passport-verification.service.js";
+import {
+  PassportVerificationService,
+  verifyStoredExtraction,
+  type PassportExtractedFields,
+} from "../modules/orders/passport-verification.service.js";
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
 import { ProductionResilienceService } from "./production-resilience.service.js";
@@ -54,6 +58,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       include: {
         traveler: true,
         documents: true,
+        passportExtraction: true,
         partner: { select: { id: true } },
       },
     });
@@ -146,21 +151,32 @@ export class PassportOcrProcessor implements OnModuleInit {
       });
       return extraction;
     }
-    const result = await this.passportVerifier.verify({
-      id: order.id,
-      purchaseType: order.orderType === "TOPUP" ? "TOPUP" : "INITIAL_PURCHASE",
-      traveler,
-      documents: [
-        {
-          id: passport.id,
-          type: DocumentType.PASSPORT,
-          fileName: passport.fileName,
-          privateAssetId: passport.privateAssetId,
-          status: passport.status,
-          uploadVerified: true,
-        },
-      ],
-    } as never);
+    const storedFields = this.readyExtractionFields(
+      order.passportExtraction,
+      passport.privateAssetId,
+    );
+    const result = storedFields
+      ? verifyStoredExtraction(
+          storedFields,
+          traveler,
+          order.passportExtraction?.confidence,
+        )
+      : await this.passportVerifier.verify({
+          id: order.id,
+          purchaseType:
+            order.orderType === "TOPUP" ? "TOPUP" : "INITIAL_PURCHASE",
+          traveler,
+          documents: [
+            {
+              id: passport.id,
+              type: DocumentType.PASSPORT,
+              fileName: passport.fileName,
+              privateAssetId: passport.privateAssetId,
+              status: passport.status,
+              uploadVerified: true,
+            },
+          ],
+        } as never);
 
     const technicalFailure =
       result.method === "ocr-error" || result.status === "NOT_READY";
@@ -174,11 +190,11 @@ export class PassportOcrProcessor implements OnModuleInit {
     const verified =
       result.status === "VERIFIED" || result.status === "SKIPPED";
     const partial = result.status === "PARTIAL";
-    const reviewStatus = verified
-      ? "VERIFIED"
-      : partial || technicalFailure
-        ? "MANUAL_REVIEW"
-        : "REUPLOAD_REQUIRED";
+    // A comparison failure does not prove that the image is unusable. It can
+    // equally mean that a traveller corrected (or mistyped) a field. Keep the
+    // document available for correction and human review; only an explicit
+    // reviewer decision may require a replacement image.
+    const reviewStatus = verified ? "VERIFIED" : "MANUAL_REVIEW";
     try {
       await this.prisma.$transaction(async (tx) => {
         const orderClaim = await tx.order.updateMany({
@@ -201,11 +217,7 @@ export class PassportOcrProcessor implements OnModuleInit {
             status: { not: "APPROVED" },
           },
           data: {
-            status: verified
-              ? "APPROVED"
-              : partial || technicalFailure
-                ? "PENDING"
-                : "REUPLOAD_REQUIRED",
+            status: verified ? "APPROVED" : "PENDING",
             passportVerificationStatus: result.status,
             passportVerificationMethod: result.method,
             passportMatchedFields:
@@ -227,7 +239,7 @@ export class PassportOcrProcessor implements OnModuleInit {
                 ? "Passport partially matched; routed to manual review"
                 : technicalFailure
                   ? "OCR technical failure; routed to non-blocking manual review"
-                  : "Passport verification failed; replacement requested",
+                  : "Traveller details were not confirmed; correction or manual review required",
             metadata: { documentReviewStatus: reviewStatus },
           },
         });
@@ -286,7 +298,7 @@ export class PassportOcrProcessor implements OnModuleInit {
     const verification =
       await this.prisma.partnerDocumentVerification.findUnique({
         where: { id: job.data.verificationId },
-        include: { documents: true },
+        include: { documents: true, passportExtraction: true },
       });
     if (
       !verification ||
@@ -412,21 +424,31 @@ export class PassportOcrProcessor implements OnModuleInit {
         return extraction;
       }
       const traveler = this.decryptSnapshot(verification.travelerSnapshot);
-      const result = await this.passportVerifier.verify({
-        id: verification.id,
-        purchaseType: "INITIAL_PURCHASE",
-        traveler,
-        documents: [
-          {
-            id: passport.id,
-            type: DocumentType.PASSPORT,
-            fileName: passport.fileName,
-            privateAssetId: passport.privateAssetId,
-            status: "PENDING",
-            uploadVerified: true,
-          },
-        ],
-      } as never);
+      const storedFields = this.readyExtractionFields(
+        verification.passportExtraction,
+        passport.privateAssetId,
+      );
+      const result = storedFields
+        ? verifyStoredExtraction(
+            storedFields,
+            traveler,
+            verification.passportExtraction?.confidence,
+          )
+        : await this.passportVerifier.verify({
+            id: verification.id,
+            purchaseType: "INITIAL_PURCHASE",
+            traveler,
+            documents: [
+              {
+                id: passport.id,
+                type: DocumentType.PASSPORT,
+                fileName: passport.fileName,
+                privateAssetId: passport.privateAssetId,
+                status: "PENDING",
+                uploadVerified: true,
+              },
+            ],
+          } as never);
       if (
         result.status === "NOT_READY" ||
         (result.status === "FAILED" && result.method === "ocr-error")
@@ -439,11 +461,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       // A partial read (identity matched, number unreadable) is not the
       // traveller's fault; route it to manual review instead of rejecting it.
       const partial = result.status === "PARTIAL";
-      const intentStatus = accepted
-        ? "VERIFIED"
-        : partial
-          ? "PENDING"
-          : "REUPLOAD_REQUIRED";
+      const intentStatus = accepted ? "VERIFIED" : "PENDING";
       let linkedOrderId: string | null = null;
       let verdictPersisted = false;
       let linkedOrderUpdated = false;
@@ -457,13 +475,8 @@ export class PassportOcrProcessor implements OnModuleInit {
               },
             },
             data: {
-              status: accepted
-                ? "VERIFIED"
-                : partial
-                  ? "MANUAL_REVIEW"
-                  : "REUPLOAD_REQUIRED",
-              failureCode:
-                accepted || partial ? null : "PASSPORT_REUPLOAD_REQUIRED",
+              status: accepted ? "VERIFIED" : "MANUAL_REVIEW",
+              failureCode: accepted ? null : "TRAVELLER_DETAILS_UNCONFIRMED",
             },
           });
         if (verificationClaim.count === 0) return;
@@ -497,16 +510,8 @@ export class PassportOcrProcessor implements OnModuleInit {
             },
           },
           data: {
-            status: accepted
-              ? "REVIEW_PENDING"
-              : partial
-                ? "REVIEW_PENDING"
-                : "AWAITING_CUSTOMER",
-            documentReviewStatus: accepted
-              ? "VERIFIED"
-              : partial
-                ? "MANUAL_REVIEW"
-                : "REUPLOAD_REQUIRED",
+            status: "REVIEW_PENDING",
+            documentReviewStatus: accepted ? "VERIFIED" : "MANUAL_REVIEW",
             version: { increment: 1 },
           },
         });
@@ -518,11 +523,7 @@ export class PassportOcrProcessor implements OnModuleInit {
             type: DocumentType.PASSPORT,
           },
           data: {
-            status: accepted
-              ? "APPROVED"
-              : partial
-                ? "PENDING"
-                : "REUPLOAD_REQUIRED",
+            status: accepted ? "APPROVED" : "PENDING",
             passportVerificationStatus: result.status,
             passportVerificationMethod: result.method,
             passportMatchedFields:
@@ -690,6 +691,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       firstName: snapshot.firstName ?? "",
       ...(snapshot.middleName ? { middleName: snapshot.middleName } : {}),
       surname: snapshot.surname ?? "",
+      nationality: snapshot.nationality ?? "",
       dateOfBirth: this.crypto.decrypt(snapshot.dateOfBirthEncrypted ?? ""),
       passportNumber: this.crypto.decrypt(
         snapshot.passportNumberEncrypted ?? "",
@@ -820,6 +822,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       firstName: string;
       middleName: string | null;
       surname: string;
+      nationality: string;
       dateOfBirthEncrypted: string | null;
       passportNumberEncrypted: string | null;
       passportExpiryEncrypted: string | null;
@@ -830,6 +833,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       firstName: traveler.firstName,
       ...(traveler.middleName ? { middleName: traveler.middleName } : {}),
       surname: traveler.surname,
+      nationality: traveler.nationality,
       dateOfBirth: this.crypto.decrypt(traveler.dateOfBirthEncrypted ?? ""),
       passportNumber: this.crypto.decrypt(
         traveler.passportNumberEncrypted ?? "",
@@ -838,5 +842,36 @@ export class PassportOcrProcessor implements OnModuleInit {
         traveler.passportExpiryEncrypted ?? "",
       ),
     };
+  }
+
+  private readyExtractionFields(
+    extraction: {
+      status: string;
+      passportAssetId: string;
+      payloadEncrypted: string | null;
+    } | null,
+    currentAssetId: string,
+  ): PassportExtractedFields | null {
+    if (
+      extraction?.status !== "READY" ||
+      extraction.passportAssetId !== currentAssetId ||
+      !extraction.payloadEncrypted
+    )
+      return null;
+    try {
+      const value = JSON.parse(
+        this.crypto.decrypt(extraction.payloadEncrypted),
+      ) as unknown;
+      if (!value || typeof value !== "object" || Array.isArray(value))
+        return null;
+      return Object.fromEntries(
+        Object.entries(value).filter(([, field]) => typeof field === "string"),
+      ) as PassportExtractedFields;
+    } catch (error) {
+      this.logger.warn(
+        `Stored passport extraction could not be used: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
+      return null;
+    }
   }
 }

@@ -465,6 +465,7 @@ describe("partner hosted checkout", () => {
           ]),
           orderType: "INITIAL_PURCHASE",
           documentReviewStatus: "MANUAL_REVIEW",
+          traveler: null,
           partner: { name: "Test partner", slug: "test", brand: {} },
           plan: {
             id: "plan-1",

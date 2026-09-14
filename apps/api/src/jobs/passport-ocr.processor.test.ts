@@ -204,7 +204,7 @@ describe("PassportOcrProcessor partner verification synchronization", () => {
     );
   });
 
-  it("uses a consistent recoverable re-upload state", async () => {
+  it("keeps a comparison mismatch recoverable without forcing re-upload", async () => {
     const verificationUpdate = vi.fn().mockResolvedValue({ count: 1 });
     const orderUpdate = vi.fn().mockResolvedValue({ count: 1 });
     const intentUpdate = vi.fn();
@@ -244,7 +244,7 @@ describe("PassportOcrProcessor partner verification synchronization", () => {
     expect(intentUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          verificationStatus: "REUPLOAD_REQUIRED",
+          verificationStatus: "PENDING",
         }),
       }),
     );
@@ -257,16 +257,16 @@ describe("PassportOcrProcessor partner verification synchronization", () => {
           },
         }),
         data: {
-          status: "REUPLOAD_REQUIRED",
-          failureCode: "PASSPORT_REUPLOAD_REQUIRED",
+          status: "MANUAL_REVIEW",
+          failureCode: "TRAVELLER_DETAILS_UNCONFIRMED",
         },
       }),
     );
     expect(orderUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          status: "AWAITING_CUSTOMER",
-          documentReviewStatus: "REUPLOAD_REQUIRED",
+          status: "REVIEW_PENDING",
+          documentReviewStatus: "MANUAL_REVIEW",
         }),
       }),
     );
