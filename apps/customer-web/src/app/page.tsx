@@ -3,14 +3,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   CheckCircle2,
-  Globe2,
   Headset,
   Plane,
   QrCode,
   ShieldCheck,
   Smartphone,
   Signal,
-  Timer,
   Wifi,
   Zap,
 } from "lucide-react";
@@ -21,7 +19,6 @@ import {
   FeaturedCampaign,
   GuideCampaign,
   OfferGallery,
-  WhyCampaign,
 } from "./homepage-campaigns";
 import {
   HeroDestinationSearch,
@@ -161,13 +158,40 @@ export default async function Home({
           <PopularRightNow />
           <FeaturedCampaign />
           <OfferGallery />
-          <section className="trust-strip" aria-label="Why travellers choose Visa Compass">
-            <div className="shell trust-strip-grid">
-              <span><ShieldCheck size={18} /><b>Secure NPR payment</b><small>Khalti and Fonepay</small></span>
-              <span><Wifi size={18} /><b>Ubigi connectivity</b><small>Global network partner</small></span>
-              <span><QrCode size={18} /><b>Digital delivery</b><small>QR after verification</small></span>
-              <span><Headset size={18} /><b>Local support</b><small>Help from Kathmandu</small></span>
-              <Link href="/compatibility"><Smartphone size={18} /><b>Check compatibility</b><small>Review before payment</small></Link>
+          <section className="trust-assurance" aria-labelledby="trust-assurance-title">
+            <div className="shell">
+              <div className="trust-panel">
+                <div className="trust-panel-intro">
+                  <span>Travel with confidence</span>
+                  <h2 id="trust-assurance-title">Clear before you pay.</h2>
+                  <p>
+                    Local payment, proven connectivity and practical support
+                    from purchase to activation.
+                  </p>
+                  <div className="trust-panel-links">
+                    <Link href="/compatibility">Check compatibility</Link>
+                    <Link href="/refund-policy">Refund policy</Link>
+                  </div>
+                </div>
+                <ul className="trust-proof-list">
+                  <li>
+                    <span><ShieldCheck size={20} aria-hidden="true" /></span>
+                    <div><b>Secure NPR payment</b><small>Khalti and Fonepay</small></div>
+                  </li>
+                  <li>
+                    <span><Wifi size={20} aria-hidden="true" /></span>
+                    <div><b>Ubigi connectivity</b><small>Global network partner</small></div>
+                  </li>
+                  <li>
+                    <span><QrCode size={20} aria-hidden="true" /></span>
+                    <div><b>Digital QR delivery</b><small>After verification and provisioning</small></div>
+                  </li>
+                  <li>
+                    <span><Headset size={20} aria-hidden="true" /></span>
+                    <div><b>Local Nepal support</b><small>Help from Kathmandu</small></div>
+                  </li>
+                </ul>
+              </div>
             </div>
           </section>
 
@@ -229,85 +253,6 @@ export default async function Home({
                     Your selected plan starts automatically when you arrive.
                   </p>
                 </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="section" id="why-us">
-          <div className="shell">
-            <div className="section-title">
-              <span className="eyebrow">
-                <Zap size={14} />
-                Why Visa Compass
-              </span>
-              <h2>Travel light. Stay connected.</h2>
-              <p>
-                Everything a traveller needs to land connected — priced clearly
-                in NPR, without the roaming shock.
-              </p>
-            </div>
-            <WhyCampaign />
-            <div className="why-grid">
-              <div className="why-card">
-                <span className="why-icon">
-                  <Wifi size={22} />
-                </span>
-                <h3>Instant digital eSIM</h3>
-                <p>
-                  Receive your QR code after payment verification and successful
-                  provider provisioning. No physical SIM or airport counter.
-                </p>
-              </div>
-              <div className="why-card">
-                <span className="why-icon">
-                  <Timer size={22} />
-                </span>
-                <h3>Connect before you fly</h3>
-                <p>
-                  Activate your data the moment you land. Skip queues and start
-                  exploring while others wait in roaming lines.
-                </p>
-              </div>
-              <div className="why-card">
-                <span className="why-icon">
-                  <ShieldCheck size={22} />
-                </span>
-                <h3>Transparent NPR pricing</h3>
-                <p>
-                  Every plan shows its full cost in NPR before you pay. No
-                  hidden fees, no surprise roaming bills on return.
-                </p>
-              </div>
-              <div className="why-card">
-                <span className="why-icon">
-                  <QrCode size={22} />
-                </span>
-                <h3>One eSIM, many plans</h3>
-                <p>
-                  Store several country plans on a single eSIM and top up an
-                  existing one using its eSIM mobile number.
-                </p>
-              </div>
-              <div className="why-card">
-                <span className="why-icon">
-                  <Headset size={22} />
-                </span>
-                <h3>Local support</h3>
-                <p>
-                  Travel document review, activation help and re-delivery of
-                  your QR — handled by a team that responds.
-                </p>
-              </div>
-              <div className="why-card">
-                <span className="why-icon">
-                  <Globe2 size={22} />
-                </span>
-                <h3>Real-time usage</h3>
-                <p>
-                  Track your data in your account and refresh live usage
-                  whenever you need a quick top-up decision.
-                </p>
               </div>
             </div>
           </div>
