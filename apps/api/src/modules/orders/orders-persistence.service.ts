@@ -227,6 +227,7 @@ export class OrdersPersistenceService {
           to: event.toStatus as OrderStatus,
           at: event.createdAt.toISOString(),
           ...(event.reason ? { reason: event.reason } : {}),
+          ...(event.actorId ? { actorId: event.actorId } : {}),
         })),
         ...(row.customerEsim
           ? {
@@ -696,6 +697,7 @@ export class OrdersPersistenceService {
                 toStatus: event.to as DbOrderStatus,
                 createdAt: new Date(event.at),
                 reason: event.reason ?? null,
+                actorId: event.actorId ?? null,
               })),
             });
         },
@@ -905,24 +907,54 @@ export class OrdersPersistenceService {
     });
   }
 
-  async audit() {
-    if (!this.prisma.enabled) return [];
-    const rows = await this.prisma.auditLog.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 200,
-      include: { performedBy: { select: { email: true } } },
-    });
-    return rows.map((row) => ({
-      id: row.id,
-      module: row.module,
-      entity: row.entity,
-      entityId: row.entityId,
-      action: row.action,
-      performedByEmail: row.performedBy?.email ?? null,
-      previousValue: row.previousValue,
-      newValue: row.newValue,
-      createdAt: row.createdAt.toISOString(),
-    }));
+  async audit(input: { limit: number; offset: number; query?: string }) {
+    if (!this.prisma.enabled)
+      return { items: [], total: 0, limit: input.limit, offset: input.offset };
+    const search = input.query?.trim();
+    const where = search
+      ? {
+          OR: [
+            { module: { contains: search, mode: "insensitive" as const } },
+            { entity: { contains: search, mode: "insensitive" as const } },
+            { action: { contains: search, mode: "insensitive" as const } },
+            {
+              performedBy: {
+                is: {
+                  email: { contains: search, mode: "insensitive" as const },
+                },
+              },
+            },
+          ],
+        }
+      : undefined;
+    const [rows, total] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        ...(where ? { where } : {}),
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+        skip: input.offset,
+        include: { performedBy: { select: { email: true } } },
+      }),
+      where
+        ? this.prisma.auditLog.count({ where })
+        : this.prisma.auditLog.count(),
+    ]);
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        module: row.module,
+        entity: row.entity,
+        entityId: row.entityId,
+        action: row.action,
+        performedByEmail: row.performedBy?.email ?? null,
+        previousValue: row.previousValue,
+        newValue: row.newValue,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      total,
+      limit: input.limit,
+      offset: input.offset,
+    };
   }
 
   async recordReview(
@@ -963,6 +995,48 @@ export class OrdersPersistenceService {
           action: decision,
           performedById: actor.id,
           newValue: { orderId, reason: reason ?? null },
+        },
+      }),
+    ]);
+  }
+
+  async recordBulkReupload(
+    orderId: string,
+    documentIds: string[],
+    actorClerkId: string,
+    reason: string,
+  ) {
+    if (!this.prisma.enabled) return;
+    const actor = await this.prisma.user.upsert({
+      where: { clerkId: actorClerkId },
+      update: {},
+      create: {
+        clerkId: actorClerkId,
+        email: `${createHash("sha256").update(actorClerkId).digest("hex").slice(0, 12)}@local.visacompass.invalid`,
+      },
+    });
+    await this.prisma.$transaction([
+      this.prisma.orderReview.create({
+        data: {
+          orderId,
+          reviewerId: actor.id,
+          decision: "REUPLOAD_REQUIRED",
+          reasons: [reason],
+          comments: reason,
+        },
+      }),
+      this.prisma.travelerDocument.updateMany({
+        where: { orderId, id: { in: documentIds } },
+        data: { reviewedById: actor.id, reviewedAt: new Date() },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          module: "VERIFICATION",
+          entity: "Order",
+          entityId: orderId,
+          action: "REUPLOAD",
+          performedById: actor.id,
+          newValue: { orderId, documentIds, reason },
         },
       }),
     ]);

@@ -339,7 +339,7 @@ export default function OrderReview({ id }: { id: string }) {
   const canReviewDocuments =
     !awaitingPartnerFinalization &&
     order.documentReviewPolicy !== "NO_REVIEW" &&
-    !["CANCELLED", "REFUNDED"].includes(order.status) &&
+    ["DRAFT", "REVIEW_PENDING", "AWAITING_CUSTOMER"].includes(order.status) &&
     order.documents.length > 0;
   const canResendQr =
     order.purchaseType !== "TOPUP" &&

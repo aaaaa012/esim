@@ -72,6 +72,7 @@ export const NOTIFICATION_TEMPLATE_LABELS: Record<string, string> = {
   ORDER_STATUS: "Order update",
   QR_READY: "Your eSIM is ready",
   DOCUMENT_REUPLOAD: "Document update",
+  DOCUMENT_APPROVED: "Documents approved",
   PLAN_EXHAUSTED: "Data used up",
   PLAN_EXPIRED: "Plan expired",
   OPS_ALERT: "System alert",

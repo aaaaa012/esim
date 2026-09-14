@@ -148,4 +148,86 @@ describe("ManualRefundsService", () => {
       }),
     ).rejects.toThrow("Partial refunds are not supported");
   });
+
+  it("walks a non-pending order through REFUND_PENDING before marking it refunded", async () => {
+    const context = setup();
+    const orderUpdates = context.tx.order.update;
+    const events = context.tx.orderEvent.create;
+    context.prisma.manualRefund.findUnique.mockResolvedValue({
+      id: "refund-1",
+      orderId: "order-1",
+      paymentId: "payment-1",
+      status: ManualRefundStatus.APPROVED,
+      reason: ManualRefundReason.PROVISIONING_FAILURE,
+      amount: 2499,
+      order: { status: "QR_READY" },
+      payment: { status: PaymentStatus.COMPLETED, amount: 2499 },
+    });
+    await context.service.complete("refund-1", "admin-1", {
+      providerReference: "khalti-ref-456",
+      amount: 2499,
+      completedAt: new Date().toISOString(),
+    });
+    expect(orderUpdates).toHaveBeenNthCalledWith(1, {
+      where: { id: "order-1" },
+      data: { status: "REFUND_PENDING", version: { increment: 1 } },
+    });
+    expect(events).toHaveBeenNthCalledWith(1, {
+      data: {
+        orderId: "order-1",
+        fromStatus: "QR_READY",
+        toStatus: "REFUND_PENDING",
+        actorId: "admin-1",
+        reason: "Manual refund entered pending refund state",
+        metadata: { manualRefundId: "refund-1", reason: "PROVISIONING_FAILURE" },
+      },
+    });
+    expect(orderUpdates).toHaveBeenNthCalledWith(2, {
+      where: { id: "order-1" },
+      data: { status: "REFUNDED", version: { increment: 1 } },
+    });
+  });
+
+  it("keeps an order already in REFUND_PENDING on the single refunded leg", async () => {
+    const context = setup();
+    context.prisma.manualRefund.findUnique.mockResolvedValue({
+      id: "refund-1",
+      orderId: "order-1",
+      paymentId: "payment-1",
+      status: ManualRefundStatus.APPROVED,
+      reason: ManualRefundReason.COMPANY_FAULT,
+      amount: 2499,
+      order: { status: "REFUND_PENDING" },
+      payment: { status: PaymentStatus.COMPLETED, amount: 2499 },
+    });
+    await context.service.complete("refund-1", "admin-1", {
+      providerReference: "khalti-ref-789",
+      amount: 2499,
+      completedAt: new Date().toISOString(),
+    });
+    expect(context.tx.order.update).toHaveBeenCalledTimes(1);
+    expect(context.tx.order.update).toHaveBeenCalledWith({
+      where: { id: "order-1" },
+      data: { status: "REFUNDED", version: { increment: 1 } },
+    });
+  });
+
+  it("rejects completion from an order state the state machine cannot refund", async () => {
+    const context = setup();
+    context.prisma.manualRefund.findUnique.mockResolvedValue({
+      id: "refund-1",
+      status: ManualRefundStatus.APPROVED,
+      amount: 2499,
+      payment: { amount: 2499 },
+      order: { status: "PAYMENT_PENDING" },
+    });
+    await expect(
+      context.service.complete("refund-1", "admin-1", {
+        providerReference: "khalti-ref-321",
+        amount: 2499,
+        completedAt: new Date().toISOString(),
+      }),
+    ).rejects.toThrow("Invalid order transition");
+    expect(context.tx.order.update).not.toHaveBeenCalled();
+  });
 });

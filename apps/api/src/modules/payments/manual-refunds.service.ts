@@ -11,8 +11,10 @@ import {
   PaymentStatus,
   Prisma,
 } from "@prisma/client";
+import { OrderStatus as SharedOrderStatus } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { withPostgresTransactionRetry } from "../../infrastructure/postgres-transaction-retry.js";
+import { assertTransition } from "../orders/order-machine.js";
 import { OrdersService } from "../orders/orders.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 
@@ -300,6 +302,17 @@ export class ManualRefundsService {
               where: { id: current.paymentId },
               data: { status: PaymentStatus.REFUNDED },
             });
+            const orderState = await this.enterPendingRefundState(
+              tx,
+              current.orderId,
+              current.order.status,
+              actorId,
+              { manualRefundId: id, reason: current.reason },
+            );
+            assertTransition(
+              orderState as unknown as SharedOrderStatus,
+              SharedOrderStatus.REFUNDED,
+            );
             await tx.order.update({
               where: { id: current.orderId },
               data: { status: OrderStatus.REFUNDED, version: { increment: 1 } },
@@ -307,11 +320,14 @@ export class ManualRefundsService {
             await tx.orderEvent.create({
               data: {
                 orderId: current.orderId,
-                fromStatus: current.order.status,
+                fromStatus: orderState,
                 toStatus: OrderStatus.REFUNDED,
                 actorId,
                 reason: `Manual refund completed (${reference})`,
-                metadata: { manualRefundId: id, reason: current.reason },
+                metadata: {
+                  manualRefundId: id,
+                  reason: current.reason,
+                } as Prisma.InputJsonValue,
               },
             });
             await tx.auditLog.create({
@@ -349,5 +365,37 @@ export class ManualRefundsService {
     }
     await this.orders.refreshOne(current.orderId, true);
     return this.prisma.manualRefund.findUniqueOrThrow({ where: { id } });
+  }
+
+  private async enterPendingRefundState(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    fromStatus: OrderStatus,
+    actorId: string,
+    metadata: Prisma.InputJsonValue,
+  ): Promise<OrderStatus> {
+    if (fromStatus === OrderStatus.REFUND_PENDING) return fromStatus;
+    assertTransition(
+      fromStatus as unknown as SharedOrderStatus,
+      SharedOrderStatus.REFUND_PENDING,
+    );
+    await tx.order.update({
+      where: { id: orderId },
+      data: {
+        status: OrderStatus.REFUND_PENDING,
+        version: { increment: 1 },
+      },
+    });
+    await tx.orderEvent.create({
+      data: {
+        orderId,
+        fromStatus,
+        toStatus: OrderStatus.REFUND_PENDING,
+        actorId,
+        reason: "Manual refund entered pending refund state",
+        metadata,
+      },
+    });
+    return OrderStatus.REFUND_PENDING;
   }
 }

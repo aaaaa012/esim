@@ -86,6 +86,8 @@ function ordersService(
     load: vi.fn().mockResolvedValue(seed),
     save: vi.fn().mockResolvedValue(undefined),
     provisioningAttempt: vi.fn().mockResolvedValue(undefined),
+    recordReview: vi.fn().mockResolvedValue(undefined),
+    recordBulkReupload: vi.fn().mockResolvedValue(undefined),
     ...persistenceOverrides,
   } as unknown as OrdersPersistenceService;
   return new OrdersService(
@@ -102,6 +104,117 @@ function ordersService(
     resilience as never,
   );
 }
+
+describe("OrdersService document decision invariants", () => {
+  it.each([
+    OrderStatus.PROVISIONING,
+    OrderStatus.QR_READY,
+    OrderStatus.COMPLETED,
+    OrderStatus.CANCELLED,
+    OrderStatus.REFUNDED,
+  ])("rejects document review mutations after entering %s", async (status) => {
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: `terminal-${status}`,
+          status,
+          documents: [
+            {
+              id: "passport",
+              type: DocumentType.PASSPORT,
+              fileName: "passport.png",
+              privateAssetId: "passport-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+    );
+    await instance.refreshFromPersistence();
+    await expect(
+      instance.reviewDocument(
+        `terminal-${status}`,
+        "passport",
+        "staff-1",
+        "APPROVE",
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("makes final partner approval webhook creation retry-safe and notifies the customer", async () => {
+    const partnerEventUpsert = vi.fn().mockResolvedValue({ id: "event-1" });
+    const verificationUpdate = vi.fn().mockResolvedValue({});
+    const notify = vi.fn().mockResolvedValue({ status: "QUEUED" });
+    const order = readyOrder({
+      id: "partner-review",
+      status: OrderStatus.REVIEW_PENDING,
+      partner: { id: "partner-1", code: "P1", name: "Partner" },
+      externalOrderId: "external-1",
+      traveler: customerTraveler(),
+      documentReviewStatus: "MANUAL_REVIEW",
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.APPROVED,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    });
+    const instance = ordersService(
+      [order],
+      {},
+      undefined,
+      {
+        enabled: true,
+        $transaction: vi.fn((items: Promise<unknown>[]) =>
+          Promise.all(items),
+        ),
+        partnerDocumentVerification: {
+          findFirst: vi.fn().mockResolvedValue({ id: "verification-1" }),
+          update: verificationUpdate,
+        },
+        partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
+        partnerEvent: { upsert: partnerEventUpsert },
+        user: { findUnique: vi.fn().mockResolvedValue({ id: "staff-local" }) },
+      },
+      { enqueue: notify },
+    );
+    await instance.refreshFromPersistence();
+    await instance.reviewDocument(order.id, "ticket", "staff-1", "APPROVE");
+    await instance.reviewDocument(order.id, "ticket", "staff-1", "APPROVE");
+    expect(verificationUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: "MANUALLY_APPROVED", failureCode: null },
+      }),
+    );
+    expect(partnerEventUpsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: {
+          dedupeKey: "document-verification:partner-review:manually-approved",
+        },
+      }),
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template: "DOCUMENT_APPROVED",
+        dedupeKey: "order-notification:partner-review:DOCUMENT_APPROVED",
+      }),
+    );
+  });
+});
 
 describe("OrdersService operations attribution", () => {
   it.each(["PARTNER_HOSTED", "PARTNER_API", "CUSTOMER_WEB"])(
@@ -1317,3 +1430,40 @@ it.each([
     expect(add).not.toHaveBeenCalled();
   },
 );
+
+describe("OrdersService cancellation attribution", () => {
+  it("records the acting staff on an operations cancellation and hides it from customers", async () => {
+    const order = readyOrder({
+      id: "cancel-attribution",
+      status: OrderStatus.PAYMENT_PENDING,
+      ownerId: null,
+    });
+    const save = vi.fn().mockResolvedValue(undefined);
+    const instance = ordersService(
+      [order],
+      {},
+      undefined,
+      { enabled: false },
+      {},
+      undefined,
+      { save },
+    );
+    await instance.refreshFromPersistence();
+    const view = await instance.cancel(
+      order.id,
+      null,
+      "Cancelled by operations",
+      "staff-clerk-9",
+    );
+    const persisted = save.mock.calls[0][0] as DemoOrder;
+    const cancelled = persisted.timeline.at(-1)!;
+    expect(cancelled.to).toBe(OrderStatus.CANCELLED);
+    expect(cancelled.reason).toBe("Cancelled by operations");
+    expect(cancelled.actorId).toBe("staff-clerk-9");
+    expect(
+      (view.timeline as { actorId?: string }[]).some(
+        (event) => event.actorId !== undefined,
+      ),
+    ).toBe(false);
+  });
+});

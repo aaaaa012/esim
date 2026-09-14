@@ -23,9 +23,10 @@ import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { cn } from "@/lib/utils";
+import { PaginationBar } from "@/components/pagination-bar";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 50;
 
 type OpsOrder = {
   id: string;
@@ -56,7 +57,7 @@ const SECTIONS: SectionDef[] = [
     label: "Partner finalization",
     icon: Clock,
     tone: "sky",
-    statuses: ["REVIEW_PENDING"],
+    statuses: ["REVIEW_PENDING", "DRAFT"],
     description: "verified orders waiting for the partner to finalize",
     matches: (order) =>
       Boolean(order.partner) &&
@@ -89,6 +90,14 @@ const SECTIONS: SectionDef[] = [
     icon: XCircle,
     tone: "red",
     statuses: ["PROVISIONING_FAILED"],
+  },
+  {
+    key: "activation_attention",
+    label: "Activation attention",
+    icon: ShieldQuestion,
+    tone: "amber",
+    statuses: ["ACTIVATION_ATTENTION"],
+    description: "installed eSIMs whose activation needs investigation",
   },
   {
     key: "payment",
@@ -129,6 +138,9 @@ export default function QueueClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [resultTotal, setResultTotal] = useState(0);
   const [open, setOpen] = useState<Record<string, boolean>>({
     review: true,
     partner_finalization: true,
@@ -139,22 +151,37 @@ export default function QueueClient() {
     ? (SECTIONS.find((s) => s.statuses.includes(statusParam))?.key ?? "review")
     : "review";
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
   const load = () => {
     setLoading(true);
     setError("");
-    authFetch(`${API}/operations/orders?limit=${PAGE_SIZE}`, { headers: {} })
+    const params = new URLSearchParams({
+      queue: "true",
+      limit: String(PAGE_SIZE),
+      offset: String((page - 1) * PAGE_SIZE),
+    });
+    if (debouncedQuery) params.set("q", debouncedQuery);
+    if (statusParam) params.set("status", statusParam);
+    authFetch(`${API}/operations/orders?${params}`, { headers: {} })
       .then(async (r) => {
         const v = await r.json();
         if (!r.ok)
           throw new Error(v?.error?.message ?? "Could not load the queue");
         setOrders(v.data?.items ?? []);
+        setResultTotal(v.data?.total ?? 0);
       })
       .catch((e: unknown) =>
         setError(e instanceof Error ? e.message : "Could not load the queue"),
       )
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [page, debouncedQuery, statusParam]);
 
   const today = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kathmandu",
@@ -162,7 +189,7 @@ export default function QueueClient() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
-  const q = query.trim().toLowerCase();
+  const q = "";
 
   const grouped = useMemo(() => {
     const result: Record<string, OpsOrder[]> = {};
@@ -348,6 +375,12 @@ export default function QueueClient() {
               </Panel>
             );
           })}
+          <PaginationBar
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={resultTotal}
+            onPageChange={setPage}
+          />
         </div>
       )}
     </>

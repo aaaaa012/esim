@@ -588,9 +588,20 @@ export class OperationsController {
       throw new BadRequestException("A valid idempotency key is required");
     return this.transatelOperations.reconcile(id, req.user!.localUserId);
   }
-  @Get("audit") audit(@Req() req: AuthenticatedRequest) {
+  @Get("audit") audit(
+    @Req() req: AuthenticatedRequest,
+    @Query("limit") limit?: string,
+    @Query("offset") offset?: string,
+    @Query("q") query?: string,
+  ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    return this.orders.audit();
+    const take = Math.min(100, Math.max(1, Number(limit) || 50));
+    const skip = Math.max(0, Number(offset) || 0);
+    return this.orders.audit({
+      limit: take,
+      offset: skip,
+      ...(query ? { query } : {}),
+    });
   }
   @Get("partners/options") async partnerOptions(
     @Req() req: AuthenticatedRequest,
@@ -611,6 +622,7 @@ export class OperationsController {
     @Query("channel") channel?: OrderChannel,
     @Query("partnerId") partnerId?: string,
     @Query("status") status?: string,
+    @Query("queue") queue?: string,
     @Query("from") from?: string,
     @Query("to") to?: string,
   ) {
@@ -621,6 +633,19 @@ export class OperationsController {
         .filter(
           (order) =>
             (!status || order.status === status) &&
+            (queue !== "true" ||
+              [
+                "REVIEW_PENDING",
+                "AWAITING_CUSTOMER",
+                "PAYMENT_PENDING",
+                "PAYMENT_FAILED",
+                "PAYMENT_REVIEW_REQUIRED",
+                "PROVISIONING_FAILED",
+                "ACTIVATION_ATTENTION",
+                "REFUND_PENDING",
+              ].includes(order.status) ||
+              (order.status === "DRAFT" &&
+                order.documentReviewStatus === "MANUAL_REVIEW")) &&
             matchesQuery(
               q ?? "",
               order.orderNumber,
@@ -647,7 +672,32 @@ export class OperationsController {
     const search = q?.trim();
     const where = {
       ...dateFilter,
-      ...(status ? { status: status as never } : {}),
+      ...(status
+        ? { status: status as never }
+        : queue === "true"
+          ? {
+              OR: [
+                {
+                  status: {
+                    in: [
+                      "REVIEW_PENDING",
+                      "AWAITING_CUSTOMER",
+                      "PAYMENT_PENDING",
+                      "PAYMENT_FAILED",
+                      "PAYMENT_REVIEW_REQUIRED",
+                      "PROVISIONING_FAILED",
+                      "ACTIVATION_ATTENTION",
+                      "REFUND_PENDING",
+                    ] as never,
+                  },
+                },
+                {
+                  status: "DRAFT" as never,
+                  documentReviewStatus: "MANUAL_REVIEW" as never,
+                },
+              ],
+            }
+          : {}),
       ...(source === "PARTNER"
         ? { partnerId: { not: null } }
         : source === "DIRECT"
@@ -657,101 +707,108 @@ export class OperationsController {
       ...(partnerId ? { partnerId } : {}),
       ...(search
         ? {
-            OR: [
+            AND: [
               {
-                orderNumber: { contains: search, mode: "insensitive" as const },
-              },
-              {
-                externalOrderId: {
-                  contains: search,
-                  mode: "insensitive" as const,
-                },
-              },
-              {
-                traveler: {
-                  is: {
-                    OR: [
-                      {
-                        firstName: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                      {
-                        surname: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                      {
-                        email: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                    ],
+                OR: [
+                  {
+                    orderNumber: {
+                      contains: search,
+                      mode: "insensitive" as const,
+                    },
                   },
-                },
-              },
-              {
-                partner: {
-                  is: {
-                    OR: [
-                      {
-                        name: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                      {
-                        code: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                    ],
+                  {
+                    externalOrderId: {
+                      contains: search,
+                      mode: "insensitive" as const,
+                    },
                   },
-                },
-              },
-              {
-                customer: {
-                  is: {
-                    OR: [
-                      {
-                        customerCode: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                      {
-                        email: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                      {
-                        user: {
-                          is: {
+                  {
+                    traveler: {
+                      is: {
+                        OR: [
+                          {
+                            firstName: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
+                            surname: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
                             email: {
                               contains: search,
                               mode: "insensitive" as const,
                             },
                           },
-                        },
+                        ],
                       },
-                      {
-                        partnerIdentity: {
-                          is: {
-                            externalCustomerId: {
+                    },
+                  },
+                  {
+                    partner: {
+                      is: {
+                        OR: [
+                          {
+                            name: {
                               contains: search,
                               mode: "insensitive" as const,
                             },
                           },
-                        },
+                          {
+                            code: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                        ],
                       },
-                    ],
+                    },
                   },
-                },
+                  {
+                    customer: {
+                      is: {
+                        OR: [
+                          {
+                            customerCode: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
+                            email: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
+                            user: {
+                              is: {
+                                email: {
+                                  contains: search,
+                                  mode: "insensitive" as const,
+                                },
+                              },
+                            },
+                          },
+                          {
+                            partnerIdentity: {
+                              is: {
+                                externalCustomerId: {
+                                  contains: search,
+                                  mode: "insensitive" as const,
+                                },
+                              },
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                ],
               },
             ],
           }
@@ -900,7 +957,7 @@ export class OperationsController {
     @Req() req: AuthenticatedRequest,
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    return this.orders.requestReupload(id, body.reason);
+    return this.orders.requestReupload(id, body.reason, req.user!.id);
   }
   @Post("orders/:id/reject-documents") rejectDocuments(
     @Param("id") id: string,
@@ -960,7 +1017,8 @@ export class OperationsController {
     return this.orders.cancel(
       id,
       null,
-      body.reason ?? "Cancelled by operations",
+      body.reason?.trim() || "Cancelled by operations",
+      req.user!.id,
     );
   }
   @Post("orders/:id/payment/fail") failPayment(

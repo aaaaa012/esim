@@ -50,11 +50,18 @@ import {
 } from "./passport-verification.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 
+const DOCUMENT_REVIEW_MUTABLE_STATUSES = new Set<OrderStatus>([
+  OrderStatus.DRAFT,
+  OrderStatus.REVIEW_PENDING,
+  OrderStatus.AWAITING_CUSTOMER,
+]);
+
 type Timeline = {
   from: OrderStatus | null;
   to: OrderStatus;
   at: string;
   reason?: string;
+  actorId?: string;
 };
 export type DemoOrder = {
   id: string;
@@ -216,8 +223,8 @@ export class OrdersService implements OnModuleInit {
       .filter((o) => !ownerId || o.ownerId === ownerId)
       .map((order) => (ownerId ? this.redact(order) : this.expand(order)));
   }
-  audit() {
-    return this.persistence.audit();
+  audit(input: { limit: number; offset: number; query?: string }) {
+    return this.persistence.audit(input);
   }
   get(id: string, ownerId?: string) {
     const order = this.orders.get(id);
@@ -872,9 +879,7 @@ export class OrdersService implements OnModuleInit {
       order.documentReviewStatus === "REUPLOAD_REQUIRED";
     const correctingMismatch =
       order.documentReviewStatus === "CORRECTION_REQUIRED" &&
-      ["PARTIAL", "FAILED"].includes(
-        order.passportVerification?.status ?? "",
-      );
+      ["PARTIAL", "FAILED"].includes(order.passportVerification?.status ?? "");
     const retryExistingPassport = replacingPassport || correctingMismatch;
     order.traveler = traveler;
     if (retryExistingPassport) {
@@ -1180,6 +1185,7 @@ export class OrdersService implements OnModuleInit {
           "Document verification was skipped by the configured review policy",
       };
       await this.persistence.save(order);
+      await this.ensureDocumentReviewAttention(order);
       return this.redact(order);
     }
     if (config.documentReviewPolicy === "MANUAL_REVIEW") {
@@ -1207,7 +1213,7 @@ export class OrdersService implements OnModuleInit {
       );
       const verified = result.status === "VERIFIED";
       const correctionAttempts = verified
-        ? extraction.correctionAttempts ?? 0
+        ? (extraction.correctionAttempts ?? 0)
         : (extraction.correctionAttempts ?? 0) + 1;
       extraction.correctionAttempts = correctionAttempts;
       order.passportVerification = result;
@@ -1220,6 +1226,7 @@ export class OrdersService implements OnModuleInit {
         ? DocumentStatus.APPROVED
         : DocumentStatus.PENDING;
       await this.persistence.save(order);
+      await this.ensureDocumentReviewAttention(order);
       return this.redact(order);
     }
     // A later customer recheck is a recovery signal. Legacy OCR_BACKGROUND
@@ -1519,7 +1526,12 @@ export class OrdersService implements OnModuleInit {
     });
     return run;
   }
-  async cancel(id: string, ownerId: string | null, reason: string) {
+  async cancel(
+    id: string,
+    ownerId: string | null,
+    reason: string,
+    actorId?: string,
+  ) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
     if (
@@ -1534,7 +1546,7 @@ export class OrdersService implements OnModuleInit {
       );
     if (order.payment && order.payment.status === PaymentStatus.PENDING)
       order.payment.status = PaymentStatus.CANCELLED;
-    this.transition(order, OrderStatus.CANCELLED, reason);
+    this.transition(order, OrderStatus.CANCELLED, reason, actorId);
     await this.persistence.save(order);
     return this.redact(order);
   }
@@ -1868,9 +1880,10 @@ export class OrdersService implements OnModuleInit {
     const provider = await this.connectivity.checkEligibility(planId, msisdn);
     return provider;
   }
-  async requestReupload(id: string, reason: string) {
+  async requestReupload(id: string, reason: string, actorId: string) {
     await this.refreshOne(id, true);
     const order = this.get(id);
+    this.assertDocumentReviewMutable(order);
     if (!reason.trim())
       throw new BadRequestException("Re-upload reason is required");
     order.documentReviewStatus = "REUPLOAD_REQUIRED";
@@ -1891,6 +1904,16 @@ export class OrdersService implements OnModuleInit {
       reason: `Documents requested again: ${reason.trim()}`,
     });
     await this.persistence.save(order);
+    await this.persistence.recordBulkReupload(
+      order.id,
+      order.documents
+        .filter((item) =>
+          [DocumentType.PASSPORT, DocumentType.TICKET].includes(item.type),
+        )
+        .map((item) => item.id),
+      actorId,
+      reason.trim(),
+    );
     if (order.partner) {
       const verification =
         await this.prisma.partnerDocumentVerification.findFirst({
@@ -1936,6 +1959,7 @@ export class OrdersService implements OnModuleInit {
   ) {
     await this.refreshOne(id, true);
     const order = this.get(id);
+    this.assertDocumentReviewMutable(order);
     const document = order.documents.find((item) => item.id === documentId);
     if (!document) throw new NotFoundException("Document not found");
     let recordDecision = true;
@@ -2011,10 +2035,7 @@ export class OrdersService implements OnModuleInit {
             }),
           ]);
         else if (order.documentReviewStatus === "MANUALLY_APPROVED")
-          await this.prisma.partnerDocumentVerification.update({
-            where: { id: verification.id },
-            data: { status: "MANUALLY_APPROVED", failureCode: null },
-          });
+          await this.commitManualApprovalProjection(order, verification);
       }
     }
     if (order.partner && decision === "REUPLOAD")
@@ -2023,18 +2044,6 @@ export class OrdersService implements OnModuleInit {
         "document.verification.reupload_required",
         "DOCUMENT_REUPLOAD_REQUIRED",
         document.type,
-      );
-    else if (
-      order.partner &&
-      recordDecision &&
-      order.documentReviewStatus === "MANUALLY_APPROVED"
-    )
-      await this.emitPartnerDocumentEvent(
-        order,
-        "document.verification.verified",
-        null,
-        undefined,
-        "MANUALLY_APPROVED",
       );
     if (recordDecision)
       await this.persistence.recordReview(
@@ -2052,6 +2061,8 @@ export class OrdersService implements OnModuleInit {
         "All required documents manually approved",
         actorId,
       );
+    if (order.documentReviewStatus === "MANUALLY_APPROVED")
+      await this.safeNotify(order, "DOCUMENT_APPROVED");
     else if (decision === "REUPLOAD")
       await this.resilience?.attention({
         dedupeKey: `document-review:${order.id}`,
@@ -3498,7 +3509,12 @@ export class OrdersService implements OnModuleInit {
     }
     throw failure;
   }
-  private transition(order: DemoOrder, to: OrderStatus, reason?: string) {
+  private transition(
+    order: DemoOrder,
+    to: OrderStatus,
+    reason?: string,
+    actorId?: string,
+  ) {
     assertTransition(order.status, to);
     const from = order.status;
     order.status = to;
@@ -3507,6 +3523,7 @@ export class OrdersService implements OnModuleInit {
       to,
       at: new Date().toISOString(),
       ...(reason ? { reason } : {}),
+      ...(actorId ? { actorId } : {}),
     });
   }
   private notifyEmailFor(order: DemoOrder) {
@@ -3540,7 +3557,7 @@ export class OrdersService implements OnModuleInit {
   }
   private async safeNotify(
     order: DemoOrder,
-    template: "QR_READY" | "DOCUMENT_REUPLOAD",
+    template: "QR_READY" | "DOCUMENT_REUPLOAD" | "DOCUMENT_APPROVED",
     reason?: string,
   ) {
     const recipient = this.notifyEmailFor(order);
@@ -3552,6 +3569,7 @@ export class OrdersService implements OnModuleInit {
         template,
         recipient,
         orderNumber: order.orderNumber,
+        dedupeKey: `order-notification:${order.id}:${template}`,
         ...(reason ? { reason } : {}),
       });
     } catch (error) {
@@ -3621,12 +3639,63 @@ export class OrdersService implements OnModuleInit {
       }
     }
   }
+  private async commitManualApprovalProjection(
+    order: DemoOrder,
+    verification: { id: string },
+  ) {
+    if (!order.partner) return;
+    const dedupeKey = `document-verification:${order.id}:manually-approved`;
+    const endpoints =
+      await this.prisma.partnerWebhookEndpoint.findMany({
+        where: { partnerId: order.partner.id, active: true },
+      });
+    const eligible = endpoints.filter((endpoint) => {
+      const types = Array.isArray(endpoint.eventTypes)
+        ? endpoint.eventTypes.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : [];
+      return (
+        types.includes("*") || types.includes("document.verification.verified")
+      );
+    });
+    const data = {
+      partnerId: order.partner.id,
+      orderId: order.id,
+      type: "document.verification.verified",
+      resourceId: verification.id,
+      correlationId: randomUUID(),
+      dedupeKey,
+      payload: {
+        orderId: order.id,
+        externalOrderId: order.externalOrderId ?? null,
+        verificationId: verification.id,
+        status: "MANUALLY_APPROVED",
+        failureCode: null,
+      },
+      deliveries: {
+        create: eligible.map((endpoint) => ({ endpointId: endpoint.id })),
+      },
+    };
+    await this.prisma.$transaction([
+      this.prisma.partnerDocumentVerification.update({
+        where: { id: verification.id },
+        data: { status: "MANUALLY_APPROVED", failureCode: null },
+      }),
+      this.prisma.partnerEvent.upsert({
+        where: { dedupeKey },
+        update: {},
+        create: data,
+      }),
+    ]);
+  }
   private async emitPartnerDocumentEvent(
     order: DemoOrder,
     type: string,
     failureCode: string | null,
     documentType?: DocumentType,
     status?: "INVALID" | "REUPLOAD_REQUIRED" | "MANUALLY_APPROVED",
+    dedupeKey?: string,
   ) {
     if (!order.partner) return;
     const verification =
@@ -3646,30 +3715,42 @@ export class OrdersService implements OnModuleInit {
         : [];
       return types.includes("*") || types.includes(type);
     });
-    await this.prisma.partnerEvent.create({
-      data: {
-        partnerId: order.partner.id,
+    const data = {
+      partnerId: order.partner.id,
+      orderId: order.id,
+      type,
+      resourceId: verification.id,
+      correlationId: randomUUID(),
+      ...(dedupeKey ? { dedupeKey } : {}),
+      payload: {
         orderId: order.id,
-        type,
-        resourceId: verification.id,
-        correlationId: randomUUID(),
-        payload: {
-          orderId: order.id,
-          externalOrderId: order.externalOrderId ?? null,
-          verificationId: verification.id,
-          status:
-            status ??
-            (failureCode === "DOCUMENTS_REJECTED"
-              ? "INVALID"
-              : "REUPLOAD_REQUIRED"),
-          failureCode,
-          ...(documentType ? { documentType } : {}),
-        },
-        deliveries: {
-          create: eligible.map((endpoint) => ({ endpointId: endpoint.id })),
-        },
+        externalOrderId: order.externalOrderId ?? null,
+        verificationId: verification.id,
+        status:
+          status ??
+          (failureCode === "DOCUMENTS_REJECTED"
+            ? "INVALID"
+            : "REUPLOAD_REQUIRED"),
+        failureCode,
+        ...(documentType ? { documentType } : {}),
       },
-    });
+      deliveries: {
+        create: eligible.map((endpoint) => ({ endpointId: endpoint.id })),
+      },
+    };
+    if (dedupeKey)
+      await this.prisma.partnerEvent.upsert({
+        where: { dedupeKey },
+        update: {},
+        create: data,
+      });
+    else await this.prisma.partnerEvent.create({ data });
+  }
+  private assertDocumentReviewMutable(order: DemoOrder) {
+    if (!DOCUMENT_REVIEW_MUTABLE_STATUSES.has(order.status))
+      throw new ConflictException(
+        `Documents cannot be reviewed after the order entered ${order.status}`,
+      );
   }
   private expand(order: DemoOrder) {
     const { qrPayload: _qrPayload, ...safe } = order;
@@ -3706,7 +3787,7 @@ export class OrdersService implements OnModuleInit {
           ...rest
         }) => rest)(safe.payment)
       : undefined;
-    const timeline = safe.timeline.map((event) => ({
+    const timeline = safe.timeline.map(({ actorId: _actorId, ...event }) => ({
       ...event,
       ...(event.reason
         ? {

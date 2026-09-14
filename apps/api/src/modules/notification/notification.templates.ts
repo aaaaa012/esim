@@ -2,6 +2,7 @@ export type NotificationTemplate =
   | "ORDER_STATUS"
   | "QR_READY"
   | "DOCUMENT_REUPLOAD"
+  | "DOCUMENT_APPROVED"
   | "RECHARGE_RECOVERY"
   | "GUEST_ORDER_RECOVERY"
   | "TOPUP_LOOKUP"
@@ -172,6 +173,14 @@ export function renderNotification(
         label: "Upload document",
         href: webUrl("customer", "/account/orders"),
       },
+    });
+  if (template === "DOCUMENT_APPROVED")
+    return branded({
+      subject: `Documents approved for ${data.orderNumber}`,
+      paragraphs: [
+        `Your travel documents for ${data.orderNumber} have been approved.`,
+        "Return to the checkout you previously opened to continue securely to payment. Do not start a duplicate order.",
+      ],
     });
   if (template === "PLAN_EXHAUSTED")
     return branded({

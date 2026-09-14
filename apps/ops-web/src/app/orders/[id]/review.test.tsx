@@ -28,7 +28,7 @@ it("shows hosted attribution and pre-payment verification, retaining context aft
   const order = {
     id: "hosted-order",
     orderNumber: "VC-HOSTED",
-    status: "QR_READY",
+    status: "DRAFT",
     channel: "PARTNER_HOSTED",
     purchaseType: "INITIAL_PURCHASE",
     createdAt: "2026-09-06T16:00:00Z",
@@ -51,7 +51,7 @@ it("shows hosted attribution and pre-payment verification, retaining context aft
       externalCustomerId: "partner-ref",
     },
     documentReviewPolicy: "AUTO_OCR",
-    documentReviewStatus: "VERIFIED",
+    documentReviewStatus: "MANUAL_REVIEW",
     passportVerification: { status: "VERIFIED" },
     documents: [
       {
@@ -69,7 +69,6 @@ it("shows hosted attribution and pre-payment verification, retaining context aft
         uploadVerified: true,
       },
     ],
-    payment: { provider: "KHALTI", status: "COMPLETED" },
     timeline: [
       {
         from: "DRAFT",
