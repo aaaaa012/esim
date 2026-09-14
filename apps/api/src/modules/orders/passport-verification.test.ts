@@ -35,6 +35,7 @@ describe("stored passport extraction comparison", () => {
   it("deterministically compares customer corrections without another OCR pass", () => {
     const evidence = {
       firstName: "ASHA",
+      middleName: "KUMARI",
       surname: "SHRESTHA",
       dateOfBirth: "1990-08-15",
       nationality: "NP",
@@ -46,6 +47,7 @@ describe("stored passport extraction comparison", () => {
         "passportNumber",
         "surname",
         "givenNames",
+        "middleName",
         "dateOfBirth",
         "nationality",
         "passportExpiryDate",
@@ -108,6 +110,8 @@ describe("comparePassport", () => {
     const { matchedFields } = comparePassport(ocr, traveler);
     expect(matchedFields).toContain("passportNumber");
     expect(matchedFields).toContain("surname");
+    expect(matchedFields).toContain("givenNames");
+    expect(matchedFields).toContain("middleName");
     expect(matchedFields).toContain("dateOfBirth");
     expect(matchedFields).toContain("passportExpiryDate");
   });

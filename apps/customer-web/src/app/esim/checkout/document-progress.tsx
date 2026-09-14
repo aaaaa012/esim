@@ -26,7 +26,12 @@ export function DocumentProgress({
   );
   const manual = status === "MANUAL_REVIEW";
   const pending = ["OCR_PENDING", "OCR_BACKGROUND"].includes(status ?? "");
-  const failed = ["FAILED", "PARTIAL", "REUPLOAD_REQUIRED"].includes(
+  const failed = [
+    "FAILED",
+    "PARTIAL",
+    "CORRECTION_REQUIRED",
+    "REUPLOAD_REQUIRED",
+  ].includes(
     status ?? "",
   );
   useEffect(() => {

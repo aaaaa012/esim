@@ -1235,3 +1235,85 @@ it("starts OCR after confirming only a replacement passport with a saved ticket"
     "OCR_PENDING",
   );
 });
+
+it.each([
+  ["matching", customerTraveler(), "VERIFIED", 0],
+  [
+    "customer-corrected mismatch",
+    { ...customerTraveler(), passportNumber: "P7654321" },
+    "CORRECTION_REQUIRED",
+    0,
+  ],
+  [
+    "third customer-corrected mismatch",
+    { ...customerTraveler(), passportNumber: "P7654321" },
+    "MANUAL_REVIEW",
+    2,
+  ],
+] as const)(
+  "compares ready stored extraction immediately for %s traveller data",
+  async (_case, traveler, expectedStatus, correctionAttempts) => {
+    const add = vi.fn().mockResolvedValue({});
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: "stored-extraction",
+          ownerId: "customer-1",
+          status: OrderStatus.DRAFT,
+          traveler,
+          documentReviewStatus: "NOT_STARTED",
+          passportExtraction: {
+            status: "READY",
+            fields: {
+              firstName: "Jane",
+              surname: "Doe",
+              dateOfBirth: "1990-01-01",
+              nationality: "NP",
+              passportNumber: "P1234567",
+              passportExpiryDate: "2030-01-01",
+            },
+            fieldsRequiringInput: [],
+            passportAssetId: "passport-asset",
+            confidence: 96,
+            correctionAttempts,
+          },
+          documents: [
+            {
+              id: "passport",
+              type: DocumentType.PASSPORT,
+              fileName: "passport.png",
+              privateAssetId: "passport-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+            {
+              id: "ticket",
+              type: DocumentType.TICKET,
+              fileName: "ticket.pdf",
+              privateAssetId: "ticket-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      { add },
+    );
+    await instance.refreshFromPersistence();
+
+    const result = await instance.verifyPassport(
+      "stored-extraction",
+      "customer-1",
+    );
+
+    expect(result.documentReviewStatus).toBe(expectedStatus);
+    expect(result.passportVerification?.method).toBe("stored-extraction");
+    expect(add).not.toHaveBeenCalled();
+  },
+);

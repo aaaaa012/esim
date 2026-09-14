@@ -108,6 +108,7 @@ type Order = {
     | "OCR_PENDING"
     | "OCR_BACKGROUND"
     | "VERIFIED"
+    | "CORRECTION_REQUIRED"
     | "MANUAL_REVIEW"
     | "REUPLOAD_REQUIRED"
     | "MANUALLY_APPROVED"
@@ -843,6 +844,32 @@ export default function CheckoutClient({
         { method: "POST", body: "{}" },
       );
       setOrder(updated);
+      if (updated.documentReviewStatus === "CORRECTION_REQUIRED") {
+        const matched = new Set(updated.passportVerification?.matchedFields ?? []);
+        setFieldErrors({
+          ...(!matched.has("givenNames")
+            ? { firstName: "Check against your uploaded passport" }
+            : {}),
+          ...(traveler.middleName.trim() && !matched.has("middleName")
+            ? { middleName: "Check against your uploaded passport" }
+            : {}),
+          ...(!matched.has("surname")
+            ? { surname: "Check against your uploaded passport" }
+            : {}),
+          ...(!matched.has("dateOfBirth")
+            ? { dateOfBirth: "Check against your uploaded passport" }
+            : {}),
+          ...(!matched.has("passportNumber")
+            ? { passportNumber: "Check against your uploaded passport" }
+            : {}),
+          ...(!matched.has("passportExpiryDate")
+            ? { passportExpiryDate: "Check against your uploaded passport" }
+            : {}),
+          ...(!matched.has("nationality")
+            ? { nationality: "Check against your uploaded passport" }
+            : {}),
+        });
+      }
       return updated;
     } catch (e) {
       if ((e as { code?: string }).code === "RATE_LIMITED")
@@ -1782,8 +1809,13 @@ export default function CheckoutClient({
                       onChange={(e) => update("firstName", e.target.value)}
                     />
                   </Field>
-                  <Field label="Middle name (optional)">
+                  <Field
+                    label="Middle name (optional)"
+                    error={fieldErrors.middleName}
+                  >
                     <input
+                      name="middleName"
+                      autoComplete="additional-name"
                       value={traveler.middleName}
                       onChange={(e) => update("middleName", e.target.value)}
                     />
@@ -1911,6 +1943,25 @@ export default function CheckoutClient({
                   <option value="KR">South Korea</option>
                 </datalist>
                 <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
+                {order &&
+                  [
+                    "OCR_PENDING",
+                    "OCR_BACKGROUND",
+                    "CORRECTION_REQUIRED",
+                    "MANUAL_REVIEW",
+                  ].includes(
+                    order.documentReviewStatus ?? "",
+                  ) && (
+                    <PassportCheck
+                      result={order.passportVerification}
+                      busy={busy}
+                      reviewStatus={order.documentReviewStatus}
+                      {...(order.payment?.status
+                        ? { paymentStatus: order.payment.status }
+                        : {})}
+                      onRecheck={() => void run(async () => void (await verifyPassport()))}
+                    />
+                  )}
                 {guest && order && recovery ? (
                   <details className="draft-recovery-option">
                     <summary>Need to finish this order later?</summary>
@@ -2013,6 +2064,7 @@ export default function CheckoutClient({
                     {![
                       "OCR_PENDING",
                       "OCR_BACKGROUND",
+                      "CORRECTION_REQUIRED",
                       "MANUAL_REVIEW",
                     ].includes(order?.documentReviewStatus ?? "") && (
                       <>
@@ -2106,9 +2158,10 @@ export default function CheckoutClient({
                             });
                             setEditingVerifiedDocuments(false);
                           } else if (
-                            order?.documentReviewStatus ===
-                              "REUPLOAD_REQUIRED" &&
-                            order.traveler
+                            ["REUPLOAD_REQUIRED", "CORRECTION_REQUIRED"].includes(
+                              order?.documentReviewStatus ?? "",
+                            ) &&
+                            order?.traveler
                           )
                             advance(3);
                           else jumpTo(1);
@@ -2116,8 +2169,9 @@ export default function CheckoutClient({
                       >
                         {editingVerifiedDocuments
                           ? "Cancel changes"
-                          : order?.documentReviewStatus ===
-                                "REUPLOAD_REQUIRED" && order.traveler
+                          : ["REUPLOAD_REQUIRED", "CORRECTION_REQUIRED"].includes(
+                                order?.documentReviewStatus ?? "",
+                              ) && order?.traveler
                             ? "Check traveller details"
                             : "Back"}
                       </button>
@@ -2133,6 +2187,7 @@ export default function CheckoutClient({
                             [
                               "OCR_PENDING",
                               "OCR_BACKGROUND",
+                              "CORRECTION_REQUIRED",
                               "MANUAL_REVIEW",
                             ].includes(order?.documentReviewStatus ?? "")) ||
                           (!Object.values(files).some(Boolean) &&
@@ -2408,7 +2463,13 @@ export default function CheckoutClient({
                           : {})}
                         busy={verifyingPassport}
                         onRecheck={() => void verifyPassport()}
-                        onEdit={() => jumpTo(2)}
+                        onEdit={() =>
+                          jumpTo(
+                            order.documentReviewStatus === "CORRECTION_REQUIRED"
+                              ? 3
+                              : 2,
+                          )
+                        }
                       />
                     )}
                     {order &&
@@ -2769,12 +2830,16 @@ function Action({
 }) {
   return (
     <button
+      type="button"
       className="button wide"
       disabled={busy || disabled}
       onClick={onClick}
     >
       {busy ? (
-        <LoaderCircle className="spin" size={18} />
+        <>
+          <LoaderCircle className="spin" size={18} />
+          {children}
+        </>
       ) : (
         <>
           {children}
@@ -2791,6 +2856,7 @@ const FIELD_LABELS: Record<string, string> = {
   givenNames: "Given name(s)",
   dateOfBirth: "Date of birth",
   passportExpiryDate: "Passport expiry",
+  nationality: "Nationality",
 };
 
 function PassportCheck({
@@ -2809,6 +2875,9 @@ function PassportCheck({
   onEdit?: () => void;
 }) {
   const status = result?.status;
+  const mismatchedFields = Object.entries(FIELD_LABELS)
+    .filter(([field]) => !result?.matchedFields?.includes(field))
+    .map(([, label]) => label);
   const paymentLabel =
     paymentStatus === "PENDING"
       ? "Payment awaiting confirmation"
@@ -2850,6 +2919,26 @@ function PassportCheck({
       </div>
     );
   }
+  if (reviewStatus === "CORRECTION_REQUIRED") {
+    return (
+      <div className="passport-check warning" role="status">
+        <AlertTriangle size={20} />
+        <span>
+          <b>Recheck your traveller details</b>
+          <small>
+            Check {mismatchedFields.join(", ") || "the highlighted passport fields"},
+            then select Save and continue again. For security, we do not display
+            the values read from your passport.
+          </small>
+        </span>
+        {onEdit && (
+          <button type="button" className="button secondary" onClick={onEdit}>
+            Review traveller details
+          </button>
+        )}
+      </div>
+    );
+  }
   if (reviewStatus === "REUPLOAD_REQUIRED") {
     return (
       <div className="passport-check failed">
@@ -2862,7 +2951,7 @@ function PassportCheck({
           </small>
         </span>
         {onEdit && (
-          <button className="button secondary" onClick={onEdit}>
+          <button type="button" className="button secondary" onClick={onEdit}>
             Replace document
           </button>
         )}
@@ -2934,11 +3023,11 @@ function PassportCheck({
           </small>
         </span>
         {onEdit && (
-          <button className="button secondary" onClick={onEdit}>
+          <button type="button" className="button secondary" onClick={onEdit}>
             Edit traveller details
           </button>
         )}
-        <button className="button secondary" onClick={onRecheck}>
+        <button type="button" className="button secondary" onClick={onRecheck}>
           Re-check
         </button>
       </div>
@@ -2957,11 +3046,11 @@ function PassportCheck({
           </small>
         </span>
         {onEdit && (
-          <button className="button secondary" onClick={onEdit}>
+          <button type="button" className="button secondary" onClick={onEdit}>
             Edit traveller details
           </button>
         )}
-        <button className="button secondary" onClick={onRecheck}>
+        <button type="button" className="button secondary" onClick={onRecheck}>
           Re-check
         </button>
       </div>

@@ -43,9 +43,10 @@ import { QrPdfService } from "../notification/qr-pdf.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { MetricsService } from "../../observability/metrics.service.js";
 import { normalizeMsisdn, msisdnVariants } from "../../common/msisdn.util.js";
-import type {
-  PassportExtractedFields,
-  PassportVerificationResult,
+import {
+  verifyStoredExtraction,
+  type PassportExtractedFields,
+  type PassportVerificationResult,
 } from "./passport-verification.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 
@@ -111,6 +112,9 @@ export type DemoOrder = {
     fields: PassportExtractedFields;
     fieldsRequiringInput: string[];
     failureCode?: string;
+    passportAssetId?: string;
+    confidence?: number;
+    correctionAttempts?: number;
   };
   documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
   documentReviewStatus?:
@@ -118,6 +122,7 @@ export type DemoOrder = {
     | "OCR_PENDING"
     | "OCR_BACKGROUND"
     | "VERIFIED"
+    | "CORRECTION_REQUIRED"
     | "MANUAL_REVIEW"
     | "REUPLOAD_REQUIRED"
     | "MANUALLY_APPROVED"
@@ -866,7 +871,7 @@ export class OrdersService implements OnModuleInit {
     const replacingPassport =
       order.documentReviewStatus === "REUPLOAD_REQUIRED";
     const correctingMismatch =
-      order.documentReviewStatus === "MANUAL_REVIEW" &&
+      order.documentReviewStatus === "CORRECTION_REQUIRED" &&
       ["PARTIAL", "FAILED"].includes(
         order.passportVerification?.status ?? "",
       );
@@ -1186,6 +1191,34 @@ export class OrdersService implements OnModuleInit {
         method: "ocr-error",
         detail: "Documents require manual approval before payment can continue",
       };
+      await this.persistence.save(order);
+      return this.redact(order);
+    }
+    const extraction = order.passportExtraction;
+    if (
+      extraction?.status === "READY" &&
+      extraction.passportAssetId === passport.privateAssetId &&
+      Object.keys(extraction.fields).length > 0
+    ) {
+      const result = verifyStoredExtraction(
+        extraction.fields,
+        order.traveler,
+        extraction.confidence,
+      );
+      const verified = result.status === "VERIFIED";
+      const correctionAttempts = verified
+        ? extraction.correctionAttempts ?? 0
+        : (extraction.correctionAttempts ?? 0) + 1;
+      extraction.correctionAttempts = correctionAttempts;
+      order.passportVerification = result;
+      order.documentReviewStatus = verified
+        ? "VERIFIED"
+        : correctionAttempts >= 3
+          ? "MANUAL_REVIEW"
+          : "CORRECTION_REQUIRED";
+      passport.status = verified
+        ? DocumentStatus.APPROVED
+        : DocumentStatus.PENDING;
       await this.persistence.save(order);
       return this.redact(order);
     }

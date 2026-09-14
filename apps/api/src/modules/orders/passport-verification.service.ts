@@ -23,6 +23,7 @@ export type PassportField =
   | "passportNumber"
   | "surname"
   | "givenNames"
+  | "middleName"
   | "nationality"
   | "dateOfBirth"
   | "passportExpiryDate";
@@ -161,6 +162,11 @@ export const comparePassport = (
     matchesAny(normalizeText(traveler.firstName))
   )
     matchedFields.push("givenNames");
+  if (
+    traveler.middleName?.trim() &&
+    matchesAny(normalizeText(traveler.middleName))
+  )
+    matchedFields.push("middleName");
   const mrzNationality = mrz?.nationality
     ? ISO3_TO_ISO2[mrz.nationality.toUpperCase()]
     : undefined;
@@ -208,6 +214,10 @@ export const compareExtractedPassport = (
     matchedFields.push("surname");
   if (sameText(fields.firstName, traveler.firstName))
     matchedFields.push("givenNames");
+  // Middle names are optional. Record positive evidence when both sides carry
+  // one, without weakening an otherwise valid passport when either omits it.
+  if (sameText(fields.middleName, traveler.middleName))
+    matchedFields.push("middleName");
   if (fields.dateOfBirth === traveler.dateOfBirth)
     matchedFields.push("dateOfBirth");
   if (fields.passportExpiryDate === traveler.passportExpiryDate)

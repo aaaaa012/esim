@@ -254,7 +254,12 @@ describe("hosted checkout payment flow", () => {
     },
   );
 
-  it.each(["FAILED", "OCR_PENDING", "MANUAL_REVIEW"])(
+  it.each([
+    "FAILED",
+    "OCR_PENDING",
+    "CORRECTION_REQUIRED",
+    "MANUAL_REVIEW",
+  ])(
     "blocks payment for %s documents",
     async (status) => {
       fetchMock.mockImplementation(async (url: string) =>
@@ -384,6 +389,64 @@ describe("hosted checkout payment flow", () => {
 });
 
 describe("hosted document progress", () => {
+  it("keeps visible feedback while saving traveller details", async () => {
+    const fresh = session("NOT_STARTED");
+    fresh.order.travelerComplete = false;
+    let releaseTraveler!: () => void;
+    const travelerSaved = new Promise<void>((resolve) => {
+      releaseTraveler = resolve;
+    });
+    Object.assign(fresh.order, {
+      traveler: {
+        firstName: "Anish",
+        surname: "Ghimire",
+        dateOfBirth: "1990-01-01",
+        passportNumber: "PA1234567",
+        passportExpiryDate: "2030-01-01",
+        city: "Kathmandu",
+        nationality: "NP",
+        countryOfResidence: "NP",
+        email: "anish@example.com",
+        mobile: "+9779800000000",
+      },
+    });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/traveler")) {
+        await travelerSaved;
+        return ok(fresh);
+      }
+      if (url.endsWith("/verify-passport"))
+        return ok({ status: "OCR_PENDING" });
+      return ok(fresh);
+    });
+
+    render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByRole("heading", { name: "Traveller information" });
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "First name" })).toHaveProperty(
+        "value",
+        "Anish",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    const saving = await screen.findByRole("button", {
+      name: "Save and continue",
+    });
+    expect((saving as HTMLButtonElement).disabled).toBe(true);
+    releaseTraveler();
+    expect(
+      await screen.findByRole("heading", { name: "Traveller information" }),
+    ).toBeDefined();
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) => url.endsWith("/verify-passport")),
+      ).toBe(true),
+    );
+  });
+
   it("prefills extracted passport fields before traveller confirmation", async () => {
     const extracted = session("NOT_STARTED");
     extracted.order.travelerComplete = false;

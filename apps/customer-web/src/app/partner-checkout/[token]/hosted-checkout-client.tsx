@@ -525,6 +525,32 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       { method: "POST", body: "{}" },
     );
     setVerification(result);
+    if (result.status === "CORRECTION_REQUIRED") {
+      const matched = new Set(result.matchedFields ?? []);
+      setFieldErrors({
+        ...(!matched.has("givenNames")
+          ? { firstName: "Check against your uploaded passport" }
+          : {}),
+        ...(traveler.middleName.trim() && !matched.has("middleName")
+          ? { middleName: "Check against your uploaded passport" }
+          : {}),
+        ...(!matched.has("surname")
+          ? { surname: "Check against your uploaded passport" }
+          : {}),
+        ...(!matched.has("dateOfBirth")
+          ? { dateOfBirth: "Check against your uploaded passport" }
+          : {}),
+        ...(!matched.has("passportNumber")
+          ? { passportNumber: "Check against your uploaded passport" }
+          : {}),
+        ...(!matched.has("passportExpiryDate")
+          ? { passportExpiryDate: "Check against your uploaded passport" }
+          : {}),
+        ...(!matched.has("nationality")
+          ? { nationality: "Check against your uploaded passport" }
+          : {}),
+      });
+    }
     const ok = ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
       result.status,
     );
@@ -1453,8 +1479,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           onChange={(e) => update("firstName", e.target.value)}
                         />
                       </Field>
-                      <Field label="Middle name (optional)">
+                      <Field
+                        label="Middle name (optional)"
+                        error={fieldErrors.middleName}
+                      >
                         <input
+                          name="middleName"
+                          autoComplete="additional-name"
                           value={traveler.middleName}
                           onChange={(e) => update("middleName", e.target.value)}
                         />
@@ -1592,6 +1623,36 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       busy={busy}
                       next={saveTraveler}
                     />
+                    {(Boolean(documentMessage) ||
+                      [
+                        "OCR_PENDING",
+                        "OCR_BACKGROUND",
+                        "CORRECTION_REQUIRED",
+                        "MANUAL_REVIEW",
+                      ].includes(
+                        verification?.status ?? "",
+                      )) && (
+                      <PassportCheck
+                        status={
+                          documentMessage &&
+                          ![
+                            "CORRECTION_REQUIRED",
+                            "MANUAL_REVIEW",
+                            "VERIFIED",
+                            "MANUALLY_APPROVED",
+                            "SKIPPED",
+                          ].includes(
+                            verification?.status ?? "",
+                          )
+                            ? "OCR_PENDING"
+                            : verification?.status
+                        }
+                        busy={busy}
+                        onRecheck={() =>
+                          void run(async () => void (await runVerification()))
+                        }
+                      />
+                    )}
                   </div>
                 )}
                 {step === 2 && (
@@ -1650,6 +1711,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         {![
                           "OCR_PENDING",
                           "OCR_BACKGROUND",
+                          "CORRECTION_REQUIRED",
                           "MANUAL_REVIEW",
                         ].includes(verification?.status ?? "") && (
                           <>
@@ -1716,7 +1778,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 setFiles({});
                                 setEditingVerifiedDocuments(false);
                               } else if (
-                                verification?.status === "REUPLOAD_REQUIRED" &&
+                                [
+                                  "REUPLOAD_REQUIRED",
+                                  "CORRECTION_REQUIRED",
+                                ].includes(verification?.status ?? "") &&
                                 session?.order.travelerComplete
                               )
                                 stepPush(3);
@@ -1725,7 +1790,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           >
                             {editingVerifiedDocuments
                               ? "Cancel changes"
-                              : verification?.status === "REUPLOAD_REQUIRED" &&
+                              : [
+                                    "REUPLOAD_REQUIRED",
+                                    "CORRECTION_REQUIRED",
+                                  ].includes(verification?.status ?? "") &&
                                   session?.order.travelerComplete
                                 ? "Check traveller details"
                                 : "Back"}
@@ -1742,6 +1810,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 [
                                   "OCR_PENDING",
                                   "OCR_BACKGROUND",
+                                  "CORRECTION_REQUIRED",
                                   "MANUAL_REVIEW",
                                 ].includes(verification?.status ?? "")) ||
                               (!Object.values(files).some(Boolean) &&
@@ -1856,12 +1925,16 @@ function Action({
 }) {
   return (
     <button
+      type="button"
       className="button wide"
       disabled={busy || disabled}
       onClick={onClick}
     >
       {busy ? (
-        <LoaderCircle className="spin" size={18} />
+        <>
+          <LoaderCircle className="spin" size={18} />
+          {children}
+        </>
       ) : (
         <>
           {children}
@@ -1908,6 +1981,19 @@ function PassportCheck({
   onRecheck: () => void;
   onEdit?: () => void;
 }) {
+  if (status === "CORRECTION_REQUIRED")
+    return (
+      <div className="passport-check warning" role="status">
+        <AlertTriangle size={20} />
+        <span>
+          <b>Recheck your traveller details</b>
+          <small>
+            One or more passport fields did not match. Review the form and
+            select Save and continue again. We keep the passport values private.
+          </small>
+        </span>
+      </div>
+    );
   if (status === "VERIFIED")
     return (
       <div className="passport-check verified">

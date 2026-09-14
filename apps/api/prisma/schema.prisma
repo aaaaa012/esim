@@ -194,6 +194,7 @@ enum DocumentReviewStatus {
   OCR_PENDING
   OCR_BACKGROUND
   VERIFIED
+  CORRECTION_REQUIRED
   MANUAL_REVIEW
   REUPLOAD_REQUIRED
   MANUALLY_APPROVED
@@ -652,6 +653,7 @@ model PassportExtraction {
   method                String?
   failureCode           String?
   confirmedAt           DateTime?
+  correctionAttempts    Int                          @default(0)
   createdAt             DateTime                     @default(now())
   updatedAt             DateTime                     @updatedAt
 

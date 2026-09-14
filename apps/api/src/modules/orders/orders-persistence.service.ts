@@ -128,6 +128,11 @@ export class OrdersPersistenceService {
                   (value): value is string => typeof value === "string",
                 )
               : [],
+            passportAssetId: row.passportExtraction.passportAssetId,
+            ...(row.passportExtraction.confidence != null
+              ? { confidence: row.passportExtraction.confidence }
+              : {}),
+            correctionAttempts: row.passportExtraction.correctionAttempts,
             ...(row.passportExtraction.failureCode
               ? { failureCode: row.passportExtraction.failureCode }
               : {}),
@@ -614,6 +619,9 @@ export class OrdersPersistenceService {
                     ),
                     fieldsRequiringInput: order.passportExtraction
                       .fieldsRequiringInput as Prisma.InputJsonValue,
+                    confidence: order.passportExtraction.confidence ?? null,
+                    correctionAttempts:
+                      order.passportExtraction.correctionAttempts ?? 0,
                     failureCode: order.passportExtraction.failureCode ?? null,
                   },
                   create: {
@@ -625,6 +633,9 @@ export class OrdersPersistenceService {
                     ),
                     fieldsRequiringInput: order.passportExtraction
                       .fieldsRequiringInput as Prisma.InputJsonValue,
+                    confidence: order.passportExtraction.confidence ?? null,
+                    correctionAttempts:
+                      order.passportExtraction.correctionAttempts ?? 0,
                     failureCode: order.passportExtraction.failureCode ?? null,
                   },
                 });
