@@ -46,7 +46,7 @@ describe("fonepaySocketSignal", () => {
 });
 
 describe("fonepayBankAndroidIntentUrl", () => {
-  it("pins the issuer package and adds a Play Store fallback per V1.10 §8", () => {
+  it("pins the issuer package per V1.10 section 8", () => {
     const url = fonepayBankAndroidIntentUrl(
       "LXBLNPKA://payment",
       "a+b/c=",
@@ -54,8 +54,7 @@ describe("fonepayBankAndroidIntentUrl", () => {
     );
     expect(url).toBe(
       "intent://payment/?qrPayload=a%2Bb%2Fc%3D#Intent;" +
-        "scheme=LXBLNPKA;package=com.lxblnpka.app;" +
-        "S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom.lxblnpka.app;end",
+        "scheme=LXBLNPKA;package=com.lxblnpka.app;end",
     );
   });
 

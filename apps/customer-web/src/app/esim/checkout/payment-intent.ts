@@ -23,9 +23,9 @@ export function fonepayBankIntentUrl(
 }
 
 // V1.10 "Checkout Intent Flow" §8: on Android the merchant must also pin the
-// issuer package so the intent resolves to the banking app, falling back to
-// the Play Store listing when that app is not installed. Only meaningful on
-// Android webviews/Chrome; other clients keep the plain scheme deep link.
+// issuer package so the intent resolves only to the selected banking app.
+// Only meaningful on Android webviews/Chrome; other clients keep the plain
+// scheme deep link.
 export function fonepayBankAndroidIntentUrl(
   intentScheme: string,
   qrPayload: string,
@@ -38,8 +38,7 @@ export function fonepayBankAndroidIntentUrl(
   if (!SAFE_SCHEME.test(scheme) || BLOCKED_SCHEMES.has(scheme.toLowerCase()))
     return null;
   if (!SAFE_PACKAGE.test(pkg)) return null;
-  const store = `https://play.google.com/store/apps/details?id=${encodeURIComponent(pkg)}`;
-  return `intent://payment/?qrPayload=${encodeURIComponent(qrPayload)}#Intent;scheme=${scheme};package=${pkg};S.browser_fallback_url=${encodeURIComponent(store)};end`;
+  return `intent://payment/?qrPayload=${encodeURIComponent(qrPayload)}#Intent;scheme=${scheme};package=${pkg};end`;
 }
 
 export function filterFonepayBanks<

@@ -128,6 +128,22 @@ describe("validateEnv production gate", () => {
     ).not.toThrow();
   });
 
+  it("bounds Fonepay bank-directory cache configuration", () => {
+    expect(() =>
+      validateEnv({
+        NODE_ENV: "development",
+        FONEPAY_BANK_CACHE_TTL_SECONDS: "60",
+      }),
+    ).toThrow();
+    expect(() =>
+      validateEnv({
+        NODE_ENV: "development",
+        FONEPAY_BANK_CACHE_TTL_SECONDS: "86400",
+        FONEPAY_BANK_MAX_STALE_SECONDS: "604800",
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts a Fonepay PKCS8 private-key file path", () => {
     expect(() =>
       validateEnv({
@@ -155,5 +171,4 @@ describe("validateEnv production gate", () => {
       /forbidden in production/,
     );
   });
-
 });

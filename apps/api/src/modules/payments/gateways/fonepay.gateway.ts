@@ -355,6 +355,16 @@ export class FonepayGateway implements PaymentGateway {
     };
   }
 
+  private safeWebsocketUrl(value?: string): string | undefined {
+    if (!value) return undefined;
+    const protocol = new URL(value).protocol;
+    if (protocol === "wss:") return value;
+    if (protocol === "ws:" && process.env.NODE_ENV !== "production")
+      return value;
+    this.logger.warn("Ignored an insecure Fonepay WebSocket URL");
+    return undefined;
+  }
+
   private async fetchBanks(correlationId?: string): Promise<FonepayBank[]> {
     const raw = await this.request(
       `${this.basePath}/banks/list`,
@@ -550,6 +560,7 @@ export class FonepayGateway implements PaymentGateway {
     // while qrMessage is passed to an issuer app through its deep link.
     const qrPayload = qr.qrMessage?.trim();
     const qrScanPayload = (qr.qrString ?? qr.qrMessage!).trim();
+    const websocketUrl = this.safeWebsocketUrl(qr.websocketId);
     return {
       reference,
       redirectUrl: "",
@@ -561,7 +572,7 @@ export class FonepayGateway implements PaymentGateway {
         width: 480,
         errorCorrectionLevel: "M",
       }),
-      ...(qr.websocketId ? { websocketUrl: qr.websocketId } : {}),
+      ...(websocketUrl ? { websocketUrl } : {}),
       banks,
     };
   }

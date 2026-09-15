@@ -1529,6 +1529,7 @@ export default function CheckoutClient({
           setFonepayBankHint(
             "QR recognized. Complete the payment in your banking app.",
           );
+          void verifyFonepaySilently();
           return;
         }
         if (signal === "PAYMENT_RESULT") {

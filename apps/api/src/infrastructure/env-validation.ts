@@ -58,6 +58,18 @@ const baseSchema = z.object({
     .min(1_000)
     .max(60_000)
     .optional(),
+  FONEPAY_BANK_CACHE_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(300)
+    .max(604_800)
+    .optional(),
+  FONEPAY_BANK_MAX_STALE_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(300)
+    .max(2_592_000)
+    .optional(),
   PASSPORT_OCR_MAX_PAGES: z.coerce.number().int().min(1).max(8).optional(),
   PARTNER_WEBHOOK_TIMEOUT_MS: z.coerce
     .number()

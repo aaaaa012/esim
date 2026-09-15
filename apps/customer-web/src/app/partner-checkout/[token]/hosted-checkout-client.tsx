@@ -883,6 +883,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             setFonepayBankHint(
               "QR recognized. Complete the payment in your banking app.",
             );
+            void verifySilently();
             return;
           }
           if (signal === "PAYMENT_RESULT") {

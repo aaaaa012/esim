@@ -31,7 +31,6 @@ export function FonepayBankPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [hint, setHint] = useState("");
   const titleId = useId();
   const descriptionId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -107,13 +106,14 @@ export function FonepayBankPicker({
       );
       return;
     }
-    setHint("");
     window.location.assign(target);
     window.setTimeout(() => {
-      if (document.visibilityState !== "hidden")
-        setHint(
-          "If your banking app didn't open, install it or scan the QR code above.",
+      if (document.visibilityState !== "hidden") {
+        setOpen(false);
+        onError(
+          "Your selected mobile banking app or wallet isn't available right now. Choose another app or scan the QR code.",
         );
+      }
     }, 900);
   };
 
@@ -140,11 +140,6 @@ export function FonepayBankPicker({
         <small>{banks.length} available</small>
         <ChevronRight size={18} aria-hidden="true" />
       </button>
-      {hint ? (
-        <p className="fonepay-bank-hint" role="status">
-          {hint}
-        </p>
-      ) : null}
       {open
         ? createPortal(
             <div
