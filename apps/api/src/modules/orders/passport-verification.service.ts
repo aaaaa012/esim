@@ -395,8 +395,11 @@ export class PassportVerificationService implements OnModuleDestroy {
   private readonly timeoutMs = Number(
     process.env.PASSPORT_OCR_TIMEOUT_MS ?? 30_000,
   );
-  /** Fraction of the image height re-OCR'd when hunting for the MRZ band. */
-  private static readonly MRZ_BAND_RATIO = 0.25;
+  /** Fraction of the image height re-OCR'd when hunting for the MRZ band.
+   *  Generous enough to keep TD3 line 1 (which sits at the top of the MRZ)
+   *  inside the crop even on tilted or loosely framed passport photos; the
+   *  whitelisted alphabet keeps stray edges from polluting the read. */
+  private static readonly MRZ_BAND_RATIO = 0.35;
   /** ICAO MRZ alphabet; also used as the second-pass Tesseract whitelist. */
   private static readonly MRZ_ALPHABET =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";

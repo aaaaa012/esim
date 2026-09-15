@@ -127,6 +127,28 @@ describe("parseMrz", () => {
     expect(mrz?.surname).toBe("ERIKSSON");
     expect(mrz?.givenNames).toBe("ANNA MARIA");
   });
+
+  it("recovers names when a noise line sits between line 1 and line 2", () => {
+    // OCR emitted a stray fragment between the name line and the numeric line.
+    const mrz = parseMrz(`P<UTOERIKSSON<<ANNA<MARIA\nQ7\n${LINE2}`);
+    expect(mrz?.surname).toBe("ERIKSSON");
+    expect(mrz?.givenNames).toBe("ANNA MARIA");
+  });
+
+  it("recovers an embedded name line merged with the text above it", () => {
+    // Full-page OCR glued the human-readable zone onto line 1; the name zone
+    // is still present and the 'P<' anchor locates it.
+    const merged = `OMAN SULTANATE P<UTOERIKSSON<<ANNA<MARIA${"<".repeat(30)}`;
+    const mrz = parseMrz(`${merged}\n${LINE2}`);
+    expect(mrz?.surname).toBe("ERIKSSON");
+    expect(mrz?.givenNames).toBe("ANNA MARIA");
+  });
+
+  it("recovers names when Tesseract splits line 1 across two text lines", () => {
+    const mrz = parseMrz(`P<UTOERIKSSON\n<<ANNA<MARIA${"<".repeat(26)}\n${LINE2}`);
+    expect(mrz?.surname).toBe("ERIKSSON");
+    expect(mrz?.givenNames).toBe("ANNA MARIA");
+  });
 });
 
 describe("confusableNormalize", () => {

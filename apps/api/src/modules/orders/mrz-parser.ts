@@ -106,10 +106,48 @@ export const correctMrzField = (
 const isMrzLine = (line: string) =>
   line.length === 44 && /^[A-Z0-9<]+$/.test(line);
 
+/** Tries every strategy that can prove a name line is TD3 line 1 so the names
+ *  survive even when OCR tears it. Line 2 is anchored by its check-digit
+ *  fields, so the zones above it are free to be imperfect. */
+const recoverLine1 = (zone: string[]): string | undefined => {
+  const embeddedMrzAnchor = /P<[A-Z0-9]{3}[A-Z0-9<]{2,}<</;
+
+  const fromText = (text: string): string | undefined => {
+    if (isMrzLine(text)) return text;
+    const embedded = text.match(embeddedMrzAnchor);
+    if (embedded) {
+      const start = embedded.index ?? 0;
+      return text.slice(start, start + 44).padEnd(44, "<");
+    }
+    // OCR commonly drops a few trailing '<' fillers from line 1 even when its
+    // name zone is readable, and the second-pass rectangle sometimes crops the
+    // top of the line. Recover only an unmistakable TD3 passport line.
+    const short = text.replace(/<+$/g, "");
+    if (
+      short.length >= 12 &&
+      /^P[A-Z0-9<]/.test(short) &&
+      short.includes("<<")
+    )
+      return short.padEnd(44, "<");
+    return undefined;
+  };
+
+  for (const line of zone) {
+    const recovered = fromText(line);
+    if (recovered) return recovered;
+  }
+  // When Tesseract splits one line 1 across two text lines neither fragment
+  // matches alone (e.g. "P<UTOERIKSSON" + "<<ANNA<MARIA<..."). A name polluted
+  // by one stray voxel is still far better than a missing one: comparison uses
+  // edit-distance tolerance and would route a bad name to review, not to a
+  // false VERIFIED.
+  return fromText(zone.join(""));
+};
+
 /** The TD3 line 2 is the one that carries the check digits we can validate.
  *  It is far more reliable than line 1, which OCR often mangles (the name
  *  zone's '<' filler gets read as stray letters). Returns the line 2 raw text
- *  plus the neighbouring line 1 when a clean one exists. */
+ *  plus a recovered line 1 when one exists anywhere in the lines above. */
 export const extractMrz = (
   ocrText: string,
 ): { line1?: string; line2: string } | null => {
@@ -122,20 +160,8 @@ export const extractMrz = (
   );
   if (index < 0) return null;
   const line2 = lines[index] as string;
-  const neighbour = lines[index - 1];
-  if (!neighbour) return { line2 };
-  if (isMrzLine(neighbour)) return { line1: neighbour, line2 };
-  // OCR commonly drops a few trailing '<' fillers from line 1 even when its
-  // name zone is readable. Recover only an unmistakable TD3 passport line;
-  // the check-digit-bearing line 2 remains strict and authoritative.
-  if (
-    neighbour.length >= 20 &&
-    neighbour.length < 44 &&
-    /^P[A-Z0-9<]/.test(neighbour) &&
-    neighbour.includes("<<")
-  )
-    return { line1: neighbour.padEnd(44, "<"), line2 };
-  return { line2 };
+  const line1 = recoverLine1(lines.slice(Math.max(0, index - 3), index));
+  return { ...(line1 ? { line1 } : {}), line2 };
 };
 
 /** Parses a TD3 passport MRZ. Returns null when no line 2 is present. Names
