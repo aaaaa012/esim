@@ -607,6 +607,7 @@ export default function CheckoutClient({
     [verifying, setVerifying] = useState(false);
   const [verifyingPassport, setVerifyingPassport] = useState(false);
   const [fonepayBankHint, setFonepayBankHint] = useState("");
+  const [fonepaySocketReady, setFonepaySocketReady] = useState(false);
   const [lockedProvider, setLockedProvider] = useState<PaymentProvider | null>(
     null,
   );
@@ -1512,10 +1513,14 @@ export default function CheckoutClient({
     }
   };
   useEffect(() => {
+    setFonepaySocketReady(false);
     if (!payment?.websocketUrl || !order) return;
     let socket: WebSocket | undefined;
     try {
       socket = new WebSocket(payment.websocketUrl);
+      socket.onopen = () => setFonepaySocketReady(true);
+      socket.onerror = () => setFonepaySocketReady(false);
+      socket.onclose = () => setFonepaySocketReady(false);
       // A socket message can mean that the QR was merely scanned. Keep the QR
       // visible while the authoritative status endpoint still reports pending.
       socket.onmessage = (event) => {
@@ -2772,6 +2777,7 @@ export default function CheckoutClient({
                             <FonepayBankPicker
                               banks={payment.banks}
                               qrPayload={payment.qrPayload}
+                              socketReady={fonepaySocketReady}
                               onError={setError}
                             />
                           ) : null}

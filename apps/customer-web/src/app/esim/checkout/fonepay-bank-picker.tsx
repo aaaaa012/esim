@@ -21,10 +21,12 @@ export type FonepayBank = {
 export function FonepayBankPicker({
   banks,
   qrPayload,
+  socketReady,
   onError,
 }: {
   banks: FonepayBank[];
   qrPayload?: string | undefined;
+  socketReady: boolean;
   onError: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -78,6 +80,13 @@ export function FonepayBankPicker({
       setOpen(false);
       onError(
         "Banking apps can only be opened from a mobile device. Scan the QR code with your banking app instead.",
+      );
+      return;
+    }
+    if (!socketReady) {
+      setOpen(false);
+      onError(
+        "The secure payment connection is not ready yet. Wait a moment or scan the QR code instead.",
       );
       return;
     }

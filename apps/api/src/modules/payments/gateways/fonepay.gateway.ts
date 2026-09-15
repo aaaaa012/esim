@@ -478,12 +478,20 @@ export class FonepayGateway implements PaymentGateway {
       cached.lastSyncedAt &&
       Date.now() - new Date(cached.lastSyncedAt).getTime() < ttlMs;
     const cachedBanks = cached.banks.map(toBank);
+    const cacheAgeMs = cached.lastSyncedAt
+      ? Date.now() - new Date(cached.lastSyncedAt).getTime()
+      : Number.POSITIVE_INFINITY;
+    const maximumStaleMs =
+      Math.max(
+        300,
+        Number(process.env.FONEPAY_BANK_MAX_STALE_SECONDS ?? 604_800),
+      ) * 1_000;
     if (fresh && cachedBanks.length) return cachedBanks;
     try {
       const synced = await this.syncBankDirectory();
       return synced.banks.map(toBank);
     } catch (error) {
-      if (cachedBanks.length) {
+      if (cachedBanks.length && cacheAgeMs <= maximumStaleMs) {
         this.logger.warn(
           `Using last-known-good Fonepay bank directory: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -540,14 +548,14 @@ export class FonepayGateway implements PaymentGateway {
       return this.fail("Fonepay QR reference did not match the request");
     // V1.10 assigns distinct semantics: qrString is rendered for scanning,
     // while qrMessage is passed to an issuer app through its deep link.
-    const qrPayload = (qr.qrMessage ?? qr.qrString!).trim();
+    const qrPayload = qr.qrMessage?.trim();
     const qrScanPayload = (qr.qrString ?? qr.qrMessage!).trim();
     return {
       reference,
       redirectUrl: "",
       expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
       correlationId: reference,
-      qrPayload,
+      ...(qrPayload ? { qrPayload } : {}),
       qrDataUrl: await QRCode.toDataURL(qrScanPayload, {
         margin: 4,
         width: 480,

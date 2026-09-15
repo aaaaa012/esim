@@ -80,6 +80,33 @@ describe("FonepayGateway", () => {
     expect(qrHeaders.get("signature")).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
   });
 
+  it("keeps scan payment available without exposing qrString as a bank-app payload", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockResolvedValueOnce(json({ bankDetails: [] }))
+      .mockImplementationOnce(async (_url, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        return json({
+          prn: body.referenceLabel,
+          status: "Success",
+          qrString: "scan-only-payload",
+        });
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new FonepayGateway().initiate({
+      attemptId: "scan-only-attempt",
+      orderId: "order-scan-only",
+      orderNumber: "VC-101",
+      amountNpr: 570,
+      returnUrl: "https://checkout.example/return",
+    });
+
+    expect(result.qrDataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(result.qrPayload).toBeUndefined();
+  });
+
   it("rejects QR amounts outside the provider contract before any API call", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -130,8 +157,9 @@ describe("FonepayGateway", () => {
         amountNpr: 2499,
       }),
     ).resolves.toMatchObject({ status: PaymentStatus.PENDING });
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("signature"))
-      .toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    expect(
+      new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("signature"),
+    ).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
   });
 
   it("signs requests with a PKCS8 PEM loaded from a file", async () => {
@@ -162,8 +190,9 @@ describe("FonepayGateway", () => {
         amountNpr: 2499,
       }),
     ).resolves.toMatchObject({ status: PaymentStatus.PENDING });
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("signature"))
-      .toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    expect(
+      new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("signature"),
+    ).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
   });
 
   it("reports an invalid signing key before making a network request", async () => {

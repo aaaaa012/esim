@@ -238,6 +238,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     PaymentProvider.KHALTI,
   );
   const [fonepayBankHint, setFonepayBankHint] = useState("");
+  const [fonepaySocketReady, setFonepaySocketReady] = useState(false);
   const [lockedProvider, setLockedProvider] = useState<PaymentProvider | null>(
     null,
   );
@@ -849,6 +850,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       );
     });
   useEffect(() => {
+    setFonepaySocketReady(false);
     if (!payment || outcome) return;
     let stopped = false;
     let socket: WebSocket | undefined;
@@ -872,6 +874,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     if (payment.websocketUrl) {
       try {
         socket = new WebSocket(payment.websocketUrl);
+        socket.onopen = () => setFonepaySocketReady(true);
+        socket.onerror = () => setFonepaySocketReady(false);
+        socket.onclose = () => setFonepaySocketReady(false);
         socket.onmessage = (event) => {
           const signal = fonepaySocketSignal(event.data);
           if (signal === "QR_VERIFIED") {
@@ -1386,6 +1391,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         <FonepayBankPicker
                           banks={payment.banks}
                           qrPayload={payment.qrPayload}
+                          socketReady={fonepaySocketReady}
                           onError={setError}
                         />
                       ) : null}
