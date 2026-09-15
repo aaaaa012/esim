@@ -4,12 +4,10 @@ import Link from "next/link";
 import { formatPlanDataText } from "../../../lib/format-data";
 import {
   ArrowRight,
-  CheckCircle2,
   Clock3,
   Plus,
   QrCode,
   RefreshCcw,
-  Wifi,
 } from "lucide-react";
 import { OrderRowsLoading } from "./order-loading";
 import type { OrderSummary } from "@visa-compass/shared";
@@ -38,6 +36,14 @@ const action = [
   "PROVISIONING_FAILED",
   "ACTIVATION_ATTENTION",
 ];
+
+function countryFlag(countryCode: string) {
+  const code = countryCode.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return "🌐";
+  return String.fromCodePoint(
+    ...[...code].map((letter) => 127397 + letter.charCodeAt(0)),
+  );
+}
 export default function OrderList() {
   const authFetch = useAuthenticatedFetch();
   const [orders, setOrders] = useState<Order[]>([]),
@@ -115,18 +121,13 @@ export default function OrderList() {
       (filter === "ACTION" && action.includes(order.status)),
   );
   return (
-    <main className="account-page">
+    <main className="account-page orders-page">
       <div className="shell">
-        <div className="account-head">
+        <div className="account-head orders-head">
           <div>
-            <span className="eyebrow">
-              <Wifi size={14} />
-              Your account
-            </span>
-            <h1>My orders</h1>
+            <h1>Orders</h1>
             <p>
-              Your eSIM purchases, recharges, document reviews, payments, and
-              activation events.
+              Purchases, recharges, and activation events, in one list.
             </p>
           </div>
           <div className="account-head-actions">
@@ -151,7 +152,6 @@ export default function OrderList() {
                 aria-pressed={filter === "COMPLETE"}
                 onClick={() => setFilter("COMPLETE")}
               >
-                <CheckCircle2 />
                 <span>
                   <b>{counts.complete}</b>Completed
                 </span>
@@ -160,7 +160,6 @@ export default function OrderList() {
                 aria-pressed={filter === "PROCESSING"}
                 onClick={() => setFilter("PROCESSING")}
               >
-                <RefreshCcw />
                 <span>
                   <b>{counts.processing}</b>Processing
                 </span>
@@ -169,39 +168,48 @@ export default function OrderList() {
                 aria-pressed={filter === "READY"}
                 onClick={() => setFilter("READY")}
               >
-                <QrCode />
                 <span>
-                  <b>{counts.ready}</b>Ready to install
+                  <b>{counts.ready}</b>Ready
                 </span>
               </button>
               <button
                 aria-pressed={filter === "ACTION"}
                 onClick={() => setFilter("ACTION")}
               >
-                <Clock3 />
                 <span>
                   <b>{counts.action}</b>Needs action
                 </span>
               </button>
             </section>
             <div className="customer-filters">
-              {["ALL", "COMPLETE", "PROCESSING", "READY", "ACTION"].map(
+              {["ALL", "ACTION", "READY", "PROCESSING", "COMPLETE"].map(
                 (item) => (
                   <button
                     key={item}
                     className={filter === item ? "selected" : ""}
+                    aria-label={
+                      item === "ALL"
+                        ? "All orders"
+                        : item === "COMPLETE"
+                          ? "Completed"
+                          : item === "ACTION"
+                            ? "Needs action"
+                            : item === "READY"
+                              ? "Ready to install"
+                              : "Processing"
+                    }
                     aria-pressed={filter === item}
                     onClick={() => setFilter(item)}
                   >
                     {item === "ALL"
-                      ? "All orders"
+                      ? `All ${orders.length}`
                       : item === "COMPLETE"
-                        ? "Completed"
+                        ? `Completed ${counts.complete}`
                         : item === "ACTION"
-                          ? "Needs action"
+                          ? `Needs action ${counts.action}`
                           : item === "READY"
-                            ? "Ready to install"
-                            : item[0] + item.slice(1).toLowerCase()}
+                            ? `Ready ${counts.ready}`
+                            : `Processing ${counts.processing}`}
                   </button>
                 ),
               )}
@@ -254,8 +262,8 @@ export default function OrderList() {
                 className="esim-row"
                 key={order.id}
               >
-                <span className="esim-icon">
-                  <QrCode />
+                <span className="order-country-flag" aria-hidden="true">
+                  {countryFlag(order.plan.countryCode)}
                 </span>
                 <div className="esim-main">
                   <div>
@@ -269,10 +277,12 @@ export default function OrderList() {
                         : "Plan purchase"}
                     </span>
                   </div>
-                  <p>
-                    {order.plan.countryCode} · {formatPlanDataText(order.plan.dataAllowance)} ·{" "}
-                    {order.plan.validityDays}{" "}
-                    {order.plan.validityDays === 1 ? "day" : "days"}
+                  <p className="order-plan-facts">
+                    <span>{formatPlanDataText(order.plan.dataAllowance)}</span>
+                    <span>
+                      {order.plan.validityDays}{" "}
+                      {order.plan.validityDays === 1 ? "day" : "days"}
+                    </span>
                   </p>
                 </div>
                 <div className="esim-state">
