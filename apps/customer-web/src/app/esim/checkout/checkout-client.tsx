@@ -1359,6 +1359,7 @@ export default function CheckoutClient({
   const saveDocuments = () =>
     run(async () => {
       setDocumentError("");
+      const replacedPassport = Boolean(files.passport);
       try {
         if (
           !order ||
@@ -1408,6 +1409,7 @@ export default function CheckoutClient({
         setOrder(refreshed);
         setEditingVerifiedDocuments(false);
         if (
+          replacedPassport ||
           !refreshed.documentReviewStatus ||
           refreshed.documentReviewStatus === "NOT_STARTED"
         ) {
@@ -2139,12 +2141,9 @@ export default function CheckoutClient({
                     {order?.documentReviewStatus !== "REUPLOAD_REQUIRED" && (
                       <SavedDocuments documents={order?.documents} />
                     )}
-                    {![
-                      "OCR_PENDING",
-                      "OCR_BACKGROUND",
-                      "CORRECTION_REQUIRED",
-                      "MANUAL_REVIEW",
-                    ].includes(order?.documentReviewStatus ?? "") && (
+{!["OCR_PENDING", "OCR_BACKGROUND"].includes(
+                      order?.documentReviewStatus ?? "",
+                    ) && (
                       <>
                         {editingVerifiedDocuments && (
                           <p className="document-change-warning">

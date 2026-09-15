@@ -73,6 +73,16 @@ export type TravelTicketInspection = {
 export const normalizeText = (value: string) =>
   value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
+/** Tesseract routinely reads the OCR-B MRZ '<' fillers as a run of 'L' (or
+ *  occasionally 'I') letters. Such runs are never part of a real name, so
+ *  drop and split around them; a single stray L inside a real name survives. */
+export const cleanNameTokens = (tokens: string[]): string[] =>
+  tokens
+    .map((token) => token.replace(/([LI])\1{2,}/g, " ").trim())
+    .filter(Boolean)
+    .filter((token) => !/^([LI])\1{2,}$/.test(token))
+    .flatMap((token) => token.split(/\s+/));
+
 const MONTHS: Record<string, string> = {
   JAN: "01",
   FEB: "02",
@@ -443,7 +453,19 @@ export class PassportVerificationService implements OnModuleDestroy {
         passport.privateAssetId,
       );
       const recognized = await this.recognize(image.bytes);
-      const mrz = parseMrz(recognized.text);
+      // The band pass runs with the MRZ alphabet whitelisted, so when Tesseract
+      // managed to read both MRZ lines in the crop, its name zone is trusted
+      // over the unfiltered full-page copy.
+      const parsedBand = recognized.bandText
+        ? parseMrz(recognized.bandText)
+        : null;
+      const parsedFull = parseMrz(recognized.text);
+      const mrz =
+        parsedBand &&
+        parsedBand.passportNumber.value &&
+        (parsedBand.surname || parsedBand.givenNames)
+          ? parsedBand
+          : parsedFull;
       if (!mrz)
         return {
           status: "MANUAL_ENTRY_REQUIRED",
@@ -463,9 +485,14 @@ export class PassportVerificationService implements OnModuleDestroy {
           : field.corrections?.length === 1
             ? field.corrections[0]
             : undefined;
-      const names = mrz.givenNames.split(/\s+/).filter(Boolean);
-      const firstName = names.shift();
-      const middleName = names.length ? names.join(" ") : undefined;
+      const cleanNames = cleanNameTokens(
+        mrz.givenNames.split(/\s+/).filter(Boolean),
+      );
+      const [firstName, ...rest] = cleanNames;
+      const middleName = rest.length ? rest.join(" ") : undefined;
+      const surname = cleanNameTokens(
+        mrz.surname.split(/\s+/).filter(Boolean),
+      )[0];
       const passportNumber = fieldValue(mrz.passportNumber)?.replace(
         /<+$/g,
         "",
@@ -476,7 +503,7 @@ export class PassportVerificationService implements OnModuleDestroy {
       const fields: PassportExtractedFields = {
         ...(firstName ? { firstName } : {}),
         ...(middleName ? { middleName } : {}),
-        ...(mrz.surname ? { surname: mrz.surname } : {}),
+        ...(surname ? { surname } : {}),
         ...(dateOfBirthRaw && mrzDateToIso(dateOfBirthRaw)
           ? { dateOfBirth: mrzDateToIso(dateOfBirthRaw)! }
           : {}),
@@ -676,9 +703,10 @@ export class PassportVerificationService implements OnModuleDestroy {
       });
       const { data } = result;
       let text = data.text ?? "";
+      let bandText = "";
       try {
-        const mrzText = await this.mrzBandPass(worker, image);
-        if (mrzText.trim()) text += `\n${mrzText}`;
+        bandText = await this.mrzBandPass(worker, image);
+        if (bandText.trim()) text += `\n${bandText}`;
       } catch (bandError) {
         // The band pass is best effort. A wedged restricted pass would poison
         // every later request sharing this worker, so discard it — but keep
@@ -692,6 +720,7 @@ export class PassportVerificationService implements OnModuleDestroy {
       }
       return {
         text,
+        ...(bandText.trim() ? { bandText } : {}),
         confidence:
           typeof data.confidence === "number" ? data.confidence : undefined,
       };

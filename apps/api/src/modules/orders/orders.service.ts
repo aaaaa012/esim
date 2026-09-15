@@ -992,9 +992,13 @@ export class OrdersService implements OnModuleInit {
     // a fresh validation run against the current confirmed passport.
     const restartingReplacement =
       reviewResubmission &&
-      ["NOT_STARTED", "OCR_PENDING", "REUPLOAD_REQUIRED"].includes(
-        order.documentReviewStatus ?? "",
-      );
+      [
+        "NOT_STARTED",
+        "OCR_PENDING",
+        "REUPLOAD_REQUIRED",
+        "MANUAL_REVIEW",
+        "CORRECTION_REQUIRED",
+      ].includes(order.documentReviewStatus ?? "");
     if (restartingReplacement) {
       order.documentReviewStartedAt ??= new Date().toISOString();
       if (order.documentReviewPolicy === "NO_REVIEW") {

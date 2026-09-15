@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TravelerInput } from "@visa-compass/shared";
 import {
+  cleanNameTokens,
   comparePassport,
   compareExtractedPassport,
   dateVariants,
@@ -24,6 +25,32 @@ const traveler: TravelerInput = {
   passportNumber: "PA1234567",
   passportExpiryDate: "2030-01-01",
 };
+
+describe("cleanNameTokens", () => {
+  it("drops MRZ filler runs mis-read as repeated L or I letters", () => {
+    expect(cleanNameTokens(["RESHAMSKUMAR", "LLLLLLLLLLL"])).toEqual([
+      "RESHAMSKUMAR",
+    ]);
+    expect(cleanNameTokens(["ANNA", "IIIIIIII"])).toEqual(["ANNA"]);
+  });
+  it("splits a token around an internal filler run", () => {
+    expect(cleanNameTokens(["KUMARILLLLLLSHRESTHA"])).toEqual([
+      "KUMARI",
+      "SHRESTHA",
+    ]);
+  });
+  it("keeps real names that legitimately contain L or I", () => {
+    expect(cleanNameTokens(["MARIA", "MICHAEL", "ALL", "WILLIAMS"])).toEqual([
+      "MARIA",
+      "MICHAEL",
+      "ALL",
+      "WILLIAMS",
+    ]);
+  });
+  it("removes empty and blank tokens", () => {
+    expect(cleanNameTokens(["", "   ", "RESHAM"])).toEqual(["RESHAM"]);
+  });
+});
 
 describe("normalizeText", () => {
   it("uppercases and strips every non-alphanumeric character", () => {
