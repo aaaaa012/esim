@@ -859,7 +859,9 @@ export default function CheckoutClient({
       );
       setOrder(updated);
       if (updated.documentReviewStatus === "CORRECTION_REQUIRED") {
-        const matched = new Set(updated.passportVerification?.matchedFields ?? []);
+        const matched = new Set(
+          updated.passportVerification?.matchedFields ?? [],
+        );
         setFieldErrors({
           ...(!matched.has("givenNames")
             ? { firstName: "Check against your uploaded passport" }
@@ -946,7 +948,9 @@ export default function CheckoutClient({
         );
       }
     }
-  }, [order?.documentReviewStatus]);
+    if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
+      jumpTo(2);
+  }, [order?.documentReviewStatus, step]);
   useEffect(() => {
     if (
       step === 3 &&
@@ -1622,10 +1626,7 @@ export default function CheckoutClient({
                   {!isTopUp && step > index + 1 ? (
                     <button
                       type="button"
-                      disabled={
-                        busy ||
-                        checkoutDetailsLocked(order)
-                      }
+                      disabled={busy || checkoutDetailsLocked(order)}
                       onClick={() => jumpTo(index + 1)}
                       title={`Go back to ${label}`}
                     >
@@ -1685,7 +1686,17 @@ export default function CheckoutClient({
                             void createOrder(false);
                           }}
                         >
-                          {busy ? <><LoaderCircle className="spin" size={18} /> Creating your secure order…</> : <>Continue with my account <ChevronRight size={18} /></>}
+                          {busy ? (
+                            <>
+                              <LoaderCircle className="spin" size={18} />{" "}
+                              Creating your secure order…
+                            </>
+                          ) : (
+                            <>
+                              Continue with my account{" "}
+                              <ChevronRight size={18} />
+                            </>
+                          )}
                         </button>
                       ) : (
                         <SignInButton mode="modal">
@@ -1712,7 +1723,14 @@ export default function CheckoutClient({
                         void createOrder(true);
                       }}
                     >
-                      {busy ? <><LoaderCircle className="spin" size={18} /> Creating your secure order…</> : "Continue as guest"}
+                      {busy ? (
+                        <>
+                          <LoaderCircle className="spin" size={18} /> Creating
+                          your secure order…
+                        </>
+                      ) : (
+                        "Continue as guest"
+                      )}
                     </button>
                   </div>
                 </div>
@@ -1863,14 +1881,14 @@ export default function CheckoutClient({
                 </p>
                 <div className="checkout-disclosure compact" role="note">
                   <LockKeyhole size={19} aria-hidden="true" />
-                  <p>Your passport details are encrypted and used to verify this purchase before payment. <Link href="/privacy">Read the privacy policy</Link>.</p>
+                  <p>
+                    Your passport details are encrypted and used to verify this
+                    purchase before payment.{" "}
+                    <Link href="/privacy">Read the privacy policy</Link>.
+                  </p>
                 </div>
                 {order &&
-                  [
-                    "OCR_PENDING",
-                    "OCR_BACKGROUND",
-                    "MANUAL_REVIEW",
-                  ].includes(
+                  ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
                     order.documentReviewStatus ?? "",
                   ) && (
                     <PassportCheck
@@ -2038,7 +2056,7 @@ export default function CheckoutClient({
                   <option value="JP">Japan</option>
                   <option value="KR">South Korea</option>
                 </datalist>
-<Nav back={() => goBack()} busy={busy} next={saveTraveler} />
+                <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
                 {guest && order && recovery ? (
                   <details className="draft-recovery-option">
                     <summary>Need to finish this order later?</summary>
@@ -2141,7 +2159,7 @@ export default function CheckoutClient({
                     {order?.documentReviewStatus !== "REUPLOAD_REQUIRED" && (
                       <SavedDocuments documents={order?.documents} />
                     )}
-{!["OCR_PENDING", "OCR_BACKGROUND"].includes(
+                    {!["OCR_PENDING", "OCR_BACKGROUND"].includes(
                       order?.documentReviewStatus ?? "",
                     ) && (
                       <>
@@ -2235,9 +2253,10 @@ export default function CheckoutClient({
                             });
                             setEditingVerifiedDocuments(false);
                           } else if (
-                            ["REUPLOAD_REQUIRED", "CORRECTION_REQUIRED"].includes(
-                              order?.documentReviewStatus ?? "",
-                            ) &&
+                            [
+                              "REUPLOAD_REQUIRED",
+                              "CORRECTION_REQUIRED",
+                            ].includes(order?.documentReviewStatus ?? "") &&
                             order?.traveler
                           )
                             advance(3);
@@ -2246,9 +2265,11 @@ export default function CheckoutClient({
                       >
                         {editingVerifiedDocuments
                           ? "Cancel changes"
-                          : ["REUPLOAD_REQUIRED", "CORRECTION_REQUIRED"].includes(
-                                order?.documentReviewStatus ?? "",
-                              ) && order?.traveler
+                          : [
+                                "REUPLOAD_REQUIRED",
+                                "CORRECTION_REQUIRED",
+                              ].includes(order?.documentReviewStatus ?? "") &&
+                              order?.traveler
                             ? "Check traveller details"
                             : "Back"}
                       </button>
@@ -2324,8 +2345,7 @@ export default function CheckoutClient({
                         : "Payment issue"
                       : "Choose payment method"}
                 </h2>
-                {!isTopUp &&
-                !checkoutDetailsLocked(order) ? (
+                {!isTopUp && !checkoutDetailsLocked(order) ? (
                   <button
                     className="button secondary"
                     type="button"
@@ -2979,7 +2999,7 @@ function PassportCheck({
       </div>
     );
   }
-if (reviewStatus === "MANUAL_REVIEW") {
+  if (reviewStatus === "MANUAL_REVIEW") {
     const nameUnreadable =
       !result?.matchedFields?.includes("givenNames") ||
       !result?.matchedFields?.includes("surname");
@@ -2999,7 +3019,11 @@ if (reviewStatus === "MANUAL_REVIEW") {
           </small>
         </span>
         {onReplace && (
-          <button type="button" className="button secondary" onClick={onReplace}>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={onReplace}
+          >
             Replace passport photo
           </button>
         )}
@@ -3019,7 +3043,8 @@ if (reviewStatus === "MANUAL_REVIEW") {
         <span>
           <b>Recheck your traveller details</b>
           <small>
-            Check {mismatchedFields.join(", ") || "the highlighted passport fields"},
+            Check{" "}
+            {mismatchedFields.join(", ") || "the highlighted passport fields"},
             then select Save and continue again. For security, we do not display
             the values read from your passport.
           </small>

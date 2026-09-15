@@ -775,7 +775,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         );
       }
     }
-  }, [verification?.status]);
+    if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
+      stepJump(2);
+  }, [verification?.status, step]);
 
   useEffect(() => {
     if (step === 3 && awaitingVerificationAdvance.current && gatePassed) {
@@ -1689,9 +1691,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         "OCR_PENDING",
                         "OCR_BACKGROUND",
                         "MANUAL_REVIEW",
-                      ].includes(
-                        verification?.status ?? "",
-                      )) && (
+                      ].includes(verification?.status ?? "")) && (
                       <PassportCheck
                         status={
                           documentMessage &&
@@ -1701,9 +1701,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                             "VERIFIED",
                             "MANUALLY_APPROVED",
                             "SKIPPED",
-                          ].includes(
-                            verification?.status ?? "",
-                          )
+                          ].includes(verification?.status ?? "")
                             ? "OCR_PENDING"
                             : verification?.status
                         }

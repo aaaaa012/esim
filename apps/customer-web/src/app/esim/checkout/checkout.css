@@ -1329,8 +1329,8 @@
 }
 
 .fonepay-checkout {
-  --fonepay-red: #d2202f;
-  --fonepay-black: #000000;
+  --fonepay-red: #ce2027;
+  --fonepay-black: #0a0d12;
   display: grid;
   gap: 22px;
   margin-top: 22px;
@@ -1342,8 +1342,8 @@
 }
 
 .fonepay-checkout-logo {
-  width: 150px;
-  height: auto;
+  width: auto;
+  height: 35px;
   margin-inline: auto;
   object-fit: contain;
 }
@@ -1847,7 +1847,7 @@
   color: var(--text-2);
 }
 
-.order-summary > div {
+.order-summary > div:not(.summary-plan) {
   display: flex;
   justify-content: space-between;
   gap: 15px;
@@ -2732,9 +2732,28 @@
   background: color-mix(in srgb, var(--primary-soft) 55%, var(--surface));
   color: var(--text-2);
 }
-.checkout-disclosure > svg { flex: 0 0 auto; color: var(--primary); }
-.checkout-disclosure b { display: block; color: var(--text); }
-.checkout-disclosure p { margin: 5px 0; font-size: 13px; line-height: 1.55; }
-.checkout-disclosure a { color: var(--primary); font-weight: 750; text-decoration: underline; text-underline-offset: 2px; }
-.checkout-disclosure.compact { padding: 13px 14px; }
-.checkout-disclosure.compact p { margin: 0; }
+.checkout-disclosure > svg {
+  flex: 0 0 auto;
+  color: var(--primary);
+}
+.checkout-disclosure b {
+  display: block;
+  color: var(--text);
+}
+.checkout-disclosure p {
+  margin: 5px 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.checkout-disclosure a {
+  color: var(--primary);
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.checkout-disclosure.compact {
+  padding: 13px 14px;
+}
+.checkout-disclosure.compact p {
+  margin: 0;
+}

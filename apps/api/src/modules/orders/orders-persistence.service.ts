@@ -20,7 +20,10 @@ import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { withPostgresTransactionRetry } from "../../infrastructure/postgres-transaction-retry.js";
 import type { DemoOrder } from "./orders.service.js";
-import type { PassportVerificationResult } from "./passport-verification.service.js";
+import {
+  sanitizePassportExtractedFields,
+  type PassportVerificationResult,
+} from "./passport-verification.service.js";
 
 @Injectable()
 export class OrdersPersistenceService {
@@ -112,9 +115,11 @@ export class OrdersPersistenceService {
                 return value &&
                   typeof value === "object" &&
                   !Array.isArray(value)
-                  ? (value as NonNullable<
-                      DemoOrder["passportExtraction"]
-                    >["fields"])
+                  ? sanitizePassportExtractedFields(
+                      value as NonNullable<
+                        DemoOrder["passportExtraction"]
+                      >["fields"],
+                    )
                   : {};
               } catch {
                 extractionPayloadCorrupt = true;

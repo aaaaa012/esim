@@ -90,6 +90,23 @@ export const cleanNameTokens = (tokens: string[]): string[] =>
 export const normalizeName = (value: string) =>
   cleanNameTokens(value.split(/\s+/).filter(Boolean)).join(" ");
 
+/** Re-applies OCR name cleanup when persisted extraction payloads are read.
+ * This keeps historical filler noise out of every checkout channel without
+ * changing the immutable OCR evidence stored for audit. */
+export const sanitizePassportExtractedFields = (
+  fields: PassportExtractedFields,
+): PassportExtractedFields => {
+  const sanitized = { ...fields };
+  for (const field of ["firstName", "middleName", "surname"] as const) {
+    const value = sanitized[field];
+    if (!value) continue;
+    const cleaned = normalizeName(value);
+    if (cleaned) sanitized[field] = cleaned;
+    else delete sanitized[field];
+  }
+  return sanitized;
+};
+
 const MONTHS: Record<string, string> = {
   JAN: "01",
   FEB: "02",
@@ -297,9 +314,9 @@ export const compareExtractedPassport = (
   const sameText = (left?: string, right?: string) =>
     Boolean(
       left &&
-        right &&
-        confusableNormalize(normalizeName(left)) ===
-          confusableNormalize(normalizeName(right)),
+      right &&
+      confusableNormalize(normalizeName(left)) ===
+        confusableNormalize(normalizeName(right)),
     );
   if (sameText(fields.passportNumber, traveler.passportNumber))
     matchedFields.push("passportNumber");
@@ -507,7 +524,7 @@ export class PassportVerificationService implements OnModuleDestroy {
       const dateOfBirthRaw = fieldValue(mrz.dateOfBirth);
       const expiryRaw = fieldValue(mrz.expiryDate);
       const nationality = ISO3_TO_ISO2[mrz.nationality.toUpperCase()];
-      const fields: PassportExtractedFields = {
+      const fields = sanitizePassportExtractedFields({
         ...(firstName ? { firstName } : {}),
         ...(middleName ? { middleName } : {}),
         ...(surname ? { surname } : {}),
@@ -519,7 +536,7 @@ export class PassportVerificationService implements OnModuleDestroy {
           ? { passportExpiryDate: mrzDateToIso(expiryRaw)! }
           : {}),
         ...(nationality ? { nationality } : {}),
-      };
+      });
       const fieldsRequiringInput = required.filter((field) => !fields[field]);
       return {
         status: fieldsRequiringInput.length === 0 ? "READY" : "PARTIAL",
