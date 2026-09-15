@@ -89,7 +89,7 @@ const formatStatus = (esim: Esim) => {
     return {
       label: "Needs attention",
       tone: "needs-attention",
-      detail: "We are checking this eSIM assignment.",
+      detail: "Open the related order to review the eSIM assignment issue.",
     };
   if (active)
     return {
@@ -107,13 +107,23 @@ const formatStatus = (esim: Esim) => {
     return {
       label: "Preparing eSIM",
       tone: "activating",
-      detail: "We are securely preparing your installation QR.",
+      detail: "Your secure installation QR is being prepared. No action is needed yet.",
     };
   return {
     label: "No active plan",
     tone: "no-plan",
     detail: "Add a destination plan when you are ready.",
   };
+};
+
+export const activityStatusLabel = (status: string) => {
+  if (status === "DRAFT") return "Purchase started";
+  if (status === "AWAITING_CUSTOMER") return "Action required";
+  if (status === "PAYMENT_FAILED") return "Payment needs attention";
+  if (status === "PROVISIONING_FAILED") return "eSIM preparation needs attention";
+  if (status === "QR_READY") return "Ready to install";
+  if (status === "COMPLETED") return "Purchase completed";
+  return orderStatusLabel(status);
 };
 
 function Battery({
@@ -730,7 +740,7 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
                 {esim.usage
                   ? `${formatData(esim.usage.usedMb)} used of ${formatData(esim.usage.totalMb)} · Last updated ${new Date(esim.usage.lastCheckedAt).toLocaleString()}`
                   : hasActivePlan
-                    ? "Your provider has not reported a balance yet."
+                    ? "Your provider has not reported a balance yet. No action is needed—check again after first use."
                     : "Install and activate your plan to begin tracking data."}
               </p>
               {esim.usage?.completeness === "PARTIAL" ? (
@@ -807,7 +817,7 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
                   >
                     <i />
                     <span>
-                      <b>{orderStatusLabel(item.orderStatus)}</b>
+                      <b>{activityStatusLabel(item.orderStatus)}</b>
                       <small>
                         {item.planName} ·{" "}
                         {new Date(item.createdAt).toLocaleDateString()}

@@ -185,9 +185,9 @@ button {
 
 .customer-theme-toggle {
   display: inline-grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -468,7 +468,7 @@ button {
     gap: 3px;
     border-radius: 11px;
     color: var(--text-3);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 750;
     transition: color 160ms ease, background 160ms ease, transform 100ms ease;
   }
@@ -483,7 +483,7 @@ button {
   }
 
   body {
-    padding-bottom: calc(62px + env(safe-area-inset-bottom));
+    padding-bottom: calc(86px + env(safe-area-inset-bottom));
   }
 }
 
@@ -1199,6 +1199,29 @@ body {
 .customer-auth-panel .cl-headerSubtitle {
   color: #52657a;
 }
+.customer-auth-panel .cl-socialButtonsBlockButton,
+.customer-auth-panel .cl-formFieldInput,
+.customer-auth-panel .cl-formButtonPrimary {
+  min-height: 44px;
+  border-radius: 10px;
+}
+.customer-auth-panel .cl-formFieldLabel {
+  color: #334155;
+  font-weight: 650;
+}
+.customer-auth-panel .cl-formFieldInput {
+  border-color: #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: none;
+}
+.customer-auth-panel .cl-formFieldInput:focus {
+  border-color: #075985;
+  box-shadow: 0 0 0 3px rgba(7, 89, 133, 0.18);
+}
+.customer-auth-panel .cl-dividerLine {
+  background: #e2e8f0;
+}
 .customer-auth-panel .cl-formButtonPrimary {
   background: #075985;
 }
@@ -1232,7 +1255,7 @@ body {
 @media (max-width: 760px) {
   .customer-auth-page {
     min-height: calc(100dvh - 144px);
-    padding: 20px 16px 40px;
+    padding: 18px 16px 28px;
   }
   .customer-auth-layout {
     grid-template-columns: 1fr;
@@ -1250,8 +1273,8 @@ body {
     margin: 0 0 8px;
   }
   .customer-auth-intro h1 {
-    max-width: 12ch;
-    font-size: clamp(30px, 9vw, 38px);
+    max-width: 14ch;
+    font-size: clamp(28px, 8vw, 34px);
     line-height: 1.04;
   }
   .customer-auth-intro > p:not(.customer-auth-kicker) {
@@ -1264,7 +1287,14 @@ body {
     display: none;
   }
   .customer-auth-panel {
-    padding: 20px 18px;
+    padding: 16px;
+    border-radius: 16px;
+  }
+  .customer-auth-panel .cl-headerTitle {
+    font-size: 22px;
+  }
+  .customer-auth-panel .cl-headerSubtitle {
+    font-size: 13px;
   }
 }
 
@@ -1389,12 +1419,26 @@ body {
 }
 
 @media (max-width: 700px) {
+  .footer {
+    padding: 28px 0;
+  }
   .footer .shell {
     grid-template-columns: 1fr;
-    gap: 24px;
+    gap: 18px;
+  }
+  .footer-logo {
+    width: 164px;
+  }
+  .footer-contact {
+    gap: 8px;
+  }
+  .footer-contact a {
+    min-height: 36px;
+    align-items: center;
   }
   .footer-copy {
     justify-items: start;
+    gap: 4px;
     text-align: left;
   }
 }
@@ -1412,6 +1456,108 @@ body {
 
 main section[id] {
   scroll-margin-top: 96px;
+}
+
+/* Compact operational rhythm for the dedicated recharge route. The homepage
+   teaser keeps its more expressive layout in home.css. */
+@media (max-width: 640px) {
+  body .recharge-page .recharge-page-hero {
+    padding: 28px 0 14px;
+  }
+
+  body .recharge-page .recharge-page-heading h1 {
+    max-width: 12ch;
+    margin-top: 12px;
+    font-size: clamp(32px, 10vw, 40px);
+    line-height: 1;
+    letter-spacing: -0.04em;
+  }
+
+  body .recharge-page .recharge-page-heading > p {
+    margin-top: 14px;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  body .recharge-page .recharge-owned-section {
+    padding: 16px 0 22px;
+  }
+
+  body .recharge-page .recharge-owned-section > .shell {
+    padding: 18px 16px;
+    border-radius: 16px;
+  }
+
+  body .recharge-page .recharge-owned-head {
+    flex-direction: row;
+    gap: 12px;
+  }
+
+  body .recharge-page .recharge-owned-head h2 {
+    font-size: 25px;
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+  }
+
+  body .recharge-page .recharge-owned-head p:last-child {
+    margin-top: 7px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  body .recharge-page .recharge-targets {
+    gap: 0;
+    margin-top: 16px;
+  }
+
+  body .recharge-page .recharge-target {
+    min-height: 68px;
+    padding: 12px 4px;
+    border-width: 1px 0 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  body .recharge-page .recharge-buy-new {
+    margin-top: 16px;
+  }
+
+  body .recharge-page .recharge-section {
+    padding-top: 18px;
+  }
+
+  body .recharge-page .recharge-panel {
+    gap: 18px;
+    padding: 20px 16px;
+    border-radius: 16px;
+  }
+
+  body .recharge-page .recharge-content h2 {
+    font-size: 27px;
+    line-height: 1.05;
+  }
+
+  body .recharge-page .recharge-description {
+    margin-top: 10px;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  body .recharge-page .recharge-form {
+    margin-top: 18px;
+  }
+
+  body .recharge-page .recharge-recovery-link {
+    min-height: 44px;
+    align-items: center;
+    margin-top: 10px;
+  }
+
+  body .recharge-page .recharge-note {
+    padding: 16px 0 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
 }
 .checkout-focus-inner {
   display: grid;

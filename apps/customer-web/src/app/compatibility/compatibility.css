@@ -164,20 +164,56 @@
   }
 }
 @media (max-width: 540px) {
+  .compatibility-page {
+    padding: 32px 0 calc(88px + env(safe-area-inset-bottom));
+  }
+  .compatibility-hero { gap: 22px; }
   .compatibility-page h1 {
-    font-size: 40px;
+    margin: 12px 0 10px;
+    font-size: clamp(30px, 9vw, 38px);
+    line-height: 1.04;
   }
   .compatibility-intro {
     font-size: 16px;
+    line-height: 1.55;
   }
+  .compatibility-points { gap: 8px; margin-top: 18px; }
+  .compatibility-visual {
+    border-radius: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  .compatibility-guide { gap: 0; margin-top: 24px; }
   .check-card {
-    padding: 20px;
+    gap: 14px;
+    padding: 18px 0;
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
+  .check-card.primary-check {
+    border-color: var(--border);
+    background: transparent;
+  }
+  .check-card:first-child { border-top: 0; }
+  .check-number {
+    width: 44px;
+    height: 44px;
+    border-radius: 13px;
+    box-shadow: none;
+  }
+  .check-card h2 { margin-bottom: 5px; font-size: 17px; }
+  .check-card p { line-height: 1.55; }
+  .compatibility-note { gap: 10px; margin-top: 10px; padding: 16px; border-radius: 14px; }
   .compatibility-actions {
     align-items: stretch;
     flex-direction: column;
+    gap: 8px;
+    margin-top: 20px;
   }
   .compatibility-actions .button {
     width: 100%;
+    min-height: 48px;
   }
 }

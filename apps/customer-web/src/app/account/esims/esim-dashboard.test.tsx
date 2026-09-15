@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import EsimDashboard from "./esim-dashboard";
+import EsimDashboard, { activityStatusLabel } from "./esim-dashboard";
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
 
@@ -19,6 +19,17 @@ beforeEach(() => {
   });
 });
 afterEach(() => cleanup());
+
+it("translates lifecycle statuses into clear customer next steps", () => {
+  expect(activityStatusLabel("DRAFT")).toBe("Purchase started");
+  expect(activityStatusLabel("AWAITING_CUSTOMER")).toBe("Action required");
+  expect(activityStatusLabel("PAYMENT_FAILED")).toBe("Payment needs attention");
+  expect(activityStatusLabel("PROVISIONING_FAILED")).toBe(
+    "eSIM preparation needs attention",
+  );
+  expect(activityStatusLabel("QR_READY")).toBe("Ready to install");
+  expect(activityStatusLabel("COMPLETED")).toBe("Purchase completed");
+});
 
 it("keeps orders reachable when the signed-in customer has no eSIM", async () => {
   render(<EsimDashboard />);
