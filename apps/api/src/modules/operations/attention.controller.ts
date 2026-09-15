@@ -53,6 +53,10 @@ export class AttentionController {
     @Req() request: AuthenticatedRequest,
     @Query("status") status?: AttentionCaseStatus,
     @Query("category") category?: string,
+    @Query("severity") severity?: string,
+    @Query("q") query?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
     @Query("limit") limit?: string,
     @Query("offset") offset?: string,
   ) {
@@ -60,6 +64,14 @@ export class AttentionController {
     return this.resilience.list({
       ...(status ? { status } : {}),
       ...(category ? { category } : {}),
+      ...(severity ? { severity } : {}),
+      ...(query?.trim() ? { query: query.trim() } : {}),
+      ...(from && !Number.isNaN(Date.parse(from))
+        ? { createdFrom: new Date(from) }
+        : {}),
+      ...(to && !Number.isNaN(Date.parse(to))
+        ? { createdTo: new Date(to) }
+        : {}),
       limit: Number(limit || 50),
       offset: Number(offset || 0),
     });

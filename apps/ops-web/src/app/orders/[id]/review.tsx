@@ -1072,7 +1072,7 @@ export default function OrderReview({ id }: { id: string }) {
               <StatusBadge label={order.payment?.status ?? "NOT STARTED"} />
             </div>
             <p className="text-xs text-muted-foreground">
-              Paid through {humane(order.payment?.provider ?? "—")}
+              Payment provider: {humane(order.payment?.provider ?? "—")}
             </p>
             <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5 text-sm">
               <span className="text-muted-foreground">
@@ -1240,6 +1240,19 @@ export default function OrderReview({ id }: { id: string }) {
                     : "Reconcile QR assignment"}
                 </Link>
               </Button>
+            ) : order.status === "PAYMENT_REVIEW_REQUIRED" ? (
+              <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                  <p>
+                    Payment has not been confirmed. The payment evidence
+                    requires operational review.
+                  </p>
+                </div>
+                <Button className="w-full" variant="outline" size="sm" asChild>
+                  <Link href="/attention">Open attention queue</Link>
+                </Button>
+              </div>
             ) : (
               <div className="flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />

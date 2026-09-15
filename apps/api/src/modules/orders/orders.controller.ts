@@ -445,10 +445,10 @@ export class OperationsController {
       const traveler = customer.orders.find(
         (order) => order.traveler,
       )?.traveler;
+      const internalIdentityEmail =
+        /@(guest|partner|local)\.visacompass\.invalid$/i.test(customer.email);
       const displayEmail =
-        customer.source === "PARTNER" &&
-        customer.email.endsWith("@partner.visacompass.invalid") &&
-        traveler?.email
+        internalIdentityEmail && traveler?.email
           ? traveler.email
           : customer.email;
       const subscriptions = customer.orders.flatMap(

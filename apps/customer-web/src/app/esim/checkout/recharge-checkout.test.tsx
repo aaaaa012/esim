@@ -430,7 +430,7 @@ describe("first-purchase document verification", () => {
     render(<Checkout planId="plan" orderId="first" />);
 
     expect(
-      await screen.findByRole("heading", { name: "Restoring your order" }),
+      await screen.findByRole("status", { name: "Restoring your order" }),
     ).toBeDefined();
     expect(screen.queryByText(/verifying your khalti payment/i)).toBeNull();
   });

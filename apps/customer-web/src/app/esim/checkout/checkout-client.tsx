@@ -1887,15 +1887,20 @@ export default function CheckoutClient({
               </div>
             )}
             {resumingOrder && (
-              <div className="form-section" role="status" aria-live="polite">
-                <span className="form-icon">
-                  <LoaderCircle className="spin" />
-                </span>
-                <h2>Restoring your order</h2>
-                <p>
-                  We are securely loading your saved checkout and will return
-                  you to the correct step.
-                </p>
+              <div
+                className="form-section checkout-restore-skeleton"
+                role="status"
+                aria-live="polite"
+                aria-label="Restoring your order"
+              >
+                <span className="sr-only">Restoring your order</span>
+                <div className="checkout-restore-fields" aria-hidden="true">
+                  <span className="skel" style={{ width: 190, height: 24, borderRadius: 6 }} />
+                  <span className="skel" style={{ width: "78%", height: 14, borderRadius: 6 }} />
+                  <span className="skel" style={{ width: "100%", height: 48, borderRadius: 8 }} />
+                  <span className="skel" style={{ width: "100%", height: 48, borderRadius: 8 }} />
+                  <span className="skel" style={{ width: "58%", height: 44, borderRadius: 8 }} />
+                </div>
               </div>
             )}
             {!showAccountChoice && !resumingOrder && step === 1 && (

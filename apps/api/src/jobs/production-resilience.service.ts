@@ -101,6 +101,10 @@ export class ProductionResilienceService {
   async list(input: {
     status?: AttentionCaseStatus;
     category?: string;
+    severity?: string;
+    query?: string;
+    createdFrom?: Date;
+    createdTo?: Date;
     limit?: number;
     offset?: number;
   }) {
@@ -110,11 +114,44 @@ export class ProductionResilienceService {
     const where: Prisma.AttentionCaseWhereInput = {
       ...(input.status ? { status: input.status } : {}),
       ...(input.category ? { category: input.category } : {}),
+      ...(input.severity ? { severity: input.severity } : {}),
+      ...(input.query
+        ? {
+            OR: [
+              { summary: { contains: input.query, mode: "insensitive" } },
+              { detail: { contains: input.query, mode: "insensitive" } },
+              {
+                failureCategory: {
+                  contains: input.query,
+                  mode: "insensitive",
+                },
+              },
+              {
+                order: {
+                  is: {
+                    orderNumber: {
+                      contains: input.query,
+                      mode: "insensitive",
+                    },
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+      ...(input.createdFrom || input.createdTo
+        ? {
+            createdAt: {
+              ...(input.createdFrom ? { gte: input.createdFrom } : {}),
+              ...(input.createdTo ? { lte: input.createdTo } : {}),
+            },
+          }
+        : {}),
     };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.attentionCase.findMany({
         where,
-        orderBy: [{ severity: "desc" }, { createdAt: "asc" }],
+        orderBy: { createdAt: "desc" },
         take: limit,
         skip: offset,
         include: {

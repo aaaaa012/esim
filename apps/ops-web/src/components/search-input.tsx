@@ -18,7 +18,7 @@ export function SearchInput({
   className,
 }: SearchInputProps) {
   return (
-    <div className={cn("relative", className)}>
+    <div className={cn("relative min-w-0", className)}>
       <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         type="search"
@@ -26,7 +26,7 @@ export function SearchInput({
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-9 pl-9"
+        className="h-9 w-full min-w-0 pl-9"
       />
     </div>
   );

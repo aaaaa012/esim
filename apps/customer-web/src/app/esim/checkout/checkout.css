@@ -34,6 +34,43 @@
   color: var(--primary);
 }
 
+.checkout-page .skel {
+  display: block;
+  max-width: 100%;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--border) 62%, var(--surface)) 25%,
+    color-mix(in srgb, var(--surface) 76%, var(--primary-soft)) 50%,
+    color-mix(in srgb, var(--border) 62%, var(--surface)) 75%
+  );
+  background-size: 200% 100%;
+  animation: checkout-skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+.checkout-restore-skeleton {
+  min-height: 310px;
+}
+
+.checkout-restore-fields {
+  display: grid;
+  gap: 16px;
+}
+
+@keyframes checkout-skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .checkout-page .skel {
+    animation: none;
+  }
+}
+
 .checkout-heading {
   text-align: center;
   position: relative;

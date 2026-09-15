@@ -1712,7 +1712,7 @@ export default function InventoryClient() {
                   identifiers, orders, batches, or customers
                 </p>
               </div>
-              <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(16rem,28rem)_minmax(10rem,14rem)_auto]">
+              <div className="grid min-w-0 w-full gap-2 lg:w-auto lg:grid-cols-[minmax(16rem,28rem)_minmax(10rem,14rem)_auto]">
                 <SearchInput
                   value={profilesQuery}
                   onChange={setProfilesQuery}
@@ -1769,7 +1769,7 @@ export default function InventoryClient() {
                     <TableRow>
                       <TableHead>SIM identifiers</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Device eID</TableHead>
+                      <TableHead>Device eID (EID)</TableHead>
                       <TableHead>Orders</TableHead>
                       <TableHead>Batch</TableHead>
                       <TableHead className="text-right">Provider</TableHead>
@@ -1816,7 +1816,7 @@ export default function InventoryClient() {
                         <TableCell className="font-mono text-xs">
                           {p.eid.startsWith("SYNTH-") ? (
                             <span className="font-sans text-muted-foreground">
-                              Not provided (local placeholder)
+                              Not assigned yet
                             </span>
                           ) : (
                             p.eid
