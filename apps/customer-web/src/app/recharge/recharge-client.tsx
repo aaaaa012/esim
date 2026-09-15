@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { ArrowRight, CheckCircle2, LoaderCircle, RefreshCcw, Users } from "lucide-react";
+import { ArrowRight, CheckCircle2, LoaderCircle, RefreshCcw } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
@@ -42,8 +42,6 @@ export default function RechargeClient() {
     return () => controller.abort();
   }, [authFetch, attempt, isLoaded, isSignedIn]);
 
-  const hasToken = typeof window !== "undefined" && window.location.hash.includes("topup=");
-
   return (
     <main className="recharge-page">
       <section className="recharge-page-hero">
@@ -51,8 +49,8 @@ export default function RechargeClient() {
           <span className="eyebrow"><RefreshCcw size={14} /> Add more data</span>
           <h1>Recharge the right eSIM.</h1>
           <p>
-            Your own eSIM goes straight to plans. Recharging for someone else
-            uses a private email link to protect their account.
+            Choose an eSIM linked to your account, or securely find an existing
+            Visa Compass eSIM using the mobile number from its delivery email.
           </p>
         </div>
       </section>
@@ -84,7 +82,7 @@ export default function RechargeClient() {
                 </h2>
                 <p>
                   {targets.length === 0
-                    ? "You can recharge someone else securely, or purchase a new eSIM for your next destination."
+                    ? "Use the secure lookup below, or purchase a new eSIM for your next destination."
                     : "Choose an eSIM you own, then select a destination and plan."}
                 </p>
               </div>
@@ -111,20 +109,8 @@ export default function RechargeClient() {
         </section>
       ) : null}
 
-      {!loading && !error ? <TopupLookup friendMode={Boolean(isSignedIn)} /> : null}
+      {!loading && !error ? <TopupLookup /> : null}
 
-      {!loading && !error && !hasToken ? (
-        <section className="recharge-privacy-note">
-          <div className="shell">
-            <Users size={18} aria-hidden="true" />
-            <p>
-              A friend’s eSIM stays in their account. Paying for their recharge
-              records the order in your purchases only when you open their
-              forwarded verification link while signed in.
-            </p>
-          </div>
-        </section>
-      ) : null}
     </main>
   );
 }

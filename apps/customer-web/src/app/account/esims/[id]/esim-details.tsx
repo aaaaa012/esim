@@ -60,6 +60,7 @@ export default function EsimDetails({ id }: { id: string }) {
   >({});
   const [loadError, setLoadError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  const [paymentCheckedAt, setPaymentCheckedAt] = useState<Date | null>(null);
   const load = useCallback(
     (isCurrent: () => boolean = () => true) =>
       authFetch(`${API}/customer/orders/${id}`, { headers }).then(
@@ -244,6 +245,45 @@ export default function EsimDetails({ id }: { id: string }) {
       setBusy("");
     }
   };
+  const checkPaymentStatus = async () => {
+    if (!order?.payment?.reference || busy) return;
+    setBusy("payment-status");
+    setError("");
+    try {
+      const response = await authFetch(
+        `${API}/customer/orders/${id}/payment/verify`,
+        {
+          method: "POST",
+          headers: {
+            ...headers,
+            "content-type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({ reference: order.payment.reference }),
+        },
+      );
+      const value = await response.json();
+      if (!response.ok) {
+        await load();
+        throw new Error(
+          apiErrorMessage(
+            value.error?.code ?? "",
+            "We could not confirm the payment status. Please try again shortly.",
+          ),
+        );
+      }
+      setOrder(value.data);
+      setPaymentCheckedAt(new Date());
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "We could not confirm the payment status. Please try again shortly.",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
   if (loadError && !order)
     return (
       <main className="section">
@@ -284,9 +324,7 @@ export default function EsimDetails({ id }: { id: string }) {
     "MANUAL_REVIEW",
     "OCR_BACKGROUND",
   ].includes(order.documentReviewStatus ?? "");
-  const resumeLabel = paymentPending
-    ? "Check payment status"
-    : order.status === "PAYMENT_FAILED"
+  const resumeLabel = order.status === "PAYMENT_FAILED"
       ? "Retry payment"
       : "Resume checkout";
   return (
@@ -323,18 +361,39 @@ export default function EsimDetails({ id }: { id: string }) {
             {notice}
           </div>
         )}
-        {resumable && (
+        {paymentPending ? (
+          <section className="customer-action-banner">
+            <Clock3 />
+            <span>
+              <b>Awaiting payment confirmation</b>
+              <small>
+                {paymentCheckedAt
+                  ? `Checked at ${paymentCheckedAt.toLocaleTimeString()}. The payment has not been confirmed yet.`
+                  : "Completed the payment in your banking app or wallet? Check its latest status here."}
+              </small>
+            </span>
+            <button
+              className="button"
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => void checkPaymentStatus()}
+            >
+              {busy === "payment-status" ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : (
+                <CheckCircle2 size={17} />
+              )}
+              {busy === "payment-status" ? "Checking status" : "Check status"}
+            </button>
+          </section>
+        ) : resumable ? (
           <section className="customer-action-banner">
             <AlertCircle />
             <span>
-              <b>
-                {paymentPending
-                  ? "Confirm your payment"
-                  : "Complete your purchase"}
-              </b>
+              <b>Complete your purchase</b>
               <small>
-                {paymentPending
-                  ? "Your payment is awaiting confirmation. Updates appear here automatically; you can also open checkout to check its status."
+                {order.status === "PAYMENT_FAILED"
+                  ? "The previous payment did not complete. Return to checkout to choose a payment method and try again."
                   : "Your saved traveller and document information will be restored."}
               </small>
             </span>
@@ -342,7 +401,7 @@ export default function EsimDetails({ id }: { id: string }) {
               {resumeLabel}
             </Link>
           </section>
-        )}
+        ) : null}
         {needsReupload && (
           <section className="customer-action-banner warning">
             <Upload />
@@ -449,13 +508,29 @@ export default function EsimDetails({ id }: { id: string }) {
             <span className="form-icon">
               <QrCode />
             </span>
-            <h2>{resumable ? "Purchase incomplete" : "eSIM activation"}</h2>
-            {resumable ? (
+            <h2>
+              {paymentPending
+                ? "What happens next"
+                : resumable
+                  ? "Purchase incomplete"
+                  : "eSIM activation"}
+            </h2>
+            {paymentPending ? (
               <>
                 <p>
-                  {paymentPending
-                    ? "Your order updates as payment is confirmed. Open checkout to check the latest status with your payment provider."
-                    : "Continue checkout to submit traveller documents and complete payment."}
+                  Your eSIM will be prepared only after the payment provider
+                  confirms the transaction. You do not need to start another
+                  payment while this one is pending.
+                </p>
+                <div className="processing">
+                  <Clock3 size={18} /> Payment confirmation pending
+                </div>
+              </>
+            ) : resumable ? (
+              <>
+                <p>
+                  Continue checkout to finish the remaining details and
+                  payment.
                 </p>
                 <Link
                   className="button"

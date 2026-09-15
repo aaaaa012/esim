@@ -2421,7 +2421,7 @@ export default function CheckoutClient({
                         ? "Recharge needs attention"
                         : "Payment issue"
                       : order?.status === "PAYMENT_PENDING"
-                        ? "Confirm your payment"
+                        ? "Payment confirmation pending"
                         : "Choose payment method"}
                 </h2>
                 {!isTopUp && !checkoutDetailsLocked(order) ? (
@@ -2661,8 +2661,9 @@ export default function CheckoutClient({
                         </p>
                       )}
                     <p>
-                      Review the total before continuing. Your payment and
-                      recharge status will be shown here.
+                      {order?.status === "PAYMENT_PENDING"
+                        ? "If you approved this payment in your banking app or wallet, check its latest status below. Do not start another payment while confirmation is pending."
+                        : "Review the order total, then choose how you would like to pay."}
                     </p>
                     {isTopUp && rechargeTargetLabel && (
                       <p className="form-note">
@@ -2871,7 +2872,7 @@ export default function CheckoutClient({
                             })}
                             onClick={complete}
                           >
-                            I&apos;ve completed payment - check status
+                            Check payment status
                           </Action>
                           <small className="fonepay-security-note">
                             Your order is completed only after Fonepay confirms
@@ -2888,7 +2889,7 @@ export default function CheckoutClient({
                           })}
                           onClick={complete}
                         >
-                          I&apos;ve completed payment - check status
+                          Check payment status
                         </Action>
                       )
                     ) : isTopUp && !order ? (

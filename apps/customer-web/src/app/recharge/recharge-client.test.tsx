@@ -38,7 +38,7 @@ describe("hybrid recharge route", () => {
     const target = await screen.findByRole("link", { name: /Travel eSIM · 1234/i });
     expect(target.getAttribute("href")).toBe("/destinations?esim=owned-1");
     expect(screen.getByRole("heading", { name: "Recharge your eSIM" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Help a friend stay connected" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Add data to your existing eSIM" })).toBeTruthy();
   });
 
   it("asks a customer with multiple eSIMs to choose one", async () => {
@@ -53,7 +53,7 @@ describe("hybrid recharge route", () => {
     expect(screen.getAllByText("Choose destination and plan")).toHaveLength(2);
   });
 
-  it("offers friend recharge and a new purchase when no eSIM is owned", async () => {
+  it("offers secure recharge lookup and a new purchase when no eSIM is owned", async () => {
     mocks.authFetch.mockResolvedValue(ok({ targets: [] }));
     render(<RechargeClient />);
     expect(await screen.findByRole("heading", { name: "No rechargeable eSIM is linked yet" })).toBeTruthy();

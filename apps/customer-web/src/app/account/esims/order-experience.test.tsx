@@ -86,6 +86,42 @@ it("refreshes a pending order without requiring a reload", async () => {
   expect(screen.queryByText("Checking your documents")).toBeNull();
 });
 
+it("checks a pending payment in place without sending the customer back to checkout", async () => {
+  const pending = {
+    ...order,
+    status: "PAYMENT_PENDING",
+    documentReviewStatus: "VERIFIED",
+    payment: {
+      provider: "FONEPAY",
+      status: "PENDING",
+      reference: "VCpayment1",
+    },
+  };
+  const completed = {
+    ...pending,
+    status: "COMPLETED",
+    payment: { ...pending.payment, status: "COMPLETED" },
+  };
+  mocks.fetch
+    .mockResolvedValueOnce(ok(pending))
+    .mockResolvedValueOnce(ok(completed));
+
+  render(<Details id="order" />);
+  const check = await screen.findByRole("button", { name: "Check status" });
+  expect(screen.queryByRole("link", { name: /check.*status/i })).toBeNull();
+  fireEvent.click(check);
+
+  await screen.findByText("Completed");
+  expect(screen.queryByRole("button", { name: "Check status" })).toBeNull();
+  expect(
+    mocks.fetch.mock.calls.some(
+      ([url, init]) =>
+        String(url).endsWith("/customer/orders/order/payment/verify") &&
+        init?.method === "POST",
+    ),
+  ).toBe(true);
+});
+
 it("confirms a replacement upload without clearing another selected document", async () => {
   const documents = ["PASSPORT", "TICKET"].map((type) => ({
     id: type,
