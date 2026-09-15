@@ -1863,6 +1863,27 @@ export default function CheckoutClient({
                   <LockKeyhole size={19} aria-hidden="true" />
                   <p>Your passport details are encrypted and used to verify this purchase before payment. <Link href="/privacy">Read the privacy policy</Link>.</p>
                 </div>
+                {order &&
+                  [
+                    "OCR_PENDING",
+                    "OCR_BACKGROUND",
+                    "MANUAL_REVIEW",
+                  ].includes(
+                    order.documentReviewStatus ?? "",
+                  ) && (
+                    <PassportCheck
+                      result={order.passportVerification}
+                      busy={busy}
+                      reviewStatus={order.documentReviewStatus}
+                      {...(order.payment?.status
+                        ? { paymentStatus: order.payment.status }
+                        : {})}
+                      onRecheck={() =>
+                        void run(async () => void (await verifyPassport()))
+                      }
+                      onReplace={() => jumpTo(2)}
+                    />
+                  )}
                 <div className="form-grid">
                   <Field label="Title">
                     <select
@@ -2015,25 +2036,7 @@ export default function CheckoutClient({
                   <option value="JP">Japan</option>
                   <option value="KR">South Korea</option>
                 </datalist>
-                <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
-                {order &&
-                  [
-                    "OCR_PENDING",
-                    "OCR_BACKGROUND",
-                    "MANUAL_REVIEW",
-                  ].includes(
-                    order.documentReviewStatus ?? "",
-                  ) && (
-                    <PassportCheck
-                      result={order.passportVerification}
-                      busy={busy}
-                      reviewStatus={order.documentReviewStatus}
-                      {...(order.payment?.status
-                        ? { paymentStatus: order.payment.status }
-                        : {})}
-                      onRecheck={() => void run(async () => void (await verifyPassport()))}
-                    />
-                  )}
+<Nav back={() => goBack()} busy={busy} next={saveTraveler} />
                 {guest && order && recovery ? (
                   <details className="draft-recovery-option">
                     <summary>Need to finish this order later?</summary>
@@ -2942,6 +2945,7 @@ function PassportCheck({
   busy,
   onRecheck,
   onEdit,
+  onReplace,
 }: {
   result: Order["passportVerification"];
   reviewStatus?: Order["documentReviewStatus"];
@@ -2949,6 +2953,7 @@ function PassportCheck({
   busy: boolean;
   onRecheck: () => void;
   onEdit?: () => void;
+  onReplace?: () => void;
 }) {
   const status = result?.status;
   const mismatchedFields = Object.entries(FIELD_LABELS)
@@ -2975,17 +2980,30 @@ function PassportCheck({
       </div>
     );
   }
-  if (reviewStatus === "MANUAL_REVIEW") {
+if (reviewStatus === "MANUAL_REVIEW") {
+    const nameUnreadable =
+      !result?.matchedFields?.includes("givenNames") ||
+      !result?.matchedFields?.includes("surname");
     return (
       <div className="passport-check manual" role="status">
         <ShieldCheck size={20} />
         <span>
-          <b>Traveller details need checking</b>
+          <b>
+            {nameUnreadable
+              ? "Your name needs a quick manual check"
+              : "Traveller details need checking"}
+          </b>
           <small>
-            Our team needs to review your document before payment. We will
-            notify you once it is approved — this page updates automatically.
+            {nameUnreadable
+              ? "Your other details were verified. The name on your passport photo wasn\u2019t clear enough to confirm automatically, so our team will check it before payment. You\u2019ll be notified here automatically."
+              : "Our team will review your documents before payment. You\u2019ll be notified here automatically."}
           </small>
         </span>
+        {onReplace && (
+          <button type="button" className="button secondary" onClick={onReplace}>
+            Replace passport photo
+          </button>
+        )}
         {onEdit && (
           <button type="button" className="button secondary" onClick={onEdit}>
             Review traveller details
