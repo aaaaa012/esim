@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TravelerInput } from "@visa-compass/shared";
 import {
   cleanNameTokens,
@@ -8,9 +8,15 @@ import {
   imageDimensions,
   normalizeName,
   normalizeText,
+  PassportVerificationService,
   verifyStoredExtraction,
   verdictFor,
 } from "./passport-verification.service.js";
+
+const US_MRZ = [
+  "P<USATRAVELER<<HAPPY<<<<<<<<<<<<<<<<<<<<<<<<",
+  "E000077303USA6502056F3010149500101920<091824",
+].join("\n");
 
 const traveler: TravelerInput = {
   title: "MR",
@@ -378,6 +384,56 @@ describe("imageDimensions", () => {
   it("returns null for buffers it cannot parse", () => {
     expect(imageDimensions(Buffer.from("not an image"))).toBeNull();
     expect(imageDimensions(Buffer.alloc(0))).toBeNull();
+  });
+});
+
+describe("multi-page passport extraction", () => {
+  it("continues to page two when page one has no readable MRZ", async () => {
+    const storage = {
+      isConfigured: () => true,
+      downloadDocumentImages: vi.fn().mockResolvedValue([
+        { bytes: Buffer.from("cover"), contentType: "image/jpeg" },
+        { bytes: Buffer.from("information-page"), contentType: "image/jpeg" },
+      ]),
+    };
+    const service = new PassportVerificationService(storage as never);
+    const recognize = vi
+      .spyOn(service as never, "recognize" as never)
+      .mockResolvedValueOnce({
+        text: "PASSPORT COVER",
+        confidence: 85,
+      } as never)
+      .mockResolvedValueOnce({
+        text: US_MRZ,
+        bandText: US_MRZ,
+        confidence: 92,
+      } as never);
+
+    const result = await service.extract({
+      id: "order-1",
+      purchaseType: "INITIAL_PURCHASE",
+      documents: [
+        {
+          id: "passport-1",
+          type: "PASSPORT",
+          fileName: "passport.pdf",
+          privateAssetId: "passport-asset",
+          status: "PENDING",
+          uploadVerified: true,
+        },
+      ],
+    } as never);
+
+    expect(recognize).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "READY",
+      fields: {
+        firstName: "HAPPY",
+        surname: "TRAVELER",
+        passportNumber: "E00007730",
+        nationality: "US",
+      },
+    });
   });
 });
 

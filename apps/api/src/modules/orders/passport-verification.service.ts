@@ -433,7 +433,7 @@ export class PassportVerificationService implements OnModuleDestroy {
    *  Generous enough to keep TD3 line 1 (which sits at the top of the MRZ)
    *  inside the crop even on tilted or loosely framed passport photos; the
    *  whitelisted alphabet keeps stray edges from polluting the read. */
-  private static readonly MRZ_BAND_RATIO = 0.35;
+  private static readonly MRZ_BAND_RATIOS = [0.5, 0.35] as const;
   /** ICAO MRZ alphabet; also used as the second-pass Tesseract whitelist. */
   private static readonly MRZ_ALPHABET =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
@@ -473,10 +473,9 @@ export class PassportVerificationService implements OnModuleDestroy {
         failureCode: "OCR_SIMULATOR",
       };
     try {
-      const image = await this.storage.downloadDocumentImage(
+      const recognized = await this.recognizePassportDocument(
         passport.privateAssetId,
       );
-      const recognized = await this.recognize(image.bytes);
       // The band pass runs with the MRZ alphabet whitelisted, so when Tesseract
       // managed to read both MRZ lines in the crop, its name zone is trusted
       // over the unfiltered full-page copy.
@@ -658,9 +657,9 @@ export class PassportVerificationService implements OnModuleDestroy {
       };
     }
 
-    let image: { bytes: Buffer; contentType: string };
+    let images: Array<{ bytes: Buffer; contentType: string }>;
     try {
-      image = await this.storage.downloadDocumentImage(passport.privateAssetId);
+      images = await this.loadPassportImages(passport.privateAssetId);
     } catch (error) {
       this.logger.warn(
         `Passport image download failed for order ${order.id}: ${error instanceof Error ? error.message : "unknown"}`,
@@ -676,7 +675,10 @@ export class PassportVerificationService implements OnModuleDestroy {
 
     let confidence: number | undefined;
     try {
-      const result = await this.recognize(image.bytes);
+      const result = await this.recognizePassportDocument(
+        passport.privateAssetId,
+        images,
+      );
       confidence = result.confidence;
       const { matchedFields } = comparePassport(result.text, order.traveler);
       this.logger.log(
@@ -715,7 +717,7 @@ export class PassportVerificationService implements OnModuleDestroy {
       const worker = await this.workerFor();
       let timeout: NodeJS.Timeout | undefined;
       const result = await Promise.race([
-        worker.recognize(image),
+        worker.recognize(image, { rotateAuto: true }),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(
             () => reject(new Error("Passport OCR timed out")),
@@ -771,42 +773,80 @@ export class PassportVerificationService implements OnModuleDestroy {
   private async mrzBandPass(worker: Worker, image: Buffer): Promise<string> {
     const dimensions = imageDimensions(image);
     if (!dimensions || dimensions.height < 60) return "";
-    const bandHeight = Math.max(
-      40,
-      Math.round(
-        dimensions.height * PassportVerificationService.MRZ_BAND_RATIO,
-      ),
-    );
     try {
       await worker.setParameters({
         tessedit_char_whitelist: PassportVerificationService.MRZ_ALPHABET,
         preserve_interword_spaces: "1",
       });
-      let timeout: NodeJS.Timeout | undefined;
-      const result = await Promise.race([
-        worker.recognize(image, {
-          rectangle: {
-            left: 0,
-            top: Math.max(0, dimensions.height - bandHeight),
-            width: dimensions.width,
-            height: bandHeight,
-          },
-        }),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("MRZ band OCR timed out")),
-            this.timeoutMs,
-          );
-        }),
-      ]).finally(() => {
-        if (timeout) clearTimeout(timeout);
-      });
-      return result.data.text ?? "";
+      const reads: string[] = [];
+      for (const ratio of PassportVerificationService.MRZ_BAND_RATIOS) {
+        const bandHeight = Math.max(40, Math.round(dimensions.height * ratio));
+        let timeout: NodeJS.Timeout | undefined;
+        const result = await Promise.race([
+          worker.recognize(image, {
+            rectangle: {
+              left: 0,
+              top: Math.max(0, dimensions.height - bandHeight),
+              width: dimensions.width,
+              height: bandHeight,
+            },
+          }),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error("MRZ band OCR timed out")),
+              this.timeoutMs,
+            );
+          }),
+        ]).finally(() => {
+          if (timeout) clearTimeout(timeout);
+        });
+        const text = result.data.text ?? "";
+        if (text.trim()) reads.push(text);
+        if (parseMrz(text)) break;
+      }
+      return reads.join("\n");
     } finally {
       await worker
         .setParameters({ tessedit_char_whitelist: "" })
         .catch(() => undefined);
     }
+  }
+
+  private async recognizePassportDocument(
+    assetId: string,
+    loadedImages?: Array<{ bytes: Buffer; contentType: string }>,
+  ) {
+    const images = loadedImages ?? (await this.loadPassportImages(assetId));
+    let best: Awaited<
+      ReturnType<PassportVerificationService["recognize"]>
+    > | null = null;
+    for (const image of images.slice(0, 2)) {
+      const recognized = await this.recognize(image.bytes);
+      best ??= recognized;
+      const parsedBand = recognized.bandText
+        ? parseMrz(recognized.bandText)
+        : null;
+      const parsedFull = parseMrz(recognized.text);
+      if (
+        (parsedBand?.passportNumber.value &&
+          (parsedBand.surname || parsedBand.givenNames)) ||
+        (parsedFull?.passportNumber.value &&
+          (parsedFull.surname || parsedFull.givenNames))
+      )
+        return recognized;
+    }
+    return best!;
+  }
+
+  private async loadPassportImages(assetId: string) {
+    const storage = this.storage as S3StorageService & {
+      downloadDocumentImages?: (
+        id: string,
+      ) => Promise<Array<{ bytes: Buffer; contentType: string }>>;
+    };
+    return storage.downloadDocumentImages
+      ? await storage.downloadDocumentImages(assetId)
+      : [await this.storage.downloadDocumentImage(assetId)];
   }
 
   private workerFor(): Promise<Worker> {

@@ -42,6 +42,7 @@ import {
   orderPassportOcrJobId,
 } from "../../jobs/ocr-recovery.config.js";
 import { OrdersService } from "../orders/orders.service.js";
+import { sanitizePassportExtractedFields } from "../orders/passport-verification.service.js";
 import { PaymentsService } from "../payments/payments.service.js";
 
 /** Opaque, deterministic composite cursor for (createdAt, id) keyset pagination. */
@@ -274,10 +275,7 @@ export class PartnerService {
             !existing.consumedAt &&
             existing.expiresAt > now &&
             !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
-          if (
-            resumable &&
-            existing.mode !== "EXTRACT_FIRST"
-          )
+          if (resumable && existing.mode !== "EXTRACT_FIRST")
             throw new ConflictException({
               code: "DOCUMENT_SESSION_MODE_MISMATCH",
               message:
@@ -910,13 +908,17 @@ export class PartnerService {
     };
   }
 
-async correctExtractedTraveler(
+  async correctExtractedTraveler(
     partnerId: string,
     verificationId: string,
     input: { traveler: TravelerInput; reason: string },
     idempotencyKey: string,
   ) {
-    if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 200)
+    if (
+      !idempotencyKey ||
+      idempotencyKey.length < 8 ||
+      idempotencyKey.length > 200
+    )
       throw new BadRequestException({
         code: "INVALID_IDEMPOTENCY_KEY",
         message: "Idempotency-Key is required for a traveler correction",
@@ -957,7 +959,7 @@ async correctExtractedTraveler(
         verification.status !== "MANUAL_REVIEW" ||
         verification.failureCode !== "TRAVELLER_DETAILS_UNCONFIRMED"
       )
-throw new ConflictException({
+        throw new ConflictException({
           code: "TRAVELER_CORRECTION_NOT_ALLOWED",
           message: "Corrections are accepted only after a details mismatch",
         });
@@ -965,7 +967,8 @@ throw new ConflictException({
       if (latestVersion >= 4)
         throw new ApiException({
           code: "TRAVELER_CORRECTION_LIMIT_REACHED",
-          message: "The correction limit has been reached; manual review is required",
+          message:
+            "The correction limit has been reached; manual review is required",
           status: 409,
         });
       const claim = await tx.partnerDocumentVerification.updateMany({
@@ -1007,8 +1010,13 @@ throw new ConflictException({
         QUEUES.documents,
         "verify-partner-documents",
         { verificationId },
-        `document-verification-${verificationId}-revision-${revision.version}-${createHash("sha256").update(extraction?.passportAssetId ?? verificationId).digest("hex").slice(0, 16)}`,
-ocrJobOptions(),
+        `document-verification-${verificationId}-revision-${revision.version}-${createHash(
+          "sha256",
+        )
+          .update(extraction?.passportAssetId ?? verificationId)
+          .digest("hex")
+          .slice(0, 16)}`,
+        ocrJobOptions(),
       );
     }
     return {
@@ -4349,18 +4357,20 @@ ocrJobOptions(),
     } | null,
   ) {
     if (!extraction) return null;
-    let fields: Record<string, string> = {};
+    let fields: Partial<Record<string, string>> = {};
     if (extraction.payloadEncrypted) {
       try {
         const parsed = JSON.parse(
           this.crypto.decrypt(extraction.payloadEncrypted),
         ) as unknown;
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-          fields = Object.fromEntries(
-            Object.entries(parsed).filter(
-              ([, value]) => typeof value === "string",
+          fields = sanitizePassportExtractedFields(
+            Object.fromEntries(
+              Object.entries(parsed).filter(
+                ([, value]) => typeof value === "string",
+              ),
             ),
-          ) as Record<string, string>;
+          );
       } catch (error) {
         this.logger.error(
           `Could not decrypt passport extraction: ${error instanceof Error ? error.message : "unknown"}`,
@@ -4603,12 +4613,7 @@ ocrJobOptions(),
         QUEUES.documents,
         "verify-passport",
         { orderId, documentId: id, privateAssetId: document.privateAssetId },
-        orderPassportOcrJobId(
-          orderId,
-          id,
-          document.privateAssetId,
-          attemptKey,
-        ),
+        orderPassportOcrJobId(orderId, id, document.privateAssetId, attemptKey),
         ocrJobOptions(),
       );
     } catch (error) {

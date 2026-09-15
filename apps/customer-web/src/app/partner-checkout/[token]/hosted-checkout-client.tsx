@@ -707,9 +707,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     const extraction = session?.order.passportExtraction;
     if (
       !extraction ||
-      !["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
-        extraction.status,
-      )
+      !["READY", "PARTIAL", "SKIPPED"].includes(extraction.status)
     )
       return;
     const key = `${session?.order.id}:${extraction.status}:${JSON.stringify(extraction.fields ?? {})}`;
@@ -725,8 +723,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         return { ...current, ...updates };
       });
     }
-    if (step === 2) stepPush(3);
-  }, [session?.order.id, session?.order.passportExtraction, step]);
+    if (step === 2 && verification?.status !== "REUPLOAD_REQUIRED") stepPush(3);
+  }, [
+    session?.order.id,
+    session?.order.passportExtraction,
+    verification?.status,
+    step,
+  ]);
 
   const gatePassed =
     !session ||

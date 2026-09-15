@@ -997,9 +997,7 @@ export default function CheckoutClient({
     const extraction = order?.passportExtraction;
     if (
       !extraction ||
-      !["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
-        extraction.status,
-      )
+      !["READY", "PARTIAL", "SKIPPED"].includes(extraction.status)
     )
       return;
     const key = `${order?.id}:${extraction.status}:${JSON.stringify(extraction.fields ?? {})}`;
@@ -1015,8 +1013,9 @@ export default function CheckoutClient({
         return { ...current, ...updates };
       });
     }
-    if (step === 2) advance(3);
-  }, [order?.id, order?.passportExtraction, step]);
+    if (step === 2 && order?.documentReviewStatus !== "REUPLOAD_REQUIRED")
+      advance(3);
+  }, [order?.id, order?.passportExtraction, order?.documentReviewStatus, step]);
   useEffect(() => {
     if (
       order?.status === "DRAFT" &&

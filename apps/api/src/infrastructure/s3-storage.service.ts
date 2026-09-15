@@ -12,7 +12,7 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -188,10 +188,7 @@ export class S3StorageService {
       );
       if (Number(response.ContentLength ?? 0) > MAX_DOCUMENT_BYTES)
         throw new BadRequestException("Document content is unavailable");
-      const bytes = await this.bodyToBuffer(
-        response.Body,
-        MAX_DOCUMENT_BYTES,
-      );
+      const bytes = await this.bodyToBuffer(response.Body, MAX_DOCUMENT_BYTES);
       if (!bytes.length)
         throw new BadRequestException("Document content is unavailable");
       return {
@@ -205,6 +202,13 @@ export class S3StorageService {
   }
 
   async downloadDocumentImage(assetId: string) {
+    return (await this.downloadDocumentImages(assetId))[0]!;
+  }
+
+  /** Returns every page relevant to document OCR. Passport uploads sometimes
+   * contain the cover and information page as a two-page PDF, so examining
+   * only page one incorrectly rejects an otherwise valid document. */
+  async downloadDocumentImages(assetId: string) {
     const document = await this.downloadDocument(assetId);
     const maxBytes = Number(
       process.env.PASSPORT_OCR_MAX_IMAGE_BYTES ?? 5 * 1024 * 1024,
@@ -213,10 +217,12 @@ export class S3StorageService {
     if (format !== "pdf") {
       if (document.bytes.length > maxBytes)
         throw new BadRequestException("Passport image is too large to verify");
-      return {
-        bytes: document.bytes,
-        contentType: format === "png" ? "image/png" : "image/jpeg",
-      };
+      return [
+        {
+          bytes: document.bytes,
+          contentType: format === "png" ? "image/png" : "image/jpeg",
+        },
+      ];
     }
 
     const workDir = await mkdtemp(join(tmpdir(), "visa-passport-ocr-"));
@@ -230,8 +236,7 @@ export class S3StorageService {
           "-f",
           "1",
           "-l",
-          "1",
-          "-singlefile",
+          "2",
           "-scale-to",
           "2000",
           "-gray",
@@ -241,10 +246,24 @@ export class S3StorageService {
         ],
         { timeout: 30_000, maxBuffer: 256 * 1024 },
       );
-      const bytes = await readFile(`${outputPrefix}.jpg`);
-      if (!bytes.length || bytes.length > maxBytes)
-        throw new BadRequestException("Passport image is too large to verify");
-      return { bytes, contentType: "image/jpeg" };
+      const pageNames = (await readdir(workDir))
+        .filter((name) => /^passport-page-\d+\.jpg$/i.test(name))
+        .sort((left, right) =>
+          left.localeCompare(right, undefined, { numeric: true }),
+        );
+      if (!pageNames.length)
+        throw new BadRequestException("Document could not be read as an image");
+      const pages = await Promise.all(
+        pageNames.map(async (name) => {
+          const bytes = await readFile(join(workDir, name));
+          if (!bytes.length || bytes.length > maxBytes)
+            throw new BadRequestException(
+              "Passport image is too large to verify",
+            );
+          return { bytes, contentType: "image/jpeg" };
+        }),
+      );
+      return pages;
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
       throw new BadRequestException("Document could not be read as an image");
