@@ -21,6 +21,42 @@ import { ProductionResilienceService } from "../../jobs/production-resilience.se
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { PaymentInitiationStatus, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
+
+export const fonepayClientTelemetrySchema = z.object({
+  reference: z.string().min(1).max(64),
+  event: z.enum([
+    "QR_RENDERED",
+    "SOCKET_CONNECTED",
+    "SOCKET_ERROR",
+    "SOCKET_CLOSED",
+    "QR_VERIFIED_SIGNAL",
+    "PAYMENT_RESULT_SIGNAL",
+    "BANK_LAUNCH_ATTEMPTED",
+    "BANK_LAUNCH_BLOCKED",
+    "BANK_APP_NAVIGATION_OBSERVED",
+  ]),
+  platform: z.enum(["ANDROID", "IOS", "DESKTOP", "UNKNOWN"]),
+  bankCode: z.string().trim().min(1).max(64).optional(),
+  bankName: z.string().trim().min(1).max(160).optional(),
+  launchMethod: z
+    .enum(["ANDROID_PACKAGE_INTENT", "CUSTOM_SCHEME", "QR_SCAN", "NONE"])
+    .optional(),
+  reason: z
+    .enum([
+      "NON_MOBILE_DEVICE",
+      "SOCKET_NOT_READY",
+      "PAYLOAD_UNAVAILABLE",
+      "APP_NOT_OBSERVED",
+      "SOCKET_TRANSPORT_ERROR",
+      "SOCKET_REMOTE_CLOSE",
+      "SOCKET_LOCAL_CLOSE",
+    ])
+    .optional(),
+});
+export type FonepayClientTelemetry = z.infer<
+  typeof fonepayClientTelemetrySchema
+>;
 
 type InitiationResult = {
   reference: string;
@@ -94,6 +130,42 @@ export class PaymentsService {
     )
       providers.push(PaymentProvider.FONEPAY);
     return { providers, simulator };
+  }
+
+  async recordFonepayClientTelemetry(
+    orderId: string,
+    ownerId: string | null,
+    raw: unknown,
+  ) {
+    const input = fonepayClientTelemetrySchema.parse(raw);
+    const order = this.orders.get(orderId, ownerId ?? undefined);
+    if (
+      order.payment?.provider !== PaymentProvider.FONEPAY ||
+      order.payment.reference !== input.reference
+    )
+      throw new BadRequestException(
+        "Telemetry does not match the active Fonepay payment",
+      );
+    if (!this.prisma?.enabled) return { recorded: false };
+    await this.prisma.integrationLog.create({
+      data: {
+        operation: `fonepay-client-${input.event.toLowerCase().replaceAll("_", "-")}`,
+        method: "CLIENT",
+        endpoint: "customer-checkout",
+        status: 200,
+        correlationId: orderId,
+        requestBody: {
+          reference: input.reference,
+          event: input.event,
+          platform: input.platform,
+          ...(input.bankCode ? { bankCode: input.bankCode } : {}),
+          ...(input.bankName ? { bankName: input.bankName } : {}),
+          ...(input.launchMethod ? { launchMethod: input.launchMethod } : {}),
+          ...(input.reason ? { reason: input.reason } : {}),
+        },
+      },
+    });
+    return { recorded: true };
   }
 
   /**

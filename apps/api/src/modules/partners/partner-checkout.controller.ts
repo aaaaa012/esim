@@ -122,6 +122,11 @@ export class PartnerCheckoutController {
     return this.partners.hostedCheckoutInitiate(token, provider);
   }
 
+  @Post(":token/payment/telemetry")
+  paymentTelemetry(@Param("token") token: string, @Body() body: unknown) {
+    return this.partners.hostedCheckoutTelemetry(token, body);
+  }
+
   @Post(":token/payment/simulate-complete")
   simulatePayment(@Param("token") token: string, @Body() body: unknown) {
     const input = z

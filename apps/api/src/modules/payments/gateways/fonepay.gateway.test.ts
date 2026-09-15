@@ -107,6 +107,73 @@ describe("FonepayGateway", () => {
     expect(result.qrPayload).toBeUndefined();
   });
 
+  it("records non-reusable QR fingerprints and safe socket metadata", async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const prisma = {
+      enabled: true,
+      integrationLog: { create },
+      fonepayBankDirectoryEntry: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      fonepayBankDirectorySync: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: "sync-1" }),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      $transaction: vi.fn(async (work: (tx: unknown) => unknown) =>
+        work({
+          fonepayBankDirectoryEntry: {
+            findMany: vi.fn().mockResolvedValue([]),
+            upsert: vi.fn(),
+            updateMany: vi.fn(),
+          },
+        }),
+      ),
+    } as unknown as PrismaService;
+    const payload = "fonepay-sensitive-payment-payload";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockResolvedValueOnce(json({ bankDetails: [] }))
+      .mockImplementationOnce(async (_url, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        return json({
+          prn: body.referenceLabel,
+          status: "Success",
+          qrString: payload,
+          qrMessage: payload,
+          websocketId: "wss://socket.fonepay.example/private/session-token",
+        });
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new FonepayGateway(prisma).initiate({
+      attemptId: "telemetry-attempt",
+      orderId: "order-telemetry",
+      orderNumber: "VC-102",
+      amountNpr: 815,
+      returnUrl: "https://checkout.example/return",
+    });
+
+    const qrLog = create.mock.calls
+      .map(([call]) => call.data)
+      .find(
+        (entry) => entry.operation === "fonepay-generate-intent-qr",
+      );
+    const serialized = JSON.stringify(qrLog);
+    expect(qrLog.responseBody.qrString).toMatch(
+      /^\[REDACTED length=\d+ sha256=[a-f0-9]{16}\]$/,
+    );
+    expect(qrLog.responseBody.qrMessage).toBe(
+      qrLog.responseBody.qrString,
+    );
+    expect(qrLog.responseBody.websocketId).toBe(
+      "[REDACTED protocol=wss host=socket.fonepay.example]",
+    );
+    expect(serialized).not.toContain(payload);
+    expect(serialized).not.toContain("private/session-token");
+  });
+
   it("rejects QR amounts outside the provider contract before any API call", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

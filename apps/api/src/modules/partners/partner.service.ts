@@ -3199,6 +3199,16 @@ export class PartnerService {
     return result;
   }
 
+  async hostedCheckoutTelemetry(token: string, body: unknown) {
+    const session = await this.hostedCheckoutSession(token);
+    if (!this.payments) return this.hostedPaymentDeprecated();
+    return this.payments.recordFonepayClientTelemetry(
+      session.orderId,
+      null,
+      body,
+    );
+  }
+
   async hostedCheckoutSimulate(
     token: string,
     reference?: string,

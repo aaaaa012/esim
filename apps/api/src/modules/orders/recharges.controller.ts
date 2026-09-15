@@ -136,6 +136,20 @@ export class RechargesController {
     await this.payments.verify(id, order.ownerId, reference);
     return rechargeView(await this.recharges.authorize(id, req.user, token));
   }
+  @Post(":id/payment/telemetry")
+  async paymentTelemetry(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
+    @Headers("x-guest-order-token") token: string,
+  ) {
+    const order = await this.recharges.authorize(id, req.user, token);
+    return this.payments.recordFonepayClientTelemetry(
+      id,
+      order.ownerId,
+      body,
+    );
+  }
   @Post(":id/payment/simulate")
   async simulate(
     @Param("id") id: string,

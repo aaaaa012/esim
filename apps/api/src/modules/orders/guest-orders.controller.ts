@@ -236,6 +236,15 @@ export class GuestOrdersController {
     return this.payments.verify(id, ownerId, body.reference);
   }
 
+  @Post(":id/payment/telemetry") async paymentTelemetry(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Headers("x-guest-order-token") token: string,
+  ) {
+    const ownerId = await this.assert(id, token);
+    return this.payments.recordFonepayClientTelemetry(id, ownerId, body);
+  }
+
   @Post(":id/payment/simulate") async simulate(
     @Param("id") id: string,
     @Body()

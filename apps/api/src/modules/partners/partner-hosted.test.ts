@@ -797,6 +797,38 @@ describe("partner hosted checkout", () => {
     ).rejects.toMatchObject({ code: "HOSTED_CHECKOUT_NOT_COMPLETED" });
     expect(initiate).not.toHaveBeenCalled();
   });
+
+  it("routes hosted client telemetry through the token-scoped checkout", async () => {
+    const recordFonepayClientTelemetry = vi
+      .fn()
+      .mockResolvedValue({ recorded: true });
+    const instance = service(
+      {
+        partnerHostedCheckoutSession: {
+          findUnique: vi.fn().mockResolvedValue(session),
+        },
+      },
+      undefined,
+      {},
+      { recordFonepayClientTelemetry },
+    );
+
+    const result = await instance.hostedCheckoutTelemetry(
+      "abcdefghijklmnopqrstuvwxyz012345",
+      {
+        reference: "VC-2026-ABCD",
+        event: "SOCKET_CONNECTED",
+        platform: "ANDROID",
+      },
+    );
+
+    expect(result).toEqual({ recorded: true });
+    expect(recordFonepayClientTelemetry).toHaveBeenCalledWith(
+      "order-1",
+      null,
+      expect.objectContaining({ event: "SOCKET_CONNECTED" }),
+    );
+  });
 });
 
 describe("hosted deposit settlement", () => {

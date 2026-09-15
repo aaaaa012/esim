@@ -23,11 +23,26 @@ export function FonepayBankPicker({
   qrPayload,
   socketReady,
   onError,
+  onTelemetry,
 }: {
   banks: FonepayBank[];
   qrPayload?: string | undefined;
   socketReady: boolean;
   onError: (message: string) => void;
+  onTelemetry?: (event: {
+    event:
+      | "BANK_LAUNCH_ATTEMPTED"
+      | "BANK_LAUNCH_BLOCKED"
+      | "BANK_APP_NAVIGATION_OBSERVED";
+    bankCode: string;
+    bankName: string;
+    launchMethod?: "ANDROID_PACKAGE_INTENT" | "CUSTOM_SCHEME" | "NONE";
+    reason?:
+      | "NON_MOBILE_DEVICE"
+      | "SOCKET_NOT_READY"
+      | "PAYLOAD_UNAVAILABLE"
+      | "APP_NOT_OBSERVED";
+  }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -76,6 +91,13 @@ export function FonepayBankPicker({
 
   const openBank = (bank: FonepayBank) => {
     if (!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      onTelemetry?.({
+        event: "BANK_LAUNCH_BLOCKED",
+        bankCode: bank.bankCode,
+        bankName: bank.bankName,
+        launchMethod: "NONE",
+        reason: "NON_MOBILE_DEVICE",
+      });
       setOpen(false);
       onError(
         "Banking apps can only be opened from a mobile device. Scan the QR code with your banking app instead.",
@@ -83,6 +105,13 @@ export function FonepayBankPicker({
       return;
     }
     if (!socketReady) {
+      onTelemetry?.({
+        event: "BANK_LAUNCH_BLOCKED",
+        bankCode: bank.bankCode,
+        bankName: bank.bankName,
+        launchMethod: "NONE",
+        reason: "SOCKET_NOT_READY",
+      });
       setOpen(false);
       onError(
         "The secure payment connection is not ready yet. Wait a moment or scan the QR code instead.",
@@ -100,15 +129,46 @@ export function FonepayBankPicker({
           : null) ?? fonepayBankIntentUrl(bank.intentScheme, qrPayload))
       : null;
     if (!target) {
+      onTelemetry?.({
+        event: "BANK_LAUNCH_BLOCKED",
+        bankCode: bank.bankCode,
+        bankName: bank.bankName,
+        launchMethod: "NONE",
+        reason: "PAYLOAD_UNAVAILABLE",
+      });
       setOpen(false);
       onError(
         "This banking app could not be opened securely. Scan the QR code above instead.",
       );
       return;
     }
+    const launchMethod =
+      isAndroid && bank.packageName
+        ? "ANDROID_PACKAGE_INTENT"
+        : "CUSTOM_SCHEME";
+    onTelemetry?.({
+      event: "BANK_LAUNCH_ATTEMPTED",
+      bankCode: bank.bankCode,
+      bankName: bank.bankName,
+      launchMethod,
+    });
     window.location.assign(target);
     window.setTimeout(() => {
-      if (document.visibilityState !== "hidden") {
+      if (document.visibilityState === "hidden") {
+        onTelemetry?.({
+          event: "BANK_APP_NAVIGATION_OBSERVED",
+          bankCode: bank.bankCode,
+          bankName: bank.bankName,
+          launchMethod,
+        });
+      } else {
+        onTelemetry?.({
+          event: "BANK_LAUNCH_BLOCKED",
+          bankCode: bank.bankCode,
+          bankName: bank.bankName,
+          launchMethod,
+          reason: "APP_NOT_OBSERVED",
+        });
         setOpen(false);
         onError(
           "Your selected mobile banking app or wallet isn't available right now. Choose another app or scan the QR code.",

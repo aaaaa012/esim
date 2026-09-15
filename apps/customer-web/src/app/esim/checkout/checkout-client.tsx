@@ -7,6 +7,10 @@ import { useEffect, useRef, useState } from "react";
 import ErrorModal from "../../../components/error-modal";
 import { formatPlanDataText } from "../../../lib/format-data";
 import { fonepaySocketSignal } from "./payment-intent";
+import {
+  postFonepayTelemetry,
+  type FonepayTelemetryPayload,
+} from "./fonepay-telemetry";
 import { FonepayBankPicker } from "./fonepay-bank-picker";
 import { paymentActionDisabled, retryDeclaredAllowed } from "./payment-gates";
 import Link from "next/link";
@@ -650,7 +654,11 @@ export default function CheckoutClient({
         setLegalAccepted(true);
         if (value.payment?.provider) {
           setProvider(value.payment.provider);
-          setLockedProvider(value.payment.provider);
+          setLockedProvider(
+            value.paymentRetry?.canChangeProvider
+              ? null
+              : value.payment.provider,
+          );
         }
         if (value.traveler) setTraveler({ ...initial, ...value.traveler });
         awaitingVerificationAdvance.current =
@@ -780,6 +788,10 @@ export default function CheckoutClient({
         );
         setOrder(updated);
         current = updated;
+        if (updated.paymentRetry?.canRetry) {
+          setPayment(null);
+          if (updated.paymentRetry.canChangeProvider) setLockedProvider(null);
+        }
         if (TERMINAL_STATUSES.includes(updated.status)) {
           setVerifying(false);
           return;
@@ -803,6 +815,11 @@ export default function CheckoutClient({
           ).catch(() => current);
           setOrder(refreshed);
           current = refreshed;
+          if (refreshed.paymentRetry?.canRetry) {
+            setPayment(null);
+            if (refreshed.paymentRetry.canChangeProvider)
+              setLockedProvider(null);
+          }
           setVerifying(false);
           return;
         }
@@ -813,6 +830,10 @@ export default function CheckoutClient({
         ).catch(() => current);
         setOrder(refreshed);
         current = refreshed;
+        if (refreshed.paymentRetry?.canRetry) {
+          setPayment(null);
+          if (refreshed.paymentRetry.canChangeProvider) setLockedProvider(null);
+        }
         if (TERMINAL_STATUSES.includes(refreshed.status)) {
           setVerifying(false);
           return;
@@ -826,9 +847,14 @@ export default function CheckoutClient({
         }
       }
     }
-    setOrder(
-      await api<Order>(`/customer/orders/${current.id}`).catch(() => current),
+    const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(
+      () => current,
     );
+    setOrder(refreshed);
+    if (refreshed.paymentRetry?.canRetry) {
+      setPayment(null);
+      if (refreshed.paymentRetry.canChangeProvider) setLockedProvider(null);
+    }
     setError(
       "Your payment is still being confirmed. Return to this tracking page shortly.",
     );
@@ -1480,6 +1506,18 @@ export default function CheckoutClient({
       }
       void verifyPayment(order);
     });
+  const reportTelemetry = (
+    telemetry: FonepayTelemetryPayload,
+    reference: string | undefined = payment?.reference,
+  ) => {
+    if (!order) return;
+    postFonepayTelemetry(
+      api,
+      `/customer/orders/${order.id}/payment/telemetry`,
+      reference,
+      telemetry,
+    );
+  };
   const verifyFonepaySilently = async () => {
     if (!order || paymentVerificationInFlight.current) return;
     paymentVerificationInFlight.current = true;
@@ -1498,16 +1536,17 @@ export default function CheckoutClient({
         )
       )
         setPayment(null);
-    } catch (cause) {
-      const code = (cause as { code?: string })?.code;
-      if (
-        code !== "PAYMENT_NOT_CONFIRMED" &&
-        code !== "PAYMENT_EXPIRED" &&
-        code !== "PAYMENT_REFERENCE_MISMATCH"
-      )
-        void api<Order>(`/customer/orders/${order.id}`)
-          .then(setOrder)
-          .catch(() => undefined);
+    } catch {
+      void api<Order>(`/customer/orders/${order.id}`)
+        .then((refreshed) => {
+          setOrder(refreshed);
+          if (refreshed.paymentRetry?.canRetry) {
+            setPayment(null);
+            if (refreshed.paymentRetry.canChangeProvider)
+              setLockedProvider(null);
+          }
+        })
+        .catch(() => undefined);
     } finally {
       paymentVerificationInFlight.current = false;
     }
@@ -1515,17 +1554,40 @@ export default function CheckoutClient({
   useEffect(() => {
     setFonepaySocketReady(false);
     if (!payment?.websocketUrl || !order) return;
+    const reference = payment.reference;
     let socket: WebSocket | undefined;
+    let locallyClosed = false;
     try {
       socket = new WebSocket(payment.websocketUrl);
-      socket.onopen = () => setFonepaySocketReady(true);
-      socket.onerror = () => setFonepaySocketReady(false);
-      socket.onclose = () => setFonepaySocketReady(false);
+      socket.onopen = () => {
+        setFonepaySocketReady(true);
+        reportTelemetry({ event: "SOCKET_CONNECTED" }, reference);
+      };
+      socket.onerror = () => {
+        setFonepaySocketReady(false);
+        reportTelemetry(
+          { event: "SOCKET_ERROR", reason: "SOCKET_TRANSPORT_ERROR" },
+          reference,
+        );
+      };
+      socket.onclose = () => {
+        setFonepaySocketReady(false);
+        reportTelemetry(
+          {
+            event: "SOCKET_CLOSED",
+            reason: locallyClosed
+              ? "SOCKET_LOCAL_CLOSE"
+              : "SOCKET_REMOTE_CLOSE",
+          },
+          reference,
+        );
+      };
       // A socket message can mean that the QR was merely scanned. Keep the QR
       // visible while the authoritative status endpoint still reports pending.
       socket.onmessage = (event) => {
         const signal = fonepaySocketSignal(event.data);
         if (signal === "QR_VERIFIED") {
+          reportTelemetry({ event: "QR_VERIFIED_SIGNAL" }, reference);
           setFonepayBankHint(
             "QR recognized. Complete the payment in your banking app.",
           );
@@ -1533,6 +1595,8 @@ export default function CheckoutClient({
           return;
         }
         if (signal === "PAYMENT_RESULT") {
+          reportTelemetry({ event: "PAYMENT_RESULT_SIGNAL" }, reference);
+          locallyClosed = true;
           socket?.close();
           void verifyFonepaySilently();
         }
@@ -1540,8 +1604,16 @@ export default function CheckoutClient({
     } catch {
       /* Manual status verification remains available. */
     }
-    return () => socket?.close();
+    return () => {
+      locallyClosed = true;
+      socket?.close();
+    };
   }, [payment?.websocketUrl, order?.id]);
+  useEffect(() => {
+    if (!order || !payment?.qrDataUrl || provider !== PaymentProvider.FONEPAY)
+      return;
+    reportTelemetry({ event: "QR_RENDERED" }, payment.reference);
+  }, [payment?.reference, provider, order?.id]);
   const recoveryUrl =
     order && recovery && typeof window !== "undefined"
       ? `${window.location.origin}/esim/checkout?order=${encodeURIComponent(order.id)}${isTopUp ? "&recharge=1" : ""}#resume=${encodeURIComponent(recovery.token)}`
@@ -2348,7 +2420,9 @@ export default function CheckoutClient({
                         order.status === "PROVISIONING_FAILED"
                         ? "Recharge needs attention"
                         : "Payment issue"
-                      : "Choose payment method"}
+                      : order?.status === "PAYMENT_PENDING"
+                        ? "Confirm your payment"
+                        : "Choose payment method"}
                 </h2>
                 {!isTopUp && !checkoutDetailsLocked(order) ? (
                   <button
@@ -2780,6 +2854,7 @@ export default function CheckoutClient({
                               qrPayload={payment.qrPayload}
                               socketReady={fonepaySocketReady}
                               onError={setError}
+                              onTelemetry={(event) => reportTelemetry(event)}
                             />
                           ) : null}
                           {fonepayBankHint ? (

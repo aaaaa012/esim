@@ -45,6 +45,44 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("recharge checkout", () => {
+  it("restores provider choices after a resumed payment becomes safely retryable", async () => {
+    const failed = {
+      id: "failed-order",
+      orderNumber: "VC-FAILED",
+      status: "PAYMENT_FAILED",
+      purchaseType: "INITIAL_PURCHASE",
+      plan,
+      totalAmountNpr: 100,
+      documents: [],
+      documentReviewStatus: "VERIFIED",
+      payment: {
+        provider: "FONEPAY",
+        reference: "OLDREFERENCE",
+        status: "FAILED",
+      },
+      paymentRetry: { canRetry: true, canChangeProvider: true },
+    };
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI", "FONEPAY"] });
+      return ok(failed);
+    });
+
+    render(<Checkout planId="plan" orderId="failed-order" />);
+
+    expect(
+      await screen.findByRole("button", { name: /Khalti wallet/i }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /Fonepay Mobile banking/i }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("button", {
+        name: /completed payment.*check status/i,
+      }),
+    ).toBeNull();
+  });
+
   it.each([false, true])(
     "skips account selection and keeps recovery after payment initiation fails (signed in: %s)",
     async (signedIn) => {

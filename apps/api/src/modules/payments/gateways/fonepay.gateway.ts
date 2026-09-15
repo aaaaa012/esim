@@ -1,6 +1,6 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { createPrivateKey, createSign } from "node:crypto";
+import { createHash, createPrivateKey, createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import QRCode from "qrcode";
 import { z } from "zod";
@@ -120,14 +120,41 @@ export class FonepayGateway implements PaymentGateway {
     if (Array.isArray(value)) return value.map((item) => this.redact(item));
     if (value && typeof value === "object")
       return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-          key,
-          /authorization|password|secret|signature|token|qr|string|websocket/i.test(
+        Object.entries(value as Record<string, unknown>).map(([key, item]) => {
+          const normalizedKey = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+          if (
+            (normalizedKey === "qrstring" || normalizedKey === "qrmessage") &&
+            typeof item === "string"
+          ) {
+            const fingerprint = createHash("sha256")
+              .update(item)
+              .digest("hex")
+              .slice(0, 16);
+            return [
+              key,
+              `[REDACTED length=${item.length} sha256=${fingerprint}]`,
+            ];
+          }
+          if (/websocket/i.test(key) && typeof item === "string") {
+            try {
+              const url = new URL(item);
+              return [
+                key,
+                `[REDACTED protocol=${url.protocol.replace(":", "")} host=${url.host}]`,
+              ];
+            } catch {
+              return [key, "[REDACTED invalid-url]"];
+            }
+          }
+          return [
             key,
-          )
-            ? "[REDACTED]"
-            : this.redact(item),
-        ]),
+            /authorization|password|secret|signature|token|qr|string|websocket/i.test(
+              key,
+            )
+              ? "[REDACTED]"
+              : this.redact(item),
+          ];
+        }),
       );
     if (["string", "number", "boolean"].includes(typeof value))
       return value as string | number | boolean;

@@ -730,3 +730,100 @@ describe("PaymentsService durable verification attempts", () => {
     );
   });
 });
+
+describe("PaymentsService Fonepay client telemetry", () => {
+  function telemetrySetup(prismaEnabled = true) {
+    const order = orderFor({
+      payment: {
+        provider: PaymentProvider.FONEPAY,
+        reference: "VC-2026-ABCD",
+        status: PaymentStatus.PENDING,
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+      },
+    });
+    const create = vi.fn(async () => ({}));
+    const orders = { get: () => order };
+    const service = new PaymentsService(
+      orders as never,
+      {} as never,
+      {} as never,
+      undefined,
+      undefined,
+      {
+        enabled: prismaEnabled,
+        integrationLog: { create },
+      } as never,
+    );
+    return { service, order, create };
+  }
+
+  it("records a matching event with the order correlation and no payload", async () => {
+    const { service, create } = telemetrySetup();
+
+    const result = await service.recordFonepayClientTelemetry(
+      "order-1",
+      "user-1",
+      {
+        reference: "VC-2026-ABCD",
+        event: "SOCKET_CONNECTED",
+        platform: "ANDROID",
+      },
+    );
+
+    expect(result).toEqual({ recorded: true });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        operation: "fonepay-client-socket-connected",
+        method: "CLIENT",
+        correlationId: "order-1",
+        requestBody: expect.objectContaining({
+          reference: "VC-2026-ABCD",
+          event: "SOCKET_CONNECTED",
+          platform: "ANDROID",
+        }),
+      }),
+    });
+  });
+
+  it("rejects telemetry that does not match the active Fonepay reference", async () => {
+    const { service, create } = telemetrySetup();
+
+    await expect(
+      service.recordFonepayClientTelemetry("order-1", "user-1", {
+        reference: "VC-2026-OTHER",
+        event: "SOCKET_CONNECTED",
+        platform: "ANDROID",
+      }),
+    ).rejects.toThrow("does not match the active Fonepay payment");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown events before any lookup", async () => {
+    const { service } = telemetrySetup();
+
+    await expect(
+      service.recordFonepayClientTelemetry("order-1", "user-1", {
+        reference: "VC-2026-ABCD",
+        event: "MADE_UP_EVENT",
+        platform: "ANDROID",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("skips persistence when Prisma is disabled", async () => {
+    const { service, create } = telemetrySetup(false);
+
+    const result = await service.recordFonepayClientTelemetry(
+      "order-1",
+      "user-1",
+      {
+        reference: "VC-2026-ABCD",
+        event: "QR_RENDERED",
+        platform: "DESKTOP",
+      },
+    );
+
+    expect(result).toEqual({ recorded: false });
+    expect(create).not.toHaveBeenCalled();
+  });
+});

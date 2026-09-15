@@ -51,6 +51,17 @@ export class PaymentsController {
   ) {
     return this.payments.verify(orderId, req.user!.id, body.reference);
   }
+  @Post("telemetry") telemetry(
+    @Param("orderId") orderId: string,
+    @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.payments.recordFonepayClientTelemetry(
+      orderId,
+      req.user!.id,
+      body,
+    );
+  }
 }
 
 @Controller("payments")

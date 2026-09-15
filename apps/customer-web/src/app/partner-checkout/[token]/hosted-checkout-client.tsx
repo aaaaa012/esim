@@ -40,6 +40,10 @@ import DatePicker from "../../esim/checkout/date-picker";
 import ErrorModal from "../../../components/error-modal";
 import { formatPlanDataText } from "../../../lib/format-data";
 import { fonepaySocketSignal } from "../../esim/checkout/payment-intent";
+import {
+  postFonepayTelemetry,
+  type FonepayTelemetryPayload,
+} from "../../esim/checkout/fonepay-telemetry";
 import { FonepayBankPicker } from "../../esim/checkout/fonepay-bank-picker";
 import "../../esim/checkout/checkout.css";
 
@@ -849,11 +853,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         "Your payment is still being confirmed by the gateway. Wait a moment, then check again.",
       );
     });
+  const reportTelemetry = (telemetry: FonepayTelemetryPayload) =>
+    postFonepayTelemetry(
+      api,
+      `/partner-checkout/${token}/payment/telemetry`,
+      payment?.reference,
+      telemetry,
+    );
   useEffect(() => {
     setFonepaySocketReady(false);
     if (!payment || outcome) return;
     let stopped = false;
     let socket: WebSocket | undefined;
+    let locallyClosed = false;
+    const reference = payment.reference;
     const verifySilently = async () => {
       if (stopped || paymentVerificationInFlight.current) return;
       paymentVerificationInFlight.current = true;
@@ -874,12 +887,30 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     if (payment.websocketUrl) {
       try {
         socket = new WebSocket(payment.websocketUrl);
-        socket.onopen = () => setFonepaySocketReady(true);
-        socket.onerror = () => setFonepaySocketReady(false);
-        socket.onclose = () => setFonepaySocketReady(false);
+        socket.onopen = () => {
+          setFonepaySocketReady(true);
+          reportTelemetry({ event: "SOCKET_CONNECTED" });
+        };
+        socket.onerror = () => {
+          setFonepaySocketReady(false);
+          reportTelemetry({
+            event: "SOCKET_ERROR",
+            reason: "SOCKET_TRANSPORT_ERROR",
+          });
+        };
+        socket.onclose = () => {
+          setFonepaySocketReady(false);
+          reportTelemetry({
+            event: "SOCKET_CLOSED",
+            reason: locallyClosed
+              ? "SOCKET_LOCAL_CLOSE"
+              : "SOCKET_REMOTE_CLOSE",
+          });
+        };
         socket.onmessage = (event) => {
           const signal = fonepaySocketSignal(event.data);
           if (signal === "QR_VERIFIED") {
+            reportTelemetry({ event: "QR_VERIFIED_SIGNAL" });
             setFonepayBankHint(
               "QR recognized. Complete the payment in your banking app.",
             );
@@ -887,6 +918,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             return;
           }
           if (signal === "PAYMENT_RESULT") {
+            reportTelemetry({ event: "PAYMENT_RESULT_SIGNAL" });
+            locallyClosed = true;
             socket?.close();
             void verifySilently();
           }
@@ -897,9 +930,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     }
     return () => {
       stopped = true;
+      locallyClosed = true;
       socket?.close();
     };
   }, [payment, outcome, orderNumber, token]);
+  useEffect(() => {
+    if (!payment?.qrDataUrl || outcome) return;
+    if (provider !== PaymentProvider.FONEPAY) return;
+    reportTelemetry({ event: "QR_RENDERED" });
+  }, [payment?.reference, provider, outcome]);
   const simulatePayment = () =>
     run(async () => {
       const result = await api<{ status: string }>(
@@ -1394,6 +1433,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           qrPayload={payment.qrPayload}
                           socketReady={fonepaySocketReady}
                           onError={setError}
+                          onTelemetry={(event) => reportTelemetry(event)}
                         />
                       ) : null}
                       {fonepayBankHint ? (
