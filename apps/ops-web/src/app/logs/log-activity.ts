@@ -43,6 +43,22 @@ export function activityLabel(entry: LogActivity): string {
   if (operation.includes("token") || endpoint.includes("/token"))
     return `${provider} Access Token Request`;
   if (provider === "Fonepay") {
+    const clientEventLabels: Record<string, string> = {
+      "fonepay-client-qr-rendered": "Fonepay QR Displayed",
+      "fonepay-client-socket-connected": "Fonepay WebSocket Connected",
+      "fonepay-client-socket-error": "Fonepay WebSocket Error",
+      "fonepay-client-socket-closed": "Fonepay WebSocket Closed",
+      "fonepay-client-qr-verified-signal": "Fonepay QR Scan Recognized",
+      "fonepay-client-payment-result-signal":
+        "Fonepay Payment Result Signal Received",
+      "fonepay-client-bank-launch-attempted":
+        "Fonepay Banking App Launch Attempted",
+      "fonepay-client-bank-launch-blocked":
+        "Fonepay Banking App Launch Blocked",
+      "fonepay-client-bank-app-navigation-observed":
+        "Fonepay Banking App Opened",
+    };
+    if (clientEventLabels[operation]) return clientEventLabels[operation];
     if (operation.includes("authentication")) return "Fonepay Authentication";
     if (operation.includes("banks") || endpoint.includes("/banks/list"))
       return "Fonepay Bank List";

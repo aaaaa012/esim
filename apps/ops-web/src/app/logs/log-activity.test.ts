@@ -70,6 +70,44 @@ describe("activityLabel", () => {
   });
 
   it.each([
+    ["fonepay-client-qr-rendered", "Fonepay QR Displayed"],
+    [
+      "fonepay-client-socket-connected",
+      "Fonepay WebSocket Connected",
+    ],
+    ["fonepay-client-socket-error", "Fonepay WebSocket Error"],
+    ["fonepay-client-socket-closed", "Fonepay WebSocket Closed"],
+    [
+      "fonepay-client-qr-verified-signal",
+      "Fonepay QR Scan Recognized",
+    ],
+    [
+      "fonepay-client-payment-result-signal",
+      "Fonepay Payment Result Signal Received",
+    ],
+    [
+      "fonepay-client-bank-launch-attempted",
+      "Fonepay Banking App Launch Attempted",
+    ],
+    [
+      "fonepay-client-bank-launch-blocked",
+      "Fonepay Banking App Launch Blocked",
+    ],
+    [
+      "fonepay-client-bank-app-navigation-observed",
+      "Fonepay Banking App Opened",
+    ],
+  ])("labels %s client telemetry", (identifier, label) => {
+    const entry = {
+      group: "provider" as const,
+      identifier,
+      title: "customer-checkout",
+    };
+    expect(providerLabel(entry)).toBe("Fonepay");
+    expect(activityLabel(entry)).toBe(label);
+  });
+
+  it.each([
     ["partner-api", "Partner API Request"],
     ["customer-topup-lookup", "Customer eSIM Lookup"],
     ["customer-topup-eligibility", "Customer Top-up Eligibility"],

@@ -22,6 +22,18 @@
   margin: auto;
 }
 
+.checkout-loading-surface {
+  display: grid;
+  min-height: calc(100vh - 150px);
+  place-items: center;
+}
+
+.checkout-loading-indicator {
+  width: 32px;
+  height: 32px;
+  color: var(--primary);
+}
+
 .checkout-heading {
   text-align: center;
   position: relative;

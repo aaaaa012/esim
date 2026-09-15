@@ -616,6 +616,12 @@ export default function AdminWorkspace() {
     }
   };
   const createPartner = async () => {
+    const ok = await confirm({
+      title: `Create ${partnerName.trim()}?`,
+      description: `This creates a ${partnerType === "API" ? "Partner API" : "hosted checkout"} partner in pending state${partnerBalance ? ` with NPR ${Number(partnerBalance).toLocaleString()} starting balance` : ""}. Review the details before continuing.`,
+      confirmLabel: "Create partner",
+    });
+    if (!ok) return;
     setBusy("partner-create");
     try {
       await request("/admin/partners", {
@@ -647,19 +653,35 @@ export default function AdminWorkspace() {
     partner: Partner,
     status: Partner["status"],
   ) => {
-    if (["SUSPENDED", "DISABLED"].includes(status)) {
-      const ok = await confirm({
-        title: `${status === "SUSPENDED" ? "Suspend" : "Disable"} ${partner.name}?`,
+    if (status === partner.status) return;
+    const statusCopy = {
+      ACTIVE: {
+        verb: "Activate",
         description:
-          status === "SUSPENDED"
-            ? "The partner can view details but cannot make changes."
-            : "The partner will immediately lose access.",
-        confirmLabel:
-          status === "SUSPENDED" ? "Suspend partner" : "Disable partner",
-        destructive: true,
-      });
-      if (!ok) return;
-    }
+          "The partner will be able to use the access permitted by its integration type and credentials.",
+      },
+      PENDING: {
+        verb: "Move to pending",
+        description:
+          "The partner will remain configured, but production access will not be active.",
+      },
+      SUSPENDED: {
+        verb: "Suspend",
+        description:
+          "The partner can view permitted details but cannot make changes or place orders.",
+      },
+      DISABLED: {
+        verb: "Disable",
+        description: "The partner will immediately lose access.",
+      },
+    }[status];
+    const ok = await confirm({
+      title: `${statusCopy.verb} ${partner.name}?`,
+      description: `${statusCopy.description} Current status: ${partner.status}. New status: ${status}.`,
+      confirmLabel: `${statusCopy.verb} partner`,
+      destructive: status === "SUSPENDED" || status === "DISABLED",
+    });
+    if (!ok) return;
     setBusy(partner.id);
     try {
       await request(`/admin/partners/${partner.id}`, {

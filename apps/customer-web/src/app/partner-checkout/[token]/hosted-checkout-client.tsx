@@ -996,10 +996,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     );
   if (!session && !loadFailed)
     return (
-      <main className="checkout-page">
-        <div className="checkout-shell">
-          <div className="form-error">Loading your checkout…</div>
-        </div>
+      <main
+        className="checkout-page checkout-loading-surface"
+        aria-busy="true"
+        aria-label="Loading secure checkout"
+        role="status"
+      >
+        <LoaderCircle
+          className="spin checkout-loading-indicator"
+          aria-hidden="true"
+        />
       </main>
     );
 
