@@ -73,15 +73,22 @@ export type TravelTicketInspection = {
 export const normalizeText = (value: string) =>
   value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-/** Tesseract routinely reads the OCR-B MRZ '<' fillers as a run of 'L' (or
- *  occasionally 'I') letters. Such runs are never part of a real name, so
- *  drop and split around them; a single stray L inside a real name survives. */
+/** Tesseract routinely reads the OCR-B MRZ '<' fillers as a run of identical
+ *  letters (L, I, or on noisier scans K or others). Such runs are never part
+ *  of a real name, so split around them and drop whole filler tokens; real
+ *  names with one or two repeated letters survive. */
 export const cleanNameTokens = (tokens: string[]): string[] =>
   tokens
-    .map((token) => token.replace(/([LI])\1{2,}/g, " ").trim())
+    .map((token) => token.replace(/([A-Z])\1{2,}/g, " ").trim())
     .filter(Boolean)
-    .filter((token) => !/^([LI])\1{2,}$/.test(token))
+    .filter((token) => token.length < 2 || !/^([A-Z])\1+$/.test(token))
     .flatMap((token) => token.split(/\s+/));
+
+/** Canonical form used for name comparison: strips OCR filler noise so strict
+ *  equality still holds for genuinely matching names while a real mismatch
+ *  keeps failing. */
+export const normalizeName = (value: string) =>
+  cleanNameTokens(value.split(/\s+/).filter(Boolean)).join(" ");
 
 const MONTHS: Record<string, string> = {
   JAN: "01",
@@ -290,9 +297,9 @@ export const compareExtractedPassport = (
   const sameText = (left?: string, right?: string) =>
     Boolean(
       left &&
-      right &&
-      confusableNormalize(normalizeText(left)) ===
-        confusableNormalize(normalizeText(right)),
+        right &&
+        confusableNormalize(normalizeName(left)) ===
+          confusableNormalize(normalizeName(right)),
     );
   if (sameText(fields.passportNumber, traveler.passportNumber))
     matchedFields.push("passportNumber");

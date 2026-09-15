@@ -30,7 +30,7 @@
 }
 
 .checkout-heading::before {
-  content: "Secure eSIM checkout";
+  content: none;
   display: inline-flex;
   align-items: center;
   min-height: 27px;

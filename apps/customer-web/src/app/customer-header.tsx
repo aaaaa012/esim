@@ -10,7 +10,6 @@ import {
   ClipboardList,
   Globe2,
   RefreshCw,
-  ShieldCheck,
   Smartphone,
 } from "lucide-react";
 import { SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
@@ -119,7 +118,7 @@ export default function CustomerHeader() {
       <header className="site-header checkout-focus-header">
         <div className="shell checkout-focus-inner">
           <Link href="/destinations" aria-label="Back to plans"><ArrowLeft size={18} /> <span>Plans</span></Link>
-          <strong><ShieldCheck size={18} /> Secure checkout</strong>
+          <strong className="checkout-focus-brand">Visa Compass</strong>
           <Link href="/help">Support</Link>
         </div>
       </header>

@@ -6,6 +6,7 @@ import {
   compareExtractedPassport,
   dateVariants,
   imageDimensions,
+  normalizeName,
   normalizeText,
   verifyStoredExtraction,
   verdictFor,
@@ -33,13 +34,20 @@ describe("cleanNameTokens", () => {
     ]);
     expect(cleanNameTokens(["ANNA", "IIIIIIII"])).toEqual(["ANNA"]);
   });
+  it("drops short repeated-letter filler tokens like KK next to a real name", () => {
+    expect(cleanNameTokens(["KUMAR", "KK"])).toEqual(["KUMAR"]);
+    expect(cleanNameTokens(["RESHAM", "KK", "KUMAR"])).toEqual([
+      "RESHAM",
+      "KUMAR",
+    ]);
+  });
   it("splits a token around an internal filler run", () => {
     expect(cleanNameTokens(["KUMARILLLLLLSHRESTHA"])).toEqual([
       "KUMARI",
       "SHRESTHA",
     ]);
   });
-  it("keeps real names that legitimately contain L or I", () => {
+  it("keeps real names that legitimately contain repeated letters", () => {
     expect(cleanNameTokens(["MARIA", "MICHAEL", "ALL", "WILLIAMS"])).toEqual([
       "MARIA",
       "MICHAEL",
@@ -49,6 +57,16 @@ describe("cleanNameTokens", () => {
   });
   it("removes empty and blank tokens", () => {
     expect(cleanNameTokens(["", "   ", "RESHAM"])).toEqual(["RESHAM"]);
+  });
+});
+
+describe("normalizeName", () => {
+  it("is identical for a name with and without OCR filler noise", () => {
+    expect(normalizeName("KUMAR KK")).toBe(normalizeName("KUMAR"));
+    expect(normalizeName("BISHWOKARMA")).toBe(normalizeName(" BISHWOKARMA "));
+  });
+  it("still differs for genuinely different names", () => {
+    expect(normalizeName("RAMUK")).not.toBe(normalizeName("KUMAR"));
   });
 });
 
@@ -101,6 +119,69 @@ describe("stored passport extraction comparison", () => {
     );
     expect(result.status).toBe("PARTIAL");
     expect(result.matchedFields).not.toContain("passportNumber");
+  });
+
+  it("matches a name against stored OCR that carries filler noise like KK or L", () => {
+    const evidenced = verifyStoredExtraction(
+      {
+        firstName: "RESHAM",
+        middleName: "KUMAR KK",
+        surname: "BISHWOKARMA",
+        dateOfBirth: "1983-07-30",
+        nationality: "NP",
+        passportNumber: "PA0319064",
+        passportExpiryDate: "2032-05-03",
+      },
+      {
+        ...traveler,
+        firstName: "Resham",
+        middleName: "Kumar",
+        surname: "Bishwokarma",
+        dateOfBirth: "1983-07-30",
+        nationality: "NP",
+        passportNumber: "PA0319064",
+        passportExpiryDate: "2032-05-03",
+      },
+      48,
+    );
+    expect(evidenced.matchedFields).toEqual(
+      expect.arrayContaining([
+        "passportNumber",
+        "surname",
+        "givenNames",
+        "middleName",
+        "dateOfBirth",
+        "nationality",
+        "passportExpiryDate",
+      ]),
+    );
+    expect(evidenced.status).toBe("VERIFIED");
+  });
+
+  it("still flags a genuinely wrong first name even when OCR noise is cleaned", () => {
+    const result = verifyStoredExtraction(
+      {
+        firstName: "RAMUK",
+        middleName: "KUMAR KK",
+        surname: "BISHWOKARMA",
+        dateOfBirth: "1983-07-30",
+        nationality: "NP",
+        passportNumber: "PA0319064",
+        passportExpiryDate: "2032-05-03",
+      },
+      {
+        ...traveler,
+        firstName: "Resham",
+        middleName: "Kumar",
+        surname: "Bishwokarma",
+        dateOfBirth: "1983-07-30",
+        nationality: "NP",
+        passportNumber: "PA0319064",
+        passportExpiryDate: "2032-05-03",
+      },
+    );
+    expect(result.matchedFields).not.toContain("givenNames");
+    expect(result.status).toBe("VERIFIED");
   });
 });
 
