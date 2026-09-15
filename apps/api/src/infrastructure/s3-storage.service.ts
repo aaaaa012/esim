@@ -21,6 +21,12 @@ import type { DocumentType } from "@visa-compass/shared";
 
 const execFileAsync = promisify(execFile);
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+export const passportOcrMaxPages = () => {
+  const configured = Number(process.env.PASSPORT_OCR_MAX_PAGES ?? 4);
+  return Number.isInteger(configured) && configured >= 1 && configured <= 8
+    ? configured
+    : 4;
+};
 const ALLOWED_CONTENT_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -236,7 +242,7 @@ export class S3StorageService {
           "-f",
           "1",
           "-l",
-          "2",
+          String(passportOcrMaxPages()),
           "-scale-to",
           "2000",
           "-gray",

@@ -6,7 +6,10 @@ import {
 } from "@nestjs/common";
 import { createWorker, type Worker } from "tesseract.js";
 import { DocumentType, type TravelerInput } from "@visa-compass/shared";
-import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
+import {
+  passportOcrMaxPages,
+  S3StorageService,
+} from "../../infrastructure/s3-storage.service.js";
 import {
   confusableNormalize,
   editDistance,
@@ -820,7 +823,7 @@ export class PassportVerificationService implements OnModuleDestroy {
     let best: Awaited<
       ReturnType<PassportVerificationService["recognize"]>
     > | null = null;
-    for (const image of images.slice(0, 2)) {
+    for (const image of images.slice(0, passportOcrMaxPages())) {
       const recognized = await this.recognize(image.bytes);
       best ??= recognized;
       const parsedBand = recognized.bandText

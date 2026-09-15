@@ -388,11 +388,13 @@ describe("imageDimensions", () => {
 });
 
 describe("multi-page passport extraction", () => {
-  it("continues to page two when page one has no readable MRZ", async () => {
+  it("checks every configured page until it finds the biodata MRZ", async () => {
     const storage = {
       isConfigured: () => true,
       downloadDocumentImages: vi.fn().mockResolvedValue([
         { bytes: Buffer.from("cover"), contentType: "image/jpeg" },
+        { bytes: Buffer.from("visa-page"), contentType: "image/jpeg" },
+        { bytes: Buffer.from("observations-page"), contentType: "image/jpeg" },
         { bytes: Buffer.from("information-page"), contentType: "image/jpeg" },
       ]),
     };
@@ -402,6 +404,11 @@ describe("multi-page passport extraction", () => {
       .mockResolvedValueOnce({
         text: "PASSPORT COVER",
         confidence: 85,
+      } as never)
+      .mockResolvedValueOnce({ text: "VISA PAGE", confidence: 84 } as never)
+      .mockResolvedValueOnce({
+        text: "OBSERVATIONS",
+        confidence: 88,
       } as never)
       .mockResolvedValueOnce({
         text: US_MRZ,
@@ -424,7 +431,7 @@ describe("multi-page passport extraction", () => {
       ],
     } as never);
 
-    expect(recognize).toHaveBeenCalledTimes(2);
+    expect(recognize).toHaveBeenCalledTimes(4);
     expect(result).toMatchObject({
       status: "READY",
       fields: {
