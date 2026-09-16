@@ -1080,7 +1080,7 @@ describe("TransatelProvider", () => {
         cos: "WW_COS_TEST",
         msisdn: "33612345678",
         iccid: "8988247076000000319",
-        externalReference: "order-1",
+        externalReference: ORDER_UUID,
         productSubscription: {
           subscriptionId: "sub-123",
           activationDate: "2026-08-04T13:30:00Z",
@@ -1092,13 +1092,13 @@ describe("TransatelProvider", () => {
       eventType: "OCS/PRODUCT/ACTIVATED",
       orderId: "order-1",
       iccid: "8988247076000000319",
-      externalReference: "order-1",
+      externalReference: ORDER_UUID,
       subscriptionId: "sub-123",
       status: "ACTIVATED",
       activatedAt: "2026-08-04T13:30:00Z",
     });
     expect(prisma.order.findUnique).toHaveBeenCalledWith({
-      where: { id: "order-1" },
+      where: { id: ORDER_UUID },
       select: { id: true },
     });
     expect(prisma.esimInventory.findUnique).not.toHaveBeenCalled();
@@ -1118,7 +1118,7 @@ describe("TransatelProvider", () => {
       body: {
         msisdn: "33612345678",
         iccid: "8988989996000000319",
-        externalReference: "order-9",
+        externalReference: ORDER_UUID,
         productSubscription: { subscriptionId: "sub-9" },
       },
     });
@@ -1127,7 +1127,7 @@ describe("TransatelProvider", () => {
     expect(prisma.esimInventory.findUnique).not.toHaveBeenCalled();
   });
 
-  it("falls back to ICCID inventory binding when externalReference matches no order", async () => {
+  it("ignores a free-form externalReference and falls back to the ICCID binding", async () => {
     const prisma = prismaStub();
     prisma.order.findUnique = vi.fn().mockResolvedValue(null);
     prisma.esimInventory.findUnique = vi
@@ -1143,12 +1143,15 @@ describe("TransatelProvider", () => {
       body: {
         msisdn: "33612345678",
         iccid: "8988247076000000319",
-        externalReference: "unknown-ref",
+        externalReference: "RX12345ZVGT",
         productSubscription: { subscriptionId: "sub-3" },
       },
     });
     expect(result.handled).toBe(true);
     expect(result.event?.orderId).toBe("order-3");
+    expect(prisma.order.findUnique).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "RX12345ZVGT" } }),
+    );
     expect(prisma.esimInventory.findUnique).toHaveBeenCalledWith({
       where: { iccid: "8988247076000000319" },
       select: {
@@ -1243,7 +1246,7 @@ describe("TransatelProvider", () => {
       body: {
         msisdn: "33612345678",
         iccid: "8988247076000000319",
-        externalReference: "order-2",
+        externalReference: ORDER_UUID,
         productSubscription: {
           subscriptionId: "sub-2",
           expirationDate: "2026-08-19T00:00:00Z",
@@ -1265,7 +1268,7 @@ describe("TransatelProvider", () => {
       header: { eventId: "evt-canceled", eventType: "OCS/PRODUCT/CANCELED" },
       body: {
         iccid: "8988247076000000319",
-        externalReference: "order-2",
+        externalReference: ORDER_UUID,
         productSubscription: {
           subscriptionId: "sub-2",
           expirationDate: "2026-09-19T00:00:00Z",
@@ -1352,7 +1355,7 @@ describe("TransatelProvider", () => {
         cos: "WW_COS_TEST",
         msisdn: "33612345678",
         iccid: "8988247076000000319",
-        externalReference: "order-1",
+        externalReference: ORDER_UUID,
         productSubscription: {
           subscriptionId: "sub-123",
           activationDate: "2026-08-04T13:30:00Z",

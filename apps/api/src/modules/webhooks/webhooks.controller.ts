@@ -880,7 +880,9 @@ export class OperationsLogsController {
               ? "PROCESSED"
               : row.errorMessage?.startsWith("Queue dispatch pending:")
                 ? "RETRY_PENDING"
-                : "QUEUED",
+                : row.errorMessage
+                  ? "PROCESSING_FAILED"
+                  : "QUEUED",
         createdAt: row.createdAt,
         error: sanitizeLogText(row.errorMessage),
         requestBody: sanitizeOperationsLog(row.payload),

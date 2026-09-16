@@ -84,8 +84,19 @@ describe("OperationsLogsController", () => {
             createdAt,
             payload: { event: "retry" },
           },
+          {
+            id: "webhook-processing-failed-1",
+            source: "transatel",
+            eventId: "event-processing-failed-1",
+            processedAt: null,
+            deadLetteredAt: null,
+            signatureValid: true,
+            errorMessage: "Order correlation failed",
+            createdAt,
+            payload: { event: "processing-failed" },
+          },
         ]),
-        count: vi.fn().mockResolvedValue(2),
+        count: vi.fn().mockResolvedValue(3),
       },
       auditLog: {
         findMany: vi.fn().mockResolvedValue([
@@ -174,8 +185,8 @@ describe("OperationsLogsController", () => {
       "2026-08-23T18:15:00.000Z",
     );
 
-    expect(result.total).toBe(7);
-    expect(result.items).toHaveLength(7);
+    expect(result.total).toBe(8);
+    expect(result.items).toHaveLength(8);
     expect(result.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -192,6 +203,11 @@ describe("OperationsLogsController", () => {
         expect.objectContaining({
           id: "webhook-retry-1",
           statusLabel: "RETRY_PENDING",
+        }),
+        expect.objectContaining({
+          id: "webhook-processing-failed-1",
+          status: 500,
+          statusLabel: "PROCESSING_FAILED",
         }),
         expect.objectContaining({ id: "attempt-attempt-1" }),
         expect.objectContaining({ id: "operation-operation-1" }),

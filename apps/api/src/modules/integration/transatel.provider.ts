@@ -21,6 +21,13 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { resiliencePolicy } from "../../infrastructure/resilience-policy.js";
 import { classifyProviderHttpFailure } from "./provider-failure.js";
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
 /*
  * Raw Transatel OpenAPI DTOs. These types describe the external API contract and
  * MUST NOT leak past the ConnectivityProvider boundary (docs/ADR-002-provider-adapters.md).
@@ -1935,7 +1942,11 @@ export class TransatelProvider implements ConnectivityProvider {
       // provider subscription id, and finally an unambiguous SIM serial.
       // A SIM can have many top-up orders, so blindly using its original
       // assignedOrderId would apply a top-up event to the wrong order.
-      if (!orderId && envelope.externalReference) {
+      if (
+        !orderId &&
+        envelope.externalReference &&
+        isUuid(envelope.externalReference)
+      ) {
         const order = await this.prisma.order.findUnique({
           where: { id: envelope.externalReference },
           select: { id: true },
