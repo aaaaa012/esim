@@ -45,6 +45,7 @@ import {
   type FonepayTelemetryPayload,
 } from "../../esim/checkout/fonepay-telemetry";
 import { FonepayBankPicker } from "../../esim/checkout/fonepay-bank-picker";
+import { FonepayQrPanel } from "../../esim/checkout/fonepay-qr-panel";
 import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -1440,41 +1441,49 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         src="/brand/fonepay-logo.png"
                         alt="Checkout by Fonepay"
                       />
-                      <div className="fonepay-qr-stage">
-                        <h2 id="hosted-fonepay-checkout-title">
-                          Scan to pay with any banking app
-                        </h2>
-                        <ol className="fonepay-qr-steps">
-                          <li>
-                            Open a Fonepay-supported banking app on your phone.
-                          </li>
-                          <li>
-                            Choose &ldquo;Scan QR&rdquo; inside the app and scan
-                            this code.
-                          </li>
-                          <li>Approve the payment to confirm your order.</li>
-                        </ol>
-                        <img
-                          className="fonepay-qr"
-                          src={payment.qrDataUrl}
-                          alt="Fonepay payment QR code"
+                      <h2
+                        id="hosted-fonepay-checkout-title"
+                        className="fonepay-checkout-title"
+                      >
+                        Pay with your banking app
+                      </h2>
+                      <div className="fonepay-pay-options">
+                        {provider === PaymentProvider.FONEPAY &&
+                        payment.banks?.length ? (
+                          <div className="fonepay-bank-col">
+                            <FonepayBankPicker
+                              banks={payment.banks}
+                              qrPayload={payment.qrPayload}
+                              socketReady={fonepaySocketReady}
+                              onError={setError}
+                              onTelemetry={(event) => reportTelemetry(event)}
+                            />
+                            {fonepayBankHint ? (
+                              <p
+                                className="fonepay-bank-hint"
+                                role="status"
+                              >
+                                {fonepayBankHint}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <FonepayQrPanel
+                          qrDataUrl={payment.qrDataUrl}
+                          defaultOpen={
+                            !(
+                              provider === PaymentProvider.FONEPAY &&
+                              payment.banks?.length
+                            )
+                          }
+                          hideToggle={
+                            !(
+                              provider === PaymentProvider.FONEPAY &&
+                              payment.banks?.length
+                            )
+                          }
                         />
                       </div>
-                      {provider === PaymentProvider.FONEPAY &&
-                      payment.banks?.length ? (
-                        <FonepayBankPicker
-                          banks={payment.banks}
-                          qrPayload={payment.qrPayload}
-                          socketReady={fonepaySocketReady}
-                          onError={setError}
-                          onTelemetry={(event) => reportTelemetry(event)}
-                        />
-                      ) : null}
-                      {fonepayBankHint ? (
-                        <p className="fonepay-bank-hint" role="status">
-                          {fonepayBankHint}
-                        </p>
-                      ) : null}
                       <Action busy={busy} onClick={checkPayment}>
                         I&apos;ve completed payment - check status
                       </Action>

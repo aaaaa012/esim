@@ -12,6 +12,7 @@ import {
   type FonepayTelemetryPayload,
 } from "./fonepay-telemetry";
 import { FonepayBankPicker } from "./fonepay-bank-picker";
+import { FonepayQrPanel } from "./fonepay-qr-panel";
 import { paymentActionDisabled, retryDeclaredAllowed } from "./payment-gates";
 import Link from "next/link";
 import {
@@ -2853,44 +2854,51 @@ export default function CheckoutClient({
                             src="/brand/fonepay-logo.png"
                             alt="Checkout by Fonepay"
                           />
-                          <div className="fonepay-qr-stage">
-                            <h2 id="fonepay-checkout-title">
-                              Scan to pay with any banking app
-                            </h2>
-                            <ol className="fonepay-qr-steps">
-                              <li>
-                                Open a Fonepay-supported banking app on your
-                                phone.
-                              </li>
-                              <li>
-                                Choose &ldquo;Scan QR&rdquo; inside the app and
-                                scan this code.
-                              </li>
-                              <li>
-                                Approve the payment to confirm your order.
-                              </li>
-                            </ol>
-                            <img
-                              className="fonepay-qr"
-                              src={payment.qrDataUrl}
-                              alt="Fonepay payment QR code"
+                          <h2
+                            id="fonepay-checkout-title"
+                            className="fonepay-checkout-title"
+                          >
+                            Pay with your banking app
+                          </h2>
+                          <div className="fonepay-pay-options">
+                            {provider === PaymentProvider.FONEPAY &&
+                            payment.banks?.length ? (
+                              <div className="fonepay-bank-col">
+                                <FonepayBankPicker
+                                  banks={payment.banks}
+                                  qrPayload={payment.qrPayload}
+                                  socketReady={fonepaySocketReady}
+                                  onError={setError}
+                                  onTelemetry={(event) =>
+                                    reportTelemetry(event)
+                                  }
+                                />
+                                {fonepayBankHint ? (
+                                  <p
+                                    className="fonepay-bank-hint"
+                                    role="status"
+                                  >
+                                    {fonepayBankHint}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            <FonepayQrPanel
+                              qrDataUrl={payment.qrDataUrl}
+                              defaultOpen={
+                                !(
+                                  provider === PaymentProvider.FONEPAY &&
+                                  payment.banks?.length
+                                )
+                              }
+                              hideToggle={
+                                !(
+                                  provider === PaymentProvider.FONEPAY &&
+                                  payment.banks?.length
+                                )
+                              }
                             />
                           </div>
-                          {provider === PaymentProvider.FONEPAY &&
-                          payment.banks?.length ? (
-                            <FonepayBankPicker
-                              banks={payment.banks}
-                              qrPayload={payment.qrPayload}
-                              socketReady={fonepaySocketReady}
-                              onError={setError}
-                              onTelemetry={(event) => reportTelemetry(event)}
-                            />
-                          ) : null}
-                          {fonepayBankHint ? (
-                            <p className="fonepay-bank-hint" role="status">
-                              {fonepayBankHint}
-                            </p>
-                          ) : null}
                           <Action
                             busy={busy}
                             disabled={paymentActionDisabled({

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { FonepayBankPicker } from "./fonepay-bank-picker";
 
@@ -17,7 +17,7 @@ const banks = [
 ];
 
 describe("FonepayBankPicker", () => {
-  it("keeps the full provider directory behind an accessible selector", () => {
+  it("renders the full provider directory inline", () => {
     render(
       <FonepayBankPicker
         banks={banks}
@@ -27,14 +27,13 @@ describe("FonepayBankPicker", () => {
       />,
     );
 
+    expect(
+      screen.getByRole("button", { name: /laxmi sunrise bank/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /nabil bank/i }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: /choose banking app/i }),
-    );
-
-    const dialog = screen.getByRole("dialog", { name: /choose banking app/i });
-    expect(within(dialog).getByText("Laxmi Sunrise Bank")).toBeInTheDocument();
-    expect(within(dialog).getByText("Nabil Bank")).toBeInTheDocument();
   });
 
   it("filters by provider bank name without dropping the original directory", () => {
@@ -45,9 +44,6 @@ describe("FonepayBankPicker", () => {
         socketReady
         onError={vi.fn()}
       />,
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: /choose banking app/i }),
     );
     fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "nabil" },
@@ -66,9 +62,6 @@ describe("FonepayBankPicker", () => {
         socketReady
         onError={onError}
       />,
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: /choose banking app/i }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: /laxmi sunrise bank/i }),
@@ -104,9 +97,6 @@ describe("FonepayBankPicker", () => {
         onError={onError}
         onTelemetry={onTelemetry}
       />,
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: /choose banking app/i }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: /laxmi sunrise bank/i }),
