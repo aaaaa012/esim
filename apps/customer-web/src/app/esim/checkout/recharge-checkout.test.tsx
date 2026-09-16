@@ -45,6 +45,63 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("recharge checkout", () => {
+  it("restores an unpaid Fonepay QR when a pending recharge is reopened", async () => {
+    const pending = {
+      id: "pending-recharge",
+      orderNumber: "VC-PENDING",
+      status: "PAYMENT_PENDING",
+      purchaseType: "TOPUP",
+      plan,
+      totalAmountNpr: 100,
+      documents: [],
+      payment: {
+        provider: "FONEPAY",
+        reference: "FONEPAY-REFERENCE",
+        status: "PENDING",
+      },
+      paymentRetry: { canRetry: false, canChangeProvider: false },
+    };
+    mocks.authFetch.mockImplementation(
+      async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/payments/providers"))
+          return ok({ providers: ["FONEPAY"] });
+        if (
+          url.endsWith("/recharges/pending-recharge/payment/initiate") &&
+          init?.method === "POST"
+        )
+          return ok({
+            reference: "FONEPAY-REFERENCE",
+            redirectUrl: "",
+            expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+            qrDataUrl: "data:image/png;base64,restored",
+            qrPayload: "fonepay-qr-payload",
+            websocketUrl: "",
+            banks: [],
+          });
+        return ok(pending);
+      },
+    );
+
+    render(<Checkout planId="plan" orderId="pending-recharge" />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Complete your payment" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("img", { name: "Fonepay payment QR code" }),
+    ).toHaveProperty("src", "data:image/png;base64,restored");
+    expect(screen.queryByText("Payment confirmation pending")).toBeNull();
+    expect(screen.getByText("Pay within")).toBeDefined();
+    expect(
+      mocks.authFetch.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith(
+            "/recharges/pending-recharge/payment/initiate",
+          ) && init?.method === "POST",
+      ),
+    ).toBe(true);
+  });
+
   it("restores provider choices after a resumed payment becomes safely retryable", async () => {
     const failed = {
       id: "failed-order",

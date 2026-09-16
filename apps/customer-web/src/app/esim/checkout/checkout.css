@@ -1493,6 +1493,42 @@
   background: #ffffff;
 }
 
+.fonepay-qr-expiry {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  justify-content: center;
+  gap: 3px 8px;
+  min-width: min(100%, 244px);
+  padding: 10px 14px;
+  border: 1px solid #ead7d8;
+  border-radius: 10px;
+  background: #fff7f7;
+  color: #5f1b20;
+}
+
+.fonepay-qr-expiry b {
+  color: var(--fonepay-red);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.fonepay-qr-expiry small {
+  grid-column: 1 / -1;
+  color: #6c5557;
+}
+
+.fonepay-qr-expiry.is-expired {
+  grid-template-columns: 1fr;
+  background: #fff8eb;
+  color: #684516;
+}
+
+.fonepay-qr-expiry.is-expired b {
+  color: #9a5b00;
+  letter-spacing: 0;
+}
+
 .fonepay-bank-section,
 .fonepay-bank-heading {
   display: grid;

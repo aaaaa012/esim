@@ -141,6 +141,7 @@ type Payment = {
     intentScheme: string;
   }[];
 };
+
 type Traveler = {
   title: "MR" | "MS" | "MRS";
   firstName: string;
@@ -514,6 +515,7 @@ export default function CheckoutClient({
   }, [orderId]);
   const verifyRunToken = useRef(0);
   const paymentVerificationInFlight = useRef(false);
+  const fonepayExpiryChecked = useRef("");
   const passportRetryNoBefore = useRef(0);
   const appliedExtraction = useRef("");
   const awaitingVerificationAdvance = useRef(false);
@@ -645,7 +647,7 @@ export default function CheckoutClient({
     setResumingOrder(true);
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
-      .then((value) => {
+      .then(async (value) => {
         const disposition = checkoutResumeDisposition(value.status);
         if (disposition === "UNSUPPORTED")
           throw new Error("This order can no longer be resumed from checkout");
@@ -669,23 +671,30 @@ export default function CheckoutClient({
         const resumeStep = checkoutResumeStep(value);
         navigateStep(resumeStep, "replace");
         if (disposition === "POST_PAYMENT") return;
-        if (value.purchaseType === "TOPUP") {
-          if (value.status === "PAYMENT_PENDING" && value.payment) {
-            setPayment({
-              reference: value.payment.reference,
-              redirectUrl: "",
-              expiresAt: "",
-            });
-            if (hasGatewayReturnSignal()) void verifyPayment(value, true);
-          }
-          return;
-        }
         if (value.status === "PAYMENT_PENDING" && value.payment) {
-          setPayment({
+          const paymentSummary: Payment = {
             reference: value.payment.reference,
             redirectUrl: "",
             expiresAt: "",
-          });
+          };
+          if (value.payment.provider === PaymentProvider.FONEPAY) {
+            try {
+              const restored = await api<Payment>(
+                `/customer/orders/${value.id}/payment`,
+                {
+                  method: "POST",
+                  body: JSON.stringify({ provider: PaymentProvider.FONEPAY }),
+                },
+              );
+              setPayment(restored);
+            } catch {
+              // Keep status recovery available even when the provider cannot
+              // restore the QR session at this moment.
+              setPayment(paymentSummary);
+            }
+          } else {
+            setPayment(paymentSummary);
+          }
           if (hasGatewayReturnSignal()) void verifyPayment(value, true);
         } else if (value.status === "PAYMENT_FAILED") {
           setPayment(null);
@@ -1551,6 +1560,58 @@ export default function CheckoutClient({
       paymentVerificationInFlight.current = false;
     }
   };
+  useEffect(() => {
+    if (
+      !order ||
+      order.status !== "PAYMENT_PENDING" ||
+      provider !== PaymentProvider.FONEPAY ||
+      !payment?.qrDataUrl ||
+      !payment.expiresAt
+    )
+      return;
+
+    const expiry = new Date(payment.expiresAt).getTime();
+    if (!Number.isFinite(expiry)) return;
+    let timeout: number | undefined;
+    let stopped = false;
+
+    const schedule = () => {
+      if (stopped) return;
+      timeout = window.setTimeout(poll, 5_000);
+    };
+    const poll = () => {
+      if (stopped) return;
+      if (Date.now() >= expiry) {
+        if (fonepayExpiryChecked.current !== payment.reference) {
+          fonepayExpiryChecked.current = payment.reference;
+          void verifyFonepaySilently();
+        }
+        return;
+      }
+      if (document.visibilityState === "visible")
+        void verifyFonepaySilently();
+      schedule();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && Date.now() < expiry)
+        void verifyFonepaySilently();
+    };
+
+    schedule();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      stopped = true;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [
+    order?.id,
+    order?.status,
+    payment?.reference,
+    payment?.qrDataUrl,
+    payment?.expiresAt,
+    provider,
+  ]);
   useEffect(() => {
     setFonepaySocketReady(false);
     if (!payment?.websocketUrl || !order) return;
@@ -2449,7 +2510,9 @@ export default function CheckoutClient({
                         ? "Recharge needs attention"
                         : "Payment issue"
                       : order?.status === "PAYMENT_PENDING"
-                        ? "Payment confirmation pending"
+                        ? payment?.qrDataUrl
+                          ? "Complete your payment"
+                          : "Payment status not confirmed"
                         : "Choose payment method"}
                 </h2>
                 {!isTopUp && !checkoutDetailsLocked(order) ? (
@@ -2690,7 +2753,9 @@ export default function CheckoutClient({
                       )}
                     <p>
                       {order?.status === "PAYMENT_PENDING"
-                        ? "If you approved this payment in your banking app or wallet, check its latest status below. Do not start another payment while confirmation is pending."
+                        ? payment?.qrDataUrl
+                          ? "Scan the QR or choose your banking app below. Your order remains unpaid until Fonepay confirms the payment."
+                          : "We have not received payment confirmation. Check the latest status before trying again."
                         : "Review the order total, then choose how you would like to pay."}
                     </p>
                     {isTopUp && rechargeTargetLabel && (
@@ -2853,6 +2918,7 @@ export default function CheckoutClient({
                           }
                           qrPayload={payment.qrPayload}
                           qrDataUrl={payment.qrDataUrl}
+                          expiresAt={payment.expiresAt}
                           socketReady={fonepaySocketReady}
                           onError={setError}
                           onTelemetry={(event) => reportTelemetry(event)}

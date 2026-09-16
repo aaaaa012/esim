@@ -1,18 +1,61 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, LoaderCircle, QrCode } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   FonepayBankPicker,
   type FonepayBank,
 } from "./fonepay-bank-picker";
 import type { FonepayTelemetryPayload } from "./fonepay-telemetry";
 
+function PaymentExpiryCountdown({ expiresAt }: { expiresAt: string }) {
+  const expiry = new Date(expiresAt).getTime();
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!Number.isFinite(expiry) || expiry <= Date.now()) return;
+    const interval = window.setInterval(() => {
+      const next = Date.now();
+      setNow(next);
+      if (next >= expiry) window.clearInterval(interval);
+    }, 1_000);
+    return () => window.clearInterval(interval);
+  }, [expiry]);
+
+  if (!Number.isFinite(expiry)) return null;
+  const remainingSeconds = Math.max(0, Math.ceil((expiry - now) / 1_000));
+  if (remainingSeconds === 0)
+    return (
+      <div className="fonepay-qr-expiry is-expired" role="status">
+        <b>This QR has expired</b>
+        <span>Check payment status before requesting a new QR.</span>
+      </div>
+    );
+
+  const hours = Math.floor(remainingSeconds / 3_600);
+  const minutes = Math.floor((remainingSeconds % 3_600) / 60);
+  const seconds = remainingSeconds % 60;
+  const timer = hours
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+
+  return (
+    <div className="fonepay-qr-expiry">
+      <span>Pay within</span>
+      <b role="timer" aria-label={`${remainingSeconds} seconds remaining`}>
+        {timer}
+      </b>
+      <small>The QR closes automatically when this timer ends.</small>
+    </div>
+  );
+}
+
 export function FonepayCheckout({
   titleId,
   banks,
   qrPayload,
   qrDataUrl,
+  expiresAt,
   socketReady,
   onError,
   onTelemetry,
@@ -26,6 +69,7 @@ export function FonepayCheckout({
   banks?: FonepayBank[] | undefined;
   qrPayload?: string | undefined;
   qrDataUrl: string;
+  expiresAt?: string;
   socketReady: boolean;
   onError: (message: string) => void;
   onTelemetry: (event: FonepayTelemetryPayload) => void;
@@ -46,6 +90,7 @@ export function FonepayCheckout({
         src="/brand/fonepay-logo.png"
         alt="Checkout by Fonepay"
       />
+      {expiresAt ? <PaymentExpiryCountdown expiresAt={expiresAt} /> : null}
       {qrView ? (
         <div className="fonepay-qr-stage">
           {hasBanks ? (
