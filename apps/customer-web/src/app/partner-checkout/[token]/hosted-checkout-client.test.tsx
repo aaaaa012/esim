@@ -387,6 +387,114 @@ describe("hosted checkout payment flow", () => {
       fetchMock.mock.calls.filter(([url]) => url.endsWith("/complete")),
     ).toHaveLength(1);
   });
+
+  it("clears a dead Fonepay payment (PAYMENT_EXPIRED) so the QR is not re-scanned", async () => {
+    const failedVerify = {
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: {
+          code: "PAYMENT_EXPIRED",
+          message: "This payment attempt has expired. Please start a new one.",
+        },
+      }),
+    };
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI", "FONEPAY"] });
+      if (url.endsWith("/complete"))
+        return ok({ orderNumber: "VC-HOSTED", status: "PAYMENT_PENDING" });
+      if (url.endsWith("/payment"))
+        return ok({
+          reference: "payment",
+          redirectUrl: "",
+          expiresAt: "2027-01-01",
+          qrPayload: "payload",
+        });
+      if (url.endsWith("/verify")) return failedVerify;
+      return ok(session());
+    });
+    render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByRole("heading", { name: "Pay NPR 2" });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Fonepay Mobile banking/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Fonepay" }));
+    await screen.findByRole("button", {
+      name: "I've completed payment - check status",
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "I've completed payment - check status" }),
+    );
+    await screen.findByText(
+      "That payment attempt has ended. Start a new one to continue.",
+    );
+    // The dead QR/session is gone: no re-scan UI, and a fresh attempt action is
+    // shown instead of the verify button.
+    expect(
+      screen.queryByRole("button", {
+        name: "I've completed payment - check status",
+      }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Continue to Fonepay" }),
+    ).toBeDefined();
+    // The verify call carried the terminal verdict back to the client.
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/verify"))).toBe(
+      true,
+    );
+  });
+
+  it("ends the payment screen for PAYMENT_RETRY_NOT_SAFE while surfacing the server message", async () => {
+    const blockedVerify = {
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: {
+          code: "PAYMENT_RETRY_NOT_SAFE",
+          message: "A payment is still being confirmed for this order.",
+        },
+      }),
+    };
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI", "FONEPAY"] });
+      if (url.endsWith("/complete"))
+        return ok({ orderNumber: "VC-HOSTED", status: "PAYMENT_PENDING" });
+      if (url.endsWith("/payment"))
+        return ok({
+          reference: "payment",
+          redirectUrl: "",
+          expiresAt: "2027-01-01",
+          qrPayload: "payload",
+        });
+      if (url.endsWith("/verify")) return blockedVerify;
+      return ok(session());
+    });
+    render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByRole("heading", { name: "Pay NPR 2" });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Fonepay Mobile banking/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Fonepay" }));
+    await screen.findByRole("button", {
+      name: "I've completed payment - check status",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "I've completed payment - check status" }),
+    );
+    await screen.findByText(/A payment is still being confirmed for this order/);
+    // The scan screen ended; the customer may not re-scan the same QR.
+    expect(
+      screen.queryByRole("button", {
+        name: "I've completed payment - check status",
+      }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Continue to Fonepay" }),
+    ).toBeDefined();
+  });
 });
 
 describe("hosted document progress", () => {

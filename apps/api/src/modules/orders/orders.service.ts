@@ -1350,6 +1350,14 @@ export class OrdersService implements OnModuleInit {
   ) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
+    // Defense-in-depth against double charges: a COMPLETED payment makes the
+    // QR/session single-use forever. Even if the order's own status drifted
+    // (e.g. a split-state during boot recovery), a new session must never
+    // overwrite an already-paid payment record.
+    if (order.payment?.status === PaymentStatus.COMPLETED)
+      throw new ConflictException(
+        "This order has already been paid and cannot collect another payment",
+      );
     if (
       order.payment?.status === PaymentStatus.PENDING &&
       order.payment.reference === initiation.reference

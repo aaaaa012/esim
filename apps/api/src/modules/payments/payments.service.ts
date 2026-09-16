@@ -114,7 +114,13 @@ export class PaymentsService {
   // not cause the provider to be hammered every sweep for the whole window.
   private readonly recentReconcileState = new Map<
     string,
-    { lastCheckedAt: number; consecutivePending: number }
+    {
+      lastCheckedAt: number;
+      consecutivePending: number;
+      /** True once an expired session has been settled or handed to the
+       * expiry-phase reconcile; the fast sweep never queries it again. */
+      expiryEvaluated?: boolean;
+    }
   >();
   constructor(
     private orders: OrdersService,
@@ -190,6 +196,14 @@ export class PaymentsService {
    * the checkout UI reads the same declaration before it even renders actions.
    */
   private assertSafeToInitiate(order: DemoOrder): void {
+    // A COMPLETED payment is the strongest form of double-charge protection:
+    // the order may never be handed a second payment session regardless of how
+    // the order's own status drifted (e.g. a split-state after a partial boot
+    // recovery). beginPayment() enforces the same invariant at the boundary.
+    if (order.payment?.status === PaymentStatus.COMPLETED)
+      throw new BadRequestException(
+        "This order has already been paid and cannot collect another payment",
+      );
     const declaration = declarePaymentRetry({
       status: order.status,
       payment: order.payment,
@@ -468,6 +482,11 @@ evidence: {
    * - Expired / user canceled -> order moved to PAYMENT_FAILED (retryable, a
    *   fresh Khalti session can be created) and a stable error code returned.
    * - Amount/reference mismatch -> security error; the order stays pending.
+   *
+   * Replay-proof short-circuit: once a session is settled on disk (paid,
+   * failed, cancelled, or under review) the stored verdict is returned or
+   * rethrown without a provider round-trip, so a paid QR is never re-scanned
+   * into a second charge and a dead session can never be revived.
    */
   async verify(orderId: string, ownerId: string | null, reference: string) {
     await this.orders.refreshOne?.(orderId, true);
@@ -479,15 +498,62 @@ evidence: {
       );
       throw new BadRequestException("Payment reference mismatch");
     }
+    if (order.payment?.status === PaymentStatus.COMPLETED)
+      return this.orders.view(orderId, ownerId ?? undefined);
+    const stored = this.storedSettlementError(order);
+    if (stored) throw stored;
     const verdict = await this.lookup(order, reference, "verify");
     return this.applyVerdict(orderId, ownerId, reference, verdict);
   }
 
-  /** Same verdict semantics for the callback/job path (server initiated). */
+  /**
+   * Stable, customer-safe error for a payment session that is already settled
+   * on this order. Only terminal states produce a verdict — a PENDING session
+   * returns null and is still consulted with the gateway.
+   */
+  private storedSettlementError(order: DemoOrder): ApiException | null {
+    switch (order.payment?.status) {
+      case PaymentStatus.CANCELLED:
+        return new ApiException({
+          code: ApiErrorCode.PAYMENT_NOT_CONFIRMED,
+          message:
+            "We could not confirm your payment. Please verify with your wallet or retry.",
+          status: 400,
+          details: "Customer cancelled the payment at the wallet",
+        });
+      case PaymentStatus.FAILED:
+        return new ApiException({
+          code: ApiErrorCode.PAYMENT_EXPIRED,
+          message: "This payment attempt has expired. Please start a new one.",
+          status: 400,
+          details:
+            "Payment completion could not be confirmed on the previous attempt",
+        });
+      case PaymentStatus.REVIEW_REQUIRED:
+        return new ApiException({
+          code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+          message:
+            "Your payment could not be confirmed automatically. Our team must check it before a new attempt is safe.",
+          status: 409,
+          details: "Payment confirmation is under operational review",
+        });
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Same verdict semantics for the callback/job path (server initiated).
+   * Replay-safe: a settled session (paid, failed, cancelled, or under review)
+   * returns the stored view without a gateway round-trip.
+   */
   async verifyCallback(orderId: string, reference: string) {
     await this.orders.refreshOne?.(orderId, true);
     const order = this.orders.get(orderId);
-    if (order.payment?.status === PaymentStatus.COMPLETED)
+    const payment = order.payment;
+    if (payment?.reference && payment.reference !== reference)
+      throw new BadRequestException("Payment reference mismatch");
+    if (payment?.status && payment.status !== PaymentStatus.PENDING)
       return this.orders.view(orderId);
     const verdict = await this.lookup(order, reference, "callback");
     return this.applyVerdict(orderId, null, reference, verdict);
@@ -539,13 +605,81 @@ evidence: {
         new Date(
           new Date(order.createdAt).getTime() + 30 * 60_000,
         ).toISOString();
+      const state = this.recentReconcileState.get(order.id);
       if (now >= new Date(expiry).getTime()) {
-        // Hand off to the expiry-phase reconcile; it tracks its own attempts,
-        // so the fast-sweep entry is no longer needed.
-        this.recentReconcileState.delete(order.id);
+        // The payment window is closed: settle the attempt now. Exactly one
+        // terminal lookup confirms a charge, fails a definitive miss, or flags
+        // a mismatch to review. Uncertain outcomes (still pending, provider
+        // unreachable) are handed to reconcilePendingPayments(), the single
+        // owner of bounded expiry verification. After that one lookup an
+        // expired session is never re-queried by this sweep — a dead QR must
+        // not keep being polled.
+        if (state?.expiryEvaluated) continue;
+        try {
+          const verdict = await this.lookup(order, reference, "recent-reconcile");
+          if (verdict.outcome === "CONFIRMED") {
+            this.recentReconcileState.delete(order.id);
+            await this.orders.confirmPayment(
+              order.id,
+              reference,
+              verdict.transactionId,
+            );
+            confirmed.push(order.id);
+          } else if (verdict.outcome === "TERMINAL" && verdict.resolve) {
+            this.recentReconcileState.delete(order.id);
+            await this.orders.resolvePaymentFailure(
+              order.id,
+              null,
+              verdict.reason,
+              verdict.paymentStatus,
+            );
+            terminal.push(order.id);
+          } else if (
+            verdict.outcome === "TERMINAL" &&
+            (verdict.code === ApiErrorCode.PAYMENT_REFERENCE_MISMATCH ||
+              verdict.reason.toLowerCase().includes("mismatch"))
+          ) {
+            // The gateway reports the payment completed against different
+            // order/amount/currency evidence — a security event, never a
+            // failure. Escalate to review so an operator settles the truth.
+            await this.flagPaymentMismatch(order, verdict.reason);
+            await this.markReviewRequired(
+              order,
+              `Payment completed for a different order/amount after the payment window`,
+            );
+            this.recentReconcileState.delete(order.id);
+            terminal.push(order.id);
+          } else {
+            // No transaction found yet at window close. Do not fail the order
+            // — the expiry-phase reconcile runs bounded verification attempts
+            // before raising review.
+            this.recentReconcileState.set(order.id, {
+              lastCheckedAt: Date.now(),
+              consecutivePending: 0,
+              expiryEvaluated: true,
+            });
+          }
+        } catch (error) {
+          this.recentReconcileState.set(order.id, {
+            lastCheckedAt: Date.now(),
+            consecutivePending: 0,
+            expiryEvaluated: true,
+          });
+          errored.push(order.id);
+          this.logger.warn(
+            JSON.stringify({
+              event: "payment_expiry_deferred",
+              orderId: order.id,
+              source: "recent-reconcile",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "unknown",
+            }),
+          );
+        }
         continue;
       }
-      const state = this.recentReconcileState.get(order.id);
       const lastCheckedAt = state?.lastCheckedAt ?? 0;
       if (now - lastCheckedAt < backoffMs(state?.consecutivePending ?? 0))
         continue; // not due yet; skip without a provider call
@@ -774,7 +908,14 @@ evidence: {
         reason: `Payment verification mismatch (order/amount/currency) for order ${order.id}`,
       };
     }
-    if (result.status === PaymentStatus.PENDING) return { outcome: "PENDING" };
+    // INITIATED never proves a failed payment: a wallet that is still
+    // authenticating (or a transaction the provider has not finished indexing)
+    // must be held pending, exactly like PENDING.
+    if (
+      result.status === PaymentStatus.PENDING ||
+      result.status === PaymentStatus.INITIATED
+    )
+      return { outcome: "PENDING" };
     if (result.status === PaymentStatus.CANCELLED) {
       return {
         outcome: "TERMINAL",

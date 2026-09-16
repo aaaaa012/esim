@@ -273,6 +273,59 @@ describe("PaymentsService inventory admission", () => {
       service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
     ).rejects.toMatchObject({ code: "PAYMENT_SESSION_ACTIVE" });
   });
+
+  it("does not open a payment session when the order is already paid", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_CONFIRMED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.COMPLETED,
+      },
+    });
+    const initiate = vi.fn();
+    const beginPayment = vi.fn().mockResolvedValue(undefined);
+    const service = new PaymentsService(
+      {
+        refreshOne: vi.fn(),
+        get: vi.fn().mockReturnValue(order),
+        beginPayment,
+        assertInventoryAvailableForNewOrder: vi.fn(),
+      } as never,
+      { initiate } as never,
+      { initiate } as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+    ).rejects.toThrow("already been paid");
+    expect(initiate).not.toHaveBeenCalled();
+    expect(beginPayment).not.toHaveBeenCalled();
+  });
+
+  it("blocks a new payment session while the previous one is under review", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_REVIEW_REQUIRED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.REVIEW_REQUIRED,
+      },
+    });
+    const initiate = vi.fn();
+    const service = new PaymentsService(
+      {
+        refreshOne: vi.fn(),
+        get: vi.fn().mockReturnValue(order),
+        assertInventoryAvailableForNewOrder: vi.fn(),
+      } as never,
+      { initiate } as never,
+      { initiate } as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE });
+    expect(initiate).not.toHaveBeenCalled();
+  });
 });
 
 describe("PaymentsService payment verification mapping", () => {
@@ -384,7 +437,116 @@ describe("PaymentsService payment verification mapping", () => {
     );
     expect(confirmedCalls).toHaveLength(0);
   });
+
+  it("keeps a still-initiating wallet pending instead of failing it", async () => {
+    // Khalti can still be authenticating when the wallet returns; INITIATED is
+    // not a failure and must stay pending exactly like PENDING.
+    const { svc, order, confirmedCalls, failedCalls } = makeService({
+      status: PaymentStatus.INITIATED,
+    });
+    const result = await svc.verify("order-1", "user-1", "pidx-1");
+    expect(result.status).toBe(OrderStatus.PAYMENT_PENDING);
+    expect(confirmedCalls).toHaveLength(0);
+    expect(failedCalls).toHaveLength(0);
+    expect(order.payment.status).toBe(PaymentStatus.PENDING);
+  });
+
+  it("returns the paid order without a gateway round-trip when already COMPLETED", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_CONFIRMED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.COMPLETED,
+      },
+    });
+    const { svc, gateway } = serviceWithGateway(order);
+    const result = await svc.verify("order-1", "user-1", "pidx-1");
+    expect(result.status).toBe(OrderStatus.PAYMENT_CONFIRMED);
+    expect(gateway.verify).not.toHaveBeenCalled();
+  });
+
+  it("rethrows the stored verdict for a cancelled session without re-querying", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_FAILED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.CANCELLED,
+      },
+    });
+    const { svc, gateway, confirmedCalls, failedCalls } = serviceWithGateway(order);
+    await expect(
+      svc.verify("order-1", "user-1", "pidx-1"),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_NOT_CONFIRMED });
+    expect(gateway.verify).not.toHaveBeenCalled();
+    // The stored verdict is returned as an error, never re-applied.
+    expect(failedCalls).toHaveLength(0);
+    expect(confirmedCalls).toHaveLength(0);
+  });
+
+  it("rethrows the stored verdict for a failed/expired session without re-querying", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_FAILED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.FAILED,
+      },
+    });
+    const { svc, gateway } = serviceWithGateway(order);
+    await expect(
+      svc.verify("order-1", "user-1", "pidx-1"),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_EXPIRED });
+    expect(gateway.verify).not.toHaveBeenCalled();
+  });
+
+  it("rethrows PAYMENT_RETRY_NOT_SAFE for a payment under operational review", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_REVIEW_REQUIRED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.REVIEW_REQUIRED,
+      },
+    });
+    const { svc, gateway } = serviceWithGateway(order);
+    await expect(
+      svc.verify("order-1", "user-1", "pidx-1"),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE });
+    expect(gateway.verify).not.toHaveBeenCalled();
+  });
 });
+
+/** Builds a service whose gateway never gets called unless the session is live. */
+function serviceWithGateway(order: AnyRecord) {
+  const confirmedCalls: { id: string }[] = [];
+  const failedCalls: { id: string; reason: string }[] = [];
+  const svc = new PaymentsService(
+    {
+      refreshOne: vi.fn(),
+      get: () => order,
+      view: () => order,
+      confirmPayment: vi.fn(async (id: string) => {
+        confirmedCalls.push({ id });
+        return order;
+      }),
+      resolvePaymentFailure: vi.fn(async (id: string, _o: string | null, reason: string) => {
+        failedCalls.push({ id, reason });
+        return order;
+      }),
+    } as never,
+    {} as never,
+    {} as never,
+  );
+  const gateway = {
+    provider: "KHALTI",
+    verify: vi.fn(async () => ({
+      reference: order.payment.reference,
+      orderId: order.id,
+      amountNpr: order.totalAmountNpr,
+      status: PaymentStatus.COMPLETED,
+    })),
+  };
+  (svc as unknown as { gateway: () => typeof gateway }).gateway = () => gateway;
+  return { svc, gateway, confirmedCalls, failedCalls };
+}
 
 describe("PaymentsService.verifyCallback", () => {
   it("confirms a completed callback lookup", async () => {
@@ -413,6 +575,49 @@ describe("PaymentsService.verifyCallback", () => {
     const { svc } = makeService({ status: PaymentStatus.PENDING });
     const result = await svc.verifyCallback("order-1", "pidx-1");
     expect(result.status).toBe(OrderStatus.PAYMENT_PENDING);
+  });
+
+  it("returns the stored view for a cancelled session without a gateway round-trip", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_FAILED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.CANCELLED,
+      },
+    });
+    const { svc, gateway } = serviceWithGateway(order);
+    const result = await svc.verifyCallback("order-1", "pidx-1");
+    expect(result.status).toBe(OrderStatus.PAYMENT_FAILED);
+    expect(gateway.verify).not.toHaveBeenCalled();
+  });
+
+  it("returns the stored view for a failed session without a gateway round-trip", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_FAILED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.FAILED,
+      },
+    });
+    const { svc, gateway } = serviceWithGateway(order);
+    const result = await svc.verifyCallback("order-1", "pidx-1");
+    expect(result.status).toBe(OrderStatus.PAYMENT_FAILED);
+    expect(gateway.verify).not.toHaveBeenCalled();
+  });
+
+  it("rejects a callback whose reference does not match a settled session", async () => {
+    const order = orderFor({
+      status: OrderStatus.PAYMENT_FAILED,
+      payment: {
+        ...orderFor().payment,
+        status: PaymentStatus.FAILED,
+      },
+    });
+    const { svc, gateway } = serviceWithGateway(order);
+    await expect(svc.verifyCallback("order-1", "pidx-OTHER")).rejects.toThrow(
+      "Payment reference mismatch",
+    );
+    expect(gateway.verify).not.toHaveBeenCalled();
   });
 });
 
@@ -467,7 +672,7 @@ describe("PaymentsService.reconcileRecentPendingPayments", () => {
     expect(result.errored).toHaveLength(0);
   });
 
-  it("skips orders outside their payment window (hand-off to expiry reconcile)", async () => {
+  it("settles an expired session with exactly one terminal lookup, confirming a paid result", async () => {
     const order = orderFor({
       payment: {
         ...orderFor().payment,
@@ -476,9 +681,139 @@ describe("PaymentsService.reconcileRecentPendingPayments", () => {
     });
     const { svc, confirmedCalls } = makeService({ order });
     const result = await svc.reconcileRecentPendingPayments();
+    expect(result.confirmed).toEqual(["order-1"]);
+    expect(result.stillPending).toHaveLength(0);
+    expect(result.errored).toHaveLength(0);
+    // A single lookup settles the expired session; a dead QR is not re-polled.
+    const again = await svc.reconcileRecentPendingPayments();
+    expect(again.confirmed).toHaveLength(0);
+    expect(confirmedCalls).toHaveLength(1);
+  });
+
+  it("fails an expired session once when the gateway reports payment cancelled", async () => {
+    const order = orderFor({
+      payment: {
+        ...orderFor().payment,
+        expiresAt: new Date(Date.now() - 1000).toISOString(),
+      },
+    });
+    const { svc, failedCalls, confirmedCalls } = makeService({
+      order,
+      status: PaymentStatus.CANCELLED,
+    });
+    const result = await svc.reconcileRecentPendingPayments();
     expect(result.confirmed).toHaveLength(0);
     expect(result.stillPending).toHaveLength(0);
+    expect(result.terminal).toEqual(["order-1"]);
+    expect(failedCalls).toEqual([
+      {
+        id: "order-1",
+        reason: "Customer cancelled the payment at the wallet",
+        paymentStatus: PaymentStatus.CANCELLED,
+      },
+    ]);
     expect(confirmedCalls).toHaveLength(0);
+    // Settled once: a second sweep must not re-query or re-fail.
+    const again = await svc.reconcileRecentPendingPayments();
+    expect(again.terminal).toHaveLength(0);
+    expect(failedCalls).toHaveLength(1);
+  });
+
+  it("hands a still-pending expired session to the expiry reconcile and never re-queries it", async () => {
+    const order = orderFor({
+      payment: {
+        ...orderFor().payment,
+        expiresAt: new Date(Date.now() - 1000).toISOString(),
+      },
+    });
+    const calls: string[] = [];
+    const svc = new PaymentsService(
+      {
+        get: () => order,
+        view: () => order,
+        list: () => [order],
+        confirmPayment: vi.fn(async () => order),
+        resolvePaymentFailure: vi.fn(async () => order),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    const gateway = {
+      provider: "KHALTI",
+      verify: vi.fn(async (reference: string) => {
+        calls.push(reference);
+        return {
+          reference,
+          orderId: order.id,
+          amountNpr: order.totalAmountNpr,
+          status: PaymentStatus.PENDING,
+        };
+      }),
+    };
+    (svc as unknown as { gateway: () => typeof gateway }).gateway = () =>
+      gateway;
+    const state = (
+      svc as unknown as {
+        recentReconcileState: Map<string, { expiryEvaluated?: boolean }>;
+      }
+    ).recentReconcileState;
+
+    const first = await svc.reconcileRecentPendingPayments();
+    expect(calls).toEqual(["pidx-1"]);
+    expect(first.confirmed).toHaveLength(0);
+    expect(first.stillPending).toHaveLength(0);
+    expect(first.errored).toHaveLength(0);
+    expect(state.get("order-1")?.expiryEvaluated).toBe(true);
+
+    // Even if the gateway starts reporting paid later, the expired session was
+    // already handed to the expiry-phase reconcile — the fast sweep is done.
+    const second = await svc.reconcileRecentPendingPayments();
+    expect(calls).toEqual(["pidx-1"]);
+    expect(second.confirmed).toHaveLength(0);
+  });
+
+  it("does not re-query the gateway once an expired session already errored", async () => {
+    const order = orderFor({
+      payment: {
+        ...orderFor().payment,
+        expiresAt: new Date(Date.now() - 1000).toISOString(),
+      },
+    });
+    const calls: string[] = [];
+    const svc = new PaymentsService(
+      {
+        get: () => order,
+        view: () => order,
+        list: () => [order],
+        confirmPayment: vi.fn(async () => order),
+        resolvePaymentFailure: vi.fn(async () => order),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    const gateway = {
+      provider: "KHALTI",
+      verify: vi.fn(async (reference: string) => {
+        calls.push(reference);
+        throw new ApiException({
+          code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
+          message: "unavailable",
+          status: 502,
+        });
+      }),
+    };
+    (svc as unknown as { gateway: () => typeof gateway }).gateway = () =>
+      gateway;
+
+    const first = await svc.reconcileRecentPendingPayments();
+    expect(first.errored).toEqual(["order-1"]);
+    expect(calls).toEqual(["pidx-1"]);
+
+    // The expired session is not hung on: one failure evaluation and then no
+    // more provider chatter from the fast sweep.
+    const second = await svc.reconcileRecentPendingPayments();
+    expect(calls).toEqual(["pidx-1"]);
+    expect(second.errored).toHaveLength(0);
   });
 
   it("defers provider errors without failing the order", async () => {

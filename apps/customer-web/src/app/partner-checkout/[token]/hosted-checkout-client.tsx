@@ -181,13 +181,20 @@ const api = async <T,>(path: string, init?: RequestInit) => {
     if (response.ok) return undefined as T;
     throw new Error("This checkout request could not be completed.");
   }
-  if (!response.ok || !payload.data)
-    throw new Error(
+  if (!response.ok || !payload.data) {
+    // Preserve the machine-readable code so callers can distinguish a
+    // settled-verdict error (PAYMENT_EXPIRED / PAYMENT_NOT_CONFIRMED) from a
+    // transient transport or provider failure.
+    const error = new Error(
       apiErrorMessage(
         payload.error?.code ?? "UNEXPECTED",
         "This checkout request could not be completed.",
       ),
-    );
+    ) as Error & { code?: string; status?: number };
+    if (payload.error?.code) error.code = payload.error.code;
+    error.status = response.status;
+    throw error;
+  }
   return payload.data;
 };
 
@@ -837,23 +844,49 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       window.location.assign(value.redirectUrl);
   };
   const initiatePayment = () => run(requestPayment);
+  const settleTerminalVerdict = (code?: string) => {
+    // The payment session is over: expired, cancelled, a reference that does
+    // not belong to the order, or one the server refuses a new attempt for.
+    // Drop the dead payment so the QR can never be re-scanned and the customer
+    // can see the provider choices again (the server still enforces safety).
+    if (
+      code === "PAYMENT_EXPIRED" ||
+      code === "PAYMENT_NOT_CONFIRMED" ||
+      code === "PAYMENT_REFERENCE_MISMATCH" ||
+      code === "PAYMENT_RETRY_NOT_SAFE"
+    ) {
+      setPayment(null);
+      return true;
+    }
+    return false;
+  };
   const checkPayment = () =>
     run(async () => {
       if (paymentVerificationInFlight.current)
         throw new Error(
           "We are already checking this payment. Please wait a moment, then check again.",
         );
-      const result = await api<{ status: string }>(
-        `/partner-checkout/${token}/verify`,
-        { method: "POST", body: "{}" },
-      );
-      if (PAID_STATUSES.has(result.status)) {
-        setOutcome({ status: result.status, orderNumber });
-        return;
-      }
-      if (FAILED_STATUSES.has(result.status)) {
-        setPayment(null);
-        return;
+      try {
+        const result = await api<{ status: string }>(
+          `/partner-checkout/${token}/verify`,
+          { method: "POST", body: "{}" },
+        );
+        if (PAID_STATUSES.has(result.status)) {
+          setOutcome({ status: result.status, orderNumber });
+          return;
+        }
+        if (FAILED_STATUSES.has(result.status)) {
+          setPayment(null);
+          return;
+        }
+      } catch (cause) {
+        const code = (cause as { code?: string })?.code;
+        if (settleTerminalVerdict(code)) {
+          if (code === "PAYMENT_RETRY_NOT_SAFE") throw cause;
+          setError("That payment attempt has ended. Start a new one to continue.");
+          return;
+        }
+        throw cause;
       }
       throw new Error(
         "Your payment is still being confirmed by the gateway. Wait a moment, then check again.",
@@ -879,8 +912,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       } else if (FAILED_STATUSES.has(result.status)) {
         setPayment(null);
       }
-    } catch {
-      // Polling and the manual action remain available for transient errors.
+    } catch (cause) {
+      // A settled verdict (expired/cancelled/mismatch/review) ends the
+      // session; the polling effect's stoppedForVerify guard stops further
+      // pings once payment is cleared. Transient errors stay available for
+      // the manual "check again" action.
+      if (settleTerminalVerdict((cause as { code?: string })?.code))
+        fonepayExpiryChecked.current = payment?.reference ?? "";
     } finally {
       paymentVerificationInFlight.current = false;
     }

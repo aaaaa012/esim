@@ -831,7 +831,8 @@ export default function CheckoutClient({
           if (
             code === "PAYMENT_EXPIRED" ||
             code === "PAYMENT_REFERENCE_MISMATCH" ||
-            code === "PAYMENT_NOT_CONFIRMED"
+            code === "PAYMENT_NOT_CONFIRMED" ||
+            code === "PAYMENT_RETRY_NOT_SAFE"
           ) {
             const refreshed = await api<Order>(
               `/customer/orders/${current.id}`,
@@ -843,6 +844,10 @@ export default function CheckoutClient({
               if (refreshed.paymentRetry.canChangeProvider)
                 setLockedProvider(null);
             }
+            if (code === "PAYMENT_RETRY_NOT_SAFE")
+              setError(
+                "A previous payment must be confirmed before a new attempt is safe. Our team is verifying it and no second charge will be made.",
+              );
             setVerifying(false);
             return;
           }

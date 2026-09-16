@@ -108,6 +108,69 @@ describe("recharge checkout", () => {
     ).toBe(true);
   });
 
+  it("surfaces the server's blocked message when a new payment is declared unsafe", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/esim/checkout?order=pending-recharge&recharge=1&reference=FONEPAY-REFERENCE",
+    );
+    const pending = {
+      id: "pending-recharge",
+      orderNumber: "VC-PENDING",
+      status: "PAYMENT_PENDING",
+      purchaseType: "TOPUP",
+      plan,
+      totalAmountNpr: 100,
+      documents: [],
+      payment: {
+        provider: "FONEPAY",
+        reference: "FONEPAY-REFERENCE",
+        status: "PENDING",
+        qrDataUrl: "data:image/png;base64,restored",
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      },
+      paymentRetry: { canRetry: false, canChangeProvider: false },
+    };
+    mocks.authFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["FONEPAY"] });
+      if (
+        url.endsWith("/recharges/pending-recharge/payment/initiate") &&
+        init?.method === "POST"
+      )
+        return ok({
+          reference: "FONEPAY-REFERENCE",
+          redirectUrl: "",
+          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          qrDataUrl: "data:image/png;base64,restored",
+        });
+      if (url.endsWith("/payment/verify"))
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({
+            error: {
+              code: "PAYMENT_RETRY_NOT_SAFE",
+              message: "A payment is still being confirmed for this order.",
+            },
+          }),
+        };
+      return ok(pending);
+    });
+
+    render(<Checkout planId="plan" orderId="pending-recharge" />);
+    await screen.findByRole("heading", { name: "Complete your payment" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check payment status" }),
+    );
+    await screen.findByText(
+      /A previous payment must be confirmed before a new attempt is safe/,
+    );
+    // The silent verification's competing request also ended on the same
+    // verdict; the manual check fully stopped instead of showing "pending".
+    expect(screen.queryByText("Checking Fonepay payment status")).toBeNull();
+  });
+
   it("restores provider choices after a resumed payment becomes safely retryable", async () => {
     const failed = {
       id: "failed-order",

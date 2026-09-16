@@ -4,6 +4,7 @@ import {
   DocumentStatus,
   DocumentType,
   OrderStatus,
+  PaymentProvider,
   PaymentStatus,
 } from "@visa-compass/shared";
 import { OrdersService, type DemoOrder } from "./orders.service.js";
@@ -588,6 +589,72 @@ describe("OrdersService provider callback conflict safety", () => {
     expect(attention).not.toHaveBeenCalledWith(
       expect.objectContaining({ category: "UNEXPECTED_PROVIDER_LIFECYCLE" }),
     );
+  });
+});
+
+describe("OrdersService.beginPayment double-charge guard", () => {
+  it("rejects a second payment session once the order is already paid", async () => {
+    const order = {
+      ...readyOrder({
+        status: OrderStatus.PAYMENT_CONFIRMED,
+      }),
+      payment: {
+        provider: PaymentProvider.KHALTI,
+        reference: "pidx-1",
+        status: PaymentStatus.COMPLETED,
+      },
+    };
+    const orders = ordersService(
+      [order as DemoOrder],
+      { descriptor: () => ({ provider: "TRANSATEL" }) },
+    );
+    await orders.refreshFromPersistence();
+
+    await expect(
+      orders.beginPayment(order.id, null, PaymentProvider.KHALTI, {
+        reference: "pidx-2",
+        returnUrl: "https://app.example/esim/checkout?order=q-1",
+        redirectUrl: "https://khalti.example/pay",
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    // The paid session is untouched — no double charge can be handed out.
+    expect(orders.get(order.id).payment?.reference).toBe("pidx-1");
+    expect(orders.get(order.id).payment?.status).toBe(PaymentStatus.COMPLETED);
+  });
+
+  it("keeps an identical PENDING reference idempotent instead of rejecting", async () => {
+    const order = {
+      ...readyOrder({
+        status: OrderStatus.PAYMENT_PENDING,
+      }),
+      payment: {
+        provider: PaymentProvider.KHALTI,
+        reference: "pidx-1",
+        status: PaymentStatus.PENDING,
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        redirectUrl: "https://khalti.example/pay",
+      },
+    };
+    const orders = ordersService(
+      [order as DemoOrder],
+      { descriptor: () => ({ provider: "TRANSATEL" }) },
+    );
+    await orders.refreshFromPersistence();
+
+    const result = await orders.beginPayment(
+      order.id,
+      null,
+      PaymentProvider.KHALTI,
+      {
+        reference: "pidx-1",
+        returnUrl: "https://app.example/esim/checkout?order=q-1",
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        redirectUrl: "https://khalti.example/pay",
+      },
+    );
+    expect(result.payment?.reference).toBe("pidx-1");
+    expect(result.payment?.status).toBe(PaymentStatus.PENDING);
   });
 });
 
