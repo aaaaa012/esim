@@ -33,9 +33,8 @@ export type FonepayTelemetryReason =
 
 /**
  * A diagnostic event about how the customer's device handled the Fonepay QR.
- * It deliberately carries no scan payload, deep link, token, or socket
- * credential - only the categorical outcome that ops needs to correlate with
- * the server-side PRN fingerprint.
+ * The deep link is carried with its payment payload redacted so ops can verify
+ * scheme freshness without leaking scan credentials.
  */
 export type FonepayTelemetryPayload = {
   event: FonepayTelemetryEvent;
@@ -44,6 +43,10 @@ export type FonepayTelemetryPayload = {
   launchMethod?: FonepayTelemetryLaunchMethod;
   reason?: FonepayTelemetryReason;
   attempt?: number;
+  /** The bare issuer scheme actually resolved for the selected bank (e.g. SNMANPKA). */
+  scheme?: string;
+  /** The constructed deep link with the qrPayload masked (payment credential). */
+  launchUrl?: string;
 };
 
 export function fonepayPlatform(): FonepayTelemetryPlatform {

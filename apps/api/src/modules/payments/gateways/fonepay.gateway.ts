@@ -24,6 +24,25 @@ const FONEPAY_AMOUNT_MAX = 9_999_999;
 const REDACTED_QR_FIELDS = new Set(["qrstring", "qrmessage"]);
 /** V1.10 §9.4 / §9.6: referenceLabel must be alphanumeric only. */
 const REFERENCE_LABEL_RE = /^[A-Za-z0-9]+$/;
+/** Deep-link scheme shapes accepted from Fonepay's bank directory: bare
+ * ("scheme"), suffixed with authority ("scheme://"), or with the payment path
+ * ("scheme://payment", optional trailing slash). Anything else is rejected and
+ * the deep link is always rebuilt from the bare token. */
+const FONEPAY_SCHEME_RE = /^([a-z][a-z0-9+.-]*)(?::\/\/(?:payment\/?)?)?$/i;
+const FONEPAY_BLOCKED_SCHEMES = new Set([
+  "data",
+  "file",
+  "http",
+  "https",
+  "javascript",
+]);
+
+/** Strips any "://[payment]" suffix to expose the bare issuer scheme. */
+function bareScheme(raw: string): string | null {
+  const scheme = raw.trim().match(FONEPAY_SCHEME_RE)?.[1];
+  if (!scheme || FONEPAY_BLOCKED_SCHEMES.has(scheme.toLowerCase())) return null;
+  return scheme;
+}
 
 export type FonepayBank = {
   bankName: string;
@@ -373,16 +392,8 @@ export class FonepayGateway implements PaymentGateway {
   }
 
   private validBank(bank: z.infer<typeof bankSchema>): FonepayBank | null {
-    const intentScheme = bank.intentScheme.trim();
-    const scheme =
-      intentScheme.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1] ?? intentScheme;
-    if (
-      !/^[a-z][a-z0-9+.-]*$/i.test(scheme) ||
-      ["data", "file", "http", "https", "javascript"].includes(
-        scheme.toLowerCase(),
-      )
-    )
-      return null;
+    const intentScheme = bareScheme(bank.intentScheme);
+    if (!intentScheme) return null;
     const bankIcon = bank.bankIcon?.trim();
     if (bankIcon) {
       try {
@@ -519,22 +530,25 @@ export class FonepayGateway implements PaymentGateway {
       intentScheme: string;
       bankIcon?: string | null;
       packageName?: string | null;
-    }): FonepayBank => ({
-      bankName: bank.bankName,
-      bankCode: bank.bankCode,
-      intentScheme: bank.intentScheme,
-      ...(bank.bankIcon ? { bankIcon: bank.bankIcon } : {}),
-      ...(bank.packageName ? { packageName: bank.packageName } : {}),
-    });
+    }): FonepayBank | null => {
+      const intentScheme = bareScheme(bank.intentScheme);
+      if (!intentScheme) return null;
+      return {
+        bankName: bank.bankName,
+        bankCode: bank.bankCode,
+        intentScheme,
+        ...(bank.bankIcon ? { bankIcon: bank.bankIcon } : {}),
+        ...(bank.packageName ? { packageName: bank.packageName } : {}),
+      };
+    };
     const ttlMs =
       Math.max(
         300,
-        Number(process.env.FONEPAY_BANK_CACHE_TTL_SECONDS ?? 86_400),
+        Number(process.env.FONEPAY_BANK_CACHE_TTL_SECONDS ?? 3_600),
       ) * 1_000;
-    const fresh =
-      cached.lastSyncedAt &&
-      Date.now() - new Date(cached.lastSyncedAt).getTime() < ttlMs;
-    const cachedBanks = cached.banks.map(toBank);
+    const cachedBanks = cached.banks
+      .map(toBank)
+      .filter((bank): bank is FonepayBank => Boolean(bank));
     const cacheAgeMs = cached.lastSyncedAt
       ? Date.now() - new Date(cached.lastSyncedAt).getTime()
       : Number.POSITIVE_INFINITY;
@@ -543,14 +557,21 @@ export class FonepayGateway implements PaymentGateway {
         300,
         Number(process.env.FONEPAY_BANK_MAX_STALE_SECONDS ?? 604_800),
       ) * 1_000;
-    if (fresh && cachedBanks.length) return cachedBanks;
+    // Issuer deep-link schemes change, so a checkout must reflect the directory
+    // as it is right now. Fetch /banks/list live on every initiation (matching
+    // the reference SDK, which never caches it); the synced table is only a
+    // circuit-breaker fallback: a fresh-enough cache is used silently, an
+    // older-but-allowed one with a warning, and beyond that the QR scan path
+    // still works with no bank list.
     try {
-      const synced = await this.syncBankDirectory();
-      return synced.banks.map(toBank);
+      return await this.fetchBanks(correlationId);
     } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : String(error);
+      if (cachedBanks.length && cacheAgeMs <= ttlMs) return cachedBanks;
       if (cachedBanks.length && cacheAgeMs <= maximumStaleMs) {
         this.logger.warn(
-          `Using last-known-good Fonepay bank directory: ${error instanceof Error ? error.message : String(error)}`,
+          `Fonepay bank directory unavailable; using cached copy: ${detail}`,
         );
         return cachedBanks;
       }

@@ -55,6 +55,8 @@ export const fonepayClientTelemetrySchema = z.object({
     ])
     .optional(),
   attempt: z.number().int().positive().optional(),
+  scheme: z.string().trim().min(1).max(64).optional(),
+  launchUrl: z.string().trim().min(1).max(512).optional(),
 });
 export type FonepayClientTelemetry = z.infer<
   typeof fonepayClientTelemetrySchema
@@ -162,8 +164,10 @@ export class PaymentsService {
           platform: input.platform,
           ...(input.bankCode ? { bankCode: input.bankCode } : {}),
           ...(input.bankName ? { bankName: input.bankName } : {}),
-          ...(input.launchMethod ? { launchMethod: input.launchMethod } : {}),
+...(input.launchMethod ? { launchMethod: input.launchMethod } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
+          ...(input.scheme ? { scheme: input.scheme } : {}),
+          ...(input.launchUrl ? { launchUrl: input.launchUrl } : {}),
         },
       },
     });

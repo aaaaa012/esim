@@ -80,6 +80,110 @@ describe("FonepayGateway", () => {
     expect(qrHeaders.get("signature")).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
   });
 
+  it("normalizes allowed intentScheme shapes and drops unsafe directory entries", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockResolvedValueOnce(
+        json({
+          bankDetails: [
+            { bankName: "Bare Bank", bankCode: "BB", intentScheme: "barebank" },
+            {
+              bankName: "Slash Bank",
+              bankCode: "SB",
+              intentScheme: "slashbank://",
+            },
+            {
+              bankName: "Path Bank",
+              bankCode: "PB",
+              intentScheme: "pathbank://payment",
+            },
+            {
+              bankName: "Exec Bank",
+              bankCode: "XB",
+              intentScheme: "javascript:alert",
+            },
+            {
+              bankName: "Host Bank",
+              bankCode: "XH",
+              intentScheme: "safe://attacker.example",
+            },
+          ],
+        }),
+      )
+      .mockImplementationOnce(async (_url, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        return json({
+          prn: body.referenceLabel,
+          status: "Success",
+          qrMessage: "fonepay-qr-payload",
+        });
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new FonepayGateway().initiate({
+      attemptId: "scheme-forms-attempt",
+      orderId: "order-scheme-forms",
+      orderNumber: "VC-102",
+      amountNpr: 100,
+      returnUrl: "https://checkout.example/return",
+    });
+
+    expect(result.banks).toEqual([
+      { bankName: "Bare Bank", bankCode: "BB", intentScheme: "barebank" },
+      { bankName: "Slash Bank", bankCode: "SB", intentScheme: "slashbank" },
+      { bankName: "Path Bank", bankCode: "PB", intentScheme: "pathbank" },
+    ]);
+  });
+
+  it("falls back to the cached directory, normalized, when the live fetch fails", async () => {
+    const prisma = {
+      enabled: true,
+      integrationLog: { create: vi.fn().mockResolvedValue({}) },
+      fonepayBankDirectoryEntry: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            bankName: "Cached Bank",
+            bankCode: "CB",
+            intentScheme: "cachedbank://payment",
+            active: true,
+          },
+        ]),
+      },
+      fonepayBankDirectorySync: {
+        findFirst: vi.fn().mockResolvedValue({
+          status: "SUCCEEDED",
+          completedAt: new Date(),
+        }),
+      },
+    } as unknown as PrismaService;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockRejectedValueOnce(new Error("network partitioned"))
+      .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        return json({
+          prn: body.referenceLabel,
+          status: "Success",
+          qrMessage: "fonepay-qr-payload",
+        });
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new FonepayGateway(prisma).initiate({
+      attemptId: "cached-scheme-attempt",
+      orderId: "order-cached-scheme",
+      orderNumber: "VC-104",
+      amountNpr: 100,
+      returnUrl: "https://checkout.example/return",
+    });
+
+    expect(result.banks).toEqual([
+      { bankName: "Cached Bank", bankCode: "CB", intentScheme: "cachedbank" },
+    ]);
+  });
+
   it("keeps scan payment available without exposing qrString as a bank-app payload", async () => {
     const fetchMock = vi
       .fn()
@@ -675,6 +779,7 @@ describe("FonepayGateway", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockResolvedValueOnce(json({ bankDetails: [] }))
       .mockImplementationOnce(async (_url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body));
         return json({

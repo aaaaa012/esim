@@ -17,6 +17,11 @@ export type FonepayBank = {
   intentScheme: string;
 };
 
+/** Masks the payment credential so telemetry can carry the exact deep-link
+ * shape without leaking the qrPayload needed to complete a payment. */
+const redactLaunchUrl = (url: string): string =>
+  url.replace(/qrPayload=[^&#]*/, "qrPayload=<redacted>");
+
 export function FonepayBankPicker({
   banks,
   qrPayload,
@@ -41,6 +46,8 @@ export function FonepayBankPicker({
       | "SOCKET_NOT_READY"
       | "PAYLOAD_UNAVAILABLE"
       | "APP_NOT_OBSERVED";
+    scheme?: string;
+    launchUrl?: string;
   }) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -100,6 +107,8 @@ export function FonepayBankPicker({
       bankCode: bank.bankCode,
       bankName: bank.bankName,
       launchMethod,
+      scheme: target.split(":")[0]!,
+      launchUrl: redactLaunchUrl(target),
     });
     window.location.assign(target);
     window.setTimeout(() => {
@@ -109,6 +118,8 @@ export function FonepayBankPicker({
           bankCode: bank.bankCode,
           bankName: bank.bankName,
           launchMethod,
+          scheme: target.split(":")[0]!,
+          launchUrl: redactLaunchUrl(target),
         });
       } else {
         onTelemetry?.({
@@ -117,6 +128,8 @@ export function FonepayBankPicker({
           bankName: bank.bankName,
           launchMethod,
           reason: "APP_NOT_OBSERVED",
+          scheme: target.split(":")[0]!,
+          launchUrl: redactLaunchUrl(target),
         });
         onError(
           "Your selected mobile banking app or wallet isn't available right now. Choose another app or scan the QR code.",

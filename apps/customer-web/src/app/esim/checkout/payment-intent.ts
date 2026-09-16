@@ -7,16 +7,29 @@ const BLOCKED_SCHEMES = new Set([
   "javascript",
 ]);
 const SAFE_PACKAGE = /^[A-Za-z0-9]+([A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+// Deep-link scheme shapes accepted from Fonepay's bank directory: bare
+// ("scheme"), suffixed with authority ("scheme://"), or with the payment path
+// ("scheme://payment", optional trailing slash). Anything else is rejected and
+// the deep link is always rebuilt from the bare token.
+const INTENT_SCHEME_RE = /^([A-Za-z][A-Za-z0-9+.-]*)(?::\/\/(?:payment\/?)?)?$/;
+
+function bareScheme(raw: string): string | null {
+  const scheme = raw.trim().match(INTENT_SCHEME_RE)?.[1];
+  if (
+    !scheme ||
+    !SAFE_SCHEME.test(scheme) ||
+    BLOCKED_SCHEMES.has(scheme.toLowerCase())
+  )
+    return null;
+  return scheme;
+}
 
 export function fonepayBankIntentUrl(
   intentScheme: string,
   qrPayload: string,
 ): string | null {
-  const raw = intentScheme.trim();
-  const deepLink = raw.match(/^([A-Za-z][A-Za-z0-9+.-]*):\/\/payment\/?$/);
-  const scheme = deepLink?.[1] ?? raw;
-  if (!SAFE_SCHEME.test(scheme) || BLOCKED_SCHEMES.has(scheme.toLowerCase()))
-    return null;
+  const scheme = bareScheme(intentScheme);
+  if (!scheme) return null;
   // Preserve the exact casing supplied by Fonepay. Android intent-filter
   // matching can be case-sensitive even though URI schemes generally are not.
   return `${scheme}://payment/?qrPayload=${encodeURIComponent(qrPayload)}`;
@@ -31,12 +44,9 @@ export function fonepayBankAndroidIntentUrl(
   qrPayload: string,
   packageName: string,
 ): string | null {
-  const raw = intentScheme.trim();
-  const deepLink = raw.match(/^([A-Za-z][A-Za-z0-9+.-]*):\/\/payment\/?$/);
-  const scheme = deepLink?.[1] ?? raw;
+  const scheme = bareScheme(intentScheme);
+  if (!scheme) return null;
   const pkg = packageName.trim().replace(/\s+/g, "");
-  if (!SAFE_SCHEME.test(scheme) || BLOCKED_SCHEMES.has(scheme.toLowerCase()))
-    return null;
   if (!SAFE_PACKAGE.test(pkg)) return null;
   return `intent://payment/?qrPayload=${encodeURIComponent(qrPayload)}#Intent;scheme=${scheme};package=${pkg};end`;
 }

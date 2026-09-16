@@ -16,6 +16,28 @@ describe("fonepayBankIntentUrl", () => {
     );
   });
 
+  it("normalizes every allowed scheme shape to the bare issuer token", () => {
+    const expected = "LXBLNPKA://payment/?qrPayload=payload";
+    expect(fonepayBankIntentUrl("LXBLNPKA", "payload")).toBe(expected);
+    expect(fonepayBankIntentUrl("LXBLNPKA://", "payload")).toBe(expected);
+    expect(fonepayBankIntentUrl("LXBLNPKA://payment", "payload")).toBe(
+      expected,
+    );
+    expect(fonepayBankIntentUrl("LXBLNPKA://payment/", "payload")).toBe(
+      expected,
+    );
+    expect(
+      fonepayBankAndroidIntentUrl(
+        "LXBLNPKA://",
+        "a+b/c=",
+        "com.lxblnpka.app",
+      ),
+    ).toBe(
+      "intent://payment/?qrPayload=a%2Bb%2Fc%3D#Intent;" +
+        "scheme=LXBLNPKA;package=com.lxblnpka.app;end",
+    );
+  });
+
   it("rejects browser and executable schemes", () => {
     expect(fonepayBankIntentUrl("javascript:alert", "payload")).toBeNull();
     expect(fonepayBankIntentUrl("https://bank.example", "payload")).toBeNull();
@@ -23,6 +45,7 @@ describe("fonepayBankIntentUrl", () => {
     expect(
       fonepayBankIntentUrl("safe://attacker.example", "payload"),
     ).toBeNull();
+    expect(fonepayBankIntentUrl("LXBLNPKA:alt-path", "payload")).toBeNull();
   });
 });
 

@@ -785,6 +785,32 @@ describe("PaymentsService Fonepay client telemetry", () => {
     });
   });
 
+  it("persists the resolved issuer scheme and redacted deep link on a bank launch", async () => {
+    const { service, create } = telemetrySetup();
+
+    await service.recordFonepayClientTelemetry("order-1", "user-1", {
+      reference: "VC-2026-ABCD",
+      event: "BANK_LAUNCH_ATTEMPTED",
+      platform: "IOS",
+      bankCode: "SNMANPKA",
+      bankName: "Sanima Bank Ltd.",
+      launchMethod: "CUSTOM_SCHEME",
+      scheme: "SNMANPKA",
+      launchUrl: "SNMANPKA://payment/?qrPayload=<redacted>",
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        operation: "fonepay-client-bank-launch-attempted",
+        requestBody: expect.objectContaining({
+          bankCode: "SNMANPKA",
+          scheme: "SNMANPKA",
+          launchUrl: "SNMANPKA://payment/?qrPayload=<redacted>",
+        }),
+      }),
+    });
+  });
+
   it("rejects telemetry that does not match the active Fonepay reference", async () => {
     const { service, create } = telemetrySetup();
 
