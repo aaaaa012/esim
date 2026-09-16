@@ -48,6 +48,7 @@ export function activityLabel(entry: LogActivity): string {
       "fonepay-client-socket-connected": "Fonepay WebSocket Connected",
       "fonepay-client-socket-error": "Fonepay WebSocket Error",
       "fonepay-client-socket-closed": "Fonepay WebSocket Closed",
+      "fonepay-client-socket-reconnecting": "Fonepay WebSocket Reconnecting",
       "fonepay-client-qr-verified-signal": "Fonepay QR Scan Recognized",
       "fonepay-client-payment-result-signal":
         "Fonepay Payment Result Signal Received",

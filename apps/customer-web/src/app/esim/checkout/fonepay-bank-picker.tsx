@@ -104,20 +104,11 @@ export function FonepayBankPicker({
       );
       return;
     }
-    if (!socketReady) {
-      onTelemetry?.({
-        event: "BANK_LAUNCH_BLOCKED",
-        bankCode: bank.bankCode,
-        bankName: bank.bankName,
-        launchMethod: "NONE",
-        reason: "SOCKET_NOT_READY",
-      });
-      setOpen(false);
-      onError(
-        "The secure payment connection is not ready yet. Wait a moment or scan the QR code instead.",
-      );
-      return;
-    }
+    // socketReady is advisory, not a gate: the banking app processes payment
+    // independently of the WebSocket, which is only a real-time notification
+    // channel. A missing socket means the customer gets no live status
+    // push, but the payment can still complete and the reconciliation sweep
+    // (plus manual "Check status") picks it up.
     const isAndroid = /Android/i.test(navigator.userAgent);
     const target = qrPayload
       ? ((isAndroid && bank.packageName

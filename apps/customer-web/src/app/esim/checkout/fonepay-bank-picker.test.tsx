@@ -79,8 +79,19 @@ describe("FonepayBankPicker", () => {
     );
   });
 
-  it("does not launch a bank before the provider socket is ready", () => {
+  it("allows a bank launch even when the provider socket is not ready", () => {
     const onError = vi.fn();
+    const onTelemetry = vi.fn();
+    let assignedUrl = "";
+    const originalAssign = window.location.assign;
+    Object.defineProperty(window, "location", {
+      value: new URL("https://example.com"),
+      writable: true,
+      configurable: true,
+    });
+    window.location.assign = ((url: string) => {
+      assignedUrl = url;
+    }) as Location["assign"];
     Object.defineProperty(window.navigator, "userAgent", {
       configurable: true,
       value: "iPhone",
@@ -91,6 +102,7 @@ describe("FonepayBankPicker", () => {
         qrPayload="payload"
         socketReady={false}
         onError={onError}
+        onTelemetry={onTelemetry}
       />,
     );
     fireEvent.click(
@@ -99,6 +111,13 @@ describe("FonepayBankPicker", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /laxmi sunrise bank/i }),
     );
-    expect(onError).toHaveBeenCalledWith(expect.stringMatching(/not ready/i));
+    expect(assignedUrl).toContain("LXBLNPKA://payment/");
+    expect(onTelemetry).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "BANK_LAUNCH_ATTEMPTED" }),
+    );
+    expect(onError).not.toHaveBeenCalledWith(
+      expect.stringMatching(/not ready/i),
+    );
+    window.location.assign = originalAssign;
   });
 });

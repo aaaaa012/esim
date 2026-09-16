@@ -885,44 +885,72 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       }
     };
     if (payment.websocketUrl) {
+      const wsUrl = payment.websocketUrl;
       try {
-        socket = new WebSocket(payment.websocketUrl);
-        socket.onopen = () => {
-          setFonepaySocketReady(true);
-          reportTelemetry({ event: "SOCKET_CONNECTED" });
+        let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+        let backoffMs = 1_000;
+        const maxBackoffMs = 30_000;
+        const maxReconnects = 5;
+        let reconnects = 0;
+        const connect = () => {
+          socket = new WebSocket(wsUrl);
+          socket.onopen = () => {
+            setFonepaySocketReady(true);
+            backoffMs = 1_000;
+            reconnects = 0;
+            reportTelemetry({ event: "SOCKET_CONNECTED" });
+          };
+          socket.onerror = () => {
+            setFonepaySocketReady(false);
+            reportTelemetry({
+              event: "SOCKET_ERROR",
+              reason: "SOCKET_TRANSPORT_ERROR",
+            });
+          };
+          socket.onclose = () => {
+            setFonepaySocketReady(false);
+            reportTelemetry({
+              event: "SOCKET_CLOSED",
+              reason: locallyClosed
+                ? "SOCKET_LOCAL_CLOSE"
+                : "SOCKET_REMOTE_CLOSE",
+            });
+            if (!stopped && !locallyClosed && reconnects < maxReconnects) {
+              reconnects += 1;
+              reportTelemetry({
+                event: "SOCKET_RECONNECTING",
+                attempt: reconnects,
+              });
+              reconnectTimer = setTimeout(() => {
+                backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+                connect();
+              }, backoffMs);
+            }
+          };
+          socket.onmessage = (event) => {
+            const signal = fonepaySocketSignal(event.data);
+            if (signal === "QR_VERIFIED") {
+              reportTelemetry({ event: "QR_VERIFIED_SIGNAL" });
+              setFonepayBankHint(
+                "QR recognized. Complete the payment in your banking app.",
+              );
+              void verifySilently();
+              return;
+            }
+            if (signal === "PAYMENT_RESULT") {
+              reportTelemetry({ event: "PAYMENT_RESULT_SIGNAL" });
+              locallyClosed = true;
+              socket?.close();
+              void verifySilently();
+            }
+          };
         };
-        socket.onerror = () => {
-          setFonepaySocketReady(false);
-          reportTelemetry({
-            event: "SOCKET_ERROR",
-            reason: "SOCKET_TRANSPORT_ERROR",
-          });
-        };
-        socket.onclose = () => {
-          setFonepaySocketReady(false);
-          reportTelemetry({
-            event: "SOCKET_CLOSED",
-            reason: locallyClosed
-              ? "SOCKET_LOCAL_CLOSE"
-              : "SOCKET_REMOTE_CLOSE",
-          });
-        };
-        socket.onmessage = (event) => {
-          const signal = fonepaySocketSignal(event.data);
-          if (signal === "QR_VERIFIED") {
-            reportTelemetry({ event: "QR_VERIFIED_SIGNAL" });
-            setFonepayBankHint(
-              "QR recognized. Complete the payment in your banking app.",
-            );
-            void verifySilently();
-            return;
-          }
-          if (signal === "PAYMENT_RESULT") {
-            reportTelemetry({ event: "PAYMENT_RESULT_SIGNAL" });
-            locallyClosed = true;
-            socket?.close();
-            void verifySilently();
-          }
+        connect();
+        return () => {
+          stopped = true;
+          locallyClosed = true;
+          clearTimeout(reconnectTimer);
+          socket?.close();
         };
       } catch {
         // The provider status endpoint remains authoritative.

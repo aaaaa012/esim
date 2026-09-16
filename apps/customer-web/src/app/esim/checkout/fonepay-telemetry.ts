@@ -3,6 +3,7 @@ export type FonepayTelemetryEvent =
   | "SOCKET_CONNECTED"
   | "SOCKET_ERROR"
   | "SOCKET_CLOSED"
+  | "SOCKET_RECONNECTING"
   | "QR_VERIFIED_SIGNAL"
   | "PAYMENT_RESULT_SIGNAL"
   | "BANK_LAUNCH_ATTEMPTED"
@@ -42,6 +43,7 @@ export type FonepayTelemetryPayload = {
   bankName?: string;
   launchMethod?: FonepayTelemetryLaunchMethod;
   reason?: FonepayTelemetryReason;
+  attempt?: number;
 };
 
 export function fonepayPlatform(): FonepayTelemetryPlatform {

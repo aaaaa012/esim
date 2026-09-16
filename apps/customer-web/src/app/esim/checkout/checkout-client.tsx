@@ -1554,58 +1554,81 @@ export default function CheckoutClient({
   useEffect(() => {
     setFonepaySocketReady(false);
     if (!payment?.websocketUrl || !order) return;
+    const wsUrl = payment.websocketUrl;
     const reference = payment.reference;
     let socket: WebSocket | undefined;
     let locallyClosed = false;
-    try {
-      socket = new WebSocket(payment.websocketUrl);
-      socket.onopen = () => {
-        setFonepaySocketReady(true);
-        reportTelemetry({ event: "SOCKET_CONNECTED" }, reference);
-      };
-      socket.onerror = () => {
-        setFonepaySocketReady(false);
-        reportTelemetry(
-          { event: "SOCKET_ERROR", reason: "SOCKET_TRANSPORT_ERROR" },
-          reference,
-        );
-      };
-      socket.onclose = () => {
-        setFonepaySocketReady(false);
-        reportTelemetry(
-          {
-            event: "SOCKET_CLOSED",
-            reason: locallyClosed
-              ? "SOCKET_LOCAL_CLOSE"
-              : "SOCKET_REMOTE_CLOSE",
-          },
-          reference,
-        );
-      };
-      // A socket message can mean that the QR was merely scanned. Keep the QR
-      // visible while the authoritative status endpoint still reports pending.
-      socket.onmessage = (event) => {
-        const signal = fonepaySocketSignal(event.data);
-        if (signal === "QR_VERIFIED") {
-          reportTelemetry({ event: "QR_VERIFIED_SIGNAL" }, reference);
-          setFonepayBankHint(
-            "QR recognized. Complete the payment in your banking app.",
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let backoffMs = 1_000;
+    const maxBackoffMs = 30_000;
+    const maxReconnects = 5;
+    let reconnects = 0;
+    const connect = () => {
+      try {
+        socket = new WebSocket(wsUrl);
+        socket.onopen = () => {
+          setFonepaySocketReady(true);
+          backoffMs = 1_000;
+          reconnects = 0;
+          reportTelemetry({ event: "SOCKET_CONNECTED" }, reference);
+        };
+        socket.onerror = () => {
+          setFonepaySocketReady(false);
+          reportTelemetry(
+            { event: "SOCKET_ERROR", reason: "SOCKET_TRANSPORT_ERROR" },
+            reference,
           );
-          void verifyFonepaySilently();
-          return;
-        }
-        if (signal === "PAYMENT_RESULT") {
-          reportTelemetry({ event: "PAYMENT_RESULT_SIGNAL" }, reference);
-          locallyClosed = true;
-          socket?.close();
-          void verifyFonepaySilently();
-        }
-      };
-    } catch {
-      /* Manual status verification remains available. */
-    }
+        };
+        socket.onclose = () => {
+          setFonepaySocketReady(false);
+          reportTelemetry(
+            {
+              event: "SOCKET_CLOSED",
+              reason: locallyClosed
+                ? "SOCKET_LOCAL_CLOSE"
+                : "SOCKET_REMOTE_CLOSE",
+            },
+            reference,
+          );
+          if (!locallyClosed && reconnects < maxReconnects) {
+            reconnects += 1;
+            reportTelemetry(
+              { event: "SOCKET_RECONNECTING", attempt: reconnects },
+              reference,
+            );
+            reconnectTimer = setTimeout(() => {
+              backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+              connect();
+            }, backoffMs);
+          }
+        };
+        // A socket message can mean that the QR was merely scanned. Keep the QR
+        // visible while the authoritative status endpoint still reports pending.
+        socket.onmessage = (event) => {
+          const signal = fonepaySocketSignal(event.data);
+          if (signal === "QR_VERIFIED") {
+            reportTelemetry({ event: "QR_VERIFIED_SIGNAL" }, reference);
+            setFonepayBankHint(
+              "QR recognized. Complete the payment in your banking app.",
+            );
+            void verifyFonepaySilently();
+            return;
+          }
+          if (signal === "PAYMENT_RESULT") {
+            reportTelemetry({ event: "PAYMENT_RESULT_SIGNAL" }, reference);
+            locallyClosed = true;
+            socket?.close();
+            void verifyFonepaySilently();
+          }
+        };
+      } catch {
+        /* Manual status verification remains available. */
+      }
+    };
+    connect();
     return () => {
       locallyClosed = true;
+      clearTimeout(reconnectTimer);
       socket?.close();
     };
   }, [payment?.websocketUrl, order?.id]);

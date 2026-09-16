@@ -30,6 +30,7 @@ export const fonepayClientTelemetrySchema = z.object({
     "SOCKET_CONNECTED",
     "SOCKET_ERROR",
     "SOCKET_CLOSED",
+    "SOCKET_RECONNECTING",
     "QR_VERIFIED_SIGNAL",
     "PAYMENT_RESULT_SIGNAL",
     "BANK_LAUNCH_ATTEMPTED",
@@ -53,6 +54,7 @@ export const fonepayClientTelemetrySchema = z.object({
       "SOCKET_LOCAL_CLOSE",
     ])
     .optional(),
+  attempt: z.number().int().positive().optional(),
 });
 export type FonepayClientTelemetry = z.infer<
   typeof fonepayClientTelemetrySchema

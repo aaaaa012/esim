@@ -78,6 +78,10 @@ describe("activityLabel", () => {
     ["fonepay-client-socket-error", "Fonepay WebSocket Error"],
     ["fonepay-client-socket-closed", "Fonepay WebSocket Closed"],
     [
+      "fonepay-client-socket-reconnecting",
+      "Fonepay WebSocket Reconnecting",
+    ],
+    [
       "fonepay-client-qr-verified-signal",
       "Fonepay QR Scan Recognized",
     ],
