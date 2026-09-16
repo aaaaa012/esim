@@ -46,6 +46,11 @@ afterEach(() => {
 });
 describe("recharge checkout", () => {
   it("restores an unpaid Fonepay QR when a pending recharge is reopened", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/esim/checkout?order=pending-recharge&recharge=1&reference=FONEPAY-REFERENCE",
+    );
     const pending = {
       id: "pending-recharge",
       orderNumber: "VC-PENDING",
@@ -91,6 +96,7 @@ describe("recharge checkout", () => {
       screen.getByRole("img", { name: "Fonepay payment QR code" }),
     ).toHaveProperty("src", "data:image/png;base64,restored");
     expect(screen.queryByText("Payment confirmation pending")).toBeNull();
+    expect(screen.queryByText("Checking Fonepay payment status")).toBeNull();
     expect(screen.getByText("Pay within")).toBeDefined();
     expect(
       mocks.authFetch.mock.calls.some(

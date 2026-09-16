@@ -695,7 +695,11 @@ export default function CheckoutClient({
           } else {
             setPayment(paymentSummary);
           }
-          if (hasGatewayReturnSignal()) void verifyPayment(value, true);
+          if (
+            value.payment.provider !== PaymentProvider.FONEPAY &&
+            hasGatewayReturnSignal()
+          )
+            void verifyPayment(value, true);
         } else if (value.status === "PAYMENT_FAILED") {
           setPayment(null);
         }
