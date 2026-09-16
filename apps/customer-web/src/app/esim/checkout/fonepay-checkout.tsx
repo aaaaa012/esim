@@ -45,7 +45,9 @@ function PaymentExpiryCountdown({ expiresAt }: { expiresAt: string }) {
       <b role="timer" aria-label={`${remainingSeconds} seconds remaining`}>
         {timer}
       </b>
-      <small>The QR closes automatically when this timer ends.</small>
+      <small>
+        Payment status is checked automatically when the timer ends.
+      </small>
     </div>
   );
 }
@@ -68,7 +70,7 @@ export function FonepayCheckout({
   titleId: string;
   banks?: FonepayBank[] | undefined;
   qrPayload?: string | undefined;
-  qrDataUrl: string;
+  qrDataUrl?: string | undefined;
   expiresAt?: string;
   socketReady: boolean;
   onError: (message: string) => void;
@@ -115,11 +117,22 @@ export function FonepayCheckout({
             </li>
             <li>Approve the payment to confirm your order.</li>
           </ol>
-          <img
-            className="fonepay-qr"
-            src={qrDataUrl}
-            alt="Fonepay payment QR code"
-          />
+          {qrDataUrl ? (
+            <img
+              className="fonepay-qr"
+              src={qrDataUrl}
+              alt="Fonepay payment QR code"
+            />
+          ) : (
+            <div className="fonepay-qr-fallback-box" role="status">
+              <b>Scan code saved in your banking app</b>
+              <span>
+                The QR image is not available yet. Open a Fonepay-supported
+                banking app, choose the saved code for this store under
+                &ldquo;Scan QR&rdquo;, and approve the payment.
+              </span>
+            </div>
+          )}
         </div>
       ) : (
         <>

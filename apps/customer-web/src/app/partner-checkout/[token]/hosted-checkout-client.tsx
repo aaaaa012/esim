@@ -250,6 +250,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     PaymentProvider[]
   >([PaymentProvider.KHALTI]);
   const paymentVerificationInFlight = useRef(false);
+  const fonepayExpiryChecked = useRef<string | undefined>(undefined);
+  const stoppedForVerify = useRef(false);
   const appliedExtraction = useRef("");
   const awaitingVerificationAdvance = useRef(false);
 
@@ -837,6 +839,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const initiatePayment = () => run(requestPayment);
   const checkPayment = () =>
     run(async () => {
+      if (paymentVerificationInFlight.current)
+        throw new Error(
+          "We are already checking this payment. Please wait a moment, then check again.",
+        );
       const result = await api<{ status: string }>(
         `/partner-checkout/${token}/verify`,
         { method: "POST", body: "{}" },
@@ -860,6 +866,73 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       payment?.reference,
       telemetry,
     );
+  const verifySilently = async () => {
+    if (stoppedForVerify.current || paymentVerificationInFlight.current) return;
+    paymentVerificationInFlight.current = true;
+    try {
+      const result = await api<{ status: string }>(
+        `/partner-checkout/${token}/verify`,
+        { method: "POST", body: "{}" },
+      );
+      if (PAID_STATUSES.has(result.status)) {
+        setOutcome({ status: result.status, orderNumber });
+      } else if (FAILED_STATUSES.has(result.status)) {
+        setPayment(null);
+      }
+    } catch {
+      // Polling and the manual action remain available for transient errors.
+    } finally {
+      paymentVerificationInFlight.current = false;
+    }
+  };
+  useEffect(() => {
+    if (
+      !payment ||
+      outcome ||
+      provider !== PaymentProvider.FONEPAY ||
+      !payment.reference ||
+      !payment.expiresAt
+    )
+      return;
+    const expiry = new Date(payment.expiresAt).getTime();
+    if (!Number.isFinite(expiry)) return;
+    let timeout: number | undefined;
+    let stopped = false;
+    const schedule = () => {
+      if (stopped) return;
+      timeout = window.setTimeout(poll, 5_000);
+    };
+    const poll = () => {
+      if (stopped) return;
+      if (Date.now() >= expiry) {
+        if (fonepayExpiryChecked.current !== payment.reference) {
+          fonepayExpiryChecked.current = payment.reference;
+          void verifySilently();
+        }
+        return;
+      }
+      if (document.visibilityState === "visible") void verifySilently();
+      schedule();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && Date.now() < expiry)
+        void verifySilently();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      stopped = true;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [
+    payment?.reference,
+    payment?.expiresAt,
+    provider,
+    outcome,
+    orderNumber,
+    token,
+  ]);
   useEffect(() => {
     setFonepaySocketReady(false);
     if (!payment || outcome) return;
@@ -867,35 +940,35 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     let socket: WebSocket | undefined;
     let locallyClosed = false;
     const reference = payment.reference;
-    const verifySilently = async () => {
-      if (stopped || paymentVerificationInFlight.current) return;
-      paymentVerificationInFlight.current = true;
-      try {
-        const result = await api<{ status: string }>(
-          `/partner-checkout/${token}/verify`,
-          { method: "POST", body: "{}" },
-        );
-        if (PAID_STATUSES.has(result.status))
-          setOutcome({ status: result.status, orderNumber });
-        else if (FAILED_STATUSES.has(result.status)) setPayment(null);
-      } catch {
-        // Polling and the manual action remain available for transient errors.
-      } finally {
-        paymentVerificationInFlight.current = false;
-      }
-    };
     if (payment.websocketUrl) {
       const wsUrl = payment.websocketUrl;
       try {
         let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+        let connectTimer: ReturnType<typeof setTimeout> | undefined;
         let backoffMs = 1_000;
         const maxBackoffMs = 30_000;
         const maxReconnects = 5;
         let reconnects = 0;
+        const scheduleReconnect = () => {
+          if (stopped || locallyClosed || reconnects >= maxReconnects) return;
+          reconnects += 1;
+          reportTelemetry({
+            event: "SOCKET_RECONNECTING",
+            attempt: reconnects,
+          });
+          reconnectTimer = setTimeout(() => {
+            backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+            connect();
+          }, backoffMs);
+        };
         const connect = () => {
           socket = new WebSocket(wsUrl);
           socket.onopen = () => {
             setFonepaySocketReady(true);
+            if (connectTimer !== undefined) {
+              clearTimeout(connectTimer);
+              connectTimer = undefined;
+            }
             backoffMs = 1_000;
             reconnects = 0;
             reportTelemetry({ event: "SOCKET_CONNECTED" });
@@ -906,26 +979,22 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               event: "SOCKET_ERROR",
               reason: "SOCKET_TRANSPORT_ERROR",
             });
+            // If onclose does not follow (unreliable transport), reconnect here.
+            scheduleReconnect();
           };
           socket.onclose = () => {
             setFonepaySocketReady(false);
+            if (connectTimer !== undefined) {
+              clearTimeout(connectTimer);
+              connectTimer = undefined;
+            }
             reportTelemetry({
               event: "SOCKET_CLOSED",
               reason: locallyClosed
                 ? "SOCKET_LOCAL_CLOSE"
                 : "SOCKET_REMOTE_CLOSE",
             });
-            if (!stopped && !locallyClosed && reconnects < maxReconnects) {
-              reconnects += 1;
-              reportTelemetry({
-                event: "SOCKET_RECONNECTING",
-                attempt: reconnects,
-              });
-              reconnectTimer = setTimeout(() => {
-                backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
-                connect();
-              }, backoffMs);
-            }
+            if (!locallyClosed) scheduleReconnect();
           };
           socket.onmessage = (event) => {
             const signal = fonepaySocketSignal(event.data);
@@ -946,10 +1015,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           };
         };
         connect();
+        connectTimer = setTimeout(scheduleReconnect, 15_000);
         return () => {
           stopped = true;
           locallyClosed = true;
           clearTimeout(reconnectTimer);
+          if (connectTimer !== undefined) clearTimeout(connectTimer);
           socket?.close();
         };
       } catch {
@@ -963,7 +1034,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     };
   }, [payment, outcome, orderNumber, token]);
   useEffect(() => {
-    if (!payment?.qrDataUrl || outcome) return;
+    if (!payment?.reference || outcome) return;
     if (provider !== PaymentProvider.FONEPAY) return;
     reportTelemetry({ event: "QR_RENDERED" });
   }, [payment?.reference, provider, outcome]);
@@ -1430,7 +1501,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         Simulate verified payment
                       </Action>
                     </div>
-                  ) : payment.qrDataUrl ? (
+                  ) : payment.qrDataUrl || payment.qrPayload ? (
                     <FonepayCheckout
                       titleId="hosted-fonepay-checkout-title"
                       banks={

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { FonepayBankLogo } from "./fonepay-bank-logo";
 import {
   filterFonepayBanks,
@@ -55,8 +55,12 @@ export function FonepayBankPicker({
     () => filterFonepayBanks(banks, query),
     [banks, query],
   );
+  // Blocks a second launch while a previous attempt is being observed so a
+  // double click cannot fire two deep links (and double telemetry).
+  const launchingRef = useRef(false);
 
   const openBank = (bank: FonepayBank) => {
+    if (launchingRef.current) return;
     if (!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
       onTelemetry?.({
         event: "BANK_LAUNCH_BLOCKED",
@@ -107,18 +111,20 @@ export function FonepayBankPicker({
       bankCode: bank.bankCode,
       bankName: bank.bankName,
       launchMethod,
-      scheme: target.split(":")[0]!,
+      scheme: bank.intentScheme,
       launchUrl: redactLaunchUrl(target),
     });
+    launchingRef.current = true;
     window.location.assign(target);
     window.setTimeout(() => {
+      launchingRef.current = false;
       if (document.visibilityState === "hidden") {
         onTelemetry?.({
           event: "BANK_APP_NAVIGATION_OBSERVED",
           bankCode: bank.bankCode,
           bankName: bank.bankName,
           launchMethod,
-          scheme: target.split(":")[0]!,
+          scheme: bank.intentScheme,
           launchUrl: redactLaunchUrl(target),
         });
       } else {
@@ -128,7 +134,7 @@ export function FonepayBankPicker({
           bankName: bank.bankName,
           launchMethod,
           reason: "APP_NOT_OBSERVED",
-          scheme: target.split(":")[0]!,
+          scheme: bank.intentScheme,
           launchUrl: redactLaunchUrl(target),
         });
         onError(

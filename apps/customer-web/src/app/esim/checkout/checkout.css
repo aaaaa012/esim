@@ -1529,6 +1529,30 @@
   letter-spacing: 0;
 }
 
+.fonepay-qr-fallback-box {
+  display: grid;
+  gap: 6px;
+  max-width: min(100%, 300px);
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px dashed #e0bc5d;
+  border-radius: 10px;
+  background: #fff8eb;
+  color: #684516;
+  text-align: center;
+}
+
+.fonepay-qr-fallback-box b {
+  color: #9a5b00;
+  font-size: 15px;
+}
+
+.fonepay-qr-fallback-box span {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #6c571f;
+}
+
 .fonepay-bank-section,
 .fonepay-bank-heading {
   display: grid;

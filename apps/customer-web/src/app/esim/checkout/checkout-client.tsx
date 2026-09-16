@@ -772,57 +772,82 @@ export default function CheckoutClient({
     ].some((key) => params.has(key));
   };
   const verifyPayment = async (initialOrder: Order, poll = false) => {
-    const token = ++verifyRunToken.current;
-    setVerifying(true);
-    setError("");
-    stripReturnParams();
-    const started = Date.now();
-    let current = initialOrder;
-    let attempt = 0;
-    while (Date.now() - started < VERIFY_BUDGET_MS) {
-      if (verifyRunToken.current !== token) return;
-      const wait =
-        VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
-      if (wait > 0) {
-        await new Promise((resolve) => setTimeout(resolve, wait));
+    // Serialize manual and silent verification so two concurrent lookups
+    // cannot race and regress the order to a stale snapshot.
+    if (paymentVerificationInFlight.current) {
+      setError("We are already checking this payment. Please wait a moment, then check again.");
+      setVerifying(false);
+      return;
+    }
+    paymentVerificationInFlight.current = true;
+    try {
+      const token = ++verifyRunToken.current;
+      setVerifying(true);
+      setError("");
+      stripReturnParams();
+      const started = Date.now();
+      let current = initialOrder;
+      let attempt = 0;
+      while (Date.now() - started < VERIFY_BUDGET_MS) {
         if (verifyRunToken.current !== token) return;
-      }
-      attempt += 1;
-      try {
-        // Retry the verification lookup itself (not just the order poll):
-        // Khalti can report pending/initiated for a few seconds after the
-        // wallet redirect, so a single attempt is not enough.
-        const updated = await api<Order>(
-          `/customer/orders/${current.id}/payment/verify`,
-          {
-            method: "POST",
-            body: JSON.stringify({ reference: current.payment?.reference }),
-          },
-        );
-        setOrder(updated);
-        current = updated;
-        if (updated.paymentRetry?.canRetry) {
-          setPayment(null);
-          if (updated.paymentRetry.canChangeProvider) setLockedProvider(null);
+        const wait =
+          VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
+        if (wait > 0) {
+          await new Promise((resolve) => setTimeout(resolve, wait));
+          if (verifyRunToken.current !== token) return;
         }
-        if (TERMINAL_STATUSES.includes(updated.status)) {
-          setVerifying(false);
-          return;
-        }
-        if (!poll) {
-          setError(
-            "Your payment provider has not confirmed this payment yet. Complete payment in the provider app, then check again.",
+        attempt += 1;
+        try {
+          // Retry the verification lookup itself (not just the order poll):
+          // Khalti can report pending/initiated for a few seconds after the
+          // wallet redirect, so a single attempt is not enough.
+          const updated = await api<Order>(
+            `/customer/orders/${current.id}/payment/verify`,
+            {
+              method: "POST",
+              body: JSON.stringify({ reference: current.payment?.reference }),
+            },
           );
-          setVerifying(false);
-          return;
-        }
-      } catch (cause) {
-        const code = (cause as { code?: string })?.code;
-        if (
-          code === "PAYMENT_EXPIRED" ||
-          code === "PAYMENT_REFERENCE_MISMATCH" ||
-          code === "PAYMENT_NOT_CONFIRMED"
-        ) {
+          setOrder(updated);
+          current = updated;
+          if (updated.paymentRetry?.canRetry) {
+            setPayment(null);
+            if (updated.paymentRetry.canChangeProvider)
+              setLockedProvider(null);
+          }
+          if (TERMINAL_STATUSES.includes(updated.status)) {
+            setVerifying(false);
+            return;
+          }
+          if (!poll) {
+            setError(
+              "Your payment provider has not confirmed this payment yet. Complete payment in the provider app, then check again.",
+            );
+            setVerifying(false);
+            return;
+          }
+        } catch (cause) {
+          const code = (cause as { code?: string })?.code;
+          if (
+            code === "PAYMENT_EXPIRED" ||
+            code === "PAYMENT_REFERENCE_MISMATCH" ||
+            code === "PAYMENT_NOT_CONFIRMED"
+          ) {
+            const refreshed = await api<Order>(
+              `/customer/orders/${current.id}`,
+            ).catch(() => current);
+            setOrder(refreshed);
+            current = refreshed;
+            if (refreshed.paymentRetry?.canRetry) {
+              setPayment(null);
+              if (refreshed.paymentRetry.canChangeProvider)
+                setLockedProvider(null);
+            }
+            setVerifying(false);
+            return;
+          }
+          // Transient network/provider errors retry; refresh the order so the
+          // UI stays current without treating an unknown error as "pending".
           const refreshed = await api<Order>(
             `/customer/orders/${current.id}`,
           ).catch(() => current);
@@ -830,48 +855,36 @@ export default function CheckoutClient({
           current = refreshed;
           if (refreshed.paymentRetry?.canRetry) {
             setPayment(null);
-            if (refreshed.paymentRetry.canChangeProvider)
-              setLockedProvider(null);
+            if (refreshed.paymentRetry.canChangeProvider) setLockedProvider(null);
           }
-          setVerifying(false);
-          return;
-        }
-        // Transient network/provider errors retry; refresh the order so the
-        // UI stays current without treating an unknown error as "pending".
-        const refreshed = await api<Order>(
-          `/customer/orders/${current.id}`,
-        ).catch(() => current);
-        setOrder(refreshed);
-        current = refreshed;
-        if (refreshed.paymentRetry?.canRetry) {
-          setPayment(null);
-          if (refreshed.paymentRetry.canChangeProvider) setLockedProvider(null);
-        }
-        if (TERMINAL_STATUSES.includes(refreshed.status)) {
-          setVerifying(false);
-          return;
-        }
-        if (!poll) {
-          setError(
-            "We could not reach the payment provider just now. No second charge was made: your order stays pending until a confirmation comes back. Please check again shortly.",
-          );
-          setVerifying(false);
-          return;
+          if (TERMINAL_STATUSES.includes(refreshed.status)) {
+            setVerifying(false);
+            return;
+          }
+          if (!poll) {
+            setError(
+              "We could not reach the payment provider just now. No second charge was made: your order stays pending until a confirmation comes back. Please check again shortly.",
+            );
+            setVerifying(false);
+            return;
+          }
         }
       }
+      const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(
+        () => current,
+      );
+      setOrder(refreshed);
+      if (refreshed.paymentRetry?.canRetry) {
+        setPayment(null);
+        if (refreshed.paymentRetry.canChangeProvider) setLockedProvider(null);
+      }
+      setError(
+        "Your payment is still being confirmed. Return to this tracking page shortly.",
+      );
+      setVerifying(false);
+    } finally {
+      paymentVerificationInFlight.current = false;
     }
-    const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(
-      () => current,
-    );
-    setOrder(refreshed);
-    if (refreshed.paymentRetry?.canRetry) {
-      setPayment(null);
-      if (refreshed.paymentRetry.canChangeProvider) setLockedProvider(null);
-    }
-    setError(
-      "Your payment is still being confirmed. Return to this tracking page shortly.",
-    );
-    setVerifying(false);
   };
   const cancelPaymentVerification = () => {
     verifyRunToken.current += 1;
@@ -1534,6 +1547,7 @@ export default function CheckoutClient({
   const verifyFonepaySilently = async () => {
     if (!order || paymentVerificationInFlight.current) return;
     paymentVerificationInFlight.current = true;
+    const token = ++verifyRunToken.current;
     try {
       const updated = await api<Order>(
         `/customer/orders/${order.id}/payment/verify`,
@@ -1542,6 +1556,7 @@ export default function CheckoutClient({
           body: JSON.stringify({ reference: payment?.reference }),
         },
       );
+      if (verifyRunToken.current !== token) return;
       setOrder(updated);
       if (
         ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
@@ -1550,6 +1565,7 @@ export default function CheckoutClient({
       )
         setPayment(null);
     } catch {
+      if (verifyRunToken.current !== token) return;
       void api<Order>(`/customer/orders/${order.id}`)
         .then((refreshed) => {
           setOrder(refreshed);
@@ -1569,7 +1585,7 @@ export default function CheckoutClient({
       !order ||
       order.status !== "PAYMENT_PENDING" ||
       provider !== PaymentProvider.FONEPAY ||
-      !payment?.qrDataUrl ||
+      !payment?.reference ||
       !payment.expiresAt
     )
       return;
@@ -1612,7 +1628,6 @@ export default function CheckoutClient({
     order?.id,
     order?.status,
     payment?.reference,
-    payment?.qrDataUrl,
     payment?.expiresAt,
     provider,
   ]);
@@ -1624,15 +1639,35 @@ export default function CheckoutClient({
     let socket: WebSocket | undefined;
     let locallyClosed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
     let backoffMs = 1_000;
     const maxBackoffMs = 30_000;
     const maxReconnects = 5;
     let reconnects = 0;
+    // Some networks drop an in-flight socket without firing onclose; onerror
+    // alone would wedge the UI on "connecting". If no open/close happens
+    // within a budget, treat it as a failed connect and schedule a retry.
+    const scheduleReconnect = () => {
+      if (locallyClosed || reconnects >= maxReconnects) return;
+      reconnects += 1;
+      reportTelemetry(
+        { event: "SOCKET_RECONNECTING", attempt: reconnects },
+        reference,
+      );
+      reconnectTimer = setTimeout(() => {
+        backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+        connect();
+      }, backoffMs);
+    };
     const connect = () => {
       try {
         socket = new WebSocket(wsUrl);
         socket.onopen = () => {
           setFonepaySocketReady(true);
+          if (connectTimer !== undefined) {
+            clearTimeout(connectTimer);
+            connectTimer = undefined;
+          }
           backoffMs = 1_000;
           reconnects = 0;
           reportTelemetry({ event: "SOCKET_CONNECTED" }, reference);
@@ -1643,9 +1678,15 @@ export default function CheckoutClient({
             { event: "SOCKET_ERROR", reason: "SOCKET_TRANSPORT_ERROR" },
             reference,
           );
+          // If onclose does not follow (unreliable transport), reconnect here.
+          scheduleReconnect();
         };
         socket.onclose = () => {
           setFonepaySocketReady(false);
+          if (connectTimer !== undefined) {
+            clearTimeout(connectTimer);
+            connectTimer = undefined;
+          }
           reportTelemetry(
             {
               event: "SOCKET_CLOSED",
@@ -1655,17 +1696,7 @@ export default function CheckoutClient({
             },
             reference,
           );
-          if (!locallyClosed && reconnects < maxReconnects) {
-            reconnects += 1;
-            reportTelemetry(
-              { event: "SOCKET_RECONNECTING", attempt: reconnects },
-              reference,
-            );
-            reconnectTimer = setTimeout(() => {
-              backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
-              connect();
-            }, backoffMs);
-          }
+          if (!locallyClosed) scheduleReconnect();
         };
         // A socket message can mean that the QR was merely scanned. Keep the QR
         // visible while the authoritative status endpoint still reports pending.
@@ -1691,9 +1722,13 @@ export default function CheckoutClient({
       }
     };
     connect();
+    // Guard against a connect that neither opens nor errors out; treat as a
+    // failed attempt so the UI does not stay wedged in "connecting".
+    connectTimer = setTimeout(scheduleReconnect, 15_000);
     return () => {
       locallyClosed = true;
       clearTimeout(reconnectTimer);
+      if (connectTimer !== undefined) clearTimeout(connectTimer);
       socket?.close();
     };
   }, [payment?.websocketUrl, order?.id]);
@@ -2912,7 +2947,7 @@ export default function CheckoutClient({
                             Simulate verified payment
                           </Action>
                         </div>
-                      ) : payment.qrDataUrl ? (
+                      ) : payment.qrDataUrl || payment.qrPayload ? (
                         <FonepayCheckout
                           titleId="fonepay-checkout-title"
                           banks={

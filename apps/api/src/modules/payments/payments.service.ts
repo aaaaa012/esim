@@ -23,6 +23,12 @@ import { PaymentInitiationStatus, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
+/** Masks the payment credential inside a deep link so server-side logs never
+ * persist a live qrPayload, regardless of what a client sends. */
+function redactFonepayLaunchUrl(value: string): string {
+  return value.replace(/qrPayload=[^&#]*/i, "qrPayload=<redacted>");
+}
+
 export const fonepayClientTelemetrySchema = z.object({
   reference: z.string().min(1).max(64),
   event: z.enum([
@@ -167,7 +173,9 @@ export class PaymentsService {
 ...(input.launchMethod ? { launchMethod: input.launchMethod } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
           ...(input.scheme ? { scheme: input.scheme } : {}),
-          ...(input.launchUrl ? { launchUrl: input.launchUrl } : {}),
+          ...(input.launchUrl
+            ? { launchUrl: redactFonepayLaunchUrl(input.launchUrl) }
+            : {}),
         },
       },
     });
