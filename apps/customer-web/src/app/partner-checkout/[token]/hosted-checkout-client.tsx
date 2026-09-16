@@ -44,8 +44,7 @@ import {
   postFonepayTelemetry,
   type FonepayTelemetryPayload,
 } from "../../esim/checkout/fonepay-telemetry";
-import { FonepayBankPicker } from "../../esim/checkout/fonepay-bank-picker";
-import { FonepayQrPanel } from "../../esim/checkout/fonepay-qr-panel";
+import { FonepayCheckout } from "../../esim/checkout/fonepay-checkout";
 import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -1432,66 +1431,23 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       </Action>
                     </div>
                   ) : payment.qrDataUrl ? (
-                    <section
-                      className="fonepay-checkout"
-                      aria-labelledby="hosted-fonepay-checkout-title"
-                    >
-                      <img
-                        className="fonepay-checkout-logo"
-                        src="/brand/fonepay-logo.png"
-                        alt="Checkout by Fonepay"
-                      />
-                      <h2
-                        id="hosted-fonepay-checkout-title"
-                        className="fonepay-checkout-title"
-                      >
-                        Pay with your banking app
-                      </h2>
-                      <div className="fonepay-pay-options">
-                        {provider === PaymentProvider.FONEPAY &&
-                        payment.banks?.length ? (
-                          <div className="fonepay-bank-col">
-                            <FonepayBankPicker
-                              banks={payment.banks}
-                              qrPayload={payment.qrPayload}
-                              socketReady={fonepaySocketReady}
-                              onError={setError}
-                              onTelemetry={(event) => reportTelemetry(event)}
-                            />
-                            {fonepayBankHint ? (
-                              <p
-                                className="fonepay-bank-hint"
-                                role="status"
-                              >
-                                {fonepayBankHint}
-                              </p>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        <FonepayQrPanel
-                          qrDataUrl={payment.qrDataUrl}
-                          defaultOpen={
-                            !(
-                              provider === PaymentProvider.FONEPAY &&
-                              payment.banks?.length
-                            )
-                          }
-                          hideToggle={
-                            !(
-                              provider === PaymentProvider.FONEPAY &&
-                              payment.banks?.length
-                            )
-                          }
-                        />
-                      </div>
-                      <Action busy={busy} onClick={checkPayment}>
-                        I&apos;ve completed payment - check status
-                      </Action>
-                      <small className="fonepay-security-note">
-                        Your order is completed only after Fonepay confirms the
-                        payment.
-                      </small>
-                    </section>
+                    <FonepayCheckout
+                      titleId="hosted-fonepay-checkout-title"
+                      banks={
+                        provider === PaymentProvider.FONEPAY
+                          ? payment.banks
+                          : undefined
+                      }
+                      qrPayload={payment.qrPayload}
+                      qrDataUrl={payment.qrDataUrl}
+                      socketReady={fonepaySocketReady}
+                      onError={setError}
+                      onTelemetry={(event) => reportTelemetry(event)}
+                      hint={fonepayBankHint}
+                      busy={busy}
+                      checkLabel="I&apos;ve completed payment - check status"
+                      onCheck={checkPayment}
+                    />
                   ) : (
                     <Action busy={busy} onClick={checkPayment}>
                       I&apos;ve paid — check status

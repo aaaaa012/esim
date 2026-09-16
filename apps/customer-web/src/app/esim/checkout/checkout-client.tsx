@@ -11,8 +11,7 @@ import {
   postFonepayTelemetry,
   type FonepayTelemetryPayload,
 } from "./fonepay-telemetry";
-import { FonepayBankPicker } from "./fonepay-bank-picker";
-import { FonepayQrPanel } from "./fonepay-qr-panel";
+import { FonepayCheckout } from "./fonepay-checkout";
 import { paymentActionDisabled, retryDeclaredAllowed } from "./payment-gates";
 import Link from "next/link";
 import {
@@ -2845,76 +2844,28 @@ export default function CheckoutClient({
                           </Action>
                         </div>
                       ) : payment.qrDataUrl ? (
-                        <section
-                          className="fonepay-checkout"
-                          aria-labelledby="fonepay-checkout-title"
-                        >
-                          <img
-                            className="fonepay-checkout-logo"
-                            src="/brand/fonepay-logo.png"
-                            alt="Checkout by Fonepay"
-                          />
-                          <h2
-                            id="fonepay-checkout-title"
-                            className="fonepay-checkout-title"
-                          >
-                            Pay with your banking app
-                          </h2>
-                          <div className="fonepay-pay-options">
-                            {provider === PaymentProvider.FONEPAY &&
-                            payment.banks?.length ? (
-                              <div className="fonepay-bank-col">
-                                <FonepayBankPicker
-                                  banks={payment.banks}
-                                  qrPayload={payment.qrPayload}
-                                  socketReady={fonepaySocketReady}
-                                  onError={setError}
-                                  onTelemetry={(event) =>
-                                    reportTelemetry(event)
-                                  }
-                                />
-                                {fonepayBankHint ? (
-                                  <p
-                                    className="fonepay-bank-hint"
-                                    role="status"
-                                  >
-                                    {fonepayBankHint}
-                                  </p>
-                                ) : null}
-                              </div>
-                            ) : null}
-                            <FonepayQrPanel
-                              qrDataUrl={payment.qrDataUrl}
-                              defaultOpen={
-                                !(
-                                  provider === PaymentProvider.FONEPAY &&
-                                  payment.banks?.length
-                                )
-                              }
-                              hideToggle={
-                                !(
-                                  provider === PaymentProvider.FONEPAY &&
-                                  payment.banks?.length
-                                )
-                              }
-                            />
-                          </div>
-                          <Action
-                            busy={busy}
-                            disabled={paymentActionDisabled({
-                              isTopUp,
-                              verifyingPassport,
-                              passportGatePassed: passportGatePassed(order),
-                            })}
-                            onClick={complete}
-                          >
-                            Check payment status
-                          </Action>
-                          <small className="fonepay-security-note">
-                            Your order is completed only after Fonepay confirms
-                            the payment.
-                          </small>
-                        </section>
+                        <FonepayCheckout
+                          titleId="fonepay-checkout-title"
+                          banks={
+                            provider === PaymentProvider.FONEPAY
+                              ? payment.banks
+                              : undefined
+                          }
+                          qrPayload={payment.qrPayload}
+                          qrDataUrl={payment.qrDataUrl}
+                          socketReady={fonepaySocketReady}
+                          onError={setError}
+                          onTelemetry={(event) => reportTelemetry(event)}
+                          hint={fonepayBankHint}
+                          busy={busy}
+                          disabled={paymentActionDisabled({
+                            isTopUp,
+                            verifyingPassport,
+                            passportGatePassed: passportGatePassed(order),
+                          })}
+                          checkLabel="Check payment status"
+                          onCheck={complete}
+                        />
                       ) : (
                         <Action
                           busy={busy}
