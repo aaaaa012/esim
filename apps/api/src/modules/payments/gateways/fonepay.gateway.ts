@@ -16,6 +16,15 @@ import type {
   PaymentVerification,
 } from "../payment-gateway.js";
 
+/** V1.10 contract: referenceLabel max 30; live support confirms 25-char effective ceiling. */
+const FONEPAY_REFERENCE_MAX = 25;
+const FONEPAY_AMOUNT_MIN = 1;
+const FONEPAY_AMOUNT_MAX = 9_999_999;
+/** QR fields that carry payment payload data and must be redacted in logs. */
+const REDACTED_QR_FIELDS = new Set(["qrstring", "qrmessage"]);
+/** V1.10 §9.4 / §9.6: referenceLabel must be alphanumeric only. */
+const REFERENCE_LABEL_RE = /^[A-Za-z0-9]+$/;
+
 export type FonepayBank = {
   bankName: string;
   bankCode: string;
@@ -43,6 +52,9 @@ const qrResponseSchema = z
     prn: z.string().min(1),
     qrMessage: z.string().min(1).optional(),
     qrString: z.string().min(1).optional(),
+    qrDisplayName: z.string().optional(),
+    paymentMessage: z.string().optional(),
+    terminalId: z.coerce.number().optional(),
     websocketId: z.string().url().optional(),
     status: z.string().min(1),
   })
@@ -55,7 +67,9 @@ const statusResponseSchema = z.object({
   merchantCode: z.string().min(1),
   paymentStatus: z.string().min(1),
   requestedAmount: z.coerce.number().finite().nonnegative(),
+  totalTransactionAmount: z.coerce.number().finite().nonnegative().optional(),
   fonepayTraceId: z.union([z.string(), z.number()]).optional(),
+  paymentMessage: z.string().optional(),
 });
 
 /** Fonepay Checkout Intent/Dynamic-QR adapter. Credentials and payload signing never leave the API. */
@@ -146,14 +160,11 @@ export class FonepayGateway implements PaymentGateway {
               return [key, "[REDACTED invalid-url]"];
             }
           }
-          return [
-            key,
-            /authorization|password|secret|signature|token|qr|string|websocket/i.test(
-              key,
-            )
-              ? "[REDACTED]"
-              : this.redact(item),
-          ];
+          const isSecret =
+            /authorization|password|secret|signature|token/i.test(key) ||
+            REDACTED_QR_FIELDS.has(normalizedKey) ||
+            /websocket/i.test(key);
+          return [key, isSecret ? "[REDACTED]" : this.redact(item)];
         }),
       );
     if (["string", "number", "boolean"].includes(typeof value))
@@ -549,16 +560,21 @@ export class FonepayGateway implements PaymentGateway {
   }): Promise<PaymentInitiation> {
     if (
       !Number.isFinite(input.amountNpr) ||
-      input.amountNpr < 1 ||
-      input.amountNpr > 9_999_999
+      input.amountNpr < FONEPAY_AMOUNT_MIN ||
+      input.amountNpr > FONEPAY_AMOUNT_MAX
     )
       return this.fail(
-        "Fonepay amount must be between NPR 1 and NPR 9,999,999",
+        `Fonepay amount must be between NPR ${FONEPAY_AMOUNT_MIN} and NPR ${FONEPAY_AMOUNT_MAX.toLocaleString()}`,
       );
     if (!input.orderNumber.trim())
       return this.fail("Fonepay billId must not be blank");
     const terminalId = this.terminalId();
-    const reference = `VC${input.attemptId.replace(/[^A-Za-z0-9]/g, "").slice(0, 28)}`;
+    const alnumOnly = input.attemptId.replace(/[^A-Za-z0-9]/g, "");
+    if (!alnumOnly)
+      return this.fail("Fonepay referenceLabel: attemptId produced no alphanumeric characters");
+    const reference = `VC${alnumOnly.slice(0, FONEPAY_REFERENCE_MAX - 2)}`;
+    if (!REFERENCE_LABEL_RE.test(reference))
+      return this.fail("Fonepay referenceLabel must be alphanumeric only (V1.10 §9.4)");
     // Bank discovery is optional checkout enhancement data. A failed refresh
     // returns cached data (or an empty list) and must never block QR creation.
     const banks = await this.banksForCheckout(input.orderId);
@@ -607,6 +623,10 @@ export class FonepayGateway implements PaymentGateway {
     reference: string,
     context: PaymentContext,
   ): Promise<PaymentVerification> {
+    if (!REFERENCE_LABEL_RE.test(reference))
+      return this.fail(
+        "Fonepay referenceLabel must be alphanumeric only (V1.10 §9.6)",
+      );
     const terminalId = this.terminalId();
     const raw = await this.request(
       `${this.basePath}/thirdPartyDynamicQrGetStatus`,
@@ -631,6 +651,23 @@ export class FonepayGateway implements PaymentGateway {
       !["success", "pending", "failed", "cancelled", "timeout"].includes(status)
     )
       return this.fail(`Fonepay returned an unknown payment status: ${status}`);
+    if (status === "success") {
+      if (!data.fonepayTraceId)
+        return this.fail(
+          "Fonepay success response missing fonepayTraceId (required for reconciliation)",
+        );
+      if (Math.abs(data.requestedAmount - context.amountNpr) > 0.005)
+        return this.fail(
+          `Fonepay requestedAmount ${data.requestedAmount} does not match expected ${context.amountNpr}`,
+        );
+      if (
+        data.totalTransactionAmount !== undefined &&
+        Math.abs(data.totalTransactionAmount - data.requestedAmount) > 0.005
+      )
+        return this.fail(
+          `Fonepay totalTransactionAmount ${data.totalTransactionAmount} differs from requestedAmount ${data.requestedAmount}`,
+        );
+    }
     // Fonepay returns HTTP 200 with paymentStatus=timeout and "Data not found"
     // when no matching transaction exists yet. That is not evidence of a
     // failed payment while the issued QR is still valid. Once our authoritative

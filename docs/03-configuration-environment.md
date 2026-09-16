@@ -78,6 +78,10 @@ local guest-order continuity.
 | `FONEPAY_TERMINAL_ID`       | —                                                     | Merchant terminal identifier, maximum 16 characters                                                                           |
 | `FONEPAY_PRIVATE_KEY_PATH`  | —                                                     | Preferred absolute path to the server-only PKCS8 PEM used to sign request JSON                                                |
 | `FONEPAY_PRIVATE_KEY_BASE64`| —                                                     | Alternative PKCS8 private key encoded as Base64 DER or PEM                                                                     |
+| `FONEPAY_API_BASE_PATH`     | `/api/merchant/third-party/v2`                       | API base path override (some Fonepay routes use `/api/merchant/merchantDetailsForThirdParty/v2`)                              |
+| `FONEPAY_LOGIN_PATH`        | `{basePath}/login`                                   | Optional override for a separate UAT OAuth login route                                                                          |
+| `FONEPAY_BANK_CACHE_TTL_SECONDS` | `86400`                                         | Issuer bank directory cache freshness window                                                                                    |
+| `FONEPAY_BANK_MAX_STALE_SECONDS` | `604800`                                       | Max age of a last-known-good bank directory before checkout blocks on refresh                                                   |
 | `FONEPAY_REQUEST_TIMEOUT_MS`| `15000`                                               | Fonepay request timeout                                                                                                       |
 
 ## Connectivity (Transatel)

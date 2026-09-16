@@ -343,7 +343,7 @@ describe("FonepayGateway", () => {
           merchantCode: "VC-TERMINAL",
           paymentStatus: "success",
           requestedAmount: "2499",
-          totalTransactionAmount: "2524",
+          totalTransactionAmount: "2499",
           fonepayTraceId: "trace-1",
         }),
       )
@@ -517,5 +517,195 @@ describe("FonepayGateway", () => {
       }),
     });
     expect(JSON.stringify(create.mock.calls)).not.toContain("private-token");
+  });
+
+  it("caps referenceLabel at 25 characters total", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockResolvedValueOnce(json({ bankDetails: [] }))
+      .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        return json({
+          prn: body.referenceLabel,
+          status: "Success",
+          qrString: "scan-payload",
+        });
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new FonepayGateway().initiate({
+      attemptId: "abcdefghijklmnopqrstuvwx", // 25 alnum chars
+      orderId: "order-1",
+      orderNumber: "VC-100",
+      amountNpr: 100,
+      returnUrl: "https://checkout.example/return",
+    });
+
+    expect(result.reference).toBe("VCabcdefghijklmnopqrstuvw");
+    expect(result.reference.length).toBe(25);
+  });
+
+  it("rejects success without fonepayTraceId", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(json({ accessToken: "token" }))
+        .mockResolvedValueOnce(
+          json({
+            prn: "VCREF",
+            merchantCode: "VC-TERMINAL",
+            paymentStatus: "success",
+            requestedAmount: 2499,
+            totalTransactionAmount: 2499,
+          }),
+        ),
+    );
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).rejects.toMatchObject({
+      internalDetail: expect.stringContaining("fonepayTraceId"),
+    });
+  });
+
+  it("rejects success when requestedAmount does not match context", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(json({ accessToken: "token" }))
+        .mockResolvedValueOnce(
+          json({
+            prn: "VCREF",
+            merchantCode: "VC-TERMINAL",
+            paymentStatus: "success",
+            requestedAmount: 3000,
+            fonepayTraceId: "trace-1",
+          }),
+        ),
+    );
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).rejects.toMatchObject({
+      internalDetail: expect.stringContaining("does not match expected"),
+    });
+  });
+
+  it("rejects success when totalTransactionAmount differs from requestedAmount", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(json({ accessToken: "token" }))
+        .mockResolvedValueOnce(
+          json({
+            prn: "VCREF",
+            merchantCode: "VC-TERMINAL",
+            paymentStatus: "success",
+            requestedAmount: 2499,
+            totalTransactionAmount: 2524,
+            fonepayTraceId: "trace-1",
+          }),
+        ),
+    );
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).rejects.toMatchObject({
+      internalDetail: expect.stringContaining("differs from requestedAmount"),
+    });
+  });
+
+  it("rejects a non-alphanumeric verify reference before any API call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new FonepayGateway().verify("VC-REF-!!", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).rejects.toMatchObject({
+      internalDetail: expect.stringContaining("alphanumeric"),
+    });
+    await expect(
+      new FonepayGateway().verify("VCREF?", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).rejects.toMatchObject({
+      internalDetail: expect.stringContaining("alphanumeric"),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not redact non-secret qr fields (qrType, qrDisplayName)", async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const prisma = {
+      enabled: true,
+      integrationLog: { create },
+      fonepayBankDirectoryEntry: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            bankName: "Example Bank",
+            bankCode: "EX",
+            intentScheme: "examplebank://",
+          },
+        ]),
+      },
+      fonepayBankDirectorySync: {
+        findFirst: vi.fn().mockResolvedValue({
+          status: "SUCCEEDED",
+          completedAt: new Date(),
+        }),
+      },
+    } as unknown as PrismaService;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token" }))
+      .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        return json({
+          prn: body.referenceLabel,
+          status: "Success",
+          qrString: "sensitive-payload-data",
+          qrDisplayName: "OmG",
+          qrType: "INTENT_QR",
+        });
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new FonepayGateway(prisma).initiate({
+      attemptId: "redact-test",
+      orderId: "order-redact",
+      orderNumber: "VC-103",
+      amountNpr: 100,
+      returnUrl: "https://checkout.example/return",
+    });
+
+    const qrLog = create.mock.calls
+      .map((call) => call[0]?.data)
+      .find(
+        (entry) => entry.operation === "fonepay-generate-intent-qr",
+      );
+    const serialized = JSON.stringify(qrLog);
+    expect(qrLog.responseBody.qrString).toMatch(
+      /^\[REDACTED length=\d+ sha256=[a-f0-9]{16}\]$/,
+    );
+    expect(qrLog.responseBody.qrDisplayName).toBe("OmG");
+    expect(qrLog.responseBody.qrType).toBe("INTENT_QR");
+    expect(serialized).not.toContain("sensitive-payload-data");
   });
 });

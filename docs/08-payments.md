@@ -119,8 +119,14 @@ expiresAt }`.
 contract: signed OAuth login, issuer bank list, single-use Intent QR creation,
 WebSocket notification, and authoritative server-side status lookup. The
 WebSocket never confirms payment by itself; it only prompts a signed backend
-lookup. The adapter checks the PRN, terminal, requested amount and documented
-status before payment completion. Automated refunds are intentionally outside
+lookup. The adapter checks the PRN, terminal, requested amount, total
+transaction amount, trace ID and documented status before payment completion.
+A `success` status requires a non-empty `fonepayTraceId` (for reconciliation
+and refund evidence), a `requestedAmount` equal to the order amount, and a
+`totalTransactionAmount` equal to `requestedAmount` when the provider returns
+it. Reference labels are generated at 25 characters total (V1.10 documents 30;
+live support enforces 25) and validated as alphanumeric-only per V1.10 §9.4/
+§9.6. Automated refunds are intentionally outside
 the adapter and use the same manual-refund workflow as Khalti.
 
 **Error handling** (`khalti.gateway.ts:32-69`): provider failures are thrown
