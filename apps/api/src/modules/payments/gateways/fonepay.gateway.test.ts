@@ -157,16 +157,12 @@ describe("FonepayGateway", () => {
 
     const qrLog = create.mock.calls
       .map(([call]) => call.data)
-      .find(
-        (entry) => entry.operation === "fonepay-generate-intent-qr",
-      );
+      .find((entry) => entry.operation === "fonepay-generate-intent-qr");
     const serialized = JSON.stringify(qrLog);
     expect(qrLog.responseBody.qrString).toMatch(
       /^\[REDACTED length=\d+ sha256=[a-f0-9]{16}\]$/,
     );
-    expect(qrLog.responseBody.qrMessage).toBe(
-      qrLog.responseBody.qrString,
-    );
+    expect(qrLog.responseBody.qrMessage).toBe(qrLog.responseBody.qrString);
     expect(qrLog.responseBody.websocketId).toBe(
       "[REDACTED protocol=wss host=socket.fonepay.example]",
     );
@@ -407,6 +403,8 @@ describe("FonepayGateway", () => {
             paymentStatus: "timeout",
             paymentMessage: "Data not found.",
             requestedAmount: 2499,
+            totalTransactionAmount: null,
+            fonepayTraceId: null,
           }),
         )
         .mockResolvedValueOnce(
@@ -416,6 +414,8 @@ describe("FonepayGateway", () => {
             paymentStatus: "timeout",
             paymentMessage: "Data not found.",
             requestedAmount: 2499,
+            totalTransactionAmount: "",
+            fonepayTraceId: "",
           }),
         ),
     );
@@ -697,9 +697,7 @@ describe("FonepayGateway", () => {
 
     const qrLog = create.mock.calls
       .map((call) => call[0]?.data)
-      .find(
-        (entry) => entry.operation === "fonepay-generate-intent-qr",
-      );
+      .find((entry) => entry.operation === "fonepay-generate-intent-qr");
     const serialized = JSON.stringify(qrLog);
     expect(qrLog.responseBody.qrString).toMatch(
       /^\[REDACTED length=\d+ sha256=[a-f0-9]{16}\]$/,

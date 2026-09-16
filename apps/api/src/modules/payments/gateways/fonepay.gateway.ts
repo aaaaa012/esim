@@ -67,9 +67,18 @@ const statusResponseSchema = z.object({
   merchantCode: z.string().min(1),
   paymentStatus: z.string().min(1),
   requestedAmount: z.coerce.number().finite().nonnegative(),
-  totalTransactionAmount: z.coerce.number().finite().nonnegative().optional(),
-  fonepayTraceId: z.union([z.string(), z.number()]).optional(),
-  paymentMessage: z.string().optional(),
+  totalTransactionAmount: z.preprocess(
+    (value) => (value === null || value === "" ? undefined : value),
+    z.coerce.number().finite().nonnegative().optional(),
+  ),
+  fonepayTraceId: z.preprocess(
+    (value) => (value === null || value === "" ? undefined : value),
+    z.union([z.string().min(1), z.number()]).optional(),
+  ),
+  paymentMessage: z.preprocess(
+    (value) => (value === null ? undefined : value),
+    z.string().optional(),
+  ),
 });
 
 /** Fonepay Checkout Intent/Dynamic-QR adapter. Credentials and payload signing never leave the API. */
@@ -571,10 +580,14 @@ export class FonepayGateway implements PaymentGateway {
     const terminalId = this.terminalId();
     const alnumOnly = input.attemptId.replace(/[^A-Za-z0-9]/g, "");
     if (!alnumOnly)
-      return this.fail("Fonepay referenceLabel: attemptId produced no alphanumeric characters");
+      return this.fail(
+        "Fonepay referenceLabel: attemptId produced no alphanumeric characters",
+      );
     const reference = `VC${alnumOnly.slice(0, FONEPAY_REFERENCE_MAX - 2)}`;
     if (!REFERENCE_LABEL_RE.test(reference))
-      return this.fail("Fonepay referenceLabel must be alphanumeric only (V1.10 §9.4)");
+      return this.fail(
+        "Fonepay referenceLabel must be alphanumeric only (V1.10 §9.4)",
+      );
     // Bank discovery is optional checkout enhancement data. A failed refresh
     // returns cached data (or an empty list) and must never block QR creation.
     const banks = await this.banksForCheckout(input.orderId);
