@@ -73,6 +73,10 @@ export function ManualRefundCard({
     );
   }, [orderId]);
 
+  const activeRefund =
+    refund && ["REQUESTED", "APPROVED"].includes(refund.status);
+  const requestDisabled = !paid || Boolean(activeRefund);
+
   const submit = async () => {
     setBusy(true);
     setError("");
@@ -114,18 +118,32 @@ export function ManualRefundCard({
             </p>
           ) : null}
         </div>
-      ) : paid ? (
-        <Button
-          className="w-full"
-          variant="outline"
-          onClick={() => {
-            setError("");
-            setOpen(true);
-          }}
-        >
-          Request manual refund
-        </Button>
       ) : null}
+      <Button
+        className="w-full"
+        variant="outline"
+        disabled={requestDisabled}
+        onClick={() => {
+          setError("");
+          setOpen(true);
+        }}
+      >
+        Request manual refund
+      </Button>
+      {activeRefund ? (
+        <p className="text-xs text-muted-foreground">
+          This order already has a refund awaiting review or completion.
+        </p>
+      ) : !paid ? (
+        <p className="text-xs text-muted-foreground">
+          Available after payment is confirmed. Refunded orders cannot be
+          requested again.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Creates a review request without sending money automatically.
+        </p>
+      )}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
