@@ -148,26 +148,10 @@ const ACTION_FILTER_OPTIONS = [
 ];
 
 function dump(value: unknown): string {
-  const redact = (item: unknown): unknown => {
-    if (Array.isArray(item)) return item.map(redact);
-    if (item && typeof item === "object")
-      return Object.fromEntries(
-        Object.entries(item as Record<string, unknown>).map(([key, child]) => [
-          key,
-          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|activation_?code|matching_?id|qr_?(code|payload)|data_?url)$/i.test(
-            key,
-          )
-            ? "[REDACTED]"
-            : redact(child),
-        ]),
-      );
-    return item;
-  };
-  const safe = redact(value);
-  if (safe === undefined || safe === null) return "";
-  if (typeof safe === "string") return safe;
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
   try {
-    return JSON.stringify(safe, null, 2);
+    return JSON.stringify(value, null, 2);
   } catch {
     return String(value);
   }

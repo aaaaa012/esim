@@ -7,6 +7,7 @@ import {
 import { catchError, tap, throwError } from "rxjs";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { PartnerRequest } from "./partner-auth.guard.js";
+import { logRedactionEnabled } from "../../common/redact.js";
 
 const SENSITIVE_KEY_PARTS = [
   "authorization",
@@ -40,6 +41,7 @@ export function isSensitivePartnerLogKey(key: string) {
 }
 
 function redact(value: unknown, depth = 0): unknown {
+  if (!logRedactionEnabled()) return value;
   if (depth > 6) return "[TRUNCATED]";
   if (value === null || value === undefined || typeof value !== "object")
     return value;

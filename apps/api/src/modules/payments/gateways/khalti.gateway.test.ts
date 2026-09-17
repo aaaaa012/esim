@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { KhaltiGateway } from "./khalti.gateway.js";
 
@@ -6,6 +6,14 @@ describe("KhaltiGateway diagnostics", () => {
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.KHALTI_SECRET_KEY;
   const originalBase = process.env.KHALTI_BASE_URL;
+
+  beforeAll(() => {
+    process.env.LOG_REDACTION = "true";
+  });
+
+  afterAll(() => {
+    delete process.env.LOG_REDACTION;
+  });
 
   function prismaWithLog(create = vi.fn().mockResolvedValue({})) {
     return {

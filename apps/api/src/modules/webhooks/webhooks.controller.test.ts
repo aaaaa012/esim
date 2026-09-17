@@ -1,5 +1,13 @@
 import { createHmac } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { UserRole } from "@visa-compass/shared";
 import { UserRoleName, UserStatus } from "@prisma/client";
 import type { RawBodyRequest } from "@nestjs/common";
@@ -12,6 +20,14 @@ import {
   OperationsLogsController,
   sanitizeOperationsLog,
 } from "./webhooks.controller.js";
+
+beforeAll(() => {
+  process.env.LOG_REDACTION = "true";
+});
+
+afterAll(() => {
+  delete process.env.LOG_REDACTION;
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

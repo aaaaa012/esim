@@ -24,6 +24,7 @@ import { GuestLookupRateLimitGuard } from "../../common/guest-lookup.rate-limit.
 import { normalizeMsisdn } from "../../common/msisdn.util.js";
 import { PassportVerificationRateLimitGuard } from "../../common/passport-verification.rate-limit.guard.js";
 import { clientIp } from "../../common/client-ip.js";
+import { logRedactionEnabled } from "../../common/redact.js";
 import { PaymentsService } from "../payments/payments.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { OrdersService } from "./orders.service.js";
@@ -334,7 +335,9 @@ export class GuestOrdersController {
         {
           verificationRequested: true,
         },
-        { mobile: "[REDACTED]" },
+        logRedactionEnabled()
+          ? { mobile: "[REDACTED]" }
+          : { mobile: body.mobile },
       );
       return {
         verificationRequested: true,
@@ -347,7 +350,9 @@ export class GuestOrdersController {
         this.statusFor(error),
         startedAt,
         { found: false },
-        { mobile: "[REDACTED]" },
+        logRedactionEnabled()
+          ? { mobile: "[REDACTED]" }
+          : { mobile: body.mobile ?? "" },
         error,
       );
       throw error;
@@ -372,12 +377,14 @@ export class GuestOrdersController {
     @Body() body: { mobile?: string; lookupToken?: string; planId?: string },
   ) {
     const startedAt = Date.now();
+    let mobile: string | undefined;
     try {
       if (!body.planId?.trim())
         throw new BadRequestException("planId is required");
-      const { mobile } = await this.recharges.targetFromLookup(
+      const resolved = await this.recharges.targetFromLookup(
         body.lookupToken ?? "",
       );
+      mobile = resolved.mobile;
       if (body.mobile && body.mobile !== mobile)
         throw new ForbiddenException(
           "Top-up lookup does not match this eSIM MSISDN",
@@ -399,8 +406,9 @@ export class GuestOrdersController {
             : {}),
         },
         {
-          mobile: "[REDACTED]",
-          lookupToken: "[REDACTED]",
+          ...(logRedactionEnabled()
+            ? { mobile: "[REDACTED]", lookupToken: "[REDACTED]" }
+            : { mobile, lookupToken: body.lookupToken ?? "" }),
           planId: body.planId,
         },
       );
@@ -414,8 +422,9 @@ export class GuestOrdersController {
           ? { planId: body.planId, allowed: false }
           : { allowed: false },
         {
-          mobile: "[REDACTED]",
-          lookupToken: "[REDACTED]",
+          ...(logRedactionEnabled()
+            ? { mobile: "[REDACTED]", lookupToken: "[REDACTED]" }
+            : { mobile: mobile ?? body.mobile ?? "", lookupToken: body.lookupToken ?? "" }),
           ...(body.planId ? { planId: body.planId } : {}),
         },
         error,

@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { ApiErrorCode, isRestrictedPlanCountry } from "@visa-compass/shared";
 import { ApiException } from "../../common/api-error.js";
+import { logRedactionEnabled } from "../../common/redact.js";
 import type {
   ConnectivityProvider,
   ProvisionRequest,
@@ -648,6 +649,7 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   private redactLogBody(value: unknown, depth = 0): Prisma.InputJsonValue {
+    if (!logRedactionEnabled()) return value as Prisma.InputJsonValue;
     if (depth >= 8) return "[TRUNCATED]";
     if (Array.isArray(value))
       return value

@@ -34,6 +34,7 @@ import { ReconciliationService } from "../../jobs/reconciliation.service.js";
 import { QUEUES } from "../../jobs/queues.js";
 import { INBOUND_WEBHOOK_JOB_OPTIONS } from "../../infrastructure/resilience-policy.js";
 import { paymentSimulatorSecret } from "../../common/payment-simulator-secret.js";
+import { logRedactionEnabled } from "../../common/redact.js";
 import { ClerkSyncService } from "../identity/clerk-sync.service.js";
 
 @Controller("webhooks")
@@ -457,6 +458,7 @@ const SENSITIVE_LOG_KEY =
   /(^|_)(authorization|cookie|password|secret|client_?secret|webhook_?secret|access_?token|refresh_?token|lookup_?token|guest_?access_?token|api_?key|signature|passport|document|email|phone|mobile|qr_?(code|payload)|activation_?code|matching_?id|otp|pin|card|account_?number|payment_?url|recovery_?(link|url|token))$/i;
 
 export function sanitizeOperationsLog(value: unknown, depth = 0): unknown {
+  if (!logRedactionEnabled()) return value;
   if (depth > 8) return "[TRUNCATED]";
   if (value === null || value === undefined) return value;
   if (typeof value === "string") {
@@ -485,6 +487,7 @@ export function sanitizeOperationsLog(value: unknown, depth = 0): unknown {
 
 function sanitizeLogText(value: string | null | undefined) {
   if (!value) return value ?? null;
+  if (!logRedactionEnabled()) return value;
   return value
     .replace(/LPA:1\$[^\s"']+/gi, "[REDACTED QR CREDENTIAL]")
     .replace(/Bearer\s+[^\s"']+/gi, "[REDACTED AUTHORIZATION]")
@@ -493,6 +496,7 @@ function sanitizeLogText(value: string | null | undefined) {
 }
 
 function sanitizeLogEndpoint(endpoint: string) {
+  if (!logRedactionEnabled()) return endpoint;
   const [path] = endpoint.split("?", 1);
   return path ?? endpoint;
 }

@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
+import { logRedactionEnabled } from "../../../common/redact.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
 import { PaymentCapability } from "../payment-gateway.js";
@@ -206,6 +207,7 @@ export class KhaltiGateway implements PaymentGateway {
   }
 
   private redactLogBody(value: unknown): Prisma.InputJsonValue {
+    if (!logRedactionEnabled()) return value as Prisma.InputJsonValue;
     if (Array.isArray(value)) return value.map((item) => this.redactLogBody(item));
     if (value && typeof value === "object")
       return Object.fromEntries(

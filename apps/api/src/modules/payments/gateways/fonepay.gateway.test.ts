@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import { PaymentStatus } from "@visa-compass/shared";
@@ -13,6 +22,12 @@ const json = (body: unknown, status = 200) =>
 
 describe("FonepayGateway", () => {
   const fileKeyPath = `/tmp/fonepay-gateway-${process.pid}.pem`;
+  beforeAll(() => {
+    process.env.LOG_REDACTION = "true";
+  });
+  afterAll(() => {
+    delete process.env.LOG_REDACTION;
+  });
   beforeEach(() => {
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     process.env.FONEPAY_ENABLED = "true";

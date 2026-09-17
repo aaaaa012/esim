@@ -6,6 +6,7 @@ import QRCode from "qrcode";
 import { z } from "zod";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
+import { logRedactionEnabled } from "../../../common/redact.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
 import { PaymentCapability } from "../payment-gateway.js";
@@ -159,6 +160,7 @@ export class FonepayGateway implements PaymentGateway {
     return terminalId;
   }
   private redact(value: unknown): Prisma.InputJsonValue {
+    if (!logRedactionEnabled()) return value as Prisma.InputJsonValue;
     if (Array.isArray(value)) return value.map((item) => this.redact(item));
     if (value && typeof value === "object")
       return Object.fromEntries(
@@ -274,6 +276,9 @@ export class FonepayGateway implements PaymentGateway {
     const path =
       process.env.FONEPAY_LOGIN_PATH?.trim() || `${this.basePath}/login`;
     const signature = this.sign(body);
+    const credentialLog = logRedactionEnabled()
+      ? { username: "[REDACTED]", password: "[REDACTED]" }
+      : { username: body.username, password: body.password };
     const startedAt = Date.now();
     let response: Response;
     try {
@@ -297,7 +302,7 @@ export class FonepayGateway implements PaymentGateway {
         ...(correlationId ? { correlationId } : {}),
         errorCode: "NETWORK_ERROR",
         errorMessage: error instanceof Error ? error.message : String(error),
-        requestBody: { username: "[REDACTED]", password: "[REDACTED]" },
+        requestBody: credentialLog,
       });
       return this.fail("Fonepay OAuth network request failed");
     }
@@ -315,7 +320,7 @@ export class FonepayGateway implements PaymentGateway {
             errorMessage: "Fonepay authentication was rejected",
           }
         : {}),
-      requestBody: { username: "[REDACTED]", password: "[REDACTED]" },
+      requestBody: credentialLog,
       responseBody: this.redact(raw),
     });
     if (!response.ok) return this.fail("Fonepay OAuth authentication failed");

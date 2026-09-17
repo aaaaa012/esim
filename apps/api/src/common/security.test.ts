@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clientIp } from "./client-ip.js";
 import { redactUrl } from "./redact.js";
 import { tabularToRecords } from "./tabular.util.js";
@@ -18,6 +18,13 @@ describe("trustProxySetting", () => {
 });
 
 describe("redactUrl", () => {
+  beforeAll(() => {
+    process.env.LOG_REDACTION = "true";
+  });
+  afterAll(() => {
+    delete process.env.LOG_REDACTION;
+  });
+
   it("leaves URLs without a query string untouched", () => {
     expect(redactUrl("/api/v1/health")).toBe("/api/v1/health");
   });
