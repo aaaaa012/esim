@@ -175,6 +175,7 @@ export default function CustomerHeader() {
               <SignedIn>
                 <Link
                   href="/account/notifications"
+                  prefetch={false}
                   aria-label="Notifications"
                   className={
                     path === "/account/notifications" ? "nav-active" : ""
@@ -185,11 +186,13 @@ export default function CustomerHeader() {
                 <Link
                   className={`button secondary ${path.startsWith("/account/esims") ? "nav-active" : ""}`}
                   href="/account/esims"
+                  prefetch={false}
                 >
                   My eSIMs
                 </Link>
                 <Link
                   href="/account/orders"
+                  prefetch={false}
                   aria-label="Orders"
                   className={
                     path.startsWith("/account/orders") ? "nav-active" : ""
@@ -239,6 +242,7 @@ export default function CustomerHeader() {
         </Link>
         <Link
           href="/account/esims"
+          prefetch={false}
           className={path.startsWith("/account/esims") ? "nav-active" : ""}
           aria-current={path.startsWith("/account/esims") ? "page" : undefined}
         >
@@ -258,6 +262,7 @@ export default function CustomerHeader() {
         <SignedIn>
           <Link
             href="/account/orders"
+            prefetch={false}
             className={
               isCustomerNavActive("/account/orders", path, activeHash)
                 ? "nav-active"

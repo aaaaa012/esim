@@ -32,6 +32,7 @@ const expectedRoutes = [
   "/provisioning-operations",
   "/security/[[...security]]",
   "/service-unavailable",
+  "/rate-limited",
   "/sign-in/[[...sign-in]]",
   "/staff-activate",
   "/staff-onboarding",

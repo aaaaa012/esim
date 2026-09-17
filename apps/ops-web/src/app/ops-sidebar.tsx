@@ -79,6 +79,7 @@ function SidebarLink({
   return (
     <Link
       href={item.href}
+      prefetch={false}
       className={cn("ops-sidebar-link", active && "active")}
       {...(onNavigate ? { onClick: onNavigate } : {})}
     >

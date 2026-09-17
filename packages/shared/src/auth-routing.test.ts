@@ -9,6 +9,7 @@ describe("authRouteDecision", () => {
     expect(decide({ status: 403, code: "ACCOUNT_DISABLED" })).toBe("ACCOUNT_UNAVAILABLE");
     expect(decide({ status: 403 })).toBe("UNAUTHORIZED");
     expect(decide({ status: 503 })).toBe("SERVICE_UNAVAILABLE");
+    expect(decide({ status: 429 })).toBe("RATE_LIMITED");
   });
   it("enforces account type and Super Admin routes", () => {
     expect(decide({ accountType: "OPERATIONS" })).toBe("UNAUTHORIZED");

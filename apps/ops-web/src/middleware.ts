@@ -1,6 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
-import { authRouteDecision } from "@visa-compass/shared";
+import { safeInternalReturnTo, verifyPortalSession } from "@visa-compass/shared";
 const isPublic = createRouteMatcher([
   "/sign-in(.*)",
   "/staff-onboarding(.*)",
@@ -8,9 +8,10 @@ const isPublic = createRouteMatcher([
   "/unauthorized",
   "/account-unavailable",
   "/service-unavailable",
+  "/rate-limited",
   "/super-admin(.*)",
 ]);
-const isTerminal = createRouteMatcher(["/access-error", "/unauthorized", "/account-unavailable", "/service-unavailable"]);
+const isTerminal = createRouteMatcher(["/access-error", "/unauthorized", "/account-unavailable", "/rate-limited", "/service-unavailable"]);
 const isSecurity = createRouteMatcher(["/security(.*)"]);
 const isChangePassword = createRouteMatcher(["/change-password(.*)"]);
 const isSuperAdminOnly = createRouteMatcher([
@@ -36,34 +37,25 @@ const productionMiddleware = clerkMiddleware(async (auth, request) => {
     return NextResponse.redirect(signInUrl);
   }
   const token = await session.getToken();
-  const destination = request.nextUrl.pathname + request.nextUrl.search;
-  const redirect = (path: string) => {
+  const destination = safeInternalReturnTo(request.nextUrl.pathname + request.nextUrl.search);
+  const redirect = (path: string, retryAfterSeconds?: number) => {
     const url = new URL(path, request.url);
     url.searchParams.set(path === "/sign-in" ? "redirect_url" : "returnTo", destination);
+    if (path === "/rate-limited" && retryAfterSeconds) url.searchParams.set("retryAfter", String(retryAfterSeconds));
     return NextResponse.redirect(url);
   };
   if (!token) return redirect("/service-unavailable");
   try {
-    const response = await fetch(`${API}/auth/me`, {
-      headers: { authorization: `Bearer ${token}` },
-      cache: "no-store",
-    });
-    const envelope = await response.json().catch(() => null) as {
-      data?: {
-        accountType: string;
-        mfaRequired: boolean;
-        mfaVerified: boolean;
-        mustChangePassword: boolean;
-      };
-      error?: { code?: string };
-    } | null;
-    const decision = authRouteDecision({ status: response.status, ...(envelope?.error?.code ? { code: envelope.error.code } : {}), ...(envelope?.data?.accountType ? { accountType: envelope.data.accountType } : {}), allowedAccountTypes: ["OPERATIONS", "SUPER_ADMIN"], requiresSuperAdmin: isSuperAdminOnly(request) });
-    if (decision !== "ALLOW") return redirect(decision === "SIGN_IN" ? "/sign-in" : decision === "ACCOUNT_UNAVAILABLE" ? "/account-unavailable" : decision === "UNAUTHORIZED" ? "/unauthorized" : "/service-unavailable");
-    if (envelope!.data!.mustChangePassword && !isChangePassword(request))
+    const result = await verifyPortalSession({ apiUrl: API, token, allowedAccountTypes: ["OPERATIONS", "SUPER_ADMIN"], requiresSuperAdmin: isSuperAdminOnly(request), timeoutMs: Number(process.env.PORTAL_AUTH_TIMEOUT_MS ?? 5_000) });
+    if (result.decision !== "ALLOW") {
+      console.warn(JSON.stringify({ event: "portal_session_verification", portal: "operations", destination: request.nextUrl.pathname.split("/").slice(0, 3).join("/"), status: result.status, failure: result.failure ?? result.decision.toLowerCase(), latencyMs: result.latencyMs, retryAfterSeconds: result.retryAfterSeconds }));
+      return redirect(result.decision === "SIGN_IN" ? "/sign-in" : result.decision === "ACCOUNT_UNAVAILABLE" ? "/account-unavailable" : result.decision === "UNAUTHORIZED" ? "/unauthorized" : result.decision === "RATE_LIMITED" ? "/rate-limited" : "/service-unavailable", result.retryAfterSeconds);
+    }
+    if (result.mustChangePassword && !isChangePassword(request))
       return NextResponse.redirect(new URL("/change-password", request.url));
     if (
-      envelope!.data!.mfaRequired &&
-      !envelope!.data!.mfaVerified &&
+      result.mfaRequired &&
+      !result.mfaVerified &&
       !isSecurity(request)
     )
       return NextResponse.redirect(new URL("/security", request.url));

@@ -28,6 +28,9 @@ export class RateLimitGuard implements CanActivate {
   private readonly authLimit = Number(
     process.env.AUTH_RATE_LIMIT_PER_MINUTE ?? 60,
   );
+  private readonly authMeIpLimit = Number(
+    process.env.AUTH_ME_IP_RATE_LIMIT_PER_MINUTE ?? 600,
+  );
   private readonly guestLimit = Number(
     process.env.GUEST_RATE_LIMIT_PER_MINUTE ?? 30,
   );
@@ -57,6 +60,7 @@ export class RateLimitGuard implements CanActivate {
     )
       return true;
 
+    const authMe = request.method === "GET" && path === "/api/v1/auth/me";
     const sensitive =
       path.startsWith("/api/v1/auth") ||
       path.startsWith("/api/v1/public") ||
@@ -65,9 +69,11 @@ export class RateLimitGuard implements CanActivate {
       path.startsWith("/api/v1/guest/orders") ||
       path.startsWith("/api/v1/recharges") ||
       path.startsWith("/api/v1/partner-checkout");
-    const configuredCapacity = guestCheckout
+    const configuredCapacity = authMe
+      ? this.authMeIpLimit
+      : guestCheckout
       ? this.guestLimit
-      : sensitive
+        : sensitive
         ? this.authLimit
         : this.limit;
     // UUIDs and numeric ids must not form attacker-controlled fresh buckets.

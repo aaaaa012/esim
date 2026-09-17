@@ -1,8 +1,8 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
-import { authRouteDecision } from "@visa-compass/shared";
+import { safeInternalReturnTo, verifyPortalSession } from "@visa-compass/shared";
 const isProtected = createRouteMatcher(["/account(.*)"]);
-const isTerminal = createRouteMatcher(["/unauthorized", "/account-unavailable", "/service-unavailable"]);
+const isTerminal = createRouteMatcher(["/unauthorized", "/account-unavailable", "/rate-limited", "/service-unavailable"]);
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const e2eMode = process.env.NEXT_PUBLIC_E2E_TEST_MODE === "true";
 if (e2eMode && process.env.NODE_ENV === "production") {
@@ -11,10 +11,11 @@ if (e2eMode && process.env.NODE_ENV === "production") {
 const productionMiddleware = clerkMiddleware(async (auth, request) => {
   if (isTerminal(request)) return;
   if (!isProtected(request)) return;
-  const destination = request.nextUrl.pathname + request.nextUrl.search;
-  const redirect = (path: string) => {
+  const destination = safeInternalReturnTo(request.nextUrl.pathname + request.nextUrl.search);
+  const redirect = (path: string, retryAfterSeconds?: number) => {
     const url = new URL(path, request.url);
     url.searchParams.set(path === "/sign-in" ? "redirect_url" : "returnTo", destination);
+    if (path === "/rate-limited" && retryAfterSeconds) url.searchParams.set("retryAfter", String(retryAfterSeconds));
     return NextResponse.redirect(url);
   };
   const session = await auth();
@@ -26,13 +27,11 @@ const productionMiddleware = clerkMiddleware(async (auth, request) => {
   // account, must never land on a bare 404. Send them to a meaningful page.
   if (!token) return redirect("/service-unavailable");
   try {
-    const response = await fetch(`${API}/auth/me`, {
-      headers: { authorization: `Bearer ${token}` },
-      cache: "no-store",
-    });
-    const envelope = await response.json().catch(() => null) as { data?: { accountType?: string }; error?: { code?: string } } | null;
-    const decision = authRouteDecision({ status: response.status, ...(envelope?.error?.code ? { code: envelope.error.code } : {}), ...(envelope?.data?.accountType ? { accountType: envelope.data.accountType } : {}), allowedAccountTypes: ["CUSTOMER"] });
-    if (decision !== "ALLOW") return redirect(decision === "SIGN_IN" ? "/sign-in" : decision === "ACCOUNT_UNAVAILABLE" ? "/account-unavailable" : decision === "UNAUTHORIZED" ? "/unauthorized" : "/service-unavailable");
+    const result = await verifyPortalSession({ apiUrl: API, token, allowedAccountTypes: ["CUSTOMER"], timeoutMs: Number(process.env.PORTAL_AUTH_TIMEOUT_MS ?? 5_000) });
+    if (result.decision !== "ALLOW") {
+      console.warn(JSON.stringify({ event: "portal_session_verification", portal: "customer", destination: request.nextUrl.pathname.split("/").slice(0, 3).join("/"), status: result.status, failure: result.failure ?? result.decision.toLowerCase(), latencyMs: result.latencyMs, retryAfterSeconds: result.retryAfterSeconds }));
+      return redirect(result.decision === "SIGN_IN" ? "/sign-in" : result.decision === "ACCOUNT_UNAVAILABLE" ? "/account-unavailable" : result.decision === "UNAUTHORIZED" ? "/unauthorized" : result.decision === "RATE_LIMITED" ? "/rate-limited" : "/service-unavailable", result.retryAfterSeconds);
+    }
   } catch {
     return redirect("/service-unavailable");
   }

@@ -8,8 +8,8 @@ vi.mock("./authenticated-api-provider", () => ({
   useAuthenticatedFetch: () => authFetch,
 }));
 vi.mock("next/link", () => ({
-  default: ({ href, children, ...props }: any) => (
-    <a href={href} {...props}>
+  default: ({ href, children, prefetch, ...props }: any) => (
+    <a href={href} data-prefetch={String(prefetch)} {...props}>
       {children}
     </a>
   ),
@@ -66,6 +66,7 @@ describe("OpsSidebar role-based navigation", () => {
     expect(
       screen.getByRole("link", { name: "Orders" }).getAttribute("href"),
     ).toBe("/orders");
+    expect(screen.getByRole("link", { name: "Orders" }).getAttribute("data-prefetch")).toBe("false");
   });
 
   it("adds Super Admin-only settings and partner menus without hiding operational menus", async () => {

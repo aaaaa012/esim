@@ -1,7 +1,7 @@
 "use client";
 import { useAuth } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
-import { createContext, useCallback, useContext } from "react";
+import { createContext, useCallback, useContext, useRef } from "react";
 import { Spinner } from "@/components/spinner";
 import { isShellFreePath } from "@/lib/shell-routes";
 import { sanitizeApiResponse } from "@/lib/sanitize-api-response";
@@ -19,6 +19,7 @@ export default function AuthenticatedApiProvider({
   children: React.ReactNode;
 }) {
   const { getToken, isLoaded, isSignedIn } = useAuth();
+  const authMeInFlight = useRef<Promise<Response> | null>(null);
   const pathname = usePathname();
   const authFetch = useCallback<AuthFetch>(
     async (input, init) => {
@@ -31,13 +32,26 @@ export default function AuthenticatedApiProvider({
       const headers = new Headers(
         init?.headers ?? (input instanceof Request ? input.headers : undefined),
       );
-      if (url.startsWith(API)) {
-        const token = await getToken({ skipCache: true });
-        if (token) headers.set("authorization", `Bearer ${token}`);
+      const request = async () => {
+        if (url.startsWith(API)) {
+          const token = await getToken();
+          if (token) headers.set("authorization", `Bearer ${token}`);
+        }
+        let response = await window.fetch(input, { ...init, headers });
+        const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+        const retryable = method === "GET" || method === "HEAD" || headers.has("x-idempotency-key");
+        if (response.status === 401 && url.startsWith(API) && retryable && !(input instanceof Request)) {
+          const fresh = await getToken({ skipCache: true });
+          if (fresh) headers.set("authorization", `Bearer ${fresh}`);
+          response = await window.fetch(input, { ...init, headers });
+        }
+        return sanitizeApiResponse(response);
+      };
+      if (url === `${API}/auth/me`) {
+        if (!authMeInFlight.current) authMeInFlight.current = request().finally(() => { authMeInFlight.current = null; });
+        return (await authMeInFlight.current).clone();
       }
-      return sanitizeApiResponse(
-        await window.fetch(input, { ...init, headers }),
-      );
+      return request();
     },
     [getToken],
   );

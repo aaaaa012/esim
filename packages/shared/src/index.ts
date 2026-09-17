@@ -4,5 +4,6 @@ export * from "./errors.js";
 export * from "./labels.js";
 export * from "./countries.js";
 export * from "./auth-routing.js";
+export * from "./portal-session.js";
 export * from "./attention-actions.js";
 export * from "./payment-gating.js";

@@ -13,6 +13,7 @@ import {
   type AuthenticatedRequest,
 } from "../../common/auth.guard.js";
 import { BootstrapRateLimitGuard } from "../../common/bootstrap-rate-limit.guard.js";
+import { AuthMeRateLimitGuard } from "../../common/auth-me-rate-limit.guard.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { ClerkSyncService } from "./clerk-sync.service.js";
 
@@ -23,7 +24,9 @@ export class AuthController {
     private readonly prisma: PrismaService,
     private readonly sync: ClerkSyncService,
   ) {}
-  @Get("me") me(@Req() request: AuthenticatedRequest) {
+  @Get("me")
+  @UseGuards(AuthMeRateLimitGuard)
+  me(@Req() request: AuthenticatedRequest) {
     const user = request.user!;
     const customerBase = (
       process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"

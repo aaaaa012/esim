@@ -277,7 +277,7 @@ export default function CustomersClient() {
                   </TableCell>
                   <TableCell className="sticky right-0 bg-card text-right">
                     <Button asChild size="sm" variant="outline">
-                      <Link href={`/customers/${c.ownerId}`}>
+                      <Link href={`/customers/${c.ownerId}`} prefetch={false}>
                         Open <ArrowRight className="size-3.5" />
                       </Link>
                     </Button>

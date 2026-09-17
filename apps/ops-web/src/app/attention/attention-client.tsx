@@ -366,7 +366,7 @@ export default function AttentionClient() {
                               variant="outline"
                               asChild
                             >
-                              <Link href={href}>
+                              <Link href={href} prefetch={false}>
                                 {attentionActionLabel(name)}
                               </Link>
                             </Button>

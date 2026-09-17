@@ -432,7 +432,7 @@ export default function OrdersClient({
                   </TableCell>
                   <TableCell className="sticky right-0 bg-card text-right">
                     <Button asChild variant="outline" size="sm">
-                      <Link href={`/orders/${order.id}`}>
+                      <Link href={`/orders/${order.id}`} prefetch={false}>
                         Open <ArrowRight className="size-3.5" />
                       </Link>
                     </Button>

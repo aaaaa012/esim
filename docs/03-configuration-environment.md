@@ -61,6 +61,9 @@ local guest-order continuity.
 | ---------------------------- | ------- | ----------------------------------------------------- |
 | `RATE_LIMIT_PER_MINUTE`      | `300`   | General per-IP+route limit (`rate-limit.guard.ts:18`) |
 | `AUTH_RATE_LIMIT_PER_MINUTE` | `60`    | Auth/public route limit (`rate-limit.guard.ts:19,33`) |
+| `AUTH_ME_RATE_LIMIT_PER_MINUTE` | `120` | Verified-user limit for `GET /auth/me` |
+| `AUTH_ME_IP_RATE_LIMIT_PER_MINUTE` | `600` | Pre-authentication IP safety ceiling for `GET /auth/me` |
+| `PORTAL_AUTH_TIMEOUT_MS` | `5000` | Customer and operations middleware session-check timeout |
 
 ## Payments
 

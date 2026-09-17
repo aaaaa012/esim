@@ -328,6 +328,7 @@ export default function QueueClient() {
                       list.map((o) => (
                         <li key={o.id}>
                           <Link
+                            prefetch={false}
                             href={`/orders/${o.id}`}
                             className="group flex items-center justify-between gap-4 p-4 hover:bg-accent/50"
                           >
