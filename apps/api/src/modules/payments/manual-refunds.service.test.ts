@@ -28,16 +28,14 @@ function setup() {
   const prisma = {
     enabled: true,
     order: {
-      findUnique: vi
-        .fn()
-        .mockResolvedValue({
-          id: "order-1",
-          status: "PROVISIONING_FAILED",
-          payments: [
-            { id: "payment-1", status: PaymentStatus.COMPLETED, amount: 2499 },
-          ],
-          manualRefunds: [],
-        }),
+      findUnique: vi.fn().mockResolvedValue({
+        id: "order-1",
+        status: "PROVISIONING_FAILED",
+        payments: [
+          { id: "payment-1", status: PaymentStatus.COMPLETED, amount: 2499 },
+        ],
+        manualRefunds: [],
+      }),
     },
     manualRefund: {
       findUnique: vi.fn(),
@@ -82,6 +80,35 @@ describe("ManualRefundsService", () => {
     expect(context.tx.order.update).not.toHaveBeenCalled();
   });
 
+  it("accepts a request when the payment attempt was never confirmed locally", async () => {
+    const context = setup();
+    context.prisma.order.findUnique.mockResolvedValue({
+      id: "order-1",
+      status: "PAYMENT_PENDING",
+      payments: [
+        { id: "payment-1", status: PaymentStatus.PENDING, amount: 2499 },
+      ],
+      manualRefunds: [],
+    });
+
+    await context.service.request("order-1", "actor-1", {
+      reason: ManualRefundReason.PROVIDER_SERVICE_FAILURE,
+      explanation: "Customer supplied evidence of the completed bank debit",
+    });
+
+    expect(context.tx.manualRefund.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ paymentId: "payment-1", amount: 2499 }),
+    });
+    expect(context.tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        newValue: expect.objectContaining({
+          paymentStatus: PaymentStatus.PENDING,
+          paymentConfirmationMissing: true,
+        }),
+      }),
+    });
+  });
+
   it("rejects duplicate active requests", async () => {
     const context = setup();
     context.prisma.order.findUnique.mockResolvedValue({
@@ -109,12 +136,10 @@ describe("ManualRefundsService", () => {
       order: { status: "PROVISIONING_FAILED" },
       payment: { status: PaymentStatus.COMPLETED, amount: 2499 },
     });
-    context.prisma.manualRefund.findUniqueOrThrow = vi
-      .fn()
-      .mockResolvedValue({
-        id: "refund-1",
-        status: ManualRefundStatus.COMPLETED,
-      });
+    context.prisma.manualRefund.findUniqueOrThrow = vi.fn().mockResolvedValue({
+      id: "refund-1",
+      status: ManualRefundStatus.COMPLETED,
+    });
     await context.service.complete("refund-1", "admin-1", {
       providerReference: "khalti-ref-123",
       amount: 2499,
@@ -179,7 +204,10 @@ describe("ManualRefundsService", () => {
         toStatus: "REFUND_PENDING",
         actorId: "admin-1",
         reason: "Manual refund entered pending refund state",
-        metadata: { manualRefundId: "refund-1", reason: "PROVISIONING_FAILURE" },
+        metadata: {
+          manualRefundId: "refund-1",
+          reason: "PROVISIONING_FAILURE",
+        },
       },
     });
     expect(orderUpdates).toHaveBeenNthCalledWith(2, {
@@ -212,22 +240,30 @@ describe("ManualRefundsService", () => {
     });
   });
 
-  it("rejects completion from an order state the state machine cannot refund", async () => {
+  it("completes an approved evidence-based refund from payment pending", async () => {
     const context = setup();
     context.prisma.manualRefund.findUnique.mockResolvedValue({
       id: "refund-1",
+      orderId: "order-1",
+      paymentId: "payment-1",
       status: ManualRefundStatus.APPROVED,
+      reason: ManualRefundReason.PROVIDER_SERVICE_FAILURE,
       amount: 2499,
-      payment: { amount: 2499 },
+      payment: { status: PaymentStatus.PENDING, amount: 2499 },
       order: { status: "PAYMENT_PENDING" },
     });
-    await expect(
-      context.service.complete("refund-1", "admin-1", {
-        providerReference: "khalti-ref-321",
-        amount: 2499,
-        completedAt: new Date().toISOString(),
-      }),
-    ).rejects.toThrow("Invalid order transition");
-    expect(context.tx.order.update).not.toHaveBeenCalled();
+    await context.service.complete("refund-1", "admin-1", {
+      providerReference: "khalti-ref-321",
+      amount: 2499,
+      completedAt: new Date().toISOString(),
+    });
+    expect(context.tx.order.update).toHaveBeenNthCalledWith(1, {
+      where: { id: "order-1" },
+      data: { status: "REFUND_PENDING", version: { increment: 1 } },
+    });
+    expect(context.tx.order.update).toHaveBeenNthCalledWith(2, {
+      where: { id: "order-1" },
+      data: { status: "REFUNDED", version: { increment: 1 } },
+    });
   });
 });

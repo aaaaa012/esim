@@ -1264,9 +1264,10 @@ export default function OrderReview({ id }: { id: string }) {
               {...(order.payment?.provider
                 ? { paymentProvider: order.payment.provider }
                 : {})}
-              paid={
-                order.payment?.status === "COMPLETED" &&
-                order.status !== "REFUNDED"
+              hasPaymentAttempt={Boolean(order.payment)}
+              alreadyRefunded={
+                order.payment?.status === "REFUNDED" ||
+                order.status === "REFUNDED"
               }
             />
             {["DRAFT", "PAYMENT_PENDING", "PAYMENT_FAILED"].includes(

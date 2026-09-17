@@ -34,11 +34,13 @@ const apiError = (value: unknown, fallback: string) => {
 
 export function ManualRefundCard({
   orderId,
-  paid,
+  hasPaymentAttempt,
+  alreadyRefunded = false,
   paymentProvider,
 }: {
   orderId: string;
-  paid: boolean;
+  hasPaymentAttempt: boolean;
+  alreadyRefunded?: boolean;
   paymentProvider?: string;
 }) {
   const authFetch = useAuthenticatedFetch();
@@ -75,7 +77,8 @@ export function ManualRefundCard({
 
   const activeRefund =
     refund && ["REQUESTED", "APPROVED"].includes(refund.status);
-  const requestDisabled = !paid || Boolean(activeRefund);
+  const requestDisabled =
+    !hasPaymentAttempt || alreadyRefunded || Boolean(activeRefund);
 
   const submit = async () => {
     setBusy(true);
@@ -114,7 +117,9 @@ export function ManualRefundCard({
           </p>
           {refund.status === "APPROVED" ? (
             <p className="mt-2 text-xs font-medium">
-              Complete the refund in {paymentProvider === "FONEPAY" ? "Fonepay" : "Khalti"}, then mark it done from Manual Refunds.
+              Complete the refund in{" "}
+              {paymentProvider === "FONEPAY" ? "Fonepay" : "Khalti"}, then mark
+              it done from Manual Refunds.
             </p>
           ) : null}
         </div>
@@ -134,14 +139,18 @@ export function ManualRefundCard({
         <p className="text-xs text-muted-foreground">
           This order already has a refund awaiting review or completion.
         </p>
-      ) : !paid ? (
+      ) : !hasPaymentAttempt ? (
         <p className="text-xs text-muted-foreground">
-          Available after payment is confirmed. Refunded orders cannot be
-          requested again.
+          Available after at least one payment attempt has been created.
+        </p>
+      ) : alreadyRefunded ? (
+        <p className="text-xs text-muted-foreground">
+          This order has already been refunded.
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          Creates a review request without sending money automatically.
+          Use this even when the customer paid but the gateway never confirmed
+          it. A Super Admin must review the evidence before completion.
         </p>
       )}
       <Dialog open={open} onOpenChange={setOpen}>
@@ -150,7 +159,9 @@ export function ManualRefundCard({
             <DialogTitle>Request manual refund</DialogTitle>
             <DialogDescription>
               This records an exception for review. It does not send money or
-              change the order.
+              change the order. If payment was not confirmed in Visa Compass,
+              include the customer&apos;s bank or wallet evidence and
+              transaction reference below.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

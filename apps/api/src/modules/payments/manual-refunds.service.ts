@@ -137,12 +137,12 @@ export class ManualRefundsService {
       throw new ConflictException(
         "A manual refund is already awaiting a decision",
       );
-    const payment = order.payments.find(
-      (item) => item.status === PaymentStatus.COMPLETED,
-    );
+    const payment =
+      order.payments.find((item) => item.status === PaymentStatus.COMPLETED) ??
+      order.payments.find((item) => item.status !== PaymentStatus.REFUNDED);
     if (!payment)
       throw new BadRequestException(
-        "Only a confirmed, not-yet-refunded payment can be refunded",
+        "A not-yet-refunded payment attempt is required to request a manual refund",
       );
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.manualRefund
@@ -178,6 +178,9 @@ export class ManualRefundsService {
             orderId,
             reason: input.reason,
             amount: payment.amount.toString(),
+            paymentStatus: payment.status,
+            paymentConfirmationMissing:
+              payment.status !== PaymentStatus.COMPLETED,
           } as Prisma.InputJsonValue,
         },
       });
@@ -375,10 +378,11 @@ export class ManualRefundsService {
     metadata: Prisma.InputJsonValue,
   ): Promise<OrderStatus> {
     if (fromStatus === OrderStatus.REFUND_PENDING) return fromStatus;
-    assertTransition(
-      fromStatus as unknown as SharedOrderStatus,
-      SharedOrderStatus.REFUND_PENDING,
-    );
+    if (fromStatus === OrderStatus.REFUNDED)
+      throw new ConflictException("This order has already been refunded");
+    // Super Admin approval and the recorded provider refund reference make
+    // this an audited exception. The provider charge may exist even when the
+    // gateway never advanced the local order beyond a pre-payment state.
     await tx.order.update({
       where: { id: orderId },
       data: {

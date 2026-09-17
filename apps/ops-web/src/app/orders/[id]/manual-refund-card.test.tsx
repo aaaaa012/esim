@@ -21,23 +21,23 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ManualRefundCard", () => {
-  it("keeps the refund action visible for an unpaid order", async () => {
-    render(<ManualRefundCard orderId="order-1" paid={false} />);
+  it("keeps the refund action visible when no payment attempt exists", async () => {
+    render(<ManualRefundCard orderId="order-1" hasPaymentAttempt={false} />);
 
     const button = await screen.findByRole("button", {
       name: "Request manual refund",
     });
     expect(button).toHaveProperty("disabled", true);
     expect(
-      screen.getByText(/Available after payment is confirmed/i),
+      screen.getByText(/after at least one payment attempt/i),
     ).toBeDefined();
   });
 
-  it("enables the refund action for a confirmed payment regardless of order state", async () => {
+  it("enables the refund action for an unconfirmed payment attempt", async () => {
     render(
       <ManualRefundCard
         orderId="order-2"
-        paid
+        hasPaymentAttempt
         paymentProvider="FONEPAY"
       />,
     );
@@ -67,7 +67,7 @@ describe("ManualRefundCard", () => {
       ]),
     );
 
-    render(<ManualRefundCard orderId="order-3" paid />);
+    render(<ManualRefundCard orderId="order-3" hasPaymentAttempt />);
 
     const button = await screen.findByRole("button", {
       name: "Request manual refund",
