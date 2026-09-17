@@ -603,6 +603,15 @@ export class FonepayGateway implements PaymentGateway {
       );
     if (!input.orderNumber.trim())
       return this.fail("Fonepay billId must not be blank");
+    // Fonepay requested a shorter billId. The QR/status flows only correlate
+    // via referenceLabel/prn, so billId is a pure invoice label: derive a
+    // compact alphanumeric value (VC + year-tail + order-id tail) from the
+    // full order number (e.g. "VC-2026-520DD926" -> "VC26520DD926").
+    const billMatch = input.orderNumber.match(/^VC-(\d{4})-([A-Za-z0-9]+)$/i);
+    const billId = billMatch
+      ? `VC${billMatch[1]!.slice(-2)}${billMatch[2]!.toUpperCase()}`
+      : (input.orderNumber.replace(/[^A-Za-z0-9]/g, "").slice(0, 12).toUpperCase() ||
+          input.orderNumber);
     const terminalId = this.terminalId();
     const alnumOnly = input.attemptId.replace(/[^A-Za-z0-9]/g, "");
     if (!alnumOnly)
@@ -622,7 +631,7 @@ export class FonepayGateway implements PaymentGateway {
       "POST",
       {
         amount: input.amountNpr,
-        billId: input.orderNumber,
+        billId,
         terminalId,
         paymentMode: "QR",
         referenceLabel: reference,
