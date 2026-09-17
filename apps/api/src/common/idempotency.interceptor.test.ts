@@ -11,6 +11,7 @@ function context(
   body: unknown,
   responseStatus = 201,
   headerName: "idempotency-key" | "x-idempotency-key" = "idempotency-key",
+  path = "/api/v1/customer/orders/11111111-1111-4111-8111-111111111111/pay",
 ) {
   const response = {
     statusCode: responseStatus,
@@ -22,7 +23,7 @@ function context(
       switchToHttp: () => ({
         getRequest: () => ({
           method: "POST",
-          path: "/api/v1/customer/orders/11111111-1111-4111-8111-111111111111/pay",
+          path,
           body,
           headers: { [headerName]: "retry-key-123" },
           user: { id: "customer-1" },
@@ -86,6 +87,31 @@ describe("IdempotencyInterceptor", () => {
         }),
       ),
     ).resolves.toEqual({ ok: true });
+  });
+
+  it("bypasses idempotency for fire-and-forget payment telemetry", async () => {
+    const prisma = {
+      enabled: true,
+      apiIdempotencyRecord: {
+        create: vi.fn(),
+        update: vi.fn(),
+        updateMany: vi.fn(),
+      },
+    };
+    const interceptor = new IdempotencyInterceptor(prisma as never);
+    const ctx = context(
+      { event: "BANK_LAUNCH_ATTEMPTED" },
+      200,
+      "x-idempotency-key",
+      "/api/v1/customer/orders/11111111-1111-4111-8111-111111111111/payment/telemetry",
+    );
+    const handler = { handle: vi.fn(() => of({ recorded: true })) };
+    await expect(
+      lastValueFrom(interceptor.intercept(ctx.value, handler)),
+    ).resolves.toEqual({ recorded: true });
+    expect(handler.handle).toHaveBeenCalledTimes(1);
+    expect(prisma.apiIdempotencyRecord.create).not.toHaveBeenCalled();
+    expect(ctx.response.setHeader).not.toHaveBeenCalled();
   });
 
   it("persists completion before releasing a successful response", async () => {

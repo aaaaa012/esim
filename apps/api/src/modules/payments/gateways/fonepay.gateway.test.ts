@@ -289,6 +289,66 @@ describe("FonepayGateway", () => {
     expect(serialized).not.toContain("private/session-token");
   });
 
+  it("logs the exact bank-list request headers including paymentMode INTENT", async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const prisma = {
+      enabled: true,
+      integrationLog: { create },
+      fonepayBankDirectoryEntry: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      fonepayBankDirectorySync: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+    } as unknown as PrismaService;
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(json({ accessToken: "directory-token" }))
+        .mockResolvedValueOnce(
+          json({
+            bankDetails: [
+              {
+                bankName: "Test Bank",
+                bankCode: "TSTBNPKA",
+                intentScheme: "tstbank://pay",
+              },
+            ],
+          }),
+        )
+        .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+          const body = JSON.parse(String(init.body));
+          return json({
+            prn: body.referenceLabel,
+            status: "Success",
+            qrString: "scan-payload",
+          });
+        }),
+    );
+
+    await new FonepayGateway(prisma).initiate({
+      attemptId: "banks-logging-attempt",
+      orderId: "order-banks",
+      orderNumber: "VC-103",
+      amountNpr: 815,
+      returnUrl: "https://checkout.example/return",
+    });
+
+    const banksLog = create.mock.calls
+      .map(([call]) => call.data)
+      .find((entry) => entry.operation === "fonepay-list");
+    expect(banksLog).toMatchObject({
+      method: "GET",
+      endpoint: expect.stringContaining("/banks/list"),
+      requestHeaders: { paymentMode: "INTENT" },
+    });
+    // Never log the bearer token or the request signature.
+    const serialized = JSON.stringify(banksLog);
+    expect(serialized).not.toContain("directory-token");
+    expect(serialized).not.toContain("signature");
+  });
+
   it("rejects QR amounts outside the provider contract before any API call", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

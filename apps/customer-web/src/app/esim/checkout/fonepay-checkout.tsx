@@ -94,7 +94,7 @@ export function FonepayCheckout({
       />
       {expiresAt ? <PaymentExpiryCountdown expiresAt={expiresAt} /> : null}
       {qrView ? (
-        <div className="fonepay-qr-stage">
+        <div className="fonepay-qr-view">
           {hasBanks ? (
             <button
               type="button"
@@ -117,22 +117,24 @@ export function FonepayCheckout({
             </li>
             <li>Approve the payment to confirm your order.</li>
           </ol>
-          {qrDataUrl ? (
-            <img
-              className="fonepay-qr"
-              src={qrDataUrl}
-              alt="Fonepay payment QR code"
-            />
-          ) : (
-            <div className="fonepay-qr-fallback-box" role="status">
-              <b>Scan code saved in your banking app</b>
-              <span>
-                The QR image is not available yet. Open a Fonepay-supported
-                banking app, choose the saved code for this store under
-                &ldquo;Scan QR&rdquo;, and approve the payment.
-              </span>
-            </div>
-          )}
+          <div className="fonepay-qr-card">
+            {qrDataUrl ? (
+              <img
+                className="fonepay-qr"
+                src={qrDataUrl}
+                alt="Fonepay payment QR code"
+              />
+            ) : (
+              <div className="fonepay-qr-fallback-box" role="status">
+                <b>Scan code saved in your banking app</b>
+                <span>
+                  The QR image is not available yet. Open a Fonepay-supported
+                  banking app, choose the saved code for this store under
+                  &ldquo;Scan QR&rdquo;, and approve the payment.
+                </span>
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         <>

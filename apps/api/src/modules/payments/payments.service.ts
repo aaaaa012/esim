@@ -94,6 +94,11 @@ type LookupVerdict =
   | {
       outcome: "TERMINAL";
       resolve: boolean;
+      // True when the provider reports a terminal non-success that is still
+      // ambiguous against a charge: a transaction record exists at the provider
+      // (or money has moved), so automatically allowing a retry could double
+      // charge the customer. Escalate to operational review instead.
+      retryUnsafe?: boolean;
       paymentStatus: PaymentStatus;
       code: string;
       message: string;
@@ -811,6 +816,12 @@ evidence: {
         verdict.reason,
         verdict.paymentStatus,
       );
+    else if (verdict.retryUnsafe)
+      // A terminal non-success backed by a provider transaction record is
+      // ambiguous against a charge. Never auto-close it as a retryable
+      // failure and never revoke the retry the customer already earned — put
+      // it in front of an operator and block fresh attempts until reconciled.
+      await this.orders.requirePaymentReview?.(orderId, verdict.reason);
     else
       await this.flagPaymentMismatch(
         this.orders.get(orderId, ownerId ?? undefined),
@@ -819,7 +830,7 @@ evidence: {
     throw new ApiException({
       code: verdict.code,
       message: verdict.message,
-      status: 400,
+      status: verdict.retryUnsafe ? 409 : 400,
       details: verdict.reason,
     });
   }
@@ -917,6 +928,20 @@ evidence: {
     )
       return { outcome: "PENDING" };
     if (result.status === PaymentStatus.CANCELLED) {
+      // A provider transaction id proves a record was created at the wallet,
+      // so a "cancelled" status no longer proves nothing was charged — the
+      // payment is ambiguous and must not be blindly retried.
+      if (result.providerTransactionId)
+        return {
+          outcome: "TERMINAL",
+          resolve: false,
+          retryUnsafe: true,
+          paymentStatus: PaymentStatus.CANCELLED,
+          code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+          message:
+            "Your payment could not be confirmed automatically. Our team must check it before a new attempt is safe.",
+          reason: `Customer cancelled at the wallet but a provider transaction record exists (${result.providerTransactionId})`,
+        };
       return {
         outcome: "TERMINAL",
         resolve: true,
@@ -927,6 +952,31 @@ evidence: {
         reason: "Customer cancelled the payment at the wallet",
       };
     }
+    if (result.status === PaymentStatus.REFUNDED) {
+      // Money moved for this session and was returned. A retry is never a
+      // replay of a refunded charge; the order belongs with an operator.
+      return {
+        outcome: "TERMINAL",
+        resolve: false,
+        retryUnsafe: true,
+        paymentStatus: PaymentStatus.REFUNDED,
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "Your payment could not be confirmed automatically. Our team must check it before a new attempt is safe.",
+        reason: `Provider reports this session refunded (transaction ${result.providerTransactionId ?? "unknown"})`,
+      };
+    }
+    if (result.providerTransactionId)
+      return {
+        outcome: "TERMINAL",
+        resolve: false,
+        retryUnsafe: true,
+        paymentStatus: PaymentStatus.FAILED,
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "Your payment could not be confirmed automatically. Our team must check it before a new attempt is safe.",
+        reason: `Provider status ${result.status ?? "unknown"} with an existing transaction record (${result.providerTransactionId})`,
+      };
     return {
       outcome: "TERMINAL",
       resolve: true,
@@ -995,7 +1045,9 @@ evidence: {
         } else {
           await this.markReviewRequired(
             order,
-            `Payment completion remains ${verdict.outcome === "PENDING" ? "pending" : "mismatched"} after the payment window`,
+            verdict.outcome === "TERMINAL"
+              ? verdict.reason
+              : `Payment completion remains pending after the payment window`,
           );
           await this.clearVerifyAttempts(order);
           reviewRequired.push(order.id);

@@ -210,6 +210,7 @@ export class FonepayGateway implements PaymentGateway {
     correlationId?: string;
     errorCode?: string;
     errorMessage?: string;
+    requestHeaders?: Prisma.InputJsonValue;
     requestBody?: Prisma.InputJsonValue;
     responseBody?: Prisma.InputJsonValue;
   }) {
@@ -343,6 +344,13 @@ export class FonepayGateway implements PaymentGateway {
     const token = await this.auth(correlationId);
     const payload = body ?? {};
     const startedAt = Date.now();
+    // Ops need the exact request shape (notably paymentMode) to reproduce an
+    // issuer's rejection. Log the safe headers only: never the bearer token
+    // and never the request signature.
+    const requestHeaders: Record<string, string> =
+      method === "POST" ? { "content-type": "application/json" } : {};
+    for (const [key, value] of Object.entries(extra))
+      if (key.toLowerCase() !== "signature") requestHeaders[key] = value;
     let response: Response;
     try {
       response = await fetch(`${this.base}${path}`, {
@@ -370,6 +378,7 @@ export class FonepayGateway implements PaymentGateway {
         ...(correlationId ? { correlationId } : {}),
         errorCode: "NETWORK_ERROR",
         errorMessage: error instanceof Error ? error.message : String(error),
+        requestHeaders,
         requestBody: this.redact(payload),
       });
       return this.fail(`Fonepay ${path} network request failed`);
@@ -388,6 +397,7 @@ export class FonepayGateway implements PaymentGateway {
             errorMessage: `Fonepay returned HTTP ${response.status}`,
           }
         : {}),
+      requestHeaders,
       requestBody: this.redact(payload),
       responseBody: this.redact(data),
     });

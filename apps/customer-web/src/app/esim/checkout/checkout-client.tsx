@@ -301,9 +301,14 @@ export default function CheckoutClient({
       return token;
     };
     const method = init?.method?.toUpperCase() ?? "GET";
-    let mutation = isGet
-      ? null
-      : mutationKey(`${currentGuest ? "guest" : "customer"}:${method}:${path}`);
+    // Fire-and-forget diagnostics are intentionally not idempotent: each event
+    // has a unique body, so an idempotency claim would be keyed to one event
+    // and every later event with the same stored key would be rejected with a
+    // 409 (and the key would never be released across deep-link navigation).
+    let mutation =
+      isGet || path.includes("/payment/telemetry")
+        ? null
+        : mutationKey(`${currentGuest ? "guest" : "customer"}:${method}:${path}`);
     const makeInit = () => ({
       ...init,
       ...(body !== undefined ? { body } : {}),
@@ -338,7 +343,10 @@ export default function CheckoutClient({
       currentToken()
     ) {
       toGuest();
-      mutation = isGet ? null : mutationKey(`guest:${method}:${path}`);
+      mutation =
+        isGet || path.includes("/payment/telemetry")
+          ? null
+          : mutationKey(`guest:${method}:${path}`);
       setGuest((g) => {
         const next = g || true;
         guestRef.current = next;
@@ -2952,7 +2960,8 @@ export default function CheckoutClient({
                             Simulate verified payment
                           </Action>
                         </div>
-                      ) : payment.qrDataUrl || payment.qrPayload ? (
+                      ) : order?.status === "PAYMENT_PENDING" &&
+                          (payment.qrDataUrl || payment.qrPayload) ? (
                         <FonepayCheckout
                           titleId="fonepay-checkout-title"
                           banks={

@@ -97,4 +97,33 @@ describe("FonepayCheckout", () => {
       screen.queryByRole("button", { name: /back to banking apps/i }),
     ).not.toBeInTheDocument();
   });
+
+  it("keeps the QR alone in its card with timer, steps and navigation outside it", () => {
+    const { container } = render(
+      <FonepayCheckout
+        {...baseProps()}
+        expiresAt={new Date(Date.now() + 60_000).toISOString()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /scan the qr code/i }),
+    );
+
+    const card = container.querySelector(".fonepay-qr-card");
+    expect(card).toBeInTheDocument();
+    // The card holds only the QR image (or its fallback) — never the timer,
+    // the instruction steps, or the back link.
+    expect(card?.querySelector(".fonepay-qr")).toBeInTheDocument();
+    expect(card?.querySelector(".fonepay-qr-expiry")).not.toBeInTheDocument();
+    expect(card?.querySelector(".fonepay-qr-steps")).not.toBeInTheDocument();
+    expect(card?.querySelector(".fonepay-qr-back")).not.toBeInTheDocument();
+    expect(
+      container.querySelector(".fonepay-qr-expiry"),
+    ).toBeInTheDocument();
+    expect(container.querySelector(".fonepay-qr-steps")).toBeInTheDocument();
+    expect(
+      container.querySelector(".fonepay-qr-back"),
+    ).toBeInTheDocument();
+  });
 });

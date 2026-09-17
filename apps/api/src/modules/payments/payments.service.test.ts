@@ -88,12 +88,21 @@ function makeService(opts: {
     },
   );
 
+  const reviewRequired = vi.fn(
+    async (id: string, _reason: string) => {
+      order.status = OrderStatus.PAYMENT_REVIEW_REQUIRED;
+      order.payment.status = PaymentStatus.REVIEW_REQUIRED;
+      return order;
+    },
+  );
+
   const orders = {
     get: () => order,
     view: () => order,
     list: () => [order],
     confirmPayment: confirmed,
     resolvePaymentFailure: failed,
+    requirePaymentReview: reviewRequired,
   };
 
   const svc = new PaymentsService(orders as never, {} as never, {} as never);
@@ -114,7 +123,14 @@ function makeService(opts: {
     },
   };
   (svc as unknown as { gateway: () => typeof gateway }).gateway = () => gateway;
-  return { svc, order, confirmed, confirmedCalls, failedCalls };
+  return {
+    svc,
+    order,
+    confirmed,
+    confirmedCalls,
+    failedCalls,
+    reviewRequired,
+  };
 }
 
 describe("PaymentsService inventory admission", () => {
@@ -409,6 +425,62 @@ describe("PaymentsService payment verification mapping", () => {
       },
     ]);
     expect(order.status).toBe(OrderStatus.PAYMENT_FAILED);
+  });
+
+  it("escalates a cancelled wallet session with a provider transaction to review, never retry", async () => {
+    // A provider transaction id means a record was created at the wallet even
+    // though the status is cancelled — automatically closing it as retryable
+    // could double charge the customer.
+    const { svc, order, failedCalls, reviewRequired } = makeService({
+      status: PaymentStatus.CANCELLED,
+      transactionId: "tx-ambiguous",
+    });
+    await expect(
+      svc.verify("order-1", "user-1", "pidx-1"),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE });
+    expect(failedCalls).toHaveLength(0);
+    expect(reviewRequired).toHaveBeenCalledWith("order-1", expect.any(String));
+    expect(order.status).toBe(OrderStatus.PAYMENT_REVIEW_REQUIRED);
+    expect(order.payment.status).toBe(PaymentStatus.REVIEW_REQUIRED);
+  });
+
+  it("escalates a refunded session to review instead of retrying", async () => {
+    // Money moved for this session and was returned; a retry is never a replay
+    // of a refunded charge.
+    const { svc, order, failedCalls, reviewRequired } = makeService({
+      status: PaymentStatus.REFUNDED,
+      transactionId: "tx-refunded",
+    });
+    await expect(
+      svc.verify("order-1", "user-1", "pidx-1"),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE });
+    expect(failedCalls).toHaveLength(0);
+    expect(reviewRequired).toHaveBeenCalledWith("order-1", expect.any(String));
+    expect(order.status).toBe(OrderStatus.PAYMENT_REVIEW_REQUIRED);
+  });
+
+  it("escalates a failed status that still has a provider transaction to review", async () => {
+    const { svc, order, failedCalls, reviewRequired } = makeService({
+      status: PaymentStatus.FAILED,
+      transactionId: "tx-recorded",
+    });
+    await expect(
+      svc.verify("order-1", "user-1", "pidx-1"),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE });
+    expect(failedCalls).toHaveLength(0);
+    expect(reviewRequired).toHaveBeenCalledWith("order-1", expect.any(String));
+    expect(order.status).toBe(OrderStatus.PAYMENT_REVIEW_REQUIRED);
+  });
+
+  it("keeps a plain cancelled session (no provider transaction) retryable", async () => {
+    const { svc, failedCalls, reviewRequired } = makeService({
+      status: PaymentStatus.CANCELLED,
+    });
+    await expect(
+      svc.verify("order-1", "user-1", "pidx-1"),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_NOT_CONFIRMED });
+    expect(failedCalls).toHaveLength(1);
+    expect(reviewRequired).not.toHaveBeenCalled();
   });
 
   it("propagates provider errors without touching the order", async () => {

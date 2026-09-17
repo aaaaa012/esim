@@ -52,6 +52,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
       !["POST", "PATCH", "PUT", "DELETE"].includes(request.method) ||
       request.path.includes("/webhooks/") ||
       request.path.includes("/recharges") ||
+      // Append-only client diagnostics: fire-and-forget events are keyed by
+      // per-event bodies, so replay semantics (and the same-key/different-body
+      // 409) do not apply. Skipping also avoids leaking stale session keys
+      // built up while the checkout navigates away to a banking app.
+      request.path.includes("/payment/telemetry") ||
       Boolean(
         request.body &&
         typeof request.body === "object" &&

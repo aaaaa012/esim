@@ -1405,10 +1405,10 @@
   text-align: center;
 }
 
-.fonepay-qr-stage {
+.fonepay-qr-view {
   display: grid;
   justify-items: center;
-  gap: 10px;
+  gap: 12px;
   text-align: center;
 }
 
@@ -1464,7 +1464,8 @@
 .fonepay-qr-steps {
   display: grid;
   gap: 3px;
-  margin: 0;
+  max-width: min(100%, 380px);
+  margin: 0 auto;
   padding-left: 18px;
   color: #4a4a4a;
   font-size: 14px;
@@ -1483,13 +1484,21 @@
   line-height: 1.5;
 }
 
-.fonepay-qr {
-  width: min(100%, 244px);
-  height: auto;
-  margin-top: 5px;
-  padding: 12px;
+.fonepay-qr-card {
+  width: min(100%, 300px);
+  margin-inline: auto;
+  padding: 18px;
   border: 1px solid #dedede;
-  border-radius: 10px;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 8px 28px rgb(10 13 18 / 8%);
+}
+
+.fonepay-qr {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
   background: #ffffff;
 }
 
@@ -2232,9 +2241,9 @@
     padding: 20px 14px;
     border-radius: 14px;
   }
-  .fonepay-qr {
-    width: min(72vw, 244px);
-    padding: 8px;
+  .fonepay-qr-card {
+    width: min(72vw, 300px);
+    padding: 12px;
   }
   .fonepay-bank-list button {
     gap: 8px;
