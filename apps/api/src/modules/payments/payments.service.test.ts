@@ -134,6 +134,36 @@ function makeService(opts: {
 }
 
 describe("PaymentsService inventory admission", () => {
+  it("does not contact a payment provider before document prerequisites pass", async () => {
+    const order = orderFor({
+      status: OrderStatus.DRAFT,
+      purchaseType: "INITIAL_PURCHASE",
+      payment: undefined,
+    });
+    const prerequisiteError = new ApiException({
+      code: "PASSPORT_VERIFICATION_REQUIRED",
+      message: "Passport verification must complete before payment",
+    });
+    const initiate = vi.fn();
+    const service = new PaymentsService(
+      {
+        refreshOne: vi.fn(),
+        get: vi.fn().mockReturnValue(order),
+        assertPaymentPrerequisites: vi
+          .fn()
+          .mockRejectedValue(prerequisiteError),
+        assertInventoryAvailableForNewOrder: vi.fn(),
+      } as never,
+      { initiate } as never,
+      { initiate } as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.FONEPAY),
+    ).rejects.toBe(prerequisiteError);
+    expect(initiate).not.toHaveBeenCalled();
+  });
+
   it("does not open a payment session when a new purchase has no inventory", async () => {
     const order = orderFor({
       status: OrderStatus.DRAFT,

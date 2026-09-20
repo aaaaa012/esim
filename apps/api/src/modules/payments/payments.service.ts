@@ -254,6 +254,10 @@ export class PaymentsService {
   ) {
     await this.orders.refreshOne?.(orderId, true);
     const order = this.orders.get(orderId, ownerId ?? undefined);
+    // Fail locally before creating a remote payment intent. The order service
+    // repeats this check in beginPayment after the provider responds to guard
+    // against document state changing while the request is in flight.
+    await this.orders.assertPaymentPrerequisites?.(orderId, ownerId);
     if (order.purchaseType !== "TOPUP")
       await this.orders.assertInventoryAvailableForNewOrder();
     this.assertSafeToInitiate(order);
@@ -354,6 +358,25 @@ export class PaymentsService {
             message: "Another payment provider session is still active",
             status: 409,
           });
+        if (
+          provider === PaymentProvider.FONEPAY &&
+          this.fonepay &&
+          !stored.banks?.length &&
+          stored.qrPayload
+        ) {
+          const banks = await this.fonepay.checkoutBanks(order.id);
+          if (banks.length) {
+            const restored = { ...stored, banks };
+            await prisma.paymentInitiation.updateMany({
+              where: {
+                id: record.id,
+                status: PaymentInitiationStatus.COMPLETED,
+              },
+              data: { result: restored as Prisma.InputJsonValue },
+            });
+            return restored;
+          }
+        }
         return stored;
       }
       if (

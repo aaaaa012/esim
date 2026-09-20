@@ -1369,37 +1369,7 @@ export class OrdersService implements OnModuleInit {
       new Date(order.payment.expiresAt).getTime() > Date.now()
     )
       throw new ConflictException("Another payment session is already active");
-    if (order.purchaseType !== "TOPUP") {
-      const required = order.documents.filter((d) =>
-        [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type),
-      );
-      if (!order.traveler || required.length !== 2)
-        throw new BadRequestException(
-          "Traveler, passport, and ticket are required",
-        );
-      await Promise.all(
-        required.map((document) =>
-          this.storage.verifyDocument(document.privateAssetId),
-        ),
-      );
-      required.forEach((document) => {
-        document.uploadVerified = true;
-      });
-      const review = order.documentReviewStatus;
-      if (review === "REUPLOAD_REQUIRED")
-        throw new ApiException({
-          code: "PASSPORT_VERIFICATION_REQUIRED",
-          message: "Upload a clearer passport before payment",
-        });
-      if (!["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(review ?? ""))
-        throw new ApiException({
-          code: "PASSPORT_VERIFICATION_REQUIRED",
-          message:
-            review === "OCR_PENDING" || review === "OCR_BACKGROUND"
-              ? "Passport verification must complete before payment"
-              : "Passport verification is required before payment",
-        });
-    }
+    await this.assertPaymentPrerequisitesForOrder(order);
     if (order.status !== OrderStatus.PAYMENT_PENDING)
       this.transition(order, OrderStatus.PAYMENT_PENDING);
     order.payment = {
@@ -1417,6 +1387,49 @@ export class OrdersService implements OnModuleInit {
     };
     await this.persistence.save(order);
     return this.redact(order);
+  }
+
+  /**
+   * Validate every local prerequisite before a payment provider is contacted.
+   * beginPayment repeats the same check after provider initiation so a state
+   * change racing the remote request still cannot advance an ineligible order.
+   */
+  async assertPaymentPrerequisites(id: string, ownerId: string | null) {
+    const order = this.get(id, ownerId ?? undefined);
+    await this.assertPaymentPrerequisitesForOrder(order);
+  }
+
+  private async assertPaymentPrerequisitesForOrder(order: DemoOrder) {
+    if (order.purchaseType === "TOPUP") return;
+    const required = order.documents.filter((document) =>
+      [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type),
+    );
+    if (!order.traveler || required.length !== 2)
+      throw new BadRequestException(
+        "Traveler, passport, and ticket are required",
+      );
+    await Promise.all(
+      required.map((document) =>
+        this.storage.verifyDocument(document.privateAssetId),
+      ),
+    );
+    required.forEach((document) => {
+      document.uploadVerified = true;
+    });
+    const review = order.documentReviewStatus;
+    if (review === "REUPLOAD_REQUIRED")
+      throw new ApiException({
+        code: "PASSPORT_VERIFICATION_REQUIRED",
+        message: "Upload a clearer passport before payment",
+      });
+    if (!["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(review ?? ""))
+      throw new ApiException({
+        code: "PASSPORT_VERIFICATION_REQUIRED",
+        message:
+          review === "OCR_PENDING" || review === "OCR_BACKGROUND"
+            ? "Passport verification must complete before payment"
+            : "Passport verification is required before payment",
+      });
   }
   async confirmPayment(id: string, reference: string, transactionId?: string) {
     if (this.prisma.enabled)

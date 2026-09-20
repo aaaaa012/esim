@@ -596,6 +596,16 @@ export class FonepayGateway implements PaymentGateway {
       return [];
     }
   }
+
+  /**
+   * Restore issuer choices for an already-created intent. This never creates
+   * another QR or payment reference; it only refreshes the provider directory
+   * used to construct mobile deep links for the existing qrPayload.
+   */
+  async checkoutBanks(correlationId: string): Promise<FonepayBank[]> {
+    return this.banksForCheckout(correlationId);
+  }
+
   async initiate(input: {
     attemptId: string;
     orderId: string;

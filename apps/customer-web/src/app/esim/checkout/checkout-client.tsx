@@ -1125,6 +1125,26 @@ export default function CheckoutClient({
       body: JSON.stringify({ provider }),
     });
     setPayment(value);
+    // The initiation endpoint only returns the provider session. It has already
+    // persisted PAYMENT_PENDING before responding, so keep the local order in
+    // step immediately; otherwise a freshly returned Fonepay QR is hidden by
+    // the stale DRAFT render branch until the order is fetched again.
+    setOrder((current) =>
+      current?.id === target.id
+        ? {
+            ...current,
+            status: "PAYMENT_PENDING",
+            payment: {
+              provider,
+              reference: value.reference,
+              status: "PENDING",
+            },
+          }
+        : current,
+    );
+    void api<Order>(`/customer/orders/${target.id}`)
+      .then((current) => setOrder(current))
+      .catch(() => undefined);
     let isExternal = true;
     try {
       isExternal = new URL(value.redirectUrl).origin !== window.location.origin;
@@ -2960,7 +2980,8 @@ export default function CheckoutClient({
                             Simulate verified payment
                           </Action>
                         </div>
-                      ) : order?.status === "PAYMENT_PENDING" &&
+                      ) : provider === PaymentProvider.FONEPAY &&
+                          order?.status === "PAYMENT_PENDING" &&
                           (payment.qrDataUrl || payment.qrPayload) ? (
                         <FonepayCheckout
                           titleId="fonepay-checkout-title"
