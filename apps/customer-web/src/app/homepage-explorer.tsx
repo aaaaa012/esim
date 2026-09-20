@@ -2,7 +2,15 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, Pause, Play, RefreshCw, Smartphone } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CreditCard,
+  Pause,
+  Play,
+  RefreshCw,
+  Smartphone,
+} from "lucide-react";
 import {
   createContext,
   useContext,
@@ -16,6 +24,13 @@ import CountryPicker, { flagEmoji } from "./country-picker";
 import { formatPlanDataText } from "../lib/format-data";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+
+const HERO_FALLBACK_COUNTRIES: Country[] = [
+  { code: "AU", name: "Australia", popular: true },
+  { code: "CA", name: "Canada", popular: true },
+  { code: "FR", name: "France", popular: true },
+  { code: "DE", name: "Germany", popular: true },
+];
 
 type Country = { code: string; name: string; popular?: boolean };
 type Plan = {
@@ -113,9 +128,12 @@ export function HeroDestinationSearch() {
   const router = useRouter();
   const { countries, loading, error, retry } = useHomepageExplorer();
   const [selected, setSelected] = useState("");
+  const availableCountries = countries.length
+    ? countries
+    : HERO_FALLBACK_COUNTRIES;
   const popular = useMemo(
-    () => countries.filter((country) => country.popular).slice(0, 5),
-    [countries],
+    () => availableCountries.filter((country) => country.popular).slice(0, 5),
+    [availableCountries],
   );
   const exploreHref = selected
     ? `/destinations?country=${encodeURIComponent(selected)}`
@@ -130,32 +148,36 @@ export function HeroDestinationSearch() {
       tabIndex={-1}
     >
       <CountryPicker
-        countries={countries}
+        countries={availableCountries}
         value={selected}
         onChange={setSelected}
-        disabled={loading || error}
+        disabled={loading && countries.length === 0}
         label="Where are you headed?"
         placeholder={loading ? "Loading destinations…" : "Search destination"}
         searchPlaceholder="Search destinations…"
+        triggerIcon="search"
       />
       {popular.length ? (
-        <div className="hero-popular" aria-label="Popular destinations">
-          {popular.map((country) => (
-            <button
-              type="button"
-              key={country.code}
-              onClick={() =>
-                router.push(
-                  `/destinations?country=${encodeURIComponent(country.code)}`,
-                )
-              }
-            >
-              {flagEmoji(country.code)} <span>{country.name}</span>
-            </button>
-          ))}
+        <div className="hero-popular-block">
+          <span className="hero-popular-label">Popular destinations</span>
+          <div className="hero-popular" aria-label="Popular destinations">
+            {popular.map((country) => (
+              <button
+                type="button"
+                key={country.code}
+                onClick={() =>
+                  router.push(
+                    `/destinations?country=${encodeURIComponent(country.code)}`,
+                  )
+                }
+              >
+                {flagEmoji(country.code)} <span>{country.name}</span>
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
-      {error ? (
+      {error && availableCountries.length === 0 ? (
         <button type="button" className="hero-catalog-retry" onClick={retry}>
           <RefreshCw size={15} /> Destinations unavailable. Try again
         </button>
@@ -165,11 +187,17 @@ export function HeroDestinationSearch() {
       </Link>
       <div className="hero-utility-links">
         <span>
-          Already have an eSIM? <Link href="/recharge">Recharge</Link>
+          <CreditCard className="mobile-utility-icon" size={14} /> Already have
+          an eSIM?{" "}
+          <Link href="/recharge">
+            Recharge <ArrowRight size={14} />
+          </Link>
         </span>
         <span>
           <Smartphone size={14} /> Not sure about your phone?{" "}
-          <Link href="/compatibility">Check compatibility</Link>
+          <Link href="/compatibility">
+            Check compatibility <ArrowRight size={14} />
+          </Link>
         </span>
       </div>
     </div>
@@ -232,17 +260,38 @@ export function PopularRightNow() {
             <h2 id="popular-now-title">Traveller favourites</h2>
           </div>
           {canRotate ? (
-            <div className="homepage-popular-controls" aria-label="Traveller favourites controls">
-              <button type="button" aria-label="Previous recommendations" onClick={() => move(-1)}><ArrowLeft size={17} /></button>
-              <button type="button" aria-label="Next recommendations" onClick={() => move(1)}><ArrowRight size={17} /></button>
-              <button type="button" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>
+            <div
+              className="homepage-popular-controls"
+              aria-label="Traveller favourites controls"
+            >
+              <button
+                type="button"
+                aria-label="Previous recommendations"
+                onClick={() => move(-1)}
+              >
+                <ArrowLeft size={17} />
+              </button>
+              <button
+                type="button"
+                aria-label="Next recommendations"
+                onClick={() => move(1)}
+              >
+                <ArrowRight size={17} />
+              </button>
+              <button
+                type="button"
+                aria-pressed={paused}
+                onClick={() => setPaused((value) => !value)}
+              >
                 {paused ? <Play size={16} /> : <Pause size={16} />}
                 <span>{paused ? "Play" : "Pause"}</span>
               </button>
             </div>
           ) : null}
         </div>
-        <p className="sr-only" aria-live="polite">{announcement}</p>
+        <p className="sr-only" aria-live="polite">
+          {announcement}
+        </p>
         <div
           className="homepage-popular-rail"
           ref={railRef}

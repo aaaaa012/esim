@@ -320,6 +320,7 @@ export default function CountryPicker({
   label = "Choose your destination",
   placeholder = "Select a destination…",
   searchPlaceholder = "Search countries…",
+  triggerIcon = "globe",
 }: {
   countries: Country[];
   value: string;
@@ -328,6 +329,7 @@ export default function CountryPicker({
   label?: string;
   placeholder?: string;
   searchPlaceholder?: string;
+  triggerIcon?: "globe" | "search";
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -426,7 +428,11 @@ export default function CountryPicker({
             </>
           ) : (
             <>
-              <Globe2 size={18} />
+              {triggerIcon === "search" ? (
+                <Search size={22} />
+              ) : (
+                <Globe2 size={18} />
+              )}
               <span>{placeholder}</span>
             </>
           )}

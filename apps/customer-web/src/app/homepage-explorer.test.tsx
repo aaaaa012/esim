@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HeroDestinationSearch,
@@ -9,7 +9,10 @@ import {
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
 vi.mock("next/link", () => ({
-  default: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+  default: ({
+    children,
+    ...props
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a {...props}>{children}</a>
   ),
 }));
@@ -37,7 +40,13 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) =>
-      Promise.resolve(ok(url.includes("countries") ? countries : plans.map((plan) => ({ id: `feature-${plan.id}`, plan })))),
+      Promise.resolve(
+        ok(
+          url.includes("countries")
+            ? countries
+            : plans.map((plan) => ({ id: `feature-${plan.id}`, plan })),
+        ),
+      ),
     ),
   );
 });
@@ -59,10 +68,14 @@ function renderExplorer() {
 describe("homepage destination discovery", () => {
   it("keeps Explore generic until a destination is selected", async () => {
     renderExplorer();
-    const explore = await screen.findByRole("link", { name: /Explore eSIM plans/i });
+    const explore = await screen.findByRole("link", {
+      name: /Explore eSIM plans/i,
+    });
     expect(explore.getAttribute("href")).toBe("/destinations");
 
-    fireEvent.click(screen.getByRole("button", { name: /Search destination/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Search destination/i }),
+    );
     fireEvent.change(screen.getByPlaceholderText("Search destinations…"), {
       target: { value: "Australia" },
     });
@@ -78,27 +91,28 @@ describe("homepage destination discovery", () => {
     expect(screen.getByText("NPR 999")).toBeTruthy();
   });
 
-  it("offers an inline retry when the catalog is unavailable", async () => {
-    let failures = 2;
+  it("keeps evergreen destinations available when the catalog is unavailable", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn((url: string) => {
-        if (failures-- > 0) return Promise.reject(new Error("offline"));
-        return Promise.resolve(ok(url.includes("countries") ? countries : plans.map((plan) => ({ id: `feature-${plan.id}`, plan }))));
-      }),
+      vi.fn(() => Promise.reject(new Error("offline"))),
     );
     renderExplorer();
-    fireEvent.click(await screen.findByRole("button", { name: /Try again/i }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /India/i })).toBeTruthy(),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: /Australia/i }));
+    expect(navigation.push).toHaveBeenCalledWith("/destinations?country=AU");
+    expect(screen.queryByText(/Destinations unavailable/i)).toBeNull();
   });
 
   it("keeps recharge and compatibility as tertiary paths", async () => {
     renderExplorer();
-    expect((await screen.findByRole("link", { name: "Recharge" })).getAttribute("href"))
-      .toBe("/recharge");
-    expect(screen.getByRole("link", { name: "Check compatibility" }).getAttribute("href"))
-      .toBe("/compatibility");
+    expect(
+      (await screen.findByRole("link", { name: "Recharge" })).getAttribute(
+        "href",
+      ),
+    ).toBe("/recharge");
+    expect(
+      screen
+        .getByRole("link", { name: "Check compatibility" })
+        .getAttribute("href"),
+    ).toBe("/compatibility");
   });
 });

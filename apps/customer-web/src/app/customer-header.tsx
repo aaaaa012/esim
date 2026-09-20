@@ -117,7 +117,9 @@ export default function CustomerHeader() {
     return (
       <header className="site-header checkout-focus-header">
         <div className="shell checkout-focus-inner">
-          <Link href="/destinations" aria-label="Back to plans"><ArrowLeft size={18} /> <span>Plans</span></Link>
+          <Link href="/destinations" aria-label="Back to plans">
+            <ArrowLeft size={18} /> <span>Plans</span>
+          </Link>
           <strong className="checkout-focus-brand">Visa Compass</strong>
           <Link href="/help">Support</Link>
         </div>
@@ -127,7 +129,9 @@ export default function CustomerHeader() {
 
   return (
     <>
-      <header className="site-header">
+      <header
+        className={`site-header ${path === "/" ? "home-site-header" : ""}`}
+      >
         <div className="shell header-inner">
           <Link
             className="brand"
@@ -217,7 +221,10 @@ export default function CustomerHeader() {
           </div>
         </div>
       </header>
-      <nav className="mobile-bottom-nav" aria-label="Primary mobile navigation">
+      <nav
+        className={`mobile-bottom-nav ${path === "/" ? "mobile-bottom-nav-home" : ""}`}
+        aria-label="Primary mobile navigation"
+      >
         <Link
           href="/"
           className={isExploreNavActive(path) ? "nav-active" : ""}
@@ -256,7 +263,7 @@ export default function CustomerHeader() {
             aria-current={path === "/recharge/recover" ? "page" : undefined}
           >
             <ClipboardList size={20} />
-            <span>Track order</span>
+            <span>Orders</span>
           </Link>
         </SignedOut>
         <SignedIn>
