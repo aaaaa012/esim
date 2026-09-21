@@ -88,13 +88,31 @@ export function HomepageExplorerProvider({
           countriesResponse.json(),
           plansResponse.json(),
         ])) as [Envelope<Country[]>, Envelope<FeaturedPlan[]>];
+        let homepagePlans = planData.data
+          .map((feature) => feature?.plan)
+          .filter((plan): plan is Plan => Boolean(plan));
+        if (!homepagePlans.length) {
+          try {
+            for (const path of [
+              "/public/plans?popular=true&limit=12",
+              "/public/plans?limit=12",
+            ]) {
+              const fallbackResponse = await fetch(`${API}${path}`, {
+                signal: controller.signal,
+              });
+              if (!fallbackResponse.ok) continue;
+              const fallbackData =
+                (await fallbackResponse.json()) as Envelope<Plan[]>;
+              homepagePlans = fallbackData.data;
+              if (homepagePlans.length) break;
+            }
+          } catch {
+            // The curated feed remains authoritative; an unavailable legacy
+            // fallback should not prevent destinations from loading.
+          }
+        }
         setCountries(countryData.data);
-        setPopularPlans(
-          planData.data
-            .map((feature) => feature?.plan)
-            .filter((plan): plan is Plan => Boolean(plan))
-            .slice(0, 24),
-        );
+        setPopularPlans(homepagePlans.slice(0, 24));
       })
       .catch((reason: unknown) => {
         if (!(reason instanceof DOMException && reason.name === "AbortError")) {

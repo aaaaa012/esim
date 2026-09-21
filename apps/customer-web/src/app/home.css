@@ -4658,6 +4658,7 @@
     }
     .hero-confidence {
       margin-top: 30px;
+      margin-bottom: 88px;
     }
     .hero-confidence > div {
       flex-direction: column;
@@ -4686,6 +4687,7 @@
       font-size: 12px;
     }
     .hero-skyline {
+      bottom: 78px;
       height: 112px;
       opacity: 0.82;
     }
@@ -4713,19 +4715,47 @@
     }
     .hero-discovery {
       margin-top: 22px;
-      padding: 20px 16px 18px;
+      padding: 18px 16px 14px;
     }
     .hero-discovery .country-picker label {
       font-size: 24px;
+      margin-bottom: 12px;
     }
     .hero-discovery .country-picker-trigger {
       min-height: 58px;
     }
     .hero-explore-button {
-      min-height: 56px;
+      min-height: 52px;
+      margin-top: 12px;
     }
     .hero-utility-links {
+      gap: 0;
+      margin-top: 10px;
+      padding-top: 6px;
       font-size: 12px;
+    }
+    .hero-utility-links span {
+      min-height: 30px;
+      font-size: 11px;
+    }
+    .hero-utility-links span > svg {
+      width: 15px;
+      height: 15px;
+    }
+    .hero-popular-block {
+      margin-top: 12px;
+    }
+    .hero-popular-label {
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+    .hero-popular button {
+      min-height: 38px;
+      padding-block: 5px;
+      font-size: 10px;
+    }
+    .hero-popular .country-flag-emoji {
+      font-size: 16px;
     }
     .hero-note-origin {
       top: 100px;
@@ -4737,15 +4767,23 @@
     }
     .hero-confidence {
       width: calc(100% + 8px);
+      margin-top: 18px;
       margin-inline: -4px;
     }
     .hero-confidence > div {
       padding-inline: 6px;
     }
     .hero-confidence > div > span {
-      width: 50px;
-      height: 50px;
-      flex-basis: 50px;
+      width: 48px;
+      height: 48px;
+      flex-basis: 48px;
+    }
+    .hero-confidence b {
+      font-size: 13px;
+    }
+    .hero-confidence small {
+      margin-top: 4px;
+      font-size: 11px;
     }
   }
 
@@ -4812,7 +4850,7 @@
 /* ---------- Compact mobile refinement ---------- */
 @media (max-width: 540px) {
   .hero {
-    padding-block: 18px 128px;
+    padding-block: 18px calc(148px + env(safe-area-inset-bottom));
   }
   .hero h1 {
     margin-block: 18px 16px;
@@ -5002,5 +5040,102 @@
   .faq-answer p {
     padding: 0 16px 16px;
     line-height: 1.55;
+  }
+}
+
+@media (max-width: 430px) {
+  .hero-discovery {
+    padding: 18px 16px 14px;
+  }
+  .hero-utility-links {
+    margin-top: 10px;
+    padding-top: 6px;
+  }
+  .hero-utility-links span {
+    min-height: 30px;
+  }
+
+  .homepage-popular {
+    padding-block: 26px 30px;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 82% 8%, rgba(123, 211, 231, 0.2), transparent 32%),
+      var(--bg);
+  }
+  .homepage-popular-heading {
+    align-items: flex-end;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .homepage-popular-heading > div:first-child > span {
+    display: inline-flex;
+    padding: 7px 10px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    font-size: 9px;
+    letter-spacing: 0.04em;
+  }
+  .homepage-popular-heading h2 {
+    max-width: 220px;
+    margin-top: 8px;
+    font-size: 34px;
+    line-height: 0.92;
+  }
+  .homepage-popular-controls {
+    gap: 6px;
+    padding-bottom: 2px;
+  }
+  .homepage-popular-controls button {
+    min-width: 36px;
+    min-height: 36px;
+    padding-inline: 8px;
+    border-radius: 11px;
+  }
+  .homepage-popular-rail {
+    gap: 8px;
+    padding-bottom: 6px;
+  }
+  .homepage-plan-card {
+    flex: 0 0 116px;
+    min-width: 116px;
+    min-height: 150px;
+    gap: 6px;
+    padding: 12px 10px;
+    border-radius: 12px;
+  }
+  .homepage-plan-country {
+    display: grid;
+    gap: 2px;
+  }
+  .homepage-plan-country > span {
+    font-size: 21px;
+  }
+  .homepage-plan-country small {
+    font-size: 10px;
+  }
+  .homepage-plan-card h3 {
+    font-size: 14px;
+    line-height: 1.05;
+  }
+  .homepage-plan-card p {
+    font-size: 10px;
+  }
+  .homepage-plan-card > div:last-child {
+    gap: 4px;
+    padding-top: 8px;
+  }
+  .homepage-plan-card > div:last-child b {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .homepage-plan-link {
+    min-height: 24px;
+    gap: 2px;
+    font-size: 8px;
+    white-space: nowrap;
+  }
+  .homepage-plan-link svg {
+    width: 11px;
+    height: 11px;
   }
 }

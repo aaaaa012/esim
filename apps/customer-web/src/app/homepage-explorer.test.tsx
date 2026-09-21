@@ -91,6 +91,21 @@ describe("homepage destination discovery", () => {
     expect(screen.getByText("NPR 999")).toBeTruthy();
   });
 
+  it("uses backend popular plans when no curated favourites are configured", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("countries")) return Promise.resolve(ok(countries));
+        if (url.includes("homepage-featured-plans"))
+          return Promise.resolve(ok([]));
+        return Promise.resolve(ok(plans));
+      }),
+    );
+    renderExplorer();
+    expect(await screen.findByRole("heading", { name: "India" })).toBeTruthy();
+    expect(screen.getByText("NPR 999")).toBeTruthy();
+  });
+
   it("keeps evergreen destinations available when the catalog is unavailable", async () => {
     vi.stubGlobal(
       "fetch",
