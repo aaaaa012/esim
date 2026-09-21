@@ -3,12 +3,15 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  ArrowRight,
   AlertTriangle,
+  CalendarDays,
   CheckCircle2,
   Globe2,
   MapPin,
+  Signal,
 } from "lucide-react";
-import CountryPicker, { flagEmoji } from "./country-picker";
+import CountryPicker from "./country-picker";
 import { formatPlanDataText } from "../lib/format-data";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -172,10 +175,11 @@ export default function CatalogPlans() {
     revealResultsFor.current = null;
     requestAnimationFrame(() => {
       const target = document.getElementById("plan-results");
+      const prefersReducedMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       target?.scrollIntoView({
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? "auto"
-          : "smooth",
+        behavior: prefersReducedMotion ? "auto" : "smooth",
         block: "start",
       });
       target?.focus({ preventScroll: true });
@@ -280,7 +284,9 @@ export default function CatalogPlans() {
         ) : null}
 
         {!countriesBusy && !error && !supported.length ? (
-          <p className="catalog-empty">No supported destinations are currently available.</p>
+          <p className="catalog-empty">
+            No supported destinations are currently available.
+          </p>
         ) : null}
       </section>
       {error ? (
@@ -333,36 +339,74 @@ export default function CatalogPlans() {
           Select a destination above to see its available plans.
         </p>
       ) : visible.length ? (
-        <div
-          className="cards"
-          id="plan-results"
-          tabIndex={-1}
-          aria-label={`Available plans for ${countryList.find((country) => country.code === selected)?.name ?? selected}`}
-        >
-          {visible.map((plan) => (
-            <article className="card" key={plan.id}>
-              {plan.popular ? <span className="badge">POPULAR</span> : null}
-              <span className="flag">{flagEmoji(plan.countryCode)}</span>
-              <h3>{plan.name}</h3>
-              <p className="plan-meta">
-                <MapPin size={13} style={{ verticalAlign: -2 }} />{" "}
-                {plan.countryName} · <strong>{formatPlanDataText(plan.dataAllowance)}</strong> ·{" "}
-                {plan.validityDays} {plan.validityDays === 1 ? "day" : "days"}
-              </p>
-              <div className="price">
-                <b>{npr(plan.sellingPriceNpr)}</b>
+        <section className="plan-results-section">
+          <div className="plan-results-heading">
+            <span>Choose plan</span>
+            <h2>
+              Best plans for{" "}
+              {countryList.find((country) => country.code === selected)?.name ??
+                selected}
+            </h2>
+            <p>Compare live plan allowances, validity, and NPR prices.</p>
+          </div>
+          <div
+            className="cards"
+            id="plan-results"
+            tabIndex={-1}
+            aria-label={`Available plans for ${countryList.find((country) => country.code === selected)?.name ?? selected}`}
+          >
+            {visible.map((plan) => (
+              <article className="card catalog-plan-card" key={plan.id}>
+                {plan.popular ? (
+                  <span className="badge">Most popular</span>
+                ) : null}
+                <div className="catalog-plan-main">
+                  <span className="catalog-plan-icon">
+                    <Signal aria-hidden="true" />
+                  </span>
+                  <div>
+                    <h3>{plan.name}</h3>
+                    <p>
+                      {formatPlanDataText(plan.dataAllowance)} ·{" "}
+                      {plan.validityDays}{" "}
+                      {plan.validityDays === 1 ? "day" : "days"}
+                    </p>
+                  </div>
+                  <b>{npr(plan.sellingPriceNpr)}</b>
+                </div>
+                <div className="catalog-plan-facts">
+                  <span>
+                    <MapPin aria-hidden="true" />
+                    <small>Destination</small>
+                    <b>{plan.countryName}</b>
+                  </span>
+                  <span>
+                    <Signal aria-hidden="true" />
+                    <small>Allowance</small>
+                    <b>{formatPlanDataText(plan.dataAllowance)}</b>
+                  </span>
+                  <span>
+                    <CalendarDays aria-hidden="true" />
+                    <small>Validity</small>
+                    <b>
+                      {plan.validityDays}{" "}
+                      {plan.validityDays === 1 ? "day" : "days"}
+                    </b>
+                  </span>
+                </div>
                 <Link
-                  className="button"
+                  className="button catalog-plan-select"
                   href={`/esim/checkout?plan=${plan.id}${targetEsimId ? `&esim=${encodeURIComponent(targetEsimId)}&country=${encodeURIComponent(targetCountry)}` : ""}`}
                 >
                   {targetEsimId && plan.countryCode === targetCountry
                     ? "Recharge"
-                    : "Choose"}
+                    : "Select plan"}{" "}
+                  <ArrowRight aria-hidden="true" />
                 </Link>
-              </div>
-            </article>
-          ))}
-        </div>
+              </article>
+            ))}
+          </div>
+        </section>
       ) : (
         <p className="catalog-empty">
           No plans available for this destination yet.

@@ -561,6 +561,131 @@ button {
   }
 }
 
+/* Shared Nepal journey chrome: visible only on mobile and tablet surfaces. */
+.journey-artwork,
+.journey-trust,
+.journey-skyline {
+  display: none;
+}
+
+@media (max-width: 880px) {
+  .journey-artwork {
+    position: absolute;
+    z-index: 0;
+    top: 0;
+    right: 0;
+    display: block;
+    width: 100%;
+    height: 610px;
+    overflow: hidden;
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(
+      180deg,
+      #000 0%,
+      #000 72%,
+      transparent 100%
+    );
+    mask-image: linear-gradient(180deg, #000 0%, #000 72%, transparent 100%);
+  }
+  .journey-artwork img {
+    position: absolute;
+    top: 0;
+    right: -34%;
+    width: 138%;
+    height: auto;
+  }
+  .journey-artwork-dark,
+  [data-theme="dark"] .journey-artwork-light,
+  .journey-skyline-dark,
+  [data-theme="dark"] .journey-skyline-light {
+    display: none;
+  }
+  [data-theme="dark"] .journey-artwork-dark,
+  [data-theme="dark"] .journey-skyline-dark {
+    display: block;
+  }
+  .journey-trust {
+    position: relative;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    margin-top: 24px;
+  }
+  .journey-trust > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-left: 1px solid var(--border);
+    text-align: center;
+  }
+  .journey-trust > div:first-child {
+    border-left: 0;
+  }
+  .journey-trust > div > span {
+    display: grid;
+    width: 48px;
+    height: 48px;
+    flex: 0 0 48px;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+  }
+  .journey-trust svg {
+    width: 22px;
+    height: 22px;
+  }
+  .journey-trust p {
+    margin: 0;
+    line-height: 1.2;
+  }
+  .journey-trust b,
+  .journey-trust small {
+    display: block;
+  }
+  .journey-trust b {
+    font-size: 13px;
+  }
+  .journey-trust small {
+    margin-top: 4px;
+    color: var(--text-3);
+    font-size: 11px;
+  }
+  .journey-trust.compact > div > span {
+    width: 42px;
+    height: 42px;
+    flex-basis: 42px;
+  }
+  .journey-trust.compact b {
+    font-size: 12px;
+  }
+  .journey-trust.compact small {
+    font-size: 10px;
+  }
+  .journey-skyline {
+    position: absolute;
+    z-index: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: block;
+    height: 112px;
+    overflow: hidden;
+    opacity: 0.72;
+    pointer-events: none;
+  }
+  .journey-skyline img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: bottom center;
+  }
+}
+
 /* ---------- Buttons ---------- */
 
 .button {

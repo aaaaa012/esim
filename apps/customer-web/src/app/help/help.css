@@ -2,8 +2,16 @@
   min-height: calc(100dvh - 72px);
   padding: 72px 0 96px;
   background:
-    radial-gradient(circle at 92% 5%, color-mix(in srgb, var(--accent-soft) 65%, transparent), transparent 30%),
-    radial-gradient(circle at 5% 42%, color-mix(in srgb, var(--route-soft) 55%, transparent), transparent 28%),
+    radial-gradient(
+      circle at 92% 5%,
+      color-mix(in srgb, var(--accent-soft) 65%, transparent),
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at 5% 42%,
+      color-mix(in srgb, var(--route-soft) 55%, transparent),
+      transparent 28%
+    ),
     var(--bg);
 }
 
@@ -265,7 +273,47 @@
 
 @media (max-width: 800px) {
   .help-page {
-    padding: 44px 0 72px;
+    position: relative;
+    isolation: isolate;
+    padding: 34px 0 120px;
+    overflow: hidden;
+    background: linear-gradient(
+      180deg,
+      #f8fdff 0%,
+      #f4fbfb 76%,
+      var(--bg) 100%
+    );
+  }
+
+  .help-page::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--bg) 98%, transparent) 0%,
+      color-mix(in srgb, var(--bg) 88%, transparent) 46%,
+      transparent 82%
+    );
+    pointer-events: none;
+  }
+
+  [data-theme="dark"] .help-page {
+    background: linear-gradient(180deg, #031827, #041a29 76%, var(--bg));
+  }
+  [data-theme="dark"] .help-page::before {
+    background: linear-gradient(
+      90deg,
+      rgba(3, 24, 39, 0.98),
+      rgba(3, 24, 39, 0.86) 48%,
+      transparent 84%
+    );
+  }
+
+  .help-shell {
+    position: relative;
+    z-index: 2;
   }
 
   .help-hero,
@@ -276,6 +324,28 @@
 
   .help-hero {
     align-items: start;
+  }
+
+  .help-hero h1 {
+    max-width: 430px;
+    background: linear-gradient(105deg, var(--text) 8%, var(--primary) 88%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .help-contact-summary {
+    min-height: 96px;
+    background: linear-gradient(110deg, #075985, #086b82 54%, #087f83);
+  }
+
+  .help-contact-summary > svg:last-child {
+    margin-left: auto;
+    color: white;
+  }
+  .help-contact-summary small {
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 11px;
   }
 
   .help-payment-alert {
@@ -294,13 +364,14 @@
   }
 
   .help-shell {
-    gap: 20px;
+    gap: 16px;
     padding-inline: 16px;
   }
 
   .help-hero h1 {
     margin: 12px 0 8px;
-    font-size: clamp(30px, 9vw, 36px);
+    font-size: clamp(38px, 11vw, 46px);
+    line-height: 0.94;
     line-height: 1.02;
   }
 
@@ -339,7 +410,7 @@
 
   .help-topic-grid {
     grid-template-columns: 1fr;
-    gap: 0;
+    gap: 12px;
     margin-top: 14px;
   }
 
@@ -347,11 +418,11 @@
     grid-template-columns: 40px minmax(0, 1fr);
     column-gap: 12px;
     min-height: 0;
-    padding: 16px 0;
-    border-radius: 0;
-    border-bottom: 1px solid var(--border);
-    background: transparent;
-    box-shadow: none;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    box-shadow: var(--shadow-xs);
   }
 
   .help-topic-card:first-child {
@@ -393,6 +464,9 @@
 
   .help-contact {
     gap: 16px;
+    border: 1px solid color-mix(in srgb, #16a34a 22%, var(--border));
+    border-radius: 18px;
+    background: color-mix(in srgb, #dcfce7 34%, var(--surface));
   }
 
   .help-contact-copy > p {
@@ -409,3 +483,4 @@
     width: 100%;
   }
 }
+border-radius: 18px;

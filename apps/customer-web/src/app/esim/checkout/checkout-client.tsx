@@ -27,9 +27,13 @@ import {
   Signal,
   AlertTriangle,
   Copy,
+  Mail,
+  Plane,
   Link2,
+  Smartphone,
   UserRound,
 } from "lucide-react";
+import { JourneyArtwork, JourneyTrustStrip } from "../../journey-chrome";
 import { flagEmoji } from "../../country-picker";
 import {
   DocumentProgress,
@@ -309,7 +313,9 @@ export default function CheckoutClient({
     let mutation =
       isGet || path.includes("/payment/telemetry")
         ? null
-        : mutationKey(`${currentGuest ? "guest" : "customer"}:${method}:${path}`);
+        : mutationKey(
+            `${currentGuest ? "guest" : "customer"}:${method}:${path}`,
+          );
     const makeInit = () => ({
       ...init,
       ...(body !== undefined ? { body } : {}),
@@ -784,7 +790,9 @@ export default function CheckoutClient({
     // Serialize manual and silent verification so two concurrent lookups
     // cannot race and regress the order to a stale snapshot.
     if (paymentVerificationInFlight.current) {
-      setError("We are already checking this payment. Please wait a moment, then check again.");
+      setError(
+        "We are already checking this payment. Please wait a moment, then check again.",
+      );
       setVerifying(false);
       return;
     }
@@ -821,8 +829,7 @@ export default function CheckoutClient({
           current = updated;
           if (updated.paymentRetry?.canRetry) {
             setPayment(null);
-            if (updated.paymentRetry.canChangeProvider)
-              setLockedProvider(null);
+            if (updated.paymentRetry.canChangeProvider) setLockedProvider(null);
           }
           if (TERMINAL_STATUSES.includes(updated.status)) {
             setVerifying(false);
@@ -869,7 +876,8 @@ export default function CheckoutClient({
           current = refreshed;
           if (refreshed.paymentRetry?.canRetry) {
             setPayment(null);
-            if (refreshed.paymentRetry.canChangeProvider) setLockedProvider(null);
+            if (refreshed.paymentRetry.canChangeProvider)
+              setLockedProvider(null);
           }
           if (TERMINAL_STATUSES.includes(refreshed.status)) {
             setVerifying(false);
@@ -884,9 +892,9 @@ export default function CheckoutClient({
           }
         }
       }
-      const refreshed = await api<Order>(`/customer/orders/${current.id}`).catch(
-        () => current,
-      );
+      const refreshed = await api<Order>(
+        `/customer/orders/${current.id}`,
+      ).catch(() => current);
       setOrder(refreshed);
       if (refreshed.paymentRetry?.canRetry) {
         setPayment(null);
@@ -931,25 +939,46 @@ export default function CheckoutClient({
         );
         setFieldErrors({
           ...(mismatched.has("firstName")
-            ? { firstName: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+            ? {
+                firstName:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
             : {}),
           ...(mismatched.has("middleName")
-            ? { middleName: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+            ? {
+                middleName:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
             : {}),
           ...(mismatched.has("surname")
-            ? { surname: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+            ? {
+                surname:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
             : {}),
           ...(mismatched.has("dateOfBirth")
-            ? { dateOfBirth: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+            ? {
+                dateOfBirth:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
             : {}),
           ...(mismatched.has("passportNumber")
-            ? { passportNumber: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+            ? {
+                passportNumber:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
             : {}),
           ...(mismatched.has("passportExpiryDate")
-            ? { passportExpiryDate: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+            ? {
+                passportExpiryDate:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
             : {}),
           ...(mismatched.has("nationality")
-            ? { nationality: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+            ? {
+                nationality:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
             : {}),
         });
       } else if (updated.documentReviewStatus === "MANUAL_REVIEW") {
@@ -1022,15 +1051,19 @@ export default function CheckoutClient({
           expiredPassport
             ? "This passport has expired. Upload a valid passport before continuing."
             : rejected.length
-            ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
-            : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
+              ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
+              : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
         );
       }
     }
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
       jumpTo(2);
-  }, [effectiveDocumentReviewStatus, order?.passportExtraction?.failureCode, step]);
+  }, [
+    effectiveDocumentReviewStatus,
+    order?.passportExtraction?.failureCode,
+    step,
+  ]);
   useEffect(() => {
     if (
       step === 3 &&
@@ -1655,8 +1688,7 @@ export default function CheckoutClient({
         }
         return;
       }
-      if (document.visibilityState === "visible")
-        void verifyFonepaySilently();
+      if (document.visibilityState === "visible") void verifyFonepaySilently();
       schedule();
     };
     const onVisibilityChange = () => {
@@ -1826,7 +1858,10 @@ export default function CheckoutClient({
       </main>
     );
   return (
-    <main className="checkout-page">
+    <main
+      className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}`}
+    >
+      {!isTopUp ? <JourneyArtwork /> : null}
       <div className="checkout-shell">
         <div className="checkout-heading">
           <Link href="/" className="back-link">
@@ -1843,10 +1878,29 @@ export default function CheckoutClient({
               : "Complete verification once. We’ll keep your order safe while our team reviews it."}
           </p>
         </div>
-        <div className="checkout-progress">
+        {!isTopUp ? (
+          <div
+            className="compact-checkout-progress"
+            role="progressbar"
+            aria-label={`Checkout step ${step} of 4`}
+            aria-valuemin={1}
+            aria-valuemax={4}
+            aria-valuenow={step}
+          >
+            <b>Step {step} of 4</b>
+            <span aria-hidden="true">
+              {[1, 2, 3, 4].map((item) => (
+                <i className={item <= step ? "complete" : ""} key={item} />
+              ))}
+            </span>
+          </div>
+        ) : null}
+        <div className="checkout-progress" aria-hidden="true">
           <span style={{ width: `${(isTopUp ? 1 : step * 0.25) * 100}%` }} />
         </div>
-        <div className="checkout-layout">
+        <div
+          className={`checkout-layout${!isTopUp ? " initial-checkout" : ""}${!isTopUp && step === 4 ? " step-payment" : ""}`}
+        >
           <section className="checkout-card" ref={transitionRef}>
             <div className="step-tabs">
               {(isTopUp
@@ -2065,11 +2119,26 @@ export default function CheckoutClient({
               >
                 <span className="sr-only">Restoring your order</span>
                 <div className="checkout-restore-fields" aria-hidden="true">
-                  <span className="skel" style={{ width: 190, height: 24, borderRadius: 6 }} />
-                  <span className="skel" style={{ width: "78%", height: 14, borderRadius: 6 }} />
-                  <span className="skel" style={{ width: "100%", height: 48, borderRadius: 8 }} />
-                  <span className="skel" style={{ width: "100%", height: 48, borderRadius: 8 }} />
-                  <span className="skel" style={{ width: "58%", height: 44, borderRadius: 8 }} />
+                  <span
+                    className="skel"
+                    style={{ width: 190, height: 24, borderRadius: 6 }}
+                  />
+                  <span
+                    className="skel"
+                    style={{ width: "78%", height: 14, borderRadius: 6 }}
+                  />
+                  <span
+                    className="skel"
+                    style={{ width: "100%", height: 48, borderRadius: 8 }}
+                  />
+                  <span
+                    className="skel"
+                    style={{ width: "100%", height: 48, borderRadius: 8 }}
+                  />
+                  <span
+                    className="skel"
+                    style={{ width: "58%", height: 44, borderRadius: 8 }}
+                  />
                 </div>
               </div>
             )}
@@ -2422,7 +2491,8 @@ export default function CheckoutClient({
                             passport result.
                           </p>
                         )}
-                        {effectiveDocumentReviewStatus === "REUPLOAD_REQUIRED" ? (
+                        {effectiveDocumentReviewStatus ===
+                        "REUPLOAD_REQUIRED" ? (
                           <DocumentRecoveryFields
                             documents={order?.documents ?? []}
                             types={["PASSPORT", "TICKET", "VISA"]}
@@ -2629,85 +2699,50 @@ export default function CheckoutClient({
                   ["QR_READY", "ACTIVATION_ATTENTION"].includes(
                     order.status,
                   ) ? (
-                  <div className="success-panel">
-                    {isTopUp ? (
+                  !isTopUp ? (
+                    <InitialOrderConfirmation
+                      order={order}
+                      plan={summaryPlan}
+                      stage="ready"
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                      onResend={isSignedIn === true ? resendQrEmail : undefined}
+                      resending={uxResending}
+                    />
+                  ) : (
+                    <div className="success-panel">
                       <CheckCircle2 size={42} />
-                    ) : (
-                      <QrCode size={42} />
-                    )}
-                    <b>
-                      {isTopUp
-                        ? "Package added to your existing eSIM"
-                        : "Your activation QR has been sent"}
-                    </b>
-                    <span>{order.orderNumber}</span>
-                    <p>
-                      {isTopUp
-                        ? "No new QR code or installation is required. The package will become active on your existing eSIM when the provider confirms first use."
-                        : "Install your eSIM using the QR image emailed to you, then connect to the network once to activate it. Your order will complete automatically."}
-                    </p>
-                    {isSignedIn === true && !isTopUp && (
-                      <>
-                        <Link className="button" href="/account/esims">
-                          View my eSIMs
-                        </Link>
-                        <Link
-                          className="button"
-                          href={
-                            isTopUp
-                              ? `/esim/checkout?order=${order.id}&recharge=1`
-                              : `/account/orders/${order.id}`
-                          }
-                        >
-                          Didn&apos;t get the QR? Recover it
-                        </Link>
-                        <button
-                          className="button secondary"
-                          onClick={resendQrEmail}
-                          disabled={uxResending}
-                        >
-                          {uxResending ? "Sending…" : "Re-send email"}
-                        </button>
-                      </>
-                    )}
-                  </div>
+                      <b>Package added to your existing eSIM</b>
+                      <span>{order.orderNumber}</span>
+                      <p>
+                        No new QR code or installation is required. The package
+                        will become active on your existing eSIM when the
+                        provider confirms first use.
+                      </p>
+                    </div>
+                  )
                 ) : order?.status === "COMPLETED" ? (
-                  <div className="success-panel">
-                    <CheckCircle2 size={42} />
-                    <b>
-                      {isTopUp ? "Your top-up is active" : "Your eSIM is ready"}
-                    </b>
-                    <span>{order.orderNumber}</span>
-                    <p>
-                      {isTopUp
-                        ? "The package is active on your existing eSIM. No new QR code or installation is required."
-                        : "Your activation QR was emailed to you as an image. Open it on another screen and scan it from your phone's eSIM settings."}
-                    </p>
-                    {isSignedIn === true && !isTopUp && (
-                      <>
-                        <Link className="button" href="/account/esims">
-                          View my eSIMs
-                        </Link>
-                        <Link
-                          className="button"
-                          href={
-                            isTopUp
-                              ? `/esim/checkout?order=${order.id}&recharge=1`
-                              : `/account/orders/${order.id}`
-                          }
-                        >
-                          Didn&apos;t get the QR? Recover it
-                        </Link>
-                        <button
-                          className="button secondary"
-                          onClick={resendQrEmail}
-                          disabled={uxResending}
-                        >
-                          {uxResending ? "Sending…" : "Re-send email"}
-                        </button>
-                      </>
-                    )}
-                  </div>
+                  !isTopUp ? (
+                    <InitialOrderConfirmation
+                      order={order}
+                      plan={summaryPlan}
+                      stage="complete"
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                      onResend={isSignedIn === true ? resendQrEmail : undefined}
+                      resending={uxResending}
+                    />
+                  ) : (
+                    <div className="success-panel">
+                      <CheckCircle2 size={42} />
+                      <b>Your top-up is active</b>
+                      <span>{order.orderNumber}</span>
+                      <p>
+                        The package is active on your existing eSIM. No new QR
+                        code or installation is required.
+                      </p>
+                    </div>
+                  )
                 ) : order?.status === "PAYMENT_REVIEW_REQUIRED" ? (
                   <div className="info-panel">
                     <AlertTriangle size={42} />
@@ -2769,21 +2804,30 @@ export default function CheckoutClient({
                     "APPROVED",
                     "PROVISIONING",
                   ].includes(order.status) ? (
-                  <div className="success-panel">
-                    <LoaderCircle className="spin" size={42} />
-                    <b>Payment verified. Activating your eSIM</b>
-                    <span>{order.orderNumber}</span>
-                    <p>
-                      {isTopUp
-                        ? "Payment received. Your recharge is processing. You can close this page and return using your tracking link."
-                        : "Your eSIM is being activated automatically. Your QR image will be emailed to you shortly."}
-                    </p>
-                    {isSignedIn === true && (
-                      <Link className="button" href="/account/esims">
-                        View my eSIMs
-                      </Link>
-                    )}
-                  </div>
+                  !isTopUp ? (
+                    <InitialOrderConfirmation
+                      order={order}
+                      plan={summaryPlan}
+                      stage="preparing"
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                    />
+                  ) : (
+                    <div className="success-panel">
+                      <LoaderCircle className="spin" size={42} />
+                      <b>Payment verified. Activating your eSIM</b>
+                      <span>{order.orderNumber}</span>
+                      <p>
+                        Payment received. Your recharge is processing. You can
+                        close this page and return using your tracking link.
+                      </p>
+                      {isSignedIn === true && (
+                        <Link className="button" href="/account/esims">
+                          View my eSIMs
+                        </Link>
+                      )}
+                    </div>
+                  )
                 ) : verifying ? (
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
@@ -2995,8 +3039,8 @@ export default function CheckoutClient({
                           </Action>
                         </div>
                       ) : provider === PaymentProvider.FONEPAY &&
-                          order?.status === "PAYMENT_PENDING" &&
-                          (payment.qrDataUrl || payment.qrPayload) ? (
+                        order?.status === "PAYMENT_PENDING" &&
+                        (payment.qrDataUrl || payment.qrPayload) ? (
                         <FonepayCheckout
                           titleId="fonepay-checkout-title"
                           banks={
@@ -3112,10 +3156,138 @@ export default function CheckoutClient({
               <LockKeyhole size={14} /> Price is frozen when your order is
               created.
             </p>
+            {!isTopUp ? <JourneyTrustStrip compact /> : null}
           </aside>
         </div>
       </div>
     </main>
+  );
+}
+
+function InitialOrderConfirmation({
+  order,
+  plan,
+  stage,
+  signedIn,
+  guestRecoveryUrl,
+  onResend,
+  resending = false,
+}: {
+  order: Order;
+  plan: PlanSummary | null;
+  stage: "preparing" | "ready" | "complete";
+  signedIn: boolean;
+  guestRecoveryUrl?: string;
+  onResend?: (() => void) | undefined;
+  resending?: boolean;
+}) {
+  const copy =
+    stage === "preparing"
+      ? {
+          title: "Payment received. We are preparing your eSIM.",
+          description: "Your QR will be emailed after provisioning succeeds.",
+          badge: "Preparing eSIM",
+        }
+      : stage === "ready"
+        ? {
+            title: "Your eSIM is ready to install.",
+            description:
+              "Your installation QR and instructions have been sent to your purchase email.",
+            badge: "Ready to install",
+          }
+        : {
+            title: "Your eSIM is ready.",
+            description:
+              "Open My eSIM for installation details, usage, and plan status.",
+            badge: "Ready",
+          };
+  return (
+    <section
+      className="initial-order-confirmation"
+      aria-labelledby="initial-order-confirmation-title"
+    >
+      <div className="initial-confirmation-heading">
+        <span className="initial-confirmation-check">
+          <Check aria-hidden="true" />
+        </span>
+        <div>
+          <small>Your eSIM order</small>
+          <h3 id="initial-order-confirmation-title">{copy.title}</h3>
+          <p>{copy.description}</p>
+        </div>
+      </div>
+      <div className="initial-confirmation-order">
+        <div>
+          <small>{plan?.name ?? "Travel eSIM"}</small>
+          <b>
+            {plan
+              ? `${formatPlanDataText(plan.dataAllowance)} · ${plan.validityDays} days`
+              : `Order ${order.orderNumber}`}
+          </b>
+          <span>Order #{order.orderNumber}</span>
+        </div>
+        <strong>{copy.badge}</strong>
+      </div>
+      <ol className="initial-confirmation-timeline">
+        <li>
+          <span>
+            <Mail aria-hidden="true" />
+          </span>
+          <div>
+            <b>QR sent to your email</b>
+            <p>
+              We send the QR and instructions after successful provisioning.
+            </p>
+          </div>
+        </li>
+        <li>
+          <span>
+            <Smartphone aria-hidden="true" />
+          </span>
+          <div>
+            <b>Install before departure</b>
+            <p>Use the public setup guide while you have reliable Wi-Fi.</p>
+          </div>
+        </li>
+        <li>
+          <span>
+            <Plane aria-hidden="true" />
+          </span>
+          <div>
+            <b>Enable Ubigi near arrival</b>
+            <p>
+              Select the installed Ubigi line for mobile data when you are ready
+              to connect.
+            </p>
+          </div>
+        </li>
+      </ol>
+      <div className="initial-confirmation-actions">
+        {signedIn ? (
+          <Link className="button" href="/account/esims">
+            Go to My eSIM <ChevronRight />
+          </Link>
+        ) : guestRecoveryUrl ? (
+          <a className="button" href={guestRecoveryUrl}>
+            Check this order <ChevronRight />
+          </a>
+        ) : null}
+        <Link className="button secondary" href="/help/install">
+          Open install guide <ChevronRight />
+        </Link>
+        {onResend ? (
+          <button
+            className="button secondary"
+            type="button"
+            onClick={onResend}
+            disabled={resending}
+          >
+            {resending ? "Sending QR…" : "Re-send QR email"}
+          </button>
+        ) : null}
+      </div>
+      <JourneyTrustStrip compact />
+    </section>
   );
 }
 

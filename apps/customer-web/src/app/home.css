@@ -2857,6 +2857,189 @@
   transform: translateY(-1px);
 }
 
+.plan-results-section {
+  margin-top: 28px;
+}
+.plan-results-heading {
+  display: none;
+}
+.catalog-plan-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.catalog-plan-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.catalog-plan-icon svg {
+  width: 23px;
+}
+.catalog-plan-main h3,
+.catalog-plan-main p {
+  margin: 0;
+}
+.catalog-plan-main > b {
+  color: var(--text);
+  font-size: 20px;
+  white-space: nowrap;
+}
+.catalog-plan-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.catalog-plan-facts > span {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 7px;
+  padding: 0 12px;
+  border-left: 1px solid var(--border);
+}
+.catalog-plan-facts > span:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.catalog-plan-facts svg {
+  grid-row: 1 / span 2;
+  width: 17px;
+  color: var(--primary);
+}
+.catalog-plan-facts small {
+  color: var(--text-3);
+  font-size: 10px;
+}
+.catalog-plan-facts b {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.catalog-plan-select {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 14px;
+}
+.catalog-plan-select svg {
+  width: 17px;
+}
+
+@media (max-width: 880px) {
+  .section.destinations-page {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    padding: 30px 0 132px;
+    background: linear-gradient(180deg, #f8fdff, #f4fbfb 72%, var(--bg));
+  }
+  .section.destinations-page::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--bg) 98%, transparent),
+      color-mix(in srgb, var(--bg) 86%, transparent) 50%,
+      transparent 86%
+    );
+    pointer-events: none;
+  }
+  .destinations-page > .shell {
+    position: relative;
+    z-index: 2;
+  }
+  .destinations-page .plans-intro .section-title h1 {
+    max-width: 520px;
+    background: linear-gradient(105deg, var(--text), var(--primary));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .plan-results-heading {
+    display: block;
+    margin: 24px 0 14px;
+  }
+  .plan-results-heading > span {
+    display: inline-flex;
+    padding: 7px 11px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    font-size: 10px;
+    font-weight: 850;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .plan-results-heading h2 {
+    max-width: 600px;
+    margin: 10px 0 6px;
+    font-size: clamp(30px, 6vw, 44px);
+    line-height: 0.98;
+    letter-spacing: -0.045em;
+  }
+  .plan-results-heading p {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 14px;
+  }
+  .plan-results-section .cards {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .catalog-plan-card {
+    min-height: 0;
+    padding: 18px;
+    border-radius: 20px;
+  }
+}
+
+@media (max-width: 540px) {
+  .destinations-page .plans-intro .section-title h1 {
+    font-size: 38px;
+  }
+  .plan-results-heading h2 {
+    font-size: 34px;
+  }
+  .catalog-plan-card {
+    padding: 15px;
+  }
+  .catalog-plan-icon {
+    width: 44px;
+    height: 44px;
+  }
+  .catalog-plan-main {
+    gap: 10px;
+  }
+  .catalog-plan-main h3 {
+    font-size: 18px;
+    line-height: 1.08;
+  }
+  .catalog-plan-main p {
+    font-size: 13px;
+  }
+  .catalog-plan-main > b {
+    font-size: 17px;
+  }
+  .catalog-plan-facts > span {
+    padding-inline: 8px;
+  }
+  .catalog-plan-facts b {
+    font-size: 10px;
+  }
+  .catalog-plan-select {
+    min-height: 44px;
+  }
+}
+
 /* ---------- How it works ---------- */
 
 .how-layout {
@@ -5059,7 +5242,11 @@
     padding-block: 26px 30px;
     overflow: hidden;
     background:
-      radial-gradient(circle at 82% 8%, rgba(123, 211, 231, 0.2), transparent 32%),
+      radial-gradient(
+        circle at 82% 8%,
+        rgba(123, 211, 231, 0.2),
+        transparent 32%
+      ),
       var(--bg);
   }
   .homepage-popular-heading {

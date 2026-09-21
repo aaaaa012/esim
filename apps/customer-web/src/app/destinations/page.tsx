@@ -1,12 +1,18 @@
 import { Suspense } from "react";
 import { Globe2 } from "lucide-react";
 import CatalogPlans from "../catalog-plans";
+import {
+  JourneyArtwork,
+  JourneySkyline,
+  JourneyTrustStrip,
+} from "../journey-chrome";
 import "../home.css";
 
 export default function DestinationsPage() {
   return (
     <main>
       <section className="section destinations-page" id="plans">
+        <JourneyArtwork />
         <div className="shell">
           <div className="plans-intro">
             <div className="section-title">
@@ -20,10 +26,14 @@ export default function DestinationsPage() {
               </p>
             </div>
           </div>
-          <Suspense fallback={<p className="catalog-empty">Loading destinations…</p>}>
+          <Suspense
+            fallback={<p className="catalog-empty">Loading destinations…</p>}
+          >
             <CatalogPlans />
           </Suspense>
+          <JourneyTrustStrip compact />
         </div>
+        <JourneySkyline />
       </section>
     </main>
   );

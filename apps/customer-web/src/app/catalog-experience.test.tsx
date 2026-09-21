@@ -63,9 +63,11 @@ it("retries a failed catalog request inline", async () => {
   render(<Catalog />);
   await screen.findByRole("alert");
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-  fireEvent.click(await screen.findByRole("button", { name: /Select a destination/i }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Select a destination/i }),
+  );
   fireEvent.click(screen.getByRole("option", { name: /India/i }));
-  await screen.findByRole("link", { name: "Choose" });
+  await screen.findByRole("link", { name: "Select plan" });
   expect(screen.getByRole("heading", { name: "India 500 MB" })).toBeDefined();
   expect(screen.getByText("500 MB")).toBeDefined();
   expect(screen.queryByRole("alert")).toBeNull();
