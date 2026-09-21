@@ -79,4 +79,12 @@ export class HealthController {
       throw new ServiceUnavailableException(health);
     return health;
   }
+
+  @Get("deployment")
+  async deployment() {
+    const health = await this.resilience.deploymentHealth();
+    if (health.status !== "healthy")
+      throw new ServiceUnavailableException(health);
+    return health;
+  }
 }

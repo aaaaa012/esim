@@ -71,4 +71,69 @@ describe("worker operational health", () => {
     expect(health.status).toBe("degraded");
     expect(health.missingWorkers).toContain("ocr-worker");
   });
+
+  it("checks release workers independently from operational business alerts", async () => {
+    vi.stubEnv("DEPLOY_SHA", "commit-current");
+    const fresh = new Date();
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        worker: "workflow-worker",
+        instanceId: "a",
+        buildVersion: "commit-current",
+        status: "RUNNING",
+        lastSeenAt: fresh,
+      },
+      {
+        worker: "ocr-worker",
+        instanceId: "b",
+        buildVersion: "commit-current",
+        status: "RUNNING",
+        lastSeenAt: fresh,
+      },
+    ]);
+    const service = new ProductionResilienceService(
+      { workerHeartbeat: { findMany } } as never,
+      {} as never,
+    );
+
+    const health = await service.deploymentHealth();
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { worker: { in: ["workflow-worker", "ocr-worker"] } },
+      }),
+    );
+    expect(health.status).toBe("healthy");
+    expect(health.missingWorkers).toEqual([]);
+  });
+
+  it("rejects a release when a process heartbeat belongs to another build", async () => {
+    vi.stubEnv("DEPLOY_SHA", "commit-current");
+    const service = new ProductionResilienceService(
+      {
+        workerHeartbeat: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              worker: "workflow-worker",
+              buildVersion: "commit-current",
+              status: "RUNNING",
+              lastSeenAt: new Date(),
+            },
+            {
+              worker: "ocr-worker",
+              buildVersion: "commit-old",
+              status: "RUNNING",
+              lastSeenAt: new Date(),
+            },
+          ]),
+        },
+      } as never,
+      {} as never,
+    );
+
+    const health = await service.deploymentHealth();
+
+    expect(health.status).toBe("degraded");
+    expect(health.missingWorkers).toEqual(["ocr-worker"]);
+  });
 });

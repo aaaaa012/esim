@@ -445,6 +445,44 @@ export class ProductionResilienceService {
     };
   }
 
+  /**
+   * Release health is intentionally narrower than platformHealth(). Existing
+   * operational work (for example quarantined inventory or a dead-lettered
+   * webhook) must stay visible to Operations without rolling back an otherwise
+   * healthy application release.
+   */
+  async deploymentHealth() {
+    const workers = await this.prisma.workerHeartbeat.findMany({
+      where: { worker: { in: ["workflow-worker", "ocr-worker"] } },
+      orderBy: { worker: "asc" },
+    });
+    const now = Date.now();
+    const expectedBuild = process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA;
+    const requiredWorkers = ["workflow-worker", "ocr-worker"];
+    const activeWorkers = workers.filter(
+      (worker) =>
+        now - worker.lastSeenAt.getTime() <= 120_000 &&
+        (!expectedBuild || worker.buildVersion === expectedBuild),
+    );
+    const missingWorkers = requiredWorkers.filter(
+      (name) => !activeWorkers.some((worker) => worker.worker === name),
+    );
+
+    return {
+      status: missingWorkers.length === 0 ? "healthy" : "degraded",
+      expectedBuild: expectedBuild ?? null,
+      missingWorkers,
+      workers: workers.map((worker) => ({
+        worker: worker.worker,
+        buildVersion: worker.buildVersion,
+        status: worker.status,
+        lastSeenAt: worker.lastSeenAt,
+        healthy: now - worker.lastSeenAt.getTime() <= 120_000,
+        compatible: !expectedBuild || worker.buildVersion === expectedBuild,
+      })),
+    };
+  }
+
   async item(id: string) {
     const item = await this.prisma.attentionCase.findUnique({
       where: { id },
