@@ -165,9 +165,9 @@ const initial: Traveler = {
   middleName: "",
   surname: "",
   dateOfBirth: "",
-  nationality: "NP",
+  nationality: "",
   city: "",
-  countryOfResidence: "NP",
+  countryOfResidence: "",
   employerOrBusinessName: "",
   email: "",
   mobile: "",
@@ -952,6 +952,9 @@ export default function CheckoutClient({
             ? { nationality: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
             : {}),
         });
+      } else if (updated.documentReviewStatus === "MANUAL_REVIEW") {
+        setFieldErrors({});
+        setDocumentAttentionMessage("");
       }
       return updated;
     } catch (e) {
@@ -975,8 +978,13 @@ export default function CheckoutClient({
     ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
       target.documentReviewStatus ?? "",
     );
+  const effectiveDocumentReviewStatus = (order?.documents ?? []).some(
+    (document) => document.status === "REUPLOAD_REQUIRED",
+  )
+    ? ("REUPLOAD_REQUIRED" as const)
+    : order?.documentReviewStatus;
   useEffect(() => {
-    const current = order?.documentReviewStatus;
+    const current = effectiveDocumentReviewStatus;
     const previous = previousDocumentReviewStatus.current;
     previousDocumentReviewStatus.current = current;
     if (
@@ -996,7 +1004,7 @@ export default function CheckoutClient({
     ) {
       if (current === "CORRECTION_REQUIRED") {
         setDocumentAttentionMessage(
-          "We could not confirm that the passport matches all traveller details. Review the marked fields and save again.",
+          "We couldn't automatically match some details with your uploaded passport. Please check the highlighted fields.",
         );
       } else {
         const expiredPassport =
@@ -1019,9 +1027,10 @@ export default function CheckoutClient({
         );
       }
     }
+    if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
       jumpTo(2);
-  }, [order?.documentReviewStatus, step]);
+  }, [effectiveDocumentReviewStatus, order?.passportExtraction?.failureCode, step]);
   useEffect(() => {
     if (
       step === 3 &&
@@ -2362,13 +2371,13 @@ export default function CheckoutClient({
                   verification, order fulfilment, and applicable record-keeping.
                 </p>
                 {!["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(
-                  order?.documentReviewStatus ?? "",
+                  effectiveDocumentReviewStatus ?? "",
                 ) && (
                   <DocumentProgress
                     status={
                       Object.values(files).some(Boolean)
                         ? "NOT_STARTED"
-                        : order?.documentReviewStatus
+                        : effectiveDocumentReviewStatus
                     }
                     busy={busy || verifyingPassport}
                     message={documentError || documentMessage}
@@ -2378,7 +2387,7 @@ export default function CheckoutClient({
                   <>
                     <VerifiedDocumentsSummary
                       documents={order?.documents}
-                      reviewStatus={order?.documentReviewStatus}
+                      reviewStatus={effectiveDocumentReviewStatus}
                     />
                     <div className="form-actions verified-document-actions">
                       <button
@@ -2399,11 +2408,11 @@ export default function CheckoutClient({
                   </>
                 ) : (
                   <>
-                    {order?.documentReviewStatus !== "REUPLOAD_REQUIRED" && (
+                    {effectiveDocumentReviewStatus !== "REUPLOAD_REQUIRED" && (
                       <SavedDocuments documents={order?.documents} />
                     )}
                     {!["OCR_PENDING", "OCR_BACKGROUND"].includes(
-                      order?.documentReviewStatus ?? "",
+                      effectiveDocumentReviewStatus ?? "",
                     ) && (
                       <>
                         {editingVerifiedDocuments && (
@@ -2413,9 +2422,9 @@ export default function CheckoutClient({
                             passport result.
                           </p>
                         )}
-                        {order?.documentReviewStatus === "REUPLOAD_REQUIRED" ? (
+                        {effectiveDocumentReviewStatus === "REUPLOAD_REQUIRED" ? (
                           <DocumentRecoveryFields
-                            documents={order.documents}
+                            documents={order?.documents ?? []}
                             types={["PASSPORT", "TICKET", "VISA"]}
                             files={{
                               PASSPORT: files.passport,

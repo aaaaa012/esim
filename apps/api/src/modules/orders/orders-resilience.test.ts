@@ -110,6 +110,52 @@ function ordersService(
 }
 
 describe("OrdersService document decision invariants", () => {
+  it("blocks payment when a required document needs replacement even if the aggregate review is stale", async () => {
+    const order = readyOrder({
+      id: "stale-document-review",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: customerTraveler(),
+      documentReviewStatus: "VERIFIED",
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "expired-passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.REUPLOAD_REQUIRED,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    });
+    const instance = ordersService(
+      [order],
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { verifyDocument: vi.fn().mockResolvedValue(undefined) },
+    );
+    await instance.refreshFromPersistence();
+
+    await expect(
+      instance.assertPaymentPrerequisites(order.id, "customer-1"),
+    ).rejects.toMatchObject({
+      response: { code: "PASSPORT_VERIFICATION_REQUIRED" },
+    });
+  });
+
   it.each([
     OrderStatus.PROVISIONING,
     OrderStatus.QR_READY,

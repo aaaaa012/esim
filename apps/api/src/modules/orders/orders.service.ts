@@ -1492,10 +1492,13 @@ export class OrdersService implements OnModuleInit {
       document.uploadVerified = true;
     });
     const review = order.documentReviewStatus;
-    if (review === "REUPLOAD_REQUIRED")
+    const requiredDocumentNeedsReplacement = required.some(
+      (document) => document.status === DocumentStatus.REUPLOAD_REQUIRED,
+    );
+    if (review === "REUPLOAD_REQUIRED" || requiredDocumentNeedsReplacement)
       throw new ApiException({
         code: "PASSPORT_VERIFICATION_REQUIRED",
-        message: "Upload a clearer passport before payment",
+        message: "Replace the requested travel document before payment",
       });
     if (!["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(review ?? ""))
       throw new ApiException({

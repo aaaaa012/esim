@@ -158,9 +158,9 @@ const initial: Traveler = {
   middleName: "",
   surname: "",
   dateOfBirth: "",
-  nationality: "NP",
+  nationality: "",
   city: "",
-  countryOfResidence: "NP",
+  countryOfResidence: "",
   employerOrBusinessName: "",
   email: "",
   mobile: "",
@@ -576,6 +576,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           ? { nationality: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
           : {}),
       });
+    } else if (result.status === "MANUAL_REVIEW") {
+      setFieldErrors({});
+      setDocumentAttentionMessage("");
     }
     const ok = ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
       result.status,
@@ -754,15 +757,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     step,
   ]);
 
+  const effectiveVerificationStatus = (session?.order.documents ?? []).some(
+    (document) => document.status === "REUPLOAD_REQUIRED",
+  )
+    ? "REUPLOAD_REQUIRED"
+    : verification?.status;
   const gatePassed =
     !session ||
     session.order.orderType === "TOPUP" ||
-    verification?.status === "VERIFIED" ||
-    verification?.status === "MANUALLY_APPROVED" ||
-    verification?.status === "SKIPPED";
+    effectiveVerificationStatus === "VERIFIED" ||
+    effectiveVerificationStatus === "MANUALLY_APPROVED" ||
+    effectiveVerificationStatus === "SKIPPED";
 
   useEffect(() => {
-    const current = verification?.status;
+    const current = effectiveVerificationStatus;
     const previous = previousVerificationStatus.current;
     previousVerificationStatus.current = current;
     if (
@@ -782,7 +790,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     ) {
       if (current === "CORRECTION_REQUIRED") {
         setDocumentAttentionMessage(
-          "We could not confirm that the passport matches all traveller details. Review the marked fields and save again.",
+          "We couldn't automatically match some details with your uploaded passport. Please check the highlighted fields.",
         );
       } else {
         const expiredPassport =
@@ -806,9 +814,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         );
       }
     }
+    if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
       stepJump(2);
-  }, [verification?.status, step]);
+  }, [
+    effectiveVerificationStatus,
+    session?.order.passportExtraction?.failureCode,
+    step,
+  ]);
 
   useEffect(() => {
     if (step === 3 && awaitingVerificationAdvance.current && gatePassed) {
@@ -1899,13 +1912,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       record-keeping.
                     </p>
                     {!["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(
-                      verification?.status ?? "",
+                      effectiveVerificationStatus ?? "",
                     ) && (
                       <DocumentProgress
                         status={
                           Object.values(files).some(Boolean)
                             ? "NOT_STARTED"
-                            : verification?.status
+                            : effectiveVerificationStatus
                         }
                         busy={busy || verifying}
                         message={documentError || documentMessage}
@@ -1915,7 +1928,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       <>
                         <VerifiedDocumentsSummary
                           documents={session?.order.documents}
-                          reviewStatus={verification?.status}
+                          reviewStatus={effectiveVerificationStatus}
                         />
                         <div className="form-actions verified-document-actions">
                           <button
@@ -1936,7 +1949,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       </>
                     ) : (
                       <>
-                        {verification?.status !== "REUPLOAD_REQUIRED" && (
+                        {effectiveVerificationStatus !== "REUPLOAD_REQUIRED" && (
                           <SavedDocuments
                             documents={session?.order.documents}
                           />
@@ -1946,7 +1959,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           "OCR_BACKGROUND",
                           "CORRECTION_REQUIRED",
                           "MANUAL_REVIEW",
-                        ].includes(verification?.status ?? "") && (
+                        ].includes(effectiveVerificationStatus ?? "") && (
                           <>
                             {editingVerifiedDocuments && (
                               <p className="document-change-warning">
@@ -1954,7 +1967,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 again.
                               </p>
                             )}
-                            {verification?.status === "REUPLOAD_REQUIRED" ? (
+                            {effectiveVerificationStatus === "REUPLOAD_REQUIRED" ? (
                               <DocumentRecoveryFields
                                 documents={session?.order.documents}
                                 types={session!.order.requiredDocuments}

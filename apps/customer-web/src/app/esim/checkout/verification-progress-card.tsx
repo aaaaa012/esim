@@ -34,8 +34,8 @@ function VerificationJourney({ compact = false }: { compact?: boolean }) {
       </div>
       {!compact && (
         <p className="verification-detail">
-          Checking passport details and comparing them with your traveller
-          information.
+          Reading the passport information securely and preparing the traveller
+          details form.
         </p>
       )}
     </div>
