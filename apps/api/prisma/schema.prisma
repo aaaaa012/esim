@@ -1438,6 +1438,7 @@ model IntegrationLog {
   errorCode     String?
   errorMessage  String?
   correlationId String?
+  requestHeaders Json?
   requestBody   Json?
   responseBody  Json?
   createdAt     DateTime @default(now())

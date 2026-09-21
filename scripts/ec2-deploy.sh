@@ -11,11 +11,14 @@ READY_URL="http://127.0.0.1:4000/api/v1/health/ready"
 OPERATIONAL_URL="http://127.0.0.1:4000/api/v1/health/operational"
 CUSTOMER_URL="http://127.0.0.1:3000/"
 OPS_URL="http://127.0.0.1:3001/"
+DEPLOY_ENV_FILE="/etc/visa-compass/deploy.env"
+WORKFLOW_UNIT_SOURCE="$APP_DIR/deploy/systemd/visacompass-workflow-worker.service"
 RUN_TESTS="${RUN_TESTS:-0}"
 DEPLOY_SHA="${DEPLOY_SHA:-}"
 
 SERVICES=(
   visacompass-api.service
+  visacompass-workflow-worker.service
   visacompass-ocr-worker.service
   visacompass-customer.service
   visacompass-ops.service
@@ -125,18 +128,49 @@ show_failure_logs() {
   log "Recent service logs"
   sudo journalctl --no-pager --lines=60 \
     --unit visacompass-api.service \
+    --unit visacompass-workflow-worker.service \
     --unit visacompass-ocr-worker.service \
     --unit visacompass-customer.service \
     --unit visacompass-ops.service || true
 }
 
+configure_runtime_services() {
+  local release_sha="$1"
+
+  [[ -f "$WORKFLOW_UNIT_SOURCE" ]] || \
+    die "workflow worker unit is missing: $WORKFLOW_UNIT_SOURCE"
+
+  sudo install -m 0644 "$WORKFLOW_UNIT_SOURCE" \
+    /etc/systemd/system/visacompass-workflow-worker.service
+  sudo install -d -m 0755 /etc/visa-compass
+  printf 'DEPLOY_SHA=%s\n' "$release_sha" | \
+    sudo tee "$DEPLOY_ENV_FILE" >/dev/null
+
+  sudo install -d -m 0755 \
+    /etc/systemd/system/visacompass-api.service.d \
+    /etc/systemd/system/visacompass-ocr-worker.service.d
+  printf '[Service]\nEnvironmentFile=-%s\nEnvironment=PROCESS_ROLE=api\n' \
+    "$DEPLOY_ENV_FILE" | sudo tee \
+    /etc/systemd/system/visacompass-api.service.d/20-runtime.conf >/dev/null
+  printf '[Service]\nEnvironmentFile=-%s\nEnvironment=PROCESS_ROLE=ocr-worker\n' \
+    "$DEPLOY_ENV_FILE" | sudo tee \
+    /etc/systemd/system/visacompass-ocr-worker.service.d/20-runtime.conf >/dev/null
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable visacompass-workflow-worker.service >/dev/null
+}
+
 restart_and_verify() {
+  local release_sha="${1:-$(git rev-parse HEAD)}"
+  configure_runtime_services "$release_sha"
+
   log "Restarting API"
   sudo systemctl restart visacompass-api.service
   wait_for_url "API readiness" "$READY_URL"
 
   log "Restarting worker and web applications"
   sudo systemctl restart \
+    visacompass-workflow-worker.service \
     visacompass-ocr-worker.service \
     visacompass-customer.service \
     visacompass-ops.service
@@ -182,7 +216,7 @@ rollback() {
   log "Database migrations are forward-only and are not reversed by this rollback"
   RUN_TESTS=0
   build_release
-  restart_and_verify
+  restart_and_verify "$previous_sha"
   record_deployed_sha "$previous_sha"
   show_failure_logs
   die "Deployment of $target_sha failed; application restored to $previous_sha"
@@ -243,7 +277,7 @@ git merge-base --is-ancestor "$target_sha" "$branch_sha" || \
 
 if [[ "$previous_sha" == "$target_sha" && "$last_deployed_sha" == "$target_sha" ]]; then
   log "Already deployed at $target_sha"
-  restart_and_verify
+  restart_and_verify "$target_sha"
   exit 0
 fi
 
@@ -275,7 +309,7 @@ log "Applying committed Prisma migrations"
 runtime_changed=1
 pnpm db:deploy
 
-restart_and_verify
+restart_and_verify "$target_sha"
 record_deployed_sha "$target_sha"
 deployment_started=0
 runtime_changed=0
