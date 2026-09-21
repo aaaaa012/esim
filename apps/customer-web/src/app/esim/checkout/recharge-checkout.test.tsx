@@ -346,6 +346,15 @@ describe("first-purchase document verification", () => {
         documentReviewStatus: "NOT_STARTED",
         passportExtraction: {
           status: "MANUAL_ENTRY_REQUIRED",
+          failureCode: "PASSPORT_EXPIRED",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      canEnterTravelerAfterExtraction({
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "MANUAL_ENTRY_REQUIRED",
           failureCode: "OCR_UNAVAILABLE",
         },
       }),

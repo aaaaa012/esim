@@ -374,6 +374,89 @@ it("ignores an OCR job for a replaced passport asset", async () => {
   expect(tx).not.toHaveBeenCalled();
 });
 
+it("restores the replacement gate when an expired extraction races with a refresh", async () => {
+  const orderUpdate = vi.fn().mockResolvedValue({ count: 1 });
+  const documentUpdate = vi.fn().mockResolvedValue({});
+  const instance = processor(
+    {
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "expired-order",
+          status: "DRAFT",
+          documentReviewStatus: "NOT_STARTED",
+          traveler: null,
+          passportExtraction: null,
+          partner: null,
+          documents: [
+            {
+              id: "passport",
+              type: "PASSPORT",
+              fileName: "passport.png",
+              privateAssetId: "expired-passport-asset",
+              uploadVerified: true,
+              status: "PENDING",
+            },
+          ],
+        }),
+      },
+      $transaction: vi.fn((callback) =>
+        callback({
+          travelerDocument: {
+            findUnique: vi.fn().mockResolvedValue({
+              privateAssetId: "expired-passport-asset",
+              uploadVerified: true,
+            }),
+            update: documentUpdate,
+          },
+          passportExtraction: { upsert: vi.fn().mockResolvedValue({}) },
+          order: { updateMany: orderUpdate },
+        }),
+      ),
+    },
+    {
+      status: "MANUAL_ENTRY_REQUIRED",
+      fields: { passportExpiryDate: "2020-01-01" },
+      fieldsRequiringInput: [],
+      method: "tesseract-ocr",
+      checkedAt: new Date().toISOString(),
+      failureCode: "PASSPORT_EXPIRED",
+    },
+  );
+
+  await instance.process({
+    data: {
+      orderId: "expired-order",
+      documentId: "passport",
+      privateAssetId: "expired-passport-asset",
+    },
+  } as never);
+
+  expect(orderUpdate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        id: "expired-order",
+        documentReviewStatus: {
+          in: [
+            "NOT_STARTED",
+            "OCR_PENDING",
+            "OCR_BACKGROUND",
+            "CORRECTION_REQUIRED",
+            "REUPLOAD_REQUIRED",
+          ],
+        },
+      }),
+      data: expect.objectContaining({
+        documentReviewStatus: "REUPLOAD_REQUIRED",
+      }),
+    }),
+  );
+  expect(documentUpdate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      data: expect.objectContaining({ status: "REUPLOAD_REQUIRED" }),
+    }),
+  );
+});
+
 it("re-approves a replacement ticket and replays a terminal passport verdict", async () => {
   const orderUpdate = vi.fn().mockResolvedValue({ count: 1 });
   const ticketUpdate = vi.fn().mockResolvedValue({ count: 1 });

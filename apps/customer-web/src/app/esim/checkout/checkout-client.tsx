@@ -136,6 +136,11 @@ export const canEnterTravelerAfterExtraction = (
   target: Pick<Order, "documentReviewStatus" | "passportExtraction">,
 ) =>
   target.documentReviewStatus !== "REUPLOAD_REQUIRED" &&
+  ![
+    "PASSPORT_EXPIRED",
+    "PASSPORT_BIODATA_NOT_DETECTED",
+    "MRZ_NOT_READABLE",
+  ].includes(target.passportExtraction?.failureCode ?? "") &&
   Boolean(
     target.passportExtraction &&
       ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(

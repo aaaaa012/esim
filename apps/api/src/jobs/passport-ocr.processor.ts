@@ -225,7 +225,20 @@ export class PassportOcrProcessor implements OnModuleInit {
           },
         });
         await tx.order.updateMany({
-          where: { id: order.id, documentReviewStatus: "OCR_PENDING" },
+          where: {
+            id: order.id,
+            documentReviewStatus: passportInvalid
+              ? {
+                  in: [
+                    "NOT_STARTED",
+                    "OCR_PENDING",
+                    "OCR_BACKGROUND",
+                    "CORRECTION_REQUIRED",
+                    "REUPLOAD_REQUIRED",
+                  ],
+                }
+              : "OCR_PENDING",
+          },
           data: {
             documentReviewStatus: passportInvalid
               ? "REUPLOAD_REQUIRED"
