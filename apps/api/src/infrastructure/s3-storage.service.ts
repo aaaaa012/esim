@@ -161,7 +161,10 @@ export class S3StorageService {
           mode: "s3-presigned",
           endpoint,
           method: "PUT",
-          headers: { "content-type": normalizedContentType },
+          headers: {
+            "content-type": normalizedContentType,
+            "x-amz-server-side-encryption": "AES256",
+          },
           expiresInSeconds,
         },
       };

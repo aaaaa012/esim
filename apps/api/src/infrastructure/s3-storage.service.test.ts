@@ -69,7 +69,10 @@ describe("S3StorageService", () => {
       mode: "s3-presigned",
       endpoint: "https://signed.example/upload",
       method: "PUT",
-      headers: { "content-type": "image/png" },
+      headers: {
+        "content-type": "image/png",
+        "x-amz-server-side-encryption": "AES256",
+      },
       expiresInSeconds: 600,
     });
     const command = getSignedUrlMock.mock.calls[0]?.[1] as {
@@ -79,6 +82,7 @@ describe("S3StorageService", () => {
       expect.objectContaining({
         Bucket: "private-documents",
         ContentType: "image/png",
+        ServerSideEncryption: "AES256",
       }),
     );
   });

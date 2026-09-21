@@ -36,7 +36,7 @@ Allow direct browser uploads from the real portal origins:
       "https://YOUR_PARTNER_DOMAIN"
     ],
     "AllowedMethods": ["PUT"],
-    "AllowedHeaders": ["Content-Type"],
+    "AllowedHeaders": ["Content-Type", "x-amz-server-side-encryption"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 300
   }

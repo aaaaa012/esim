@@ -48,12 +48,13 @@ When configured, the response is:
 ```
 
 The browser sends the file bytes directly to `endpoint` using `PUT` and the
-returned headers. The signed `content-type` must match exactly. Partner
+returned headers. The signed `content-type` and
+`x-amz-server-side-encryption` values must match exactly. Partner
 pre-verification upload URLs last 900 seconds; customer/order URLs last 600.
 
 The bucket CORS policy must allow the customer and partner portal origins to
-send `PUT` and the `Content-Type` header. The bucket and objects remain private;
-no public-read ACL is used.
+send `PUT`, `Content-Type`, and `x-amz-server-side-encryption`. The bucket and
+objects remain private; no public-read ACL is used.
 
 ## Verification
 
