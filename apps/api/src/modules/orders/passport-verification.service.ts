@@ -4,7 +4,8 @@ import {
   OnModuleDestroy,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import { createWorker, type Worker } from "tesseract.js";
+import { createWorker, PSM, type Worker } from "tesseract.js";
+import sharp from "sharp";
 import { DocumentType, type TravelerInput } from "@visa-compass/shared";
 import {
   passportOcrMaxPages,
@@ -16,6 +17,7 @@ import {
   mrzDateToIso,
   parseMrz,
   type MrzField,
+  type ParsedMrz,
 } from "./mrz-parser.js";
 import type { DemoOrder } from "./orders.service.js";
 import { ISO3_TO_ISO2 } from "../integration/transatel.provider.js";
@@ -407,6 +409,28 @@ export const imageDimensions = (
   return null;
 };
 
+export const looksLikePassport = (text: string): boolean => {
+  const normalized = text.toUpperCase();
+  return (
+    /\bPASSPORT\b/.test(normalized) ||
+    /P<[A-Z0-9<]{3}/.test(normalized.replace(/\s+/g, ""))
+  );
+};
+
+/** Higher scores represent MRZ evidence that is structurally stronger. The
+ * fully validated composite checksum dominates every partial candidate. */
+export const mrzCandidateScore = (mrz: ParsedMrz | null): number => {
+  if (!mrz) return 0;
+  let score = mrz.valid ? 100 : 10;
+  for (const field of [mrz.passportNumber, mrz.dateOfBirth, mrz.expiryDate]) {
+    if (field.valid) score += 12;
+    else if (field.corrections?.length === 1) score += 6;
+  }
+  if (mrz.surname) score += 5;
+  if (mrz.givenNames) score += 5;
+  return score;
+};
+
 /**
  * Server-side passport verification used to gate checkout before payment.
  *
@@ -440,6 +464,8 @@ export class PassportVerificationService implements OnModuleDestroy {
   /** ICAO MRZ alphabet; also used as the second-pass Tesseract whitelist. */
   private static readonly MRZ_ALPHABET =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
+  private static readonly RECOVERY_ROTATIONS = [0, 90, 180, 270] as const;
+  private static readonly RECOVERY_BAND_RATIOS = [0.28, 0.42] as const;
 
   constructor(private readonly storage: S3StorageService) {}
 
@@ -502,7 +528,9 @@ export class PassportVerificationService implements OnModuleDestroy {
             : {}),
           method: "tesseract-ocr",
           checkedAt,
-          failureCode: "MRZ_NOT_READABLE",
+          failureCode: looksLikePassport(recognized.text)
+            ? "MRZ_REVIEW_REQUIRED"
+            : "PASSPORT_BIODATA_NOT_DETECTED",
         };
 
       const fieldValue = (field: MrzField) =>
@@ -747,6 +775,25 @@ export class PassportVerificationService implements OnModuleDestroy {
         this.worker = null;
         this.workerPromise = null;
       }
+      if (!parseMrz(bandText) && !parseMrz(text)) {
+        try {
+          const recovered = await this.recoverMrz(worker, image);
+          if (recovered.text) {
+            bandText = [bandText, recovered.text].filter(Boolean).join("\n");
+            text += `\n${recovered.text}`;
+          }
+        } catch (recoveryError) {
+          // Recovery is deliberately best effort. Preserve the original OCR
+          // result so a processing-library issue cannot break documents that
+          // the established path already handled.
+          this.logger.warn(
+            `Enhanced MRZ recovery failed (continuing with original OCR): ${recoveryError instanceof Error ? recoveryError.message : "unknown"}`,
+          );
+          await worker.terminate().catch(() => undefined);
+          this.worker = null;
+          this.workerPromise = null;
+        }
+      }
       return {
         text,
         ...(bandText.trim() ? { bandText } : {}),
@@ -811,6 +858,103 @@ export class PassportVerificationService implements OnModuleDestroy {
     } finally {
       await worker
         .setParameters({ tessedit_char_whitelist: "" })
+        .catch(() => undefined);
+    }
+  }
+
+  /**
+   * Recovery path for rotated, compressed and loosely framed passport photos.
+   * It runs only when the established full-page and fixed-band passes fail.
+   * Every accepted result still flows through parseMrz and its ICAO check-digit
+   * validation; image enhancement never weakens the identity decision.
+   */
+  private async recoverMrz(worker: Worker, image: Buffer) {
+    const deadline = Date.now() + Math.max(
+      10_000,
+      Number(process.env.PASSPORT_OCR_RECOVERY_TIMEOUT_MS ?? 45_000),
+    );
+    let best = { text: "", score: -1 };
+    await worker.setParameters({
+      tessedit_char_whitelist: PassportVerificationService.MRZ_ALPHABET,
+      preserve_interword_spaces: "1",
+      tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+    });
+    try {
+      for (const rotation of PassportVerificationService.RECOVERY_ROTATIONS) {
+        if (Date.now() >= deadline) break;
+        const oriented = sharp(image, { failOn: "none" })
+          .rotate()
+          .rotate(rotation)
+          .flatten({ background: "white" });
+        const metadata = await oriented.clone().metadata();
+        const width = metadata.width ?? 0;
+        const height = metadata.height ?? 0;
+        if (width < 120 || height < 120) continue;
+        const scale = width < 1800 ? 1800 / width : 1;
+        const normalized = await oriented
+          .clone()
+          .resize({
+            width: Math.min(2600, Math.max(width, Math.round(width * scale))),
+            withoutEnlargement: false,
+          })
+          .grayscale()
+          .normalize()
+          .sharpen({ sigma: 1 })
+          .png()
+          .toBuffer();
+        const normalizedMeta = await sharp(normalized).metadata();
+        const normalizedWidth = normalizedMeta.width ?? 0;
+        const normalizedHeight = normalizedMeta.height ?? 0;
+        for (const ratio of PassportVerificationService.RECOVERY_BAND_RATIOS) {
+          if (Date.now() >= deadline) break;
+          const bandHeight = Math.max(
+            80,
+            Math.round(normalizedHeight * ratio),
+          );
+          const band = sharp(normalized).extract({
+            left: 0,
+            top: Math.max(0, normalizedHeight - bandHeight),
+            width: normalizedWidth,
+            height: Math.min(bandHeight, normalizedHeight),
+          });
+          const variants = [
+            await band.clone().png().toBuffer(),
+            await band.clone().threshold(165).png().toBuffer(),
+          ];
+          for (const candidate of variants) {
+            if (Date.now() >= deadline) break;
+            const remaining = Math.max(
+              1,
+              Math.min(8_000, deadline - Date.now()),
+            );
+            let timeout: NodeJS.Timeout | undefined;
+            const result = await Promise.race([
+              worker.recognize(candidate),
+              new Promise<never>((_, reject) => {
+                timeout = setTimeout(
+                  () => reject(new Error("Enhanced MRZ OCR timed out")),
+                  remaining,
+                );
+              }),
+            ]).finally(() => {
+              if (timeout) clearTimeout(timeout);
+            });
+            const candidateText = result.data.text ?? "";
+            const parsed = parseMrz(candidateText);
+            const score = mrzCandidateScore(parsed);
+            if (score > best.score) best = { text: candidateText, score };
+            if (parsed?.valid && parsed.surname && parsed.givenNames)
+              return best;
+          }
+        }
+      }
+      return best;
+    } finally {
+      await worker
+        .setParameters({
+          tessedit_char_whitelist: "",
+          tessedit_pageseg_mode: PSM.AUTO,
+        })
         .catch(() => undefined);
     }
   }

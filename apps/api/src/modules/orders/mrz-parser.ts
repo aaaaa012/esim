@@ -106,6 +106,44 @@ export const correctMrzField = (
 const isMrzLine = (line: string) =>
   line.length === 44 && /^[A-Z0-9<]+$/.test(line);
 
+const line2ChecksumScore = (line: string): number => {
+  if (!isMrzLine(line) || !/^\d$/.test(line[9] ?? "")) return -1;
+  let score = 0;
+  if (mrzCheckDigit(line.slice(0, 9)) === Number(line[9])) score += 1;
+  if (
+    /^\d$/.test(line[19] ?? "") &&
+    mrzCheckDigit(line.slice(13, 19)) === Number(line[19])
+  )
+    score += 1;
+  if (
+    /^\d$/.test(line[27] ?? "") &&
+    mrzCheckDigit(line.slice(21, 27)) === Number(line[27])
+  )
+    score += 1;
+  const composite =
+    line.slice(0, 10) + line.slice(13, 20) + line.slice(21, 43);
+  if (
+    /^\d$/.test(line[43] ?? "") &&
+    mrzCheckDigit(composite) === Number(line[43])
+  )
+    score += 2;
+  return score;
+};
+
+/** OCR may prepend a label or retain a border glyph on an otherwise complete
+ * MRZ line. Recover a 44-column window only when at least two independent ICAO
+ * checks support it; arbitrary 44-character substrings remain rejected. */
+const recoverLine2Window = (line: string): string | undefined => {
+  if (line.length < 44) return undefined;
+  let best: { value: string; score: number } | undefined;
+  for (let offset = 0; offset <= line.length - 44; offset += 1) {
+    const value = line.slice(offset, offset + 44);
+    const score = line2ChecksumScore(value);
+    if (!best || score > best.score) best = { value, score };
+  }
+  return best && best.score >= 2 ? best.value : undefined;
+};
+
 /** Tries every strategy that can prove a name line is TD3 line 1 so the names
  *  survive even when OCR tears it. Line 2 is anchored by its check-digit
  *  fields, so the zones above it are free to be imperfect. */
@@ -155,11 +193,15 @@ export const extractMrz = (
     .split(/\r?\n/)
     .map((line) => line.toUpperCase().replace(/[^A-Z0-9<]/g, ""))
     .filter(Boolean);
-  const index = lines.findIndex(
+  let index = lines.findIndex(
     (line) => isMrzLine(line) && line[9] !== undefined && /^\d$/.test(line[9]),
   );
-  if (index < 0) return null;
-  const line2 = lines[index] as string;
+  let line2 = index >= 0 ? lines[index] : undefined;
+  if (!line2) {
+    index = lines.findIndex((line) => Boolean(recoverLine2Window(line)));
+    if (index >= 0) line2 = recoverLine2Window(lines[index] as string);
+  }
+  if (index < 0 || !line2) return null;
   const line1 = recoverLine1(lines.slice(Math.max(0, index - 3), index));
   return { ...(line1 ? { line1 } : {}), line2 };
 };

@@ -179,7 +179,12 @@ export class PassportOcrProcessor implements OnModuleInit {
           },
         ],
       } as never);
-      const passportInvalid = extraction.failureCode === "MRZ_NOT_READABLE";
+      const passportInvalid = [
+        "MRZ_NOT_READABLE",
+        "PASSPORT_BIODATA_NOT_DETECTED",
+      ].includes(extraction.failureCode ?? "");
+      const passportNeedsReview =
+        extraction.failureCode === "MRZ_REVIEW_REQUIRED";
       await this.prisma.$transaction(async (tx) => {
         const current = await tx.travelerDocument.findUnique({
           where: { id: passport.id },
@@ -223,7 +228,9 @@ export class PassportOcrProcessor implements OnModuleInit {
           data: {
             documentReviewStatus: passportInvalid
               ? "REUPLOAD_REQUIRED"
-              : "NOT_STARTED",
+              : passportNeedsReview
+                ? "MANUAL_REVIEW"
+                : "NOT_STARTED",
             version: { increment: 1 },
           },
         });
@@ -251,6 +258,20 @@ export class PassportOcrProcessor implements OnModuleInit {
           failureCategory: "PASSPORT_MRZ_NOT_READABLE",
           lastSuccessfulStep: "DOCUMENTS_UPLOADED",
           availableActions: [],
+        });
+      if (passportNeedsReview)
+        await this.resilience.attention({
+          dedupeKey: `document-review:${order.id}`,
+          category: "DOCUMENT_REVIEW",
+          entityType: "Order",
+          entityId: order.id,
+          orderId: order.id,
+          summary: "Passport requires manual verification",
+          detail:
+            "The upload appears to contain a passport, but automated MRZ recovery could not prove its identity fields.",
+          failureCategory: "PASSPORT_MRZ_REVIEW_REQUIRED",
+          lastSuccessfulStep: "DOCUMENTS_UPLOADED",
+          availableActions: ["REVIEW_DOCUMENTS"],
         });
       return extraction;
     }
@@ -493,8 +514,12 @@ export class PassportOcrProcessor implements OnModuleInit {
           ],
         } as never);
         const nextStatus =
-          extraction.failureCode === "MRZ_NOT_READABLE"
+          ["MRZ_NOT_READABLE", "PASSPORT_BIODATA_NOT_DETECTED"].includes(
+            extraction.failureCode ?? "",
+          )
             ? "REUPLOAD_REQUIRED"
+            : extraction.failureCode === "MRZ_REVIEW_REQUIRED"
+              ? "MANUAL_REVIEW"
             : extraction.status === "READY" || extraction.status === "PARTIAL"
               ? "AWAITING_TRAVELER_CONFIRMATION"
               : extraction.status;
@@ -541,7 +566,11 @@ export class PassportOcrProcessor implements OnModuleInit {
               failureCode: extraction.failureCode ?? null,
             },
           });
-          if (extraction.failureCode === "MRZ_NOT_READABLE")
+          if (
+            ["MRZ_NOT_READABLE", "PASSPORT_BIODATA_NOT_DETECTED"].includes(
+              extraction.failureCode ?? "",
+            )
+          )
             await tx.partnerDocumentUploadIntent.update({
               where: { id: passport.id },
               data: {

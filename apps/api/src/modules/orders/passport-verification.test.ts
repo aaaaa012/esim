@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TravelerInput } from "@visa-compass/shared";
+import { parseMrz } from "./mrz-parser.js";
 import {
   cleanNameTokens,
   comparePassport,
   compareExtractedPassport,
   dateVariants,
   imageDimensions,
+  looksLikePassport,
+  mrzCandidateScore,
   normalizeName,
   normalizeText,
   PassportVerificationService,
@@ -384,6 +387,77 @@ describe("imageDimensions", () => {
   it("returns null for buffers it cannot parse", () => {
     expect(imageDimensions(Buffer.from("not an image"))).toBeNull();
     expect(imageDimensions(Buffer.alloc(0))).toBeNull();
+  });
+});
+
+describe("strict MRZ recovery decisions", () => {
+  it("distinguishes a passport-like OCR result from an unrelated upload", () => {
+    expect(looksLikePassport("Government of Nepal PASSPORT No. 123"))
+      .toBe(true);
+    expect(looksLikePassport("BOARDING PASS KATHMANDU TO DELHI")).toBe(false);
+  });
+
+  it("ranks a checksum-valid MRZ above an unparseable candidate", () => {
+    expect(mrzCandidateScore(null)).toBe(0);
+    expect(mrzCandidateScore(parseMrz(US_MRZ)))
+      .toBeGreaterThan(100);
+  });
+
+  it("routes a passport-like but unparseable image to review, not re-upload", async () => {
+    const storage = {
+      isConfigured: () => true,
+      downloadDocumentImages: vi.fn().mockResolvedValue([
+        { bytes: Buffer.from("passport"), contentType: "image/jpeg" },
+      ]),
+    };
+    const service = new PassportVerificationService(storage as never);
+    vi.spyOn(service as never, "recognize" as never).mockResolvedValue({
+      text: "REPUBLIC OF NEPAL PASSPORT DATE OF BIRTH",
+      confidence: 72,
+    } as never);
+    const result = await service.extract({
+      id: "order-review",
+      purchaseType: "INITIAL_PURCHASE",
+      documents: [{
+        id: "passport-review",
+        type: "PASSPORT",
+        fileName: "passport.jpg",
+        privateAssetId: "passport-review-asset",
+        status: "PENDING",
+        uploadVerified: true,
+      }],
+    } as never);
+    expect(result).toMatchObject({
+      status: "MANUAL_ENTRY_REQUIRED",
+      failureCode: "MRZ_REVIEW_REQUIRED",
+    });
+  });
+
+  it("requires replacement when no passport biodata evidence is detected", async () => {
+    const storage = {
+      isConfigured: () => true,
+      downloadDocumentImages: vi.fn().mockResolvedValue([
+        { bytes: Buffer.from("ticket"), contentType: "image/jpeg" },
+      ]),
+    };
+    const service = new PassportVerificationService(storage as never);
+    vi.spyOn(service as never, "recognize" as never).mockResolvedValue({
+      text: "BOARDING PASS KATHMANDU TO DELHI",
+      confidence: 90,
+    } as never);
+    const result = await service.extract({
+      id: "order-wrong-document",
+      purchaseType: "INITIAL_PURCHASE",
+      documents: [{
+        id: "passport-wrong",
+        type: "PASSPORT",
+        fileName: "ticket.jpg",
+        privateAssetId: "ticket-asset",
+        status: "PENDING",
+        uploadVerified: true,
+      }],
+    } as never);
+    expect(result.failureCode).toBe("PASSPORT_BIODATA_NOT_DETECTED");
   });
 });
 

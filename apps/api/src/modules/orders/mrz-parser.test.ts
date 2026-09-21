@@ -149,6 +149,20 @@ describe("parseMrz", () => {
     expect(mrz?.surname).toBe("ERIKSSON");
     expect(mrz?.givenNames).toBe("ANNA MARIA");
   });
+
+  it("recovers a line 2 with surrounding OCR border noise only through checksums", () => {
+    const mrz = parseMrz(`${LINE1}\nXX${LINE2}ZZ`);
+    expect(mrz?.passportNumber.value).toBe("L898902C3");
+    expect(mrz?.valid).toBe(true);
+  });
+
+  it("does not accept an arbitrary long alphanumeric line as an MRZ window", () => {
+    expect(
+      parseMrz(
+        `${LINE1}\nTHISISNOTAPASSPORTMACHINEZONE123456789012345678901234567890`,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("confusableNormalize", () => {
