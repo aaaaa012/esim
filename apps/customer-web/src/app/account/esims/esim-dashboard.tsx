@@ -118,6 +118,7 @@ const formatStatus = (esim: Esim) => {
 };
 
 export const activityStatusLabel = (status: string) => {
+  if (status === "COMPLETED") return "Purchase completed";
   return orderStatusPresentation(status).label;
 };
 
