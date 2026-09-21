@@ -69,4 +69,12 @@ it("deduplicates retries of the same upload but not a replacement in the same ro
       "corrected-traveller-details",
     ),
   ).not.toBe(first);
+  expect(
+    orderPassportOcrJobId(
+      "order",
+      "passport",
+      "original-upload",
+      "replacement:2026-09-22T00:00:00.000Z",
+    ),
+  ).not.toBe(first);
 });

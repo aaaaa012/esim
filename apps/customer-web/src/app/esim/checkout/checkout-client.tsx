@@ -131,6 +131,18 @@ type Order = {
     blockedReason?: string;
   };
 };
+
+export const canEnterTravelerAfterExtraction = (
+  target: Pick<Order, "documentReviewStatus" | "passportExtraction">,
+) =>
+  target.documentReviewStatus !== "REUPLOAD_REQUIRED" &&
+  Boolean(
+    target.passportExtraction &&
+      ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+        target.passportExtraction.status,
+      ),
+  );
+
 type Payment = {
   reference: string;
   redirectUrl: string;
@@ -1551,10 +1563,8 @@ export default function CheckoutClient({
         ) {
           const extractionOrder = await verifyPassport();
           if (
-            extractionOrder?.passportExtraction &&
-            ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
-              extractionOrder.passportExtraction.status,
-            )
+            extractionOrder &&
+            canEnterTravelerAfterExtraction(extractionOrder)
           )
             advance(3);
         }

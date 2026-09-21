@@ -1469,6 +1469,13 @@ it("starts OCR after confirming only a replacement passport with a saved ticket"
     expect.stringContaining("order-passport-passport-only-new-passport-"),
     expect.any(Object),
   );
+  expect(add.mock.calls[0]![3]).not.toBe(
+    orderPassportOcrJobId(
+      "passport-only",
+      "new-passport",
+      "new-passport-asset-finalized",
+    ),
+  );
   expect(instance.get("passport-only", "customer-1").documentReviewStatus).toBe(
     "OCR_PENDING",
   );

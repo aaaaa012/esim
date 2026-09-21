@@ -1128,7 +1128,7 @@ export class OrdersService implements OnModuleInit {
         const attemptKey =
           document.type === DocumentType.TICKET
             ? `replacement:${document.id}:${document.privateAssetId}`
-            : "initial";
+            : `replacement:${order.documentReviewStartedAt ?? document.privateAssetId}`;
         await this.queues.add(
           QUEUES.documents,
           "verify-order-passport",

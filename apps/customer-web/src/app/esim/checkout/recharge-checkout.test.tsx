@@ -6,7 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import Checkout from "./checkout-client";
+import Checkout, { canEnterTravelerAfterExtraction } from "./checkout-client";
 const mocks = vi.hoisted(() => ({ authFetch: vi.fn(), signedIn: false }));
 vi.mock("../../authenticated-api-provider", () => ({
   useAuthenticatedFetch: () => mocks.authFetch,
@@ -331,6 +331,27 @@ describe("recharge checkout", () => {
 });
 
 describe("first-purchase document verification", () => {
+  it("does not open traveller entry when an expired replacement passport is rejected", () => {
+    expect(
+      canEnterTravelerAfterExtraction({
+        documentReviewStatus: "REUPLOAD_REQUIRED",
+        passportExtraction: {
+          status: "MANUAL_ENTRY_REQUIRED",
+          failureCode: "PASSPORT_EXPIRED",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      canEnterTravelerAfterExtraction({
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "MANUAL_ENTRY_REQUIRED",
+          failureCode: "OCR_UNAVAILABLE",
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("restores saved traveller names when a partial extraction omitted them", async () => {
     mocks.authFetch.mockImplementation(async (url: string) => {
       if (url.endsWith("/payments/providers"))

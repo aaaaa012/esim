@@ -393,7 +393,12 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
             documentId: passport.id,
             privateAssetId: passport.privateAssetId,
           },
-          orderPassportOcrJobId(order.id, passport.id, passport.privateAssetId),
+          orderPassportOcrJobId(
+            order.id,
+            passport.id,
+            passport.privateAssetId,
+            startedAt.toISOString(),
+          ),
           ocrJobOptions(),
         );
         retried += 1;
