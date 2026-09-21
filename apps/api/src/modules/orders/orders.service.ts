@@ -44,6 +44,8 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { MetricsService } from "../../observability/metrics.service.js";
 import { normalizeMsisdn, msisdnVariants } from "../../common/msisdn.util.js";
 import {
+  canonicalIdentity,
+  passportComparisonDiagnostics,
   verifyStoredExtraction,
   type PassportExtractedFields,
   type PassportVerificationResult,
@@ -122,6 +124,11 @@ export type DemoOrder = {
     passportAssetId?: string;
     confidence?: number;
     correctionAttempts?: number;
+    lastMismatchFingerprint?: string;
+    lastMismatchFields?: NonNullable<
+      PassportVerificationResult["mismatchedFields"]
+    >;
+    confirmedMismatchFingerprint?: string;
   };
   documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
   documentReviewStatus?:
@@ -875,13 +882,45 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id, ownerId ?? undefined);
     if (order.status !== OrderStatus.DRAFT)
       throw new BadRequestException("Submitted order is immutable");
+    const previousFingerprint = order.traveler
+      ? this.travelerIdentityFingerprint(order.traveler)
+      : null;
+    const submittedFingerprint = this.travelerIdentityFingerprint(traveler);
+    const identityChanged =
+      previousFingerprint !== null && previousFingerprint !== submittedFingerprint;
+    if (
+      order.traveler &&
+      order.documentReviewStatus === "MANUAL_REVIEW"
+    )
+      throw new ConflictException(
+        "Traveller identity is under review and cannot be changed",
+      );
+    if (
+      identityChanged &&
+      order.documentReviewStatus === "MANUALLY_APPROVED"
+    )
+      throw new ConflictException(
+        "Manually approved traveller identity cannot be changed",
+      );
     const replacingPassport =
       order.documentReviewStatus === "REUPLOAD_REQUIRED";
     const correctingMismatch =
       order.documentReviewStatus === "CORRECTION_REQUIRED" &&
       ["PARTIAL", "FAILED"].includes(order.passportVerification?.status ?? "");
-    const retryExistingPassport = replacingPassport || correctingMismatch;
+    const reverifyApprovedIdentity =
+      identityChanged && order.documentReviewStatus === "VERIFIED";
+    const retryExistingPassport =
+      replacingPassport || correctingMismatch || reverifyApprovedIdentity;
     order.traveler = traveler;
+    if (correctingMismatch && order.passportExtraction) {
+      if (
+        order.passportExtraction.lastMismatchFingerprint ===
+        submittedFingerprint
+      )
+        order.passportExtraction.confirmedMismatchFingerprint =
+          submittedFingerprint;
+      else delete order.passportExtraction.confirmedMismatchFingerprint;
+    }
     if (retryExistingPassport) {
       order.documentReviewStatus = "NOT_STARTED";
       delete order.documentReviewStartedAt;
@@ -1262,22 +1301,58 @@ export class OrdersService implements OnModuleInit {
         extraction.confidence,
       );
       const verified = result.status === "VERIFIED";
+      const expired = result.failureCode === "PASSPORT_EXPIRED";
       const extractionHasName = Boolean(
         extraction.fields.firstName || extraction.fields.surname,
       );
-      const correctionAttempts = verified
-        ? (extraction.correctionAttempts ?? 0)
-        : (extraction.correctionAttempts ?? 0) + 1;
-      extraction.correctionAttempts = correctionAttempts;
+      const fingerprint = this.travelerIdentityFingerprint(order.traveler);
+      const repeatedMismatch =
+        extraction.lastMismatchFingerprint === fingerprint;
+      const explicitlyConfirmed =
+        extraction.confirmedMismatchFingerprint === fingerprint;
+      if (verified) {
+        delete extraction.lastMismatchFingerprint;
+        delete extraction.lastMismatchFields;
+        delete extraction.confirmedMismatchFingerprint;
+      } else if (!expired && !repeatedMismatch) {
+        extraction.correctionAttempts =
+          (extraction.correctionAttempts ?? 0) + 1;
+        extraction.lastMismatchFingerprint = fingerprint;
+        if (result.mismatchedFields)
+          extraction.lastMismatchFields = result.mismatchedFields;
+        else delete extraction.lastMismatchFields;
+        delete extraction.confirmedMismatchFingerprint;
+      }
+      const correctionAttempts = extraction.correctionAttempts ?? 0;
       order.passportVerification = result;
       order.documentReviewStatus = verified
         ? "VERIFIED"
-        : !extractionHasName || correctionAttempts >= 3
+        : expired
+          ? "REUPLOAD_REQUIRED"
+          : explicitlyConfirmed || !extractionHasName || correctionAttempts >= 3
           ? "MANUAL_REVIEW"
           : "CORRECTION_REQUIRED";
       passport.status = verified
         ? DocumentStatus.APPROVED
-        : DocumentStatus.PENDING;
+        : expired
+          ? DocumentStatus.REUPLOAD_REQUIRED
+          : DocumentStatus.PENDING;
+      this.logger.debug(
+        JSON.stringify({
+          event: "passport_identity_comparison",
+          orderId: order.id,
+          outcome: order.documentReviewStatus,
+          mismatchedFields: result.mismatchedFields ?? [],
+          repeatedMismatch,
+          explicitlyConfirmed,
+          correctionAttempts,
+          comparisons: passportComparisonDiagnostics(
+            extraction.fields,
+            order.traveler,
+            result.matchedFields,
+          ),
+        }),
+      );
       await this.persistence.save(order);
       await this.ensureDocumentReviewAttention(order);
       return this.redact(order);
@@ -3886,6 +3961,14 @@ export class OrdersService implements OnModuleInit {
           providerLastSeenAt: rawAssignment.providerLastSeenAt,
         }
       : undefined;
+    const passportExtraction = safe.passportExtraction
+      ? (({
+          lastMismatchFingerprint: _lastMismatchFingerprint,
+          lastMismatchFields: _lastMismatchFields,
+          confirmedMismatchFingerprint: _confirmedMismatchFingerprint,
+          ...publicExtraction
+        }) => publicExtraction)(safe.passportExtraction)
+      : undefined;
     const purchaseContext =
       safe.purchaseType === "TOPUP"
         ? "TOPUP"
@@ -3897,6 +3980,7 @@ export class OrdersService implements OnModuleInit {
       purchaseContext,
       pricingSnapshot,
       documents,
+      ...(passportExtraction ? { passportExtraction } : {}),
       ...(payment ? { payment } : {}),
       ...(assignment ? { assignment } : {}),
       paymentRetry: declarePaymentRetry({
@@ -3906,5 +3990,11 @@ export class OrdersService implements OnModuleInit {
       }),
       timeline,
     } as unknown as DemoOrder;
+  }
+
+  private travelerIdentityFingerprint(traveler: TravelerInput) {
+    return createHash("sha256")
+      .update(JSON.stringify(canonicalIdentity(traveler)))
+      .digest("hex");
   }
 }

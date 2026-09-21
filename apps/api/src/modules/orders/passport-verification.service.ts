@@ -45,6 +45,17 @@ export type PassportVerificationResult = {
     | "ocr-error"
     | "policy";
   detail?: string;
+  failureCode?: string;
+  reasonCode?: "IDENTITY_FIELDS_MISMATCH" | "PASSPORT_EXPIRED";
+  mismatchedFields?: Array<
+    | "firstName"
+    | "middleName"
+    | "surname"
+    | "dateOfBirth"
+    | "nationality"
+    | "passportNumber"
+    | "passportExpiryDate"
+  >;
 };
 export type PassportExtractedFields = Partial<
   Pick<
@@ -77,6 +88,57 @@ export type TravelTicketInspection = {
  *  spaces, dashes and slashes cannot break exact-match comparison. */
 export const normalizeText = (value: string) =>
   value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+const normalizeUnicode = (value?: string | null) =>
+  (value ?? "").normalize("NFKC").trim().replace(/\s+/gu, " ");
+
+export const canonicalName = (value?: string | null) =>
+  normalizeUnicode(value).toLocaleUpperCase("en-US");
+
+export const canonicalPassportNumber = (value?: string | null) =>
+  normalizeUnicode(value).replace(/\s+/gu, "").toLocaleUpperCase("en-US");
+
+export const canonicalDate = (value?: string | null): string => {
+  const input = normalizeUnicode(value);
+  let match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(input);
+  if (match) {
+    const year = match[1]!;
+    const month = match[2]!;
+    const day = match[3]!;
+    const candidate = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    const parsed = new Date(`${candidate}T00:00:00.000Z`);
+    return !Number.isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === candidate
+      ? candidate
+      : "";
+  }
+  match = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(input);
+  if (!match) return "";
+  const day = match[1]!;
+  const month = match[2]!;
+  const year = match[3]!;
+  const candidate = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  const parsed = new Date(`${candidate}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === candidate
+    ? candidate
+    : "";
+};
+
+export const canonicalNationality = (value?: string | null) => {
+  const code = normalizeUnicode(value).toUpperCase();
+  return code.length === 3 ? (ISO3_TO_ISO2[code] ?? code) : code;
+};
+
+export const canonicalIdentity = (traveler: PassportComparisonTraveler) => ({
+  firstName: canonicalName(traveler.firstName),
+  middleName: canonicalName(traveler.middleName),
+  surname: canonicalName(traveler.surname),
+  dateOfBirth: canonicalDate(traveler.dateOfBirth),
+  nationality: canonicalNationality(traveler.nationality),
+  passportNumber: canonicalPassportNumber(traveler.passportNumber),
+  passportExpiryDate: canonicalDate(traveler.passportExpiryDate),
+});
 
 /** Tesseract routinely reads the OCR-B MRZ '<' fillers as a run of identical
  *  letters (L, I, or on noisier scans K or others). Such runs are never part
@@ -316,29 +378,97 @@ export const compareExtractedPassport = (
   traveler: PassportComparisonTraveler,
 ): { matchedFields: PassportField[] } => {
   const matchedFields: PassportField[] = [];
-  const sameText = (left?: string, right?: string) =>
-    Boolean(
-      left &&
-      right &&
-      confusableNormalize(normalizeName(left)) ===
-        confusableNormalize(normalizeName(right)),
-    );
-  if (sameText(fields.passportNumber, traveler.passportNumber))
+  const sameName = (left?: string, right?: string) =>
+    Boolean(left && right && canonicalName(left) === canonicalName(right));
+  if (
+    fields.passportNumber &&
+    traveler.passportNumber &&
+    canonicalPassportNumber(fields.passportNumber) ===
+      canonicalPassportNumber(traveler.passportNumber)
+  )
     matchedFields.push("passportNumber");
-  if (sameText(fields.surname, traveler.surname)) matchedFields.push("surname");
-  if (sameText(fields.firstName, traveler.firstName))
+  if (sameName(fields.surname, traveler.surname)) matchedFields.push("surname");
+  if (sameName(fields.firstName, traveler.firstName))
     matchedFields.push("givenNames");
   // Middle names are optional. Record positive evidence when both sides carry
   // one, without weakening an otherwise valid passport when either omits it.
-  if (sameText(fields.middleName, traveler.middleName))
+  if (sameName(fields.middleName, traveler.middleName))
     matchedFields.push("middleName");
-  if (fields.dateOfBirth === traveler.dateOfBirth)
+  if (
+    canonicalDate(fields.dateOfBirth) &&
+    canonicalDate(fields.dateOfBirth) === canonicalDate(traveler.dateOfBirth)
+  )
     matchedFields.push("dateOfBirth");
-  if (fields.passportExpiryDate === traveler.passportExpiryDate)
+  if (
+    canonicalDate(fields.passportExpiryDate) &&
+    canonicalDate(fields.passportExpiryDate) ===
+      canonicalDate(traveler.passportExpiryDate)
+  )
     matchedFields.push("passportExpiryDate");
-  if (fields.nationality?.toUpperCase() === traveler.nationality.toUpperCase())
+  if (
+    canonicalNationality(fields.nationality) &&
+    canonicalNationality(fields.nationality) ===
+      canonicalNationality(traveler.nationality)
+  )
     matchedFields.push("nationality");
   return { matchedFields };
+};
+
+const requiredComparisonFields: Array<{
+  passport: PassportField;
+  traveler: NonNullable<PassportVerificationResult["mismatchedFields"]>[number];
+}> = [
+  { passport: "passportNumber", traveler: "passportNumber" },
+  { passport: "surname", traveler: "surname" },
+  { passport: "givenNames", traveler: "firstName" },
+  { passport: "dateOfBirth", traveler: "dateOfBirth" },
+  { passport: "passportExpiryDate", traveler: "passportExpiryDate" },
+  { passport: "nationality", traveler: "nationality" },
+];
+
+export const mismatchedIdentityFields = (
+  fields: PassportExtractedFields,
+  traveler: PassportComparisonTraveler,
+  matchedFields: PassportField[],
+) => {
+  const mismatches = requiredComparisonFields
+    .filter(({ passport }) => !matchedFields.includes(passport))
+    .map(({ traveler: field }) => field);
+  if (
+    canonicalName(fields.middleName) &&
+    canonicalName(traveler.middleName) &&
+    !matchedFields.includes("middleName")
+  )
+    mismatches.push("middleName");
+  return mismatches;
+};
+
+export const passportComparisonDiagnostics = (
+  fields: PassportExtractedFields,
+  traveler: PassportComparisonTraveler,
+  matchedFields: PassportField[],
+) => {
+  const checks = [
+    ["firstName", fields.firstName, traveler.firstName, canonicalName, "givenNames"],
+    ["middleName", fields.middleName, traveler.middleName, canonicalName, "middleName"],
+    ["surname", fields.surname, traveler.surname, canonicalName, "surname"],
+    ["dateOfBirth", fields.dateOfBirth, traveler.dateOfBirth, canonicalDate, "dateOfBirth"],
+    ["nationality", fields.nationality, traveler.nationality, canonicalNationality, "nationality"],
+    ["passportNumber", fields.passportNumber, traveler.passportNumber, canonicalPassportNumber, "passportNumber"],
+    ["passportExpiryDate", fields.passportExpiryDate, traveler.passportExpiryDate, canonicalDate, "passportExpiryDate"],
+  ] as const;
+  return checks.map(([field, extracted, submitted, normalize, matchField]) => {
+    const extractedText = extracted ?? "";
+    const submittedText = submitted ?? "";
+    return {
+      field,
+      source: "stored-extraction",
+      extractionNormalizationChanged: normalize(extractedText) !== extractedText,
+      submittedNormalizationChanged: normalize(submittedText) !== submittedText,
+      matched: matchedFields.includes(matchField),
+      checksumSupported: null,
+    };
+  });
 };
 
 export const verifyStoredExtraction = (
@@ -347,30 +477,73 @@ export const verifyStoredExtraction = (
   confidence?: number | null,
 ): PassportVerificationResult => {
   const { matchedFields } = compareExtractedPassport(fields, traveler);
+  const mismatchedFields = mismatchedIdentityFields(
+    fields,
+    traveler,
+    matchedFields,
+  );
+  if (isPassportExpired(fields.passportExpiryDate))
+    return {
+      status: "FAILED",
+      matchedFields,
+      ...(confidence != null ? { confidence } : {}),
+      checkedAt: new Date().toISOString(),
+      method: "stored-extraction",
+      detail: "The uploaded passport has expired",
+      failureCode: "PASSPORT_EXPIRED",
+      reasonCode: "PASSPORT_EXPIRED",
+      mismatchedFields,
+    };
+  const structuralVerdict = verdictFor(matchedFields);
+  const mandatoryMismatches = mismatchedFields.filter(
+    (field) => field !== "middleName",
+  );
   return {
-    status: verdictFor(matchedFields),
+    status:
+      mandatoryMismatches.length === 0
+        ? "VERIFIED"
+        : structuralVerdict === "VERIFIED"
+          ? "PARTIAL"
+          : structuralVerdict,
     matchedFields,
     ...(confidence != null ? { confidence } : {}),
     checkedAt: new Date().toISOString(),
     method: "stored-extraction",
+    ...(mismatchedFields.length
+      ? { reasonCode: "IDENTITY_FIELDS_MISMATCH" as const, mismatchedFields }
+      : {}),
   };
 };
 
-/** A machine-readable passport number and an authoritative MRZ name are mandatory identity
- *  signals. A date alone must never corroborate a deliberately wrong name.
- *  Other strong combinations remain PARTIAL for human review. */
+export const isPassportExpired = (expiry?: string): boolean => {
+  if (!expiry || !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) return false;
+  return expiry < new Date().toISOString().slice(0, 10);
+};
+
+/** Automated approval requires every mandatory identity value extracted from
+ * the passport MRZ to agree with the traveller submission. Missing or
+ * conflicting evidence remains reviewable, but it is never called verified. */
 export const verdictFor = (
   matchedFields: PassportField[],
 ): PassportVerificationStatus => {
-  if (matchedFields.includes("passportNumber")) {
-    const nameMatch =
-      matchedFields.includes("surname") || matchedFields.includes("givenNames");
-    return nameMatch ? "VERIFIED" : "PARTIAL";
-  }
+  const mandatory: PassportField[] = [
+    "passportNumber",
+    "surname",
+    "givenNames",
+    "dateOfBirth",
+    "passportExpiryDate",
+    "nationality",
+  ];
+  if (mandatory.every((field) => matchedFields.includes(field)))
+    return "VERIFIED";
+  if (matchedFields.includes("passportNumber")) return "PARTIAL";
   const nameMatch =
     matchedFields.includes("surname") || matchedFields.includes("givenNames");
-  const strongIdentityPair = nameMatch && matchedFields.includes("dateOfBirth");
-  return strongIdentityPair && matchedFields.length >= 2 ? "PARTIAL" : "FAILED";
+  const strongIdentityPair =
+    nameMatch &&
+    (matchedFields.includes("passportNumber") ||
+      matchedFields.includes("dateOfBirth"));
+  return strongIdentityPair ? "PARTIAL" : "FAILED";
 };
 
 /** Reads JPEG (SOF marker) or PNG (IHDR) pixel dimensions without pulling in
@@ -568,6 +741,18 @@ export class PassportVerificationService implements OnModuleDestroy {
         ...(nationality ? { nationality } : {}),
       });
       const fieldsRequiringInput = required.filter((field) => !fields[field]);
+      if (isPassportExpired(fields.passportExpiryDate))
+        return {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields,
+          fieldsRequiringInput,
+          ...(recognized.confidence !== undefined
+            ? { confidence: recognized.confidence }
+            : {}),
+          method: "tesseract-ocr",
+          checkedAt,
+          failureCode: "PASSPORT_EXPIRED",
+        };
       return {
         status: fieldsRequiringInput.length === 0 ? "READY" : "PARTIAL",
         fields,
@@ -669,6 +854,15 @@ export class PassportVerificationService implements OnModuleDestroy {
         detail: "Traveller details are required before verification",
       };
     }
+    if (isPassportExpired(order.traveler.passportExpiryDate))
+      return {
+        status: "FAILED",
+        matchedFields: [],
+        checkedAt: new Date().toISOString(),
+        method: "stored-extraction",
+        detail: "The uploaded passport has expired",
+        failureCode: "PASSPORT_EXPIRED",
+      };
     if (process.env.PASSPORT_VERIFY_OVERRIDE === "SKIP") {
       return {
         status: "SKIPPED",

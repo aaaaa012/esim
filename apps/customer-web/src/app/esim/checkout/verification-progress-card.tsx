@@ -124,7 +124,7 @@ export default function VerificationProgressCard({
                 autoFocus
                 onClick={() => setExpanded(false)}
               >
-                Keep waiting
+                Close
               </button>
             </div>
           </div>

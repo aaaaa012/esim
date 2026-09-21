@@ -88,7 +88,14 @@ type Detail = OpsOrder & {
     status: string;
     uploadVerified?: boolean;
   }[];
-  passportVerification?: { status: string };
+  passportVerification?: {
+    status: string;
+    matchedFields?: string[];
+    mismatchedFields?: string[];
+    reasonCode?: string;
+    checkedAt?: string;
+    method?: string;
+  };
   payment?: {
     provider: string;
     status: string;
@@ -945,6 +952,16 @@ export default function OrderReview({ id }: { id: string }) {
             }
             bodyClassName="space-y-1"
           >
+            {order.passportVerification?.mismatchedFields?.length ? (
+              <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                <p className="font-medium">Identity fields requiring review</p>
+                <p className="mt-1">
+                  {order.passportVerification.mismatchedFields
+                    .map(humane)
+                    .join(", ")}
+                </p>
+              </div>
+            ) : null}
             {order.documents.map((document) => (
               <div
                 key={document.id}

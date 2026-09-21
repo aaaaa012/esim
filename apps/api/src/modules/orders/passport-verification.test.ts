@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { TravelerInput } from "@visa-compass/shared";
 import { parseMrz } from "./mrz-parser.js";
 import {
+  canonicalDate,
+  canonicalName,
+  canonicalNationality,
+  canonicalPassportNumber,
   cleanNameTokens,
   comparePassport,
   compareExtractedPassport,
@@ -130,7 +134,7 @@ describe("stored passport extraction comparison", () => {
     expect(result.matchedFields).not.toContain("passportNumber");
   });
 
-  it("matches a name against stored OCR that carries filler noise like KK or L", () => {
+  it("does not silently fuzzy-match stored OCR filler noise", () => {
     const evidenced = verifyStoredExtraction(
       {
         firstName: "RESHAM",
@@ -153,17 +157,8 @@ describe("stored passport extraction comparison", () => {
       },
       48,
     );
-    expect(evidenced.matchedFields).toEqual(
-      expect.arrayContaining([
-        "passportNumber",
-        "surname",
-        "givenNames",
-        "middleName",
-        "dateOfBirth",
-        "nationality",
-        "passportExpiryDate",
-      ]),
-    );
+    expect(evidenced.matchedFields).not.toContain("middleName");
+    expect(evidenced.mismatchedFields).toContain("middleName");
     expect(evidenced.status).toBe("VERIFIED");
   });
 
@@ -190,7 +185,66 @@ describe("stored passport extraction comparison", () => {
       },
     );
     expect(result.matchedFields).not.toContain("givenNames");
-    expect(result.status).toBe("VERIFIED");
+    expect(result.status).toBe("PARTIAL");
+  });
+
+  it("never verifies when any mandatory identity field conflicts", () => {
+    const evidence = {
+      firstName: "ASHA",
+      surname: "SHRESTHA",
+      dateOfBirth: "1990-08-15",
+      nationality: "NP",
+      passportNumber: "PA1234567",
+      passportExpiryDate: "2030-01-01",
+    };
+    expect(
+      verifyStoredExtraction(evidence, {
+        ...traveler,
+        dateOfBirth: "1991-08-15",
+      }).status,
+    ).toBe("PARTIAL");
+    expect(
+      verifyStoredExtraction(evidence, {
+        ...traveler,
+        nationality: "IN",
+      }).status,
+    ).toBe("PARTIAL");
+  });
+
+  it("rejects an expired passport even when every entered field matches", () => {
+    const expired = {
+      firstName: "ASHA",
+      surname: "SHRESTHA",
+      dateOfBirth: "1990-08-15",
+      nationality: "NP",
+      passportNumber: "PA1234567",
+      passportExpiryDate: "2020-01-01",
+    };
+    expect(
+      verifyStoredExtraction(expired, {
+        ...traveler,
+        passportExpiryDate: "2020-01-01",
+      }),
+    ).toMatchObject({ status: "FAILED", failureCode: "PASSPORT_EXPIRED" });
+  });
+});
+
+describe("identity canonicalization", () => {
+  it("normalizes Unicode names and whitespace without fuzzy matching", () => {
+    expect(canonicalName("  Asha\u00a0 Kumari ")).toBe("ASHA KUMARI");
+    expect(canonicalName("ASHA")).not.toBe(canonicalName("ASMA"));
+  });
+
+  it("only removes whitespace from passport numbers", () => {
+    expect(canonicalPassportNumber(" pa 12 34567 ")).toBe("PA1234567");
+    expect(canonicalPassportNumber("PA-1234567")).toBe("PA-1234567");
+  });
+
+  it("canonicalizes valid dates and ISO nationality equivalents", () => {
+    expect(canonicalDate("1990/8/5")).toBe("1990-08-05");
+    expect(canonicalDate("5.8.1990")).toBe("1990-08-05");
+    expect(canonicalDate("2025-99-99")).toBe("");
+    expect(canonicalNationality("NPL")).toBe("NP");
   });
 });
 
@@ -371,7 +425,7 @@ describe("comparePassport", () => {
     expect(matchedFields).toContain("dateOfBirth");
     expect(matchedFields).toContain("passportExpiryDate");
     expect(matchedFields).toContain("nationality");
-    expect(verdictFor(matchedFields)).toBe("VERIFIED");
+    expect(verdictFor(matchedFields)).toBe("PARTIAL");
   });
 });
 
@@ -459,6 +513,44 @@ describe("strict MRZ recovery decisions", () => {
     } as never);
     expect(result.failureCode).toBe("PASSPORT_BIODATA_NOT_DETECTED");
   });
+
+  it("requires replacement before traveller entry when the MRZ passport is expired", async () => {
+    const storage = {
+      isConfigured: () => true,
+      downloadDocumentImages: vi.fn().mockResolvedValue([
+        { bytes: Buffer.from("passport"), contentType: "image/jpeg" },
+      ]),
+    };
+    const service = new PassportVerificationService(storage as never);
+    const expiredMrz = [
+      `P<UTOERIKSSON<<ANNA<MARIA${"<".repeat(19)}`,
+      "L898902C36UTO7408122F1204159<<<<<<<<<<<<<<08",
+    ].join("\n");
+    vi.spyOn(service as never, "recognize" as never).mockResolvedValue({
+      text: expiredMrz,
+      bandText: expiredMrz,
+      confidence: 94,
+    } as never);
+
+    const result = await service.extract({
+      id: "order-expired",
+      purchaseType: "INITIAL_PURCHASE",
+      documents: [{
+        id: "passport-expired",
+        type: "PASSPORT",
+        fileName: "passport.jpg",
+        privateAssetId: "passport-expired-asset",
+        status: "PENDING",
+        uploadVerified: true,
+      }],
+    } as never);
+
+    expect(result).toMatchObject({
+      status: "MANUAL_ENTRY_REQUIRED",
+      failureCode: "PASSPORT_EXPIRED",
+      fields: { passportExpiryDate: "2012-04-15" },
+    });
+  });
 });
 
 describe("multi-page passport extraction", () => {
@@ -519,9 +611,9 @@ describe("multi-page passport extraction", () => {
 });
 
 describe("verdictFor", () => {
-  it("verifies when the passport number and an MRZ name match", () => {
-    expect(verdictFor(["passportNumber", "surname"])).toBe("VERIFIED");
-    expect(verdictFor(["passportNumber", "givenNames"])).toBe("VERIFIED");
+  it("keeps incomplete identity evidence partial even when number and name match", () => {
+    expect(verdictFor(["passportNumber", "surname"])).toBe("PARTIAL");
+    expect(verdictFor(["passportNumber", "givenNames"])).toBe("PARTIAL");
   });
   it("is partial when only the passport number matches", () => {
     expect(verdictFor(["passportNumber"])).toBe("PARTIAL");

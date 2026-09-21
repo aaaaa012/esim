@@ -138,6 +138,30 @@ export class OrdersPersistenceService {
               ? { confidence: row.passportExtraction.confidence }
               : {}),
             correctionAttempts: row.passportExtraction.correctionAttempts,
+            ...(row.passportExtraction.lastMismatchFingerprint
+              ? {
+                  lastMismatchFingerprint:
+                    row.passportExtraction.lastMismatchFingerprint,
+                }
+              : {}),
+            ...(Array.isArray(row.passportExtraction.lastMismatchFields)
+              ? {
+                  lastMismatchFields:
+                    row.passportExtraction.lastMismatchFields.filter(
+                      (value): value is NonNullable<
+                        PassportVerificationResult["mismatchedFields"]
+                      >[number] => typeof value === "string",
+                    ) as NonNullable<
+                      PassportVerificationResult["mismatchedFields"]
+                    >,
+                }
+              : {}),
+            ...(row.passportExtraction.confirmedMismatchFingerprint
+              ? {
+                  confirmedMismatchFingerprint:
+                    row.passportExtraction.confirmedMismatchFingerprint,
+                }
+              : {}),
             ...(row.passportExtraction.failureCode
               ? { failureCode: row.passportExtraction.failureCode }
               : {}),
@@ -192,6 +216,12 @@ export class OrdersPersistenceService {
             matchedFields:
               (passport.passportMatchedFields as
                 PassportVerificationResult["matchedFields"] | null) ?? [],
+            ...(passportExtraction?.lastMismatchFields?.length
+              ? {
+                  mismatchedFields: passportExtraction.lastMismatchFields,
+                  reasonCode: "IDENTITY_FIELDS_MISMATCH" as const,
+                }
+              : {}),
             ...(passport.passportConfidence != null
               ? { confidence: passport.passportConfidence }
               : {}),
@@ -628,6 +658,16 @@ export class OrdersPersistenceService {
                     confidence: order.passportExtraction.confidence ?? null,
                     correctionAttempts:
                       order.passportExtraction.correctionAttempts ?? 0,
+                    lastMismatchFingerprint:
+                      order.passportExtraction.lastMismatchFingerprint ?? null,
+                    lastMismatchFields: order.passportExtraction
+                      .lastMismatchFields
+                      ? (order.passportExtraction
+                          .lastMismatchFields as Prisma.InputJsonValue)
+                      : Prisma.JsonNull,
+                    confirmedMismatchFingerprint:
+                      order.passportExtraction.confirmedMismatchFingerprint ??
+                      null,
                     failureCode: order.passportExtraction.failureCode ?? null,
                   },
                   create: {
@@ -642,6 +682,16 @@ export class OrdersPersistenceService {
                     confidence: order.passportExtraction.confidence ?? null,
                     correctionAttempts:
                       order.passportExtraction.correctionAttempts ?? 0,
+                    lastMismatchFingerprint:
+                      order.passportExtraction.lastMismatchFingerprint ?? null,
+                    lastMismatchFields: order.passportExtraction
+                      .lastMismatchFields
+                      ? (order.passportExtraction
+                          .lastMismatchFields as Prisma.InputJsonValue)
+                      : Prisma.JsonNull,
+                    confirmedMismatchFingerprint:
+                      order.passportExtraction.confirmedMismatchFingerprint ??
+                      null,
                     failureCode: order.passportExtraction.failureCode ?? null,
                   },
                 });

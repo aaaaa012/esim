@@ -24,7 +24,7 @@ it("restores the progress card while OCR runs and closes it after verification",
   expect(screen.getByText("Checking your passport")).toBeDefined();
   expect(screen.getAllByText("Ready for payment").length).toBeGreaterThan(0);
   expect(view.container.textContent).not.toMatch(/\d+%/);
-  fireEvent.click(screen.getByRole("button", { name: "Keep waiting" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   fireEvent.click(
     screen.getByRole("button", { name: "View verification progress" }),

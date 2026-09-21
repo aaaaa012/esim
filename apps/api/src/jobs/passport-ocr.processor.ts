@@ -182,6 +182,7 @@ export class PassportOcrProcessor implements OnModuleInit {
       const passportInvalid = [
         "MRZ_NOT_READABLE",
         "PASSPORT_BIODATA_NOT_DETECTED",
+        "PASSPORT_EXPIRED",
       ].includes(extraction.failureCode ?? "");
       const passportNeedsReview =
         extraction.failureCode === "MRZ_REVIEW_REQUIRED";
@@ -254,8 +255,13 @@ export class PassportOcrProcessor implements OnModuleInit {
           orderId: order.id,
           summary: "Passport image must be replaced",
           detail:
-            "The uploaded passport does not contain a readable machine-readable zone",
-          failureCategory: "PASSPORT_MRZ_NOT_READABLE",
+            extraction.failureCode === "PASSPORT_EXPIRED"
+              ? "The uploaded passport has expired and must be replaced with a valid passport"
+              : "The uploaded passport does not contain a readable machine-readable zone",
+          failureCategory:
+            extraction.failureCode === "PASSPORT_EXPIRED"
+              ? "PASSPORT_EXPIRED"
+              : "PASSPORT_MRZ_NOT_READABLE",
           lastSuccessfulStep: "DOCUMENTS_UPLOADED",
           availableActions: [],
         });
@@ -514,9 +520,11 @@ export class PassportOcrProcessor implements OnModuleInit {
           ],
         } as never);
         const nextStatus =
-          ["MRZ_NOT_READABLE", "PASSPORT_BIODATA_NOT_DETECTED"].includes(
-            extraction.failureCode ?? "",
-          )
+          [
+            "MRZ_NOT_READABLE",
+            "PASSPORT_BIODATA_NOT_DETECTED",
+            "PASSPORT_EXPIRED",
+          ].includes(extraction.failureCode ?? "")
             ? "REUPLOAD_REQUIRED"
             : extraction.failureCode === "MRZ_REVIEW_REQUIRED"
               ? "MANUAL_REVIEW"
@@ -567,15 +575,20 @@ export class PassportOcrProcessor implements OnModuleInit {
             },
           });
           if (
-            ["MRZ_NOT_READABLE", "PASSPORT_BIODATA_NOT_DETECTED"].includes(
-              extraction.failureCode ?? "",
-            )
+            [
+              "MRZ_NOT_READABLE",
+              "PASSPORT_BIODATA_NOT_DETECTED",
+              "PASSPORT_EXPIRED",
+            ].includes(extraction.failureCode ?? "")
           )
             await tx.partnerDocumentUploadIntent.update({
               where: { id: passport.id },
               data: {
                 verificationStatus: "REUPLOAD_REQUIRED",
-                verificationCode: "PASSPORT_MRZ_NOT_READABLE",
+                verificationCode:
+                  extraction.failureCode === "PASSPORT_EXPIRED"
+                    ? "PASSPORT_EXPIRED"
+                    : "PASSPORT_MRZ_NOT_READABLE",
                 verifiedAt: new Date(),
               },
             });

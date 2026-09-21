@@ -86,6 +86,7 @@ type Order = {
   passportVerification?: {
     status: string;
     matchedFields?: string[];
+    mismatchedFields?: Array<keyof typeof FIELD_LABELS>;
     confidence?: number;
     checkedAt?: string;
     method?: string;
@@ -925,30 +926,30 @@ export default function CheckoutClient({
       );
       setOrder(updated);
       if (updated.documentReviewStatus === "CORRECTION_REQUIRED") {
-        const matched = new Set(
-          updated.passportVerification?.matchedFields ?? [],
+        const mismatched = new Set(
+          updated.passportVerification?.mismatchedFields ?? [],
         );
         setFieldErrors({
-          ...(!matched.has("givenNames")
-            ? { firstName: "Check against your uploaded passport" }
+          ...(mismatched.has("firstName")
+            ? { firstName: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
             : {}),
-          ...(traveler.middleName.trim() && !matched.has("middleName")
-            ? { middleName: "Check against your uploaded passport" }
+          ...(mismatched.has("middleName")
+            ? { middleName: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
             : {}),
-          ...(!matched.has("surname")
-            ? { surname: "Check against your uploaded passport" }
+          ...(mismatched.has("surname")
+            ? { surname: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
             : {}),
-          ...(!matched.has("dateOfBirth")
-            ? { dateOfBirth: "Check against your uploaded passport" }
+          ...(mismatched.has("dateOfBirth")
+            ? { dateOfBirth: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
             : {}),
-          ...(!matched.has("passportNumber")
-            ? { passportNumber: "Check against your uploaded passport" }
+          ...(mismatched.has("passportNumber")
+            ? { passportNumber: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
             : {}),
-          ...(!matched.has("passportExpiryDate")
-            ? { passportExpiryDate: "Check against your uploaded passport" }
+          ...(mismatched.has("passportExpiryDate")
+            ? { passportExpiryDate: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
             : {}),
-          ...(!matched.has("nationality")
-            ? { nationality: "Check against your uploaded passport" }
+          ...(mismatched.has("nationality")
+            ? { nationality: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
             : {}),
         });
       }
@@ -998,6 +999,8 @@ export default function CheckoutClient({
           "We could not confirm that the passport matches all traveller details. Review the marked fields and save again.",
         );
       } else {
+        const expiredPassport =
+          order?.passportExtraction?.failureCode === "PASSPORT_EXPIRED";
         const rejected = (order?.documents ?? [])
           .filter((document) => document.status === "REUPLOAD_REQUIRED")
           .map((document) =>
@@ -1008,7 +1011,9 @@ export default function CheckoutClient({
                 : "document",
           );
         setDocumentAttentionMessage(
-          rejected.length
+          expiredPassport
+            ? "This passport has expired. Upload a valid passport before continuing."
+            : rejected.length
             ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
             : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
         );
@@ -3158,6 +3163,8 @@ function Action({
 }
 
 const FIELD_LABELS: Record<string, string> = {
+  firstName: "First name",
+  middleName: "Middle name",
   passportNumber: "Passport number",
   surname: "Surname",
   givenNames: "Given name(s)",
@@ -3184,9 +3191,9 @@ function PassportCheck({
   onReplace?: () => void;
 }) {
   const status = result?.status;
-  const mismatchedFields = Object.entries(FIELD_LABELS)
-    .filter(([field]) => !result?.matchedFields?.includes(field))
-    .map(([, label]) => label);
+  const mismatchedFields = (result?.mismatchedFields ?? []).map(
+    (field) => FIELD_LABELS[field],
+  );
   const paymentLabel =
     paymentStatus === "PENDING"
       ? "Payment awaiting confirmation"
@@ -3209,38 +3216,17 @@ function PassportCheck({
     );
   }
   if (reviewStatus === "MANUAL_REVIEW") {
-    const nameUnreadable =
-      !result?.matchedFields?.includes("givenNames") ||
-      !result?.matchedFields?.includes("surname");
     return (
       <div className="passport-check manual" role="status">
         <ShieldCheck size={20} />
         <span>
-          <b>
-            {nameUnreadable
-              ? "Your name needs a quick manual check"
-              : "Traveller details need checking"}
-          </b>
+          <b>Your documents are being reviewed</b>
           <small>
-            {nameUnreadable
-              ? "Your other details were verified. The name on your passport photo wasn\u2019t clear enough to confirm automatically, so our team will check it before payment. You\u2019ll be notified here automatically."
-              : "Our team will review your documents before payment. You\u2019ll be notified here automatically."}
+            We could not automatically confirm your corrected details. Your
+            documents have been sent for review. You do not need to upload them
+            again unless requested.
           </small>
         </span>
-        {onReplace && (
-          <button
-            type="button"
-            className="button secondary"
-            onClick={onReplace}
-          >
-            Replace passport photo
-          </button>
-        )}
-        {onEdit && (
-          <button type="button" className="button secondary" onClick={onEdit}>
-            Review traveller details
-          </button>
-        )}
         <span className="passport-check-tag">{paymentLabel}</span>
       </div>
     );
@@ -3252,10 +3238,9 @@ function PassportCheck({
         <span>
           <b>Recheck your traveller details</b>
           <small>
-            Check{" "}
-            {mismatchedFields.join(", ") || "the highlighted passport fields"},
-            then select Save and continue again. For security, we do not display
-            the values read from your passport.
+            We couldn't automatically match some details with your uploaded
+            passport. Please check the highlighted fields
+            {mismatchedFields.length ? `: ${mismatchedFields.join(", ")}` : ""}.
           </small>
         </span>
         {onEdit && (

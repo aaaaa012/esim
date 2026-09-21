@@ -654,6 +654,9 @@ model PassportExtraction {
   failureCode           String?
   confirmedAt           DateTime?
   correctionAttempts    Int                          @default(0)
+  lastMismatchFingerprint String?
+  lastMismatchFields      Json?
+  confirmedMismatchFingerprint String?
   createdAt             DateTime                     @default(now())
   updatedAt             DateTime                     @updatedAt
 

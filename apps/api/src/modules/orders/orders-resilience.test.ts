@@ -21,6 +21,8 @@ import { PaymentsService } from "../payments/payments.service.js";
 import { PaymentSimulatorGateway } from "../payments/gateways/simulator.gateway.js";
 import type { KhaltiGateway } from "../payments/gateways/khalti.gateway.js";
 import { orderPassportOcrJobId } from "../../jobs/ocr-recovery.config.js";
+import { createHash } from "node:crypto";
+import { canonicalIdentity } from "./passport-verification.service.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -1561,6 +1563,68 @@ it.each([
     expect(add).not.toHaveBeenCalled();
   },
 );
+
+it("routes an explicitly resubmitted unchanged mismatch to manual review", async () => {
+  const entered = { ...customerTraveler(), passportNumber: "P7654321" };
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(canonicalIdentity(entered)))
+    .digest("hex");
+  const instance = ordersService(
+    [readyOrder({
+      id: "confirmed-mismatch",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: entered,
+      documentReviewStatus: "NOT_STARTED",
+      passportExtraction: {
+        status: "READY",
+        fields: {
+          firstName: "Jane",
+          surname: "Doe",
+          dateOfBirth: "1990-01-01",
+          nationality: "NP",
+          passportNumber: "P1234567",
+          passportExpiryDate: "2030-01-01",
+        },
+        fieldsRequiringInput: [],
+        passportAssetId: "passport-asset",
+        confidence: 96,
+        correctionAttempts: 1,
+        lastMismatchFingerprint: fingerprint,
+        lastMismatchFields: ["passportNumber"],
+        confirmedMismatchFingerprint: fingerprint,
+      },
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    })],
+    {},
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "confirmed-mismatch",
+    "customer-1",
+  );
+
+  expect(result.documentReviewStatus).toBe("MANUAL_REVIEW");
+  expect(result.passportExtraction?.correctionAttempts).toBe(1);
+});
 
 it("reuses a completed passport extraction when re-checked before traveller details", async () => {
   const add = vi.fn().mockResolvedValue({});
