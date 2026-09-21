@@ -5,6 +5,7 @@ import {
   createHmac,
   randomBytes,
 } from "node:crypto";
+import { decodeAes256Key } from "./encryption-key.js";
 
 @Injectable()
 export class CryptoService {
@@ -12,7 +13,7 @@ export class CryptoService {
     const configured = process.env.APP_ENCRYPTION_KEY_BASE64;
     if (!configured && process.env.NODE_ENV === "production")
       throw new Error("APP_ENCRYPTION_KEY_BASE64 is required");
-    return configured ? Buffer.from(configured, "base64") : Buffer.alloc(32, 7);
+    return configured ? decodeAes256Key(configured) : Buffer.alloc(32, 7);
   }
   private blindIndexKey(): Buffer {
     const configured = process.env.PII_HASH_KEY;

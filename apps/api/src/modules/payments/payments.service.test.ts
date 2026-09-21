@@ -88,13 +88,11 @@ function makeService(opts: {
     },
   );
 
-  const reviewRequired = vi.fn(
-    async (id: string, _reason: string) => {
-      order.status = OrderStatus.PAYMENT_REVIEW_REQUIRED;
-      order.payment.status = PaymentStatus.REVIEW_REQUIRED;
-      return order;
-    },
-  );
+  const reviewRequired = vi.fn(async (id: string, _reason: string) => {
+    order.status = OrderStatus.PAYMENT_REVIEW_REQUIRED;
+    order.payment.status = PaymentStatus.REVIEW_REQUIRED;
+    return order;
+  });
 
   const orders = {
     get: () => order,
@@ -241,12 +239,20 @@ describe("PaymentsService inventory admission", () => {
       paymentInitiation: {
         create: vi.fn(async ({ data }: AnyRecord) => {
           if (record) throw { code: "P2002" };
-          record = { id: "init-1", status: "PROCESSING", result: null, ...data };
+          record = {
+            id: "init-1",
+            status: "PROCESSING",
+            result: null,
+            ...data,
+          };
           return record;
         }),
         findUnique: vi.fn(async () => record),
         updateMany: vi.fn(async ({ where, data }: AnyRecord) => {
-          if (!record || (where.claimToken && where.claimToken !== record.claimToken))
+          if (
+            !record ||
+            (where.claimToken && where.claimToken !== record.claimToken)
+          )
             return { count: 0 };
           record = { ...record, ...data };
           return { count: 1 };
@@ -318,6 +324,37 @@ describe("PaymentsService inventory admission", () => {
     await expect(
       service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
     ).rejects.toMatchObject({ code: "PAYMENT_SESSION_ACTIVE" });
+  });
+
+  it("blocks a second charge when a remote initiation is unresolved", async () => {
+    const order = orderFor({
+      status: OrderStatus.DRAFT,
+      purchaseType: "TOPUP",
+      payment: undefined,
+    });
+    const initiate = vi.fn();
+    const service = new PaymentsService(
+      {
+        refreshOne: vi.fn(),
+        get: vi.fn().mockReturnValue(order),
+        assertPaymentPrerequisites: vi.fn(),
+      } as never,
+      { initiate } as never,
+      { initiate } as never,
+      undefined,
+      undefined,
+      {
+        enabled: true,
+        paymentInitiation: {
+          findFirst: vi.fn().mockResolvedValue({ id: "attempt-1" }),
+        },
+      } as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE });
+    expect(initiate).not.toHaveBeenCalled();
   });
 
   it("does not open a payment session when the order is already paid", async () => {
@@ -575,7 +612,8 @@ describe("PaymentsService payment verification mapping", () => {
         status: PaymentStatus.CANCELLED,
       },
     });
-    const { svc, gateway, confirmedCalls, failedCalls } = serviceWithGateway(order);
+    const { svc, gateway, confirmedCalls, failedCalls } =
+      serviceWithGateway(order);
     await expect(
       svc.verify("order-1", "user-1", "pidx-1"),
     ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_NOT_CONFIRMED });
@@ -629,10 +667,12 @@ function serviceWithGateway(order: AnyRecord) {
         confirmedCalls.push({ id });
         return order;
       }),
-      resolvePaymentFailure: vi.fn(async (id: string, _o: string | null, reason: string) => {
-        failedCalls.push({ id, reason });
-        return order;
-      }),
+      resolvePaymentFailure: vi.fn(
+        async (id: string, _o: string | null, reason: string) => {
+          failedCalls.push({ id, reason });
+          return order;
+        },
+      ),
     } as never,
     {} as never,
     {} as never,

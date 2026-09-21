@@ -21,7 +21,7 @@ import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import InstallGuide from "./install-guide";
 import ErrorModal from "../../../components/error-modal";
 import { formatDataMb, formatPlanDataText } from "../../../lib/format-data";
-import { orderStatusLabel } from "@visa-compass/shared";
+import { orderStatusPresentation } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const REFRESH_COOLDOWN_MS = 30_000;
@@ -107,7 +107,8 @@ const formatStatus = (esim: Esim) => {
     return {
       label: "Preparing eSIM",
       tone: "activating",
-      detail: "Your secure installation QR is being prepared. No action is needed yet.",
+      detail:
+        "Your secure installation QR is being prepared. No action is needed yet.",
     };
   return {
     label: "No active plan",
@@ -117,13 +118,7 @@ const formatStatus = (esim: Esim) => {
 };
 
 export const activityStatusLabel = (status: string) => {
-  if (status === "DRAFT") return "Purchase started";
-  if (status === "AWAITING_CUSTOMER") return "Action required";
-  if (status === "PAYMENT_FAILED") return "Payment needs attention";
-  if (status === "PROVISIONING_FAILED") return "eSIM preparation needs attention";
-  if (status === "QR_READY") return "Ready to install";
-  if (status === "COMPLETED") return "Purchase completed";
-  return orderStatusLabel(status);
+  return orderStatusPresentation(status).label;
 };
 
 function Battery({
@@ -462,7 +457,8 @@ function CurrentPlans({ plans }: { plans: Subscription[] }) {
               <div className="plan-copy">
                 <b>{plan.plan.name}</b>
                 <span>
-                  {plan.plan.countryName} · {formatPlanDataText(plan.plan.dataAllowance)} ·{" "}
+                  {plan.plan.countryName} ·{" "}
+                  {formatPlanDataText(plan.plan.dataAllowance)} ·{" "}
                   {plan.plan.validityDays} days
                 </span>
                 <small>

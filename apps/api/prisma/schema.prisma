@@ -107,7 +107,16 @@ enum PaymentStatus {
 
 enum PaymentInitiationStatus {
   PROCESSING
+  RECONCILIATION_REQUIRED
+  REMOTE_CREATED
+  ATTACHED
   COMPLETED
+  FAILED
+}
+
+enum PartnerApiAuditStatus {
+  STARTED
+  SUCCEEDED
   FAILED
 }
 
@@ -352,6 +361,10 @@ model User {
   status                                UserStatus                    @default(ACTIVE)
   accountType                           UserRoleName                  @default(CUSTOMER)
   mustChangePassword                    Boolean                       @default(false)
+  passwordChangeRequiredAt              DateTime?
+  passwordChangeCompletedAt             DateTime?
+  passwordChangeClaimToken              String?                        @db.Uuid
+  passwordChangeClaimExpiresAt          DateTime?
   roles                                 UserRole[]
   rechargePurchases                     Order[]                       @relation("RechargePurchaser")
   customer                              Customer?
@@ -624,6 +637,9 @@ model TravelerDocument {
   type                       DocumentType
   fileName                   String
   privateAssetId             String
+  activeAssetVersionId       String?        @unique @db.Uuid
+  activeAssetVersion         DocumentAssetVersion? @relation("ActiveDocumentAssetVersion", fields: [activeAssetVersionId], references: [id], onDelete: Restrict)
+  assetVersions              DocumentAssetVersion[] @relation("DocumentAssetVersions")
   status                     DocumentStatus @default(PENDING)
   uploadVerified             Boolean        @default(false)
   reviewedById               String?        @db.Uuid
@@ -637,6 +653,24 @@ model TravelerDocument {
 
   @@unique([orderId, type])
   @@index([status])
+}
+
+model DocumentAssetVersion {
+  id             String           @id @default(uuid()) @db.Uuid
+  documentId     String           @db.Uuid
+  document       TravelerDocument @relation("DocumentAssetVersions", fields: [documentId], references: [id], onDelete: Cascade)
+  activeFor      TravelerDocument? @relation("ActiveDocumentAssetVersion")
+  temporaryAssetId String
+  finalizedAssetId String         @unique
+  sha256         String
+  byteSize       Int
+  contentType    String
+  storageVersionId String?
+  createdAt      DateTime         @default(now())
+  supersededAt   DateTime?
+
+  @@index([documentId, createdAt])
+  @@unique([documentId, sha256])
 }
 
 model PassportExtraction {
@@ -721,15 +755,22 @@ model PaymentInitiation {
   order          Order                   @relation(fields: [orderId], references: [id])
   provider       PaymentProvider
   amountNpr      Int
+  currency       String                  @default("NPR")
   status         PaymentInitiationStatus @default(PROCESSING)
   claimToken     String                  @db.Uuid
   leaseExpiresAt DateTime
   result         Json?
+  paymentReference String?
+  providerCorrelationId String?
+  remoteCreatedAt DateTime?
+  attachedAt     DateTime?
+  lastReconciledAt DateTime?
   errorCode      String?
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
 
   @@index([status, leaseExpiresAt])
+  @@index([provider, paymentReference])
 }
 
 model FonepayBankDirectoryEntry {
@@ -897,6 +938,7 @@ model Partner {
   rateBuckets              PartnerRateBucket[]
   documentUploadIntents    PartnerDocumentUploadIntent[]
   documentVerifications    PartnerDocumentVerification[]
+  apiAudits                PartnerApiAudit[]
   createdAt                DateTime                       @default(now())
   updatedAt                DateTime                       @updatedAt
 }
@@ -913,6 +955,9 @@ model PartnerDocumentUploadIntent {
   contentType        String
   declaredSizeBytes  Int
   privateAssetId     String                       @unique
+  temporaryAssetId   String?
+  contentSha256      String?
+  storageVersionId   String?
   expiresAt          DateTime
   consumedAt         DateTime?
   consumedOrderId    String?                      @db.Uuid
@@ -1472,13 +1517,41 @@ model OutboxMessage {
 }
 
 model WorkerHeartbeat {
-  worker     String   @id
+  worker     String
   instanceId String
+  buildVersion String?
   status     String   @default("RUNNING")
   lastSeenAt DateTime @default(now())
   metadata   Json?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  @@id([worker, instanceId])
+  @@index([worker, lastSeenAt])
+}
+
+model PartnerApiAudit {
+  id            String                @id @default(uuid()) @db.Uuid
+  requestId     String                @unique
+  partnerId     String                @db.Uuid
+  partner       Partner               @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  credentialId  String?               @db.Uuid
+  method        String
+  route         String
+  action        String
+  targetId      String?
+  correlationId String?
+  requestMeta   Json?
+  responseMeta  Json?
+  responseStatus Int?
+  status        PartnerApiAuditStatus @default(STARTED)
+  errorCode     String?
+  startedAt     DateTime              @default(now())
+  completedAt   DateTime?
+  updatedAt     DateTime              @updatedAt
+
+  @@index([partnerId, startedAt])
+  @@index([status, startedAt])
 }
 
 model CustomerConsent {

@@ -8,10 +8,21 @@ function service(
   storage: Record<string, unknown> = {},
   queues: Record<string, unknown> = {},
 ) {
+  const resolvedStorage = {
+    finalizeDocument: vi.fn(async (assetId: string) => ({
+      temporaryAssetId: assetId,
+      finalizedAssetId: `${assetId}-finalized`,
+      sha256: "a".repeat(64),
+      byteSize: 500,
+      contentType: "image/png",
+      storageVersionId: null,
+    })),
+    ...storage,
+  };
   return new PartnerService(
     prisma as never,
     {} as never,
-    storage as never,
+    resolvedStorage as never,
     {} as never,
     {} as never,
     partnerWebhooks as never,
@@ -53,6 +64,11 @@ describe("partner prepaid settlement", () => {
               verificationStatus: "VERIFIED",
               verificationCode: null,
               verifiedAt: new Date(),
+              contentSha256: "a".repeat(64),
+              temporaryAssetId: "asset-passport-temp",
+              storageVersionId: null,
+              declaredSizeBytes: 500,
+              contentType: "image/jpeg",
             },
           ],
         }),
@@ -406,6 +422,11 @@ describe("partner prepaid settlement", () => {
                 confidence: 0.99,
               },
               verifiedAt: new Date(),
+              contentSha256: "a".repeat(64),
+              temporaryAssetId: "asset-passport-temp",
+              storageVersionId: null,
+              declaredSizeBytes: 500,
+              contentType: "image/jpeg",
             },
             {
               id: "ticket-1",
@@ -415,6 +436,11 @@ describe("partner prepaid settlement", () => {
               uploadVerified: true,
               verificationStatus: "VERIFIED",
               verificationResult: null,
+              contentSha256: "b".repeat(64),
+              temporaryAssetId: "asset-ticket-temp",
+              storageVersionId: null,
+              declaredSizeBytes: 500,
+              contentType: "image/jpeg",
             },
           ],
         }),
@@ -438,6 +464,19 @@ describe("partner prepaid settlement", () => {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       partnerLedgerEntry: { create: vi.fn() },
+      travelerDocument: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: "order-passport", type: "PASSPORT", privateAssetId: "asset-passport" },
+          { id: "order-ticket", type: "TICKET", privateAssetId: "asset-ticket" },
+        ]),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      documentAssetVersion: {
+        create: vi
+          .fn()
+          .mockResolvedValueOnce({ id: "version-passport" })
+          .mockResolvedValueOnce({ id: "version-ticket" }),
+      },
     };
     const prisma = {
       partner: {
@@ -761,7 +800,7 @@ describe("partner prepaid settlement", () => {
         update: vi.fn().mockResolvedValue({}),
       },
       partnerDocumentUploadIntent: {
-        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         count: vi.fn().mockResolvedValue(0),
       },
       travelerDocument: {

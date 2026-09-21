@@ -181,7 +181,7 @@ export class PaymentsService {
           platform: input.platform,
           ...(input.bankCode ? { bankCode: input.bankCode } : {}),
           ...(input.bankName ? { bankName: input.bankName } : {}),
-...(input.launchMethod ? { launchMethod: input.launchMethod } : {}),
+          ...(input.launchMethod ? { launchMethod: input.launchMethod } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
           ...(input.scheme ? { scheme: input.scheme } : {}),
           ...(input.launchUrl
@@ -220,7 +220,8 @@ export class PaymentsService {
     )
       throw new ApiException({
         code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
-        message: "A new payment cannot start until the previous one is reconciled.",
+        message:
+          "A new payment cannot start until the previous one is reconciled.",
         status: 409,
         details:
           declaration.blockedReason ??
@@ -246,6 +247,32 @@ export class PaymentsService {
       );
   }
 
+  private async assertNoUnresolvedRemoteInitiation(orderId: string) {
+    if (!this.prisma?.enabled || !this.prisma.paymentInitiation?.findFirst)
+      return;
+    const unresolved = await this.prisma.paymentInitiation.findFirst({
+      where: {
+        orderId,
+        status: {
+          in: [
+            PaymentInitiationStatus.RECONCILIATION_REQUIRED,
+            PaymentInitiationStatus.REMOTE_CREATED,
+            PaymentInitiationStatus.COMPLETED,
+          ],
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true },
+    });
+    if (unresolved)
+      throw new ApiException({
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "The previous payment request is still being reconciled. Do not start another payment yet.",
+        status: 409,
+      });
+  }
+
   async initiate(
     orderId: string,
     ownerId: string | null,
@@ -261,6 +288,7 @@ export class PaymentsService {
     if (order.purchaseType !== "TOPUP")
       await this.orders.assertInventoryAvailableForNewOrder();
     this.assertSafeToInitiate(order);
+    await this.assertNoUnresolvedRemoteInitiation(orderId);
     const existing = order.payment;
     if (
       existing &&
@@ -296,6 +324,25 @@ export class PaymentsService {
       ...result,
       returnUrl,
     });
+    if (this.prisma?.enabled)
+      await this.prisma.paymentInitiation.updateMany({
+        where: {
+          orderId,
+          provider,
+          paymentReference: result.reference,
+          status: {
+            in: [
+              PaymentInitiationStatus.REMOTE_CREATED,
+              PaymentInitiationStatus.COMPLETED,
+            ],
+          },
+        },
+        data: {
+          status: PaymentInitiationStatus.ATTACHED,
+          attachedAt: new Date(),
+          errorCode: null,
+        },
+      });
     return result;
   }
 
@@ -345,8 +392,13 @@ export class PaymentsService {
           "Payment initiation conflicts with the current order amount",
         );
       const stored = record.result as InitiationResult | null;
+      const attachedStatuses = new Set<PaymentInitiationStatus>([
+        PaymentInitiationStatus.COMPLETED,
+        PaymentInitiationStatus.REMOTE_CREATED,
+        PaymentInitiationStatus.ATTACHED,
+      ]);
       const storedActive =
-        record.status === PaymentInitiationStatus.COMPLETED &&
+        attachedStatuses.has(record.status) &&
         order.status !== OrderStatus.PAYMENT_FAILED &&
         stored &&
         (!stored.expiresAt ||
@@ -370,7 +422,13 @@ export class PaymentsService {
             await prisma.paymentInitiation.updateMany({
               where: {
                 id: record.id,
-                status: PaymentInitiationStatus.COMPLETED,
+                status: {
+                  in: [
+                    PaymentInitiationStatus.COMPLETED,
+                    PaymentInitiationStatus.REMOTE_CREATED,
+                    PaymentInitiationStatus.ATTACHED,
+                  ],
+                },
               },
               data: { result: restored as Prisma.InputJsonValue },
             });
@@ -382,7 +440,7 @@ export class PaymentsService {
       if (
         record.status === PaymentInitiationStatus.FAILED ||
         record.leaseExpiresAt.getTime() <= Date.now() ||
-        (record.status === PaymentInitiationStatus.COMPLETED && !storedActive)
+        (attachedStatuses.has(record.status) && !storedActive)
       ) {
         const reclaimed = await prisma.paymentInitiation.updateMany({
           where: {
@@ -395,6 +453,8 @@ export class PaymentsService {
                 leaseExpiresAt: { lte: new Date() },
               },
               { status: PaymentInitiationStatus.COMPLETED },
+              { status: PaymentInitiationStatus.REMOTE_CREATED },
+              { status: PaymentInitiationStatus.ATTACHED },
             ],
           },
           data: {
@@ -442,8 +502,12 @@ export class PaymentsService {
           status: PaymentInitiationStatus.PROCESSING,
         },
         data: {
-          status: PaymentInitiationStatus.COMPLETED,
+          status: PaymentInitiationStatus.REMOTE_CREATED,
           result: result as Prisma.InputJsonValue,
+          paymentReference: result.reference,
+          providerCorrelationId:
+            "correlationId" in result ? (result.correlationId ?? null) : null,
+          remoteCreatedAt: new Date(),
           leaseExpiresAt: new Date(),
         },
       });
@@ -461,11 +525,10 @@ export class PaymentsService {
           toStatus: PaymentStatus.PENDING as never,
           amount: order.totalAmountNpr,
           currency: "NPR",
-evidence: {
+          evidence: {
             expiresAt: result.expiresAt ?? null,
-            correlationId: "correlationId" in result
-              ? (result.correlationId ?? null)
-              : null,
+            correlationId:
+              "correlationId" in result ? (result.correlationId ?? null) : null,
           },
           dedupeKey: `payment-initiated:${result.reference}`,
         },
@@ -479,23 +542,38 @@ evidence: {
           status: PaymentInitiationStatus.PROCESSING,
         },
         data: {
-          status: PaymentInitiationStatus.FAILED,
-          errorCode: "PROVIDER_INITIATION_FAILED",
-          leaseExpiresAt: new Date(),
+          status: PaymentInitiationStatus.RECONCILIATION_REQUIRED,
+          errorCode: "PROVIDER_OUTCOME_UNKNOWN",
+          leaseExpiresAt: new Date(Date.now() + 5 * 60_000),
         },
       });
       await prisma.paymentEvent?.createMany({
-        data: [{
-          orderId: order.id,
-          provider: provider as never,
-          eventType: "PAYMENT_INITIATION_FAILED",
-          source: "CHECKOUT",
-          amount: order.totalAmountNpr,
-          currency: "NPR",
-          providerMessage: (error instanceof Error ? error.message : String(error)).slice(0, 500),
-          dedupeKey: `payment-initiation-failed:${claimToken}`,
-        }],
+        data: [
+          {
+            orderId: order.id,
+            provider: provider as never,
+            eventType: "PAYMENT_INITIATION_RECONCILIATION_REQUIRED",
+            source: "CHECKOUT",
+            amount: order.totalAmountNpr,
+            currency: "NPR",
+            providerMessage: (error instanceof Error
+              ? error.message
+              : String(error)
+            ).slice(0, 500),
+            dedupeKey: `payment-initiation-uncertain:${claimToken}`,
+          },
+        ],
         skipDuplicates: true,
+      });
+      void this.resilience?.attention({
+        dedupeKey: `payment-initiation-uncertain:${order.id}`,
+        category: "PAYMENT",
+        entityType: "PaymentInitiation",
+        entityId: order.id,
+        orderId: order.id,
+        severity: "WARNING",
+        summary: `Payment initiation outcome requires reconciliation for ${order.orderNumber}`,
+        failureCategory: "PAYMENT_PROVIDER_OUTCOME_UNKNOWN",
       });
       throw error;
     }
@@ -603,8 +681,7 @@ evidence: {
       1000,
     );
     const maxBackoffMs = Math.max(
-      (Number(process.env.PAYMENT_RECONCILE_MAX_BACKOFF_SECONDS) || 300) *
-        1000,
+      (Number(process.env.PAYMENT_RECONCILE_MAX_BACKOFF_SECONDS) || 300) * 1000,
       1000,
     );
     // Consecutive "no transaction yet" results grow the poll interval so an
@@ -644,7 +721,11 @@ evidence: {
         // not keep being polled.
         if (state?.expiryEvaluated) continue;
         try {
-          const verdict = await this.lookup(order, reference, "recent-reconcile");
+          const verdict = await this.lookup(
+            order,
+            reference,
+            "recent-reconcile",
+          );
           if (verdict.outcome === "CONFIRMED") {
             this.recentReconcileState.delete(order.id);
             await this.orders.confirmPayment(
@@ -699,10 +780,7 @@ evidence: {
               event: "payment_expiry_deferred",
               orderId: order.id,
               source: "recent-reconcile",
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "unknown",
+              error: error instanceof Error ? error.message : "unknown",
             }),
           );
         }
@@ -872,12 +950,7 @@ evidence: {
         context,
       );
     } catch (error) {
-      await this.recordVerificationUnavailable(
-        order,
-        reference,
-        source,
-        error,
-      );
+      await this.recordVerificationUnavailable(order, reference, source, error);
       throw error;
     }
     if (this.prisma?.enabled) {
@@ -1025,6 +1098,7 @@ evidence: {
     deferred: string[];
     reviewRequired: string[];
   }> {
+    await this.reconcileUnattachedInitiations();
     const now = Date.now();
     const verified: string[] = [];
     const failed: string[] = [];
@@ -1092,6 +1166,70 @@ evidence: {
       }
     }
     return { verified, failed, deferred, reviewRequired };
+  }
+
+  private async reconcileUnattachedInitiations() {
+    if (!this.prisma?.enabled || !this.prisma.paymentInitiation?.findMany)
+      return;
+    const attempts = await this.prisma.paymentInitiation.findMany({
+      where: {
+        status: {
+          in: [
+            PaymentInitiationStatus.REMOTE_CREATED,
+            PaymentInitiationStatus.COMPLETED,
+          ],
+        },
+        result: { not: Prisma.JsonNull },
+      },
+      take: 100,
+      orderBy: { updatedAt: "asc" },
+    });
+    for (const attempt of attempts) {
+      const result = attempt.result as InitiationResult | null;
+      if (!result?.reference) continue;
+      try {
+        const order = this.orders.get(attempt.orderId);
+        await this.orders.assertPaymentPrerequisites?.(attempt.orderId, null);
+        await this.orders.beginPayment(
+          attempt.orderId,
+          null,
+          attempt.provider as PaymentProvider,
+          {
+            ...result,
+            returnUrl: `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/esim/checkout?order=${attempt.orderId}`,
+          },
+        );
+        await this.prisma.paymentInitiation.updateMany({
+          where: {
+            id: attempt.id,
+            status: attempt.status,
+            paymentReference: result.reference,
+          },
+          data: {
+            status: PaymentInitiationStatus.ATTACHED,
+            attachedAt: new Date(),
+            lastReconciledAt: new Date(),
+            errorCode: null,
+          },
+        });
+        await this.resilience?.resolve(
+          `payment-initiation-uncertain:${order.id}`,
+          null,
+          "Remote payment session attached during reconciliation",
+        );
+      } catch (error) {
+        await this.prisma.paymentInitiation.update({
+          where: { id: attempt.id },
+          data: {
+            lastReconciledAt: new Date(),
+            errorCode: "LOCAL_ATTACHMENT_PENDING",
+          },
+        });
+        this.logger.warn(
+          `Payment initiation ${attempt.id} remains unattached: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
   }
 
   private async nextVerifyAttempt(order: DemoOrder): Promise<number> {
@@ -1183,10 +1321,10 @@ evidence: {
           toStatus: order.payment?.status as never,
           amount: order.totalAmountNpr,
           currency: "NPR",
-          providerMessage: (error instanceof Error ? error.message : String(error)).slice(
-            0,
-            500,
-          ),
+          providerMessage: (error instanceof Error
+            ? error.message
+            : String(error)
+          ).slice(0, 500),
           dedupeKey: `payment-verification-unavailable:${reference}:${new Date().getTime()}`,
         },
       });

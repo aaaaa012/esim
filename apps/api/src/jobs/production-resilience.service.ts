@@ -271,14 +271,17 @@ export class ProductionResilienceService {
     if (!this.prisma.enabled) return;
     const instanceId = this.instanceId;
     await this.prisma.workerHeartbeat.upsert({
-      where: { worker },
+      where: { worker_instanceId: { worker, instanceId } },
       create: {
         worker,
         instanceId,
+        buildVersion:
+          process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA ?? "development",
         ...(metadata ? { metadata: metadata as Prisma.InputJsonValue } : {}),
       },
       update: {
-        instanceId,
+        buildVersion:
+          process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA ?? "development",
         status: "RUNNING",
         lastSeenAt: new Date(),
         ...(metadata ? { metadata: metadata as Prisma.InputJsonValue } : {}),
@@ -298,6 +301,7 @@ export class ProductionResilienceService {
       lifecycleCounts,
       unsafeAvailableInventory,
       openDisputes,
+      stalePartnerAudits,
     ] = await Promise.all([
       this.prisma.workerHeartbeat.findMany({ orderBy: { worker: "asc" } }),
       this.prisma.attentionCase.count({
@@ -368,6 +372,12 @@ export class ProductionResilienceService {
       this.prisma.paymentDispute.count({
         where: { status: { in: ["OPEN", "UNDER_REVIEW", "LOST"] } },
       }),
+      this.prisma.partnerApiAudit.count({
+        where: {
+          status: "STARTED",
+          startedAt: { lt: new Date(Date.now() - 5 * 60_000) },
+        },
+      }),
     ]);
     const now = Date.now();
     const requiredWorkers = ["workflow-worker", "ocr-worker", "reconciliation"];
@@ -378,20 +388,28 @@ export class ProductionResilienceService {
     const heartbeatHealthy = (worker: { worker: string; lastSeenAt: Date }) =>
       now - worker.lastSeenAt.getTime() <=
       (worker.worker === "reconciliation" ? reconciliationHealthyMs : 120_000);
+    const expectedBuild = process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA;
+    const activeWorkers = workers.filter(
+      (worker) =>
+        heartbeatHealthy(worker) &&
+        (!expectedBuild || worker.buildVersion === expectedBuild),
+    );
     const missingWorkers = requiredWorkers.filter(
-      (name) => !workers.some((worker) => worker.worker === name),
+      (name) => !activeWorkers.some((worker) => worker.worker === name),
     );
     return {
       status:
         missingWorkers.length > 0 ||
-        workers.some((worker) => !heartbeatHealthy(worker)) ||
+        activeWorkers.length < requiredWorkers.length ||
         deadLetters > 0 ||
+        stalePartnerAudits > 0 ||
         unsafeAvailableInventory > 0
           ? "degraded"
           : "healthy",
       workers: workers.map((worker) => ({
         ...worker,
         healthy: heartbeatHealthy(worker),
+        compatible: !expectedBuild || worker.buildVersion === expectedBuild,
       })),
       missingWorkers,
       queues,
@@ -403,6 +421,7 @@ export class ProductionResilienceService {
           : 0,
       },
       webhooks: { deadLetters },
+      partnerAudit: { stale: stalePartnerAudits },
       payments: {
         oldestReviewAgeSeconds: oldestPaymentReview
           ? Math.floor((now - oldestPaymentReview.updatedAt.getTime()) / 1000)

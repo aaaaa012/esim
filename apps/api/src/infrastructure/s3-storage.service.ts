@@ -1,4 +1,5 @@
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -16,7 +17,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DocumentType } from "@visa-compass/shared";
 
 const execFileAsync = promisify(execFile);
@@ -46,6 +47,55 @@ export type PresignedDocumentUpload = {
 
 @Injectable()
 export class S3StorageService {
+  async finalizeDocument(assetId: string) {
+    const verified = await this.verifyDocument(assetId);
+    if (!this.isConfigured())
+      return {
+        temporaryAssetId: assetId,
+        finalizedAssetId: assetId,
+        sha256: createHash("sha256").update(assetId).digest("hex"),
+        byteSize: verified.bytes,
+        contentType: "application/pdf",
+        storageVersionId: null,
+      };
+    const downloaded = await this.downloadDocument(assetId);
+    const sha256 = createHash("sha256").update(downloaded.bytes).digest("hex");
+    const extension =
+      verified.format === "pdf"
+        ? "pdf"
+        : verified.format === "png"
+          ? "png"
+          : "jpg";
+    const finalizedAssetId = `${assetId.replace(/-doc_[^/]+$/, "")}/finalized/${sha256}.${extension}`;
+    const copied = await this.client().send(
+      new CopyObjectCommand({
+        Bucket: this.bucket(),
+        Key: finalizedAssetId,
+        CopySource: encodeURIComponent(
+          `${this.bucket()}/${assetId}`,
+        ).replaceAll("%2F", "/"),
+        ContentType: downloaded.contentType,
+        MetadataDirective: "REPLACE",
+        ServerSideEncryption: "AES256",
+      }),
+    );
+    const finalHead = await this.client().send(
+      new HeadObjectCommand({ Bucket: this.bucket(), Key: finalizedAssetId }),
+    );
+    if (Number(finalHead.ContentLength ?? 0) !== downloaded.bytes.length)
+      throw new ServiceUnavailableException(
+        "Finalized document integrity check failed",
+      );
+    return {
+      temporaryAssetId: assetId,
+      finalizedAssetId,
+      sha256,
+      byteSize: downloaded.bytes.length,
+      contentType: downloaded.contentType,
+      storageVersionId: copied.VersionId ?? finalHead.VersionId ?? null,
+    };
+  }
+
   async createDocumentUpload(
     orderId: string,
     type: DocumentType,
@@ -98,6 +148,7 @@ export class S3StorageService {
           Bucket: this.bucket(),
           Key: assetId,
           ContentType: normalizedContentType,
+          ServerSideEncryption: "AES256",
         }),
         {
           expiresIn: expiresInSeconds,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { decodeAes256Key } from "./encryption-key.js";
 
 /**
  * Fail-fast validation of the environment. Required production secrets must be
@@ -159,8 +160,18 @@ const baseSchema = z.object({
   CLERK_WEBHOOK_SECRET: z.string().optional(),
   E2E_AUTH_ENABLED: z.enum(["true", "false"]).optional(),
   E2E_AUTH_SECRET: z.string().min(32).optional(),
-  AUTH_ME_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(10).max(10_000).optional(),
-  AUTH_ME_IP_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(10).max(100_000).optional(),
+  AUTH_ME_RATE_LIMIT_PER_MINUTE: z.coerce
+    .number()
+    .int()
+    .min(10)
+    .max(10_000)
+    .optional(),
+  AUTH_ME_IP_RATE_LIMIT_PER_MINUTE: z.coerce
+    .number()
+    .int()
+    .min(10)
+    .max(100_000)
+    .optional(),
   ORDER_WORKFLOW_MODE: z.enum(["single-instance", "database-first"]).optional(),
   PAYMENT_VERIFY_ATTEMPTS: z.coerce.number().int().positive().optional(),
   INVENTORY_PROVIDER_FRESHNESS_HOURS: z.coerce
@@ -245,6 +256,7 @@ export function validateEnv(
     }
     const productionResult = productionSchema.safeParse(config);
     if (!productionResult.success) return failWith(productionResult);
+    decodeAes256Key(config.APP_ENCRYPTION_KEY_BASE64);
     assertFonepayConfiguration(config);
     return config;
   }

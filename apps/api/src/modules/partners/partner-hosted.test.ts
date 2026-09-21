@@ -10,10 +10,21 @@ function service(
   applicationOrders: Record<string, unknown> = {},
   payments?: Record<string, unknown>,
 ) {
+  const resolvedStorage = {
+    finalizeDocument: vi.fn(async (assetId: string) => ({
+      temporaryAssetId: assetId,
+      finalizedAssetId: `${assetId}-finalized`,
+      sha256: "a".repeat(64),
+      byteSize: 100,
+      contentType: "application/pdf",
+      storageVersionId: null,
+    })),
+    ...storage,
+  };
   return new PartnerService(
     prisma as never,
     { decrypt: vi.fn((value: string) => value) } as never,
-    storage as never,
+    resolvedStorage as never,
     {} as never,
     {} as never,
     {} as never,
@@ -1058,6 +1069,17 @@ it("queues fresh OCR for a passport-only replacement while retaining the confirm
         return passport;
       }),
     },
+    $transaction: vi.fn((callback) =>
+      callback({
+        documentAssetVersion: {
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+          upsert: vi.fn().mockResolvedValue({ id: "version-1" }),
+        },
+        travelerDocument: {
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      }),
+    ),
     platformConfiguration: {
       upsert: vi.fn().mockResolvedValue({ documentReviewPolicy: "AUTO_OCR" }),
     },
@@ -1065,7 +1087,18 @@ it("queues fresh OCR for a passport-only replacement while retaining the confirm
   const instance = new PartnerService(
     prisma as never,
     { decrypt: (value: string) => value } as never,
-    { verifyDocument } as never,
+    {
+      verifyDocument,
+      finalizeDocument: vi.fn(async (assetId: string) => ({
+        temporaryAssetId: assetId,
+        finalizedAssetId: assetId,
+        sha256: "a".repeat(64),
+        byteSize: 100,
+        contentType: "application/pdf",
+        storageVersionId: null,
+      })),
+      deleteDocument: vi.fn().mockResolvedValue(undefined),
+    } as never,
     {} as never,
     {} as never,
     {} as never,

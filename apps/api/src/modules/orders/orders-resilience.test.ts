@@ -86,6 +86,17 @@ function ordersService(
   queue: unknown = { add: vi.fn().mockResolvedValue({}) },
   storage: unknown = {},
 ) {
+  const resolvedStorage = {
+    finalizeDocument: vi.fn(async (assetId: string) => ({
+      temporaryAssetId: assetId,
+      finalizedAssetId: `${assetId}-finalized`,
+      sha256: createHash("sha256").update(assetId).digest("hex"),
+      byteSize: 100,
+      contentType: "application/pdf",
+      storageVersionId: null,
+    })),
+    ...(storage as Record<string, unknown>),
+  };
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
     save: vi.fn().mockResolvedValue(undefined),
@@ -96,7 +107,7 @@ function ordersService(
   } as unknown as OrdersPersistenceService;
   return new OrdersService(
     connectivity as unknown as ConnectivityService,
-    storage as unknown as S3StorageService,
+    resolvedStorage as unknown as S3StorageService,
     persistence,
     inventory as unknown as InventoryService,
     queue as unknown as QueueService,
@@ -1453,7 +1464,7 @@ it("starts OCR after confirming only a replacement passport with a saved ticket"
     "verify-order-passport",
     expect.objectContaining({
       documentId: "new-passport",
-      privateAssetId: "new-passport-asset",
+      privateAssetId: "new-passport-asset-finalized",
     }),
     expect.stringContaining("order-passport-passport-only-new-passport-"),
     expect.any(Object),
@@ -1520,7 +1531,7 @@ it("restarts validation after confirming only a replacement ticket with a verifi
       "ticket-only",
       "passport",
       "passport-asset",
-      "replacement:replacement-ticket:replacement-ticket-asset",
+      "replacement:replacement-ticket:replacement-ticket-asset-finalized",
     ),
   );
   const restarted = instance.get("ticket-only", "customer-1");

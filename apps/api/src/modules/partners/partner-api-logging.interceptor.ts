@@ -4,7 +4,10 @@ import {
   Injectable,
   NestInterceptor,
 } from "@nestjs/common";
-import { catchError, tap, throwError } from "rxjs";
+import { Logger } from "@nestjs/common";
+import { catchError, of, tap, throwError } from "rxjs";
+import { from, switchMap } from "rxjs";
+import { randomUUID } from "node:crypto";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import type { PartnerRequest } from "./partner-auth.guard.js";
 import { logRedactionEnabled } from "../../common/redact.js";
@@ -59,23 +62,27 @@ function redact(value: unknown, depth = 0): unknown {
 
 @Injectable()
 export class PartnerApiLoggingInterceptor implements NestInterceptor {
+  private readonly logger = new Logger(PartnerApiLoggingInterceptor.name);
   constructor(private readonly prisma: PrismaService) {}
 
   intercept(context: ExecutionContext, next: CallHandler) {
-    const request = context
-      .switchToHttp()
-      .getRequest<
-        PartnerRequest & {
-          method: string;
-          originalUrl?: string;
-          url: string;
-          body?: unknown;
-        }
-      >();
+    const request = context.switchToHttp().getRequest<
+      PartnerRequest & {
+        method: string;
+        originalUrl?: string;
+        url: string;
+        body?: unknown;
+      }
+    >();
     const response = context
       .switchToHttp()
       .getResponse<{ statusCode: number }>();
     const startedAt = Date.now();
+    const mutation = ["POST", "PATCH", "PUT", "DELETE"].includes(
+      request.method.toUpperCase(),
+    );
+    if (mutation && request.partner && this.prisma.enabled)
+      return this.durableMutationAudit(request, response, next, startedAt);
     const write = (status: number, responseBody?: unknown, error?: unknown) => {
       if (!this.prisma.enabled) return;
       const errorValue = error as
@@ -122,6 +129,105 @@ export class PartnerApiLoggingInterceptor implements NestInterceptor {
         write(status, undefined, error);
         return throwError(() => error);
       }),
+    );
+  }
+
+  private durableMutationAudit(
+    request: PartnerRequest & {
+      method: string;
+      originalUrl?: string;
+      url: string;
+      body?: unknown;
+    },
+    response: { statusCode: number },
+    next: CallHandler,
+    startedAt: number,
+  ) {
+    const requestId = randomUUID();
+    const route = (request.originalUrl ?? request.url).split("?")[0]!;
+    const targetId = route.split("/").filter(Boolean).at(-1);
+    return from(
+      this.prisma.partnerApiAudit.create({
+        data: {
+          requestId,
+          partnerId: request.partner!.id,
+          credentialId: request.partner!.credentialId,
+          method: request.method.toUpperCase(),
+          route,
+          action: `${request.method.toUpperCase()} ${route}`,
+          correlationId: request.correlationId ?? null,
+          targetId: targetId && targetId !== "orders" ? targetId : null,
+          requestMeta: {
+            contentPresent: request.body !== undefined,
+            idempotencyKeyPresent: Boolean(
+              request.headers["idempotency-key"] ??
+              request.headers["x-idempotency-key"],
+            ),
+          },
+        },
+      }),
+    ).pipe(
+      switchMap(() =>
+        next.handle().pipe(
+          switchMap((body) =>
+            from(
+              this.prisma.partnerApiAudit.update({
+                where: { requestId },
+                data: {
+                  status: "SUCCEEDED",
+                  responseStatus: response.statusCode || 200,
+                  completedAt: new Date(),
+                  responseMeta: {
+                    durationMs: Date.now() - startedAt,
+                    resultPresent: body !== undefined,
+                  },
+                },
+              }),
+            ).pipe(
+              catchError((error: unknown) => {
+                this.logger.error(
+                  `Partner audit ${requestId} remains STARTED after a successful mutation: ${error instanceof Error ? error.message : "unknown"}`,
+                );
+                return of(undefined);
+              }),
+              switchMap(() => of(body)),
+            ),
+          ),
+          catchError((error: unknown) => {
+            const status =
+              typeof error === "object" &&
+              error &&
+              "getStatus" in error &&
+              typeof (error as { getStatus: unknown }).getStatus === "function"
+                ? (error as { getStatus(): number }).getStatus()
+                : 500;
+            const code =
+              typeof error === "object" && error && "code" in error
+                ? String((error as { code: unknown }).code)
+                : null;
+            return from(
+              this.prisma.partnerApiAudit.update({
+                where: { requestId },
+                data: {
+                  status: "FAILED",
+                  responseStatus: status,
+                  errorCode: code,
+                  completedAt: new Date(),
+                  responseMeta: { durationMs: Date.now() - startedAt },
+                },
+              }),
+            ).pipe(
+              catchError((auditError: unknown) => {
+                this.logger.error(
+                  `Partner audit ${requestId} remains STARTED after a failed mutation: ${auditError instanceof Error ? auditError.message : "unknown"}`,
+                );
+                return of(undefined);
+              }),
+              switchMap(() => throwError(() => error)),
+            );
+          }),
+        ),
+      ),
     );
   }
 }

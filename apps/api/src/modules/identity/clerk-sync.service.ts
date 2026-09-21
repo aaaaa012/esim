@@ -118,7 +118,12 @@ export class ClerkSyncService {
           clerkId: event.data.id,
           email,
           accountType,
-          ...(invitation ? { mustChangePassword: true } : {}),
+          ...(invitation
+            ? {
+                mustChangePassword: true,
+                passwordChangeRequiredAt: new Date(),
+              }
+            : {}),
         },
       });
       const role = await tx.role.upsert({

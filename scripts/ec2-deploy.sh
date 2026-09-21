@@ -8,6 +8,7 @@ REPOSITORY="git@github.com:samirextra369/esim2.2.git"
 LOCK_FILE="/tmp/visacompass-production-deploy.lock"
 DEPLOYED_SHA_FILE="$APP_DIR/.visa-compass-deployed-sha"
 READY_URL="http://127.0.0.1:4000/api/v1/health/ready"
+OPERATIONAL_URL="http://127.0.0.1:4000/api/v1/health/operational"
 CUSTOMER_URL="http://127.0.0.1:3000/"
 OPS_URL="http://127.0.0.1:3001/"
 RUN_TESTS="${RUN_TESTS:-0}"
@@ -147,6 +148,9 @@ restart_and_verify() {
 
   wait_for_url "Customer web" "$CUSTOMER_URL" 30 2
   wait_for_url "Ops web" "$OPS_URL" 30 2
+  # Readiness proves the API can serve traffic. Operational health additionally
+  # proves each required worker has published a fresh heartbeat for this build.
+  wait_for_url "Platform operational health" "$OPERATIONAL_URL" 45 2
 }
 
 rollback() {

@@ -184,6 +184,62 @@ export class PartnerService {
     }
   }
 
+  private async finalizeTravelerDocument(document: {
+    id: string;
+    privateAssetId: string;
+  }) {
+    const finalized = await this.storage.finalizeDocument(
+      document.privateAssetId,
+    );
+    const version = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.documentAssetVersion.upsert({
+        where: {
+          documentId_sha256: {
+            documentId: document.id,
+            sha256: finalized.sha256,
+          },
+        },
+        update: { supersededAt: null },
+        create: {
+          documentId: document.id,
+          temporaryAssetId: finalized.temporaryAssetId,
+          finalizedAssetId: finalized.finalizedAssetId,
+          sha256: finalized.sha256,
+          byteSize: finalized.byteSize,
+          contentType: finalized.contentType,
+          storageVersionId: finalized.storageVersionId,
+        },
+      });
+      const activated = await tx.travelerDocument.updateMany({
+        where: {
+          id: document.id,
+          privateAssetId: finalized.temporaryAssetId,
+        },
+        data: {
+          privateAssetId: finalized.finalizedAssetId,
+          activeAssetVersionId: created.id,
+        },
+      });
+      if (activated.count !== 1)
+        throw new ConflictException(
+          "This document was replaced while its upload was being confirmed",
+        );
+      await tx.documentAssetVersion.updateMany({
+        where: {
+          documentId: document.id,
+          id: { not: created.id },
+          supersededAt: null,
+        },
+        data: { supersededAt: new Date() },
+      });
+      return created;
+    });
+    await this.storage
+      .deleteDocument(finalized.temporaryAssetId)
+      .catch(() => undefined);
+    return { finalized, version };
+  }
+
   async capabilities(partnerId: string) {
     await this.partner(partnerId);
     return {
@@ -535,10 +591,29 @@ export class PartnerService {
             "Uploaded bytes do not match the declared size or content type",
           status: 422,
         });
-      await this.prisma.partnerDocumentUploadIntent.update({
-        where: { id: document.id },
-        data: { uploadVerified: true, verificationStatus: "UPLOADED" },
-      });
+      const finalized = await this.storage.finalizeDocument(
+        document.privateAssetId,
+      );
+      const activated =
+        await this.prisma.partnerDocumentUploadIntent.updateMany({
+          where: {
+            id: document.id,
+            privateAssetId: finalized.temporaryAssetId,
+            uploadVerified: false,
+          },
+          data: {
+            uploadVerified: true,
+            verificationStatus: "UPLOADED",
+            temporaryAssetId: finalized.temporaryAssetId,
+            privateAssetId: finalized.finalizedAssetId,
+            contentSha256: finalized.sha256,
+            storageVersionId: finalized.storageVersionId,
+          },
+        });
+      if (activated.count !== 1)
+        throw new ConflictException(
+          "This document was replaced while its upload was being confirmed",
+        );
       if (verification.consumedOrderId)
         await this.prisma.$transaction([
           this.prisma.travelerDocument.updateMany({
@@ -548,7 +623,7 @@ export class PartnerService {
             },
             data: {
               fileName: document.fileName,
-              privateAssetId: document.privateAssetId,
+              privateAssetId: finalized.finalizedAssetId,
               uploadVerified: true,
               status: DocumentStatus.PENDING,
               ...(document.type === DocumentType.PASSPORT
@@ -1445,6 +1520,37 @@ export class PartnerService {
           events: { create: { fromStatus: null, toStatus: status } },
         },
       });
+      const persistedDocuments = await tx.travelerDocument.findMany({
+        where: { orderId },
+        select: { id: true, type: true, privateAssetId: true },
+      });
+      for (const persisted of persistedDocuments) {
+        const intent = currentIntents.find(
+          (candidate) => candidate.type === persisted.type,
+        );
+        if (!intent?.contentSha256)
+          throw new ApiException({
+            code: "DOCUMENT_FINALIZATION_REQUIRED",
+            message:
+              "A confirmed document is missing its immutable integrity record; confirm the upload again",
+            status: 409,
+          });
+        const version = await tx.documentAssetVersion.create({
+          data: {
+            documentId: persisted.id,
+            temporaryAssetId: intent.temporaryAssetId ?? intent.privateAssetId,
+            finalizedAssetId: persisted.privateAssetId,
+            sha256: intent.contentSha256,
+            byteSize: intent.declaredSizeBytes,
+            contentType: intent.contentType,
+            storageVersionId: intent.storageVersionId,
+          },
+        });
+        await tx.travelerDocument.update({
+          where: { id: persisted.id },
+          data: { activeAssetVersionId: version.id },
+        });
+      }
       await this.reserveAccount(
         tx,
         partnerId,
@@ -2388,6 +2494,7 @@ export class PartnerService {
         status: 404,
       });
     await this.verifyUploadedDocument(document.privateAssetId);
+    const { finalized } = await this.finalizeTravelerDocument(document);
     await this.prisma.travelerDocument.update({
       where: { id: document.id },
       data: { uploadVerified: true },
@@ -2402,7 +2509,7 @@ export class PartnerService {
       orderId,
       document.type === DocumentType.PASSPORT ? documentId : undefined,
       document.type === DocumentType.TICKET
-        ? `replacement:${document.id}:${document.privateAssetId}`
+        ? `replacement:${document.id}:${finalized.finalizedAssetId}`
         : undefined,
     );
     return {
@@ -2972,6 +3079,7 @@ export class PartnerService {
         status: 404,
       });
     await this.verifyUploadedDocument(document.privateAssetId);
+    await this.finalizeTravelerDocument(document);
     await this.prisma.travelerDocument.update({
       where: { id: document.id },
       data: { uploadVerified: true },

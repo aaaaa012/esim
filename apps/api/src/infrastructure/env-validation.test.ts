@@ -53,6 +53,18 @@ describe("validateEnv production gate", () => {
     expect(() => validateEnv({ ...validProductionEnv })).not.toThrow();
   });
 
+  it.each([
+    ["missing", undefined],
+    ["malformed", "not-base64!"],
+    ["31 bytes", Buffer.alloc(31).toString("base64")],
+    ["33 bytes", Buffer.alloc(33).toString("base64")],
+  ])("rejects a %s AES-256 encryption key", (_label, value) => {
+    const env = { ...validProductionEnv } as Record<string, unknown>;
+    if (value === undefined) delete env.APP_ENCRYPTION_KEY_BASE64;
+    else env.APP_ENCRYPTION_KEY_BASE64 = value;
+    expect(() => validateEnv(env)).toThrow(/APP_ENCRYPTION_KEY_BASE64/);
+  });
+
   it("rejects production when critical secrets are missing and names them", () => {
     const incomplete = { ...validProductionEnv } as Record<string, unknown>;
     delete incomplete.DATABASE_URL;

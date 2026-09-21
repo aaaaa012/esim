@@ -887,18 +887,13 @@ export class OrdersService implements OnModuleInit {
       : null;
     const submittedFingerprint = this.travelerIdentityFingerprint(traveler);
     const identityChanged =
-      previousFingerprint !== null && previousFingerprint !== submittedFingerprint;
-    if (
-      order.traveler &&
-      order.documentReviewStatus === "MANUAL_REVIEW"
-    )
+      previousFingerprint !== null &&
+      previousFingerprint !== submittedFingerprint;
+    if (order.traveler && order.documentReviewStatus === "MANUAL_REVIEW")
       throw new ConflictException(
         "Traveller identity is under review and cannot be changed",
       );
-    if (
-      identityChanged &&
-      order.documentReviewStatus === "MANUALLY_APPROVED"
-    )
+    if (identityChanged && order.documentReviewStatus === "MANUALLY_APPROVED")
       throw new ConflictException(
         "Manually approved traveller identity cannot be changed",
       );
@@ -967,8 +962,11 @@ export class OrdersService implements OnModuleInit {
       input.type,
       input.contentType ?? "application/pdf",
     );
+    const existingDocument = order.documents.find(
+      (item) => item.type === input.type,
+    );
     const document = {
-      id: randomUUID(),
+      id: existingDocument?.id ?? randomUUID(),
       type: input.type,
       fileName: input.fileName,
       privateAssetId: signed.assetId,
@@ -1013,7 +1011,55 @@ export class OrdersService implements OnModuleInit {
         status: document.status,
         uploadVerified: true,
       };
-    await this.storage.verifyDocument(document.privateAssetId);
+    const finalized = await this.storage.finalizeDocument(
+      document.privateAssetId,
+    );
+    document.privateAssetId = finalized.finalizedAssetId;
+    if (this.prisma.enabled) {
+      const version = await this.prisma.$transaction(async (tx) => {
+        await tx.documentAssetVersion.updateMany({
+          where: { documentId: document.id, supersededAt: null },
+          data: { supersededAt: new Date() },
+        });
+        const created = await tx.documentAssetVersion.upsert({
+          where: {
+            documentId_sha256: {
+              documentId: document.id,
+              sha256: finalized.sha256,
+            },
+          },
+          update: { supersededAt: null },
+          create: {
+            documentId: document.id,
+            temporaryAssetId: finalized.temporaryAssetId,
+            finalizedAssetId: finalized.finalizedAssetId,
+            sha256: finalized.sha256,
+            byteSize: finalized.byteSize,
+            contentType: finalized.contentType,
+            storageVersionId: finalized.storageVersionId,
+          },
+        });
+        const activated = await tx.travelerDocument.updateMany({
+          where: {
+            id: document.id,
+            privateAssetId: finalized.temporaryAssetId,
+          },
+          data: {
+            privateAssetId: finalized.finalizedAssetId,
+            activeAssetVersionId: created.id,
+          },
+        });
+        if (activated.count !== 1)
+          throw new ConflictException(
+            "This document was replaced while its upload was being confirmed",
+          );
+        return created;
+      });
+      void version;
+      await this.storage
+        .deleteDocument(finalized.temporaryAssetId)
+        .catch(() => undefined);
+    }
     document.uploadVerified = true;
     const reviewResubmission = [
       OrderStatus.REVIEW_PENDING,
@@ -1045,8 +1091,7 @@ export class OrdersService implements OnModuleInit {
       } else if (order.documentReviewPolicy === "AUTO_OCR") {
         order.documentReviewStatus = "OCR_PENDING";
         const passportConfirmed = order.documents.some(
-          (item) =>
-            item.type === DocumentType.PASSPORT && item.uploadVerified,
+          (item) => item.type === DocumentType.PASSPORT && item.uploadVerified,
         );
         queueReplacementOcr =
           document.type === DocumentType.PASSPORT || passportConfirmed;
@@ -1330,8 +1375,8 @@ export class OrdersService implements OnModuleInit {
         : expired
           ? "REUPLOAD_REQUIRED"
           : explicitlyConfirmed || !extractionHasName || correctionAttempts >= 3
-          ? "MANUAL_REVIEW"
-          : "CORRECTION_REQUIRED";
+            ? "MANUAL_REVIEW"
+            : "CORRECTION_REQUIRED";
       passport.status = verified
         ? DocumentStatus.APPROVED
         : expired
