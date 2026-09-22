@@ -13,9 +13,7 @@ export function useDocumentRefresh(
     if (!enabled) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
-    let attempts = 0;
-    const delay = () =>
-      manual ? Math.min(60_000, 10_000 * 2 ** Math.min(attempts, 3)) : 3_000;
+    const delay = () => (manual ? 5_000 : 3_000);
     const poll = async () => {
       if (document.visibilityState === "hidden") {
         timer = setTimeout(() => void poll(), delay());
@@ -23,7 +21,6 @@ export function useDocumentRefresh(
       }
       try {
         await callbacks.current.refresh(() => !cancelled);
-        attempts += 1;
       } catch {
         if (!cancelled) callbacks.current.onError();
       } finally {
@@ -33,11 +30,10 @@ export function useDocumentRefresh(
     const resume = () => {
       if (document.visibilityState !== "visible" || cancelled) return;
       clearTimeout(timer);
-      attempts = 0;
       timer = setTimeout(() => void poll(), 0);
     };
     document.addEventListener("visibilitychange", resume);
-    timer = setTimeout(() => void poll(), delay());
+    timer = setTimeout(() => void poll(), manual ? 0 : delay());
     return () => {
       cancelled = true;
       clearTimeout(timer);

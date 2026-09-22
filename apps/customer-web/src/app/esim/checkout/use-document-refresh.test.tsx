@@ -59,18 +59,18 @@ it("invalidates an in-flight read when uploads begin", async () => {
   expect(refresh).toHaveBeenCalledTimes(1);
 });
 
-it("backs off manual review polling and refreshes immediately when the tab returns", async () => {
+it("refreshes manual review immediately, every five seconds, and when the tab returns", async () => {
   vi.useFakeTimers();
   const refresh = vi.fn().mockResolvedValue(undefined);
   const view = renderHook(() =>
     useDocumentRefresh(true, refresh, vi.fn(), true),
   );
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(0);
   });
   expect(refresh).toHaveBeenCalledTimes(1);
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(19_999);
+    await vi.advanceTimersByTimeAsync(4_999);
   });
   expect(refresh).toHaveBeenCalledTimes(1);
   await act(async () => {

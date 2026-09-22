@@ -506,7 +506,26 @@ export const verifyStoredExtraction = (
       reasonCode: "PASSPORT_EXPIRED",
       mismatchedFields,
     };
-  const structuralVerdict = verdictFor(matchedFields);
+  const nationalityEvidence = Boolean(
+    canonicalNationality(fields.nationality),
+  );
+  const validSubmittedNationality = Boolean(
+    canonicalNationality(traveler.nationality),
+  );
+  const coreIdentityMatched = [
+    "passportNumber",
+    "surname",
+    "givenNames",
+    "dateOfBirth",
+    "passportExpiryDate",
+  ].every((field) => matchedFields.includes(field as PassportField));
+  // Nationality remains required customer data. When OCR did not extract it,
+  // validate the submitted ISO value but do not invent a passport mismatch.
+  // If the passport did provide nationality evidence, the values must match.
+  const structuralVerdict =
+    !nationalityEvidence && validSubmittedNationality && coreIdentityMatched
+      ? "VERIFIED"
+      : verdictFor(matchedFields);
   const mandatoryMismatches = mismatchedFields.filter(
     (field) => field !== "middleName",
   );

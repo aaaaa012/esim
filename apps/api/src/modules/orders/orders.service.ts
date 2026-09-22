@@ -2228,6 +2228,33 @@ export class OrdersService implements OnModuleInit {
       const alreadyApproved = document.status === DocumentStatus.APPROVED;
       recordDecision = !alreadyApproved;
       document.status = DocumentStatus.APPROVED;
+
+      // Ticket evidence is validated when its upload is confirmed; OCR only
+      // establishes the passport identity verdict. Mirror the automatic OCR
+      // success path when Operations accepts that identity manually so a
+      // valid, pending ticket cannot silently leave the checkout blocked.
+      // Explicit re-upload/rejection decisions remain authoritative.
+      if (
+        document.type === DocumentType.PASSPORT &&
+        order.documentReviewStatus === "MANUAL_REVIEW"
+      ) {
+        const pendingVerifiedTicket = order.documents.find(
+          (item) =>
+            item.type === DocumentType.TICKET &&
+            item.uploadVerified === true &&
+            item.status === DocumentStatus.PENDING,
+        );
+        if (pendingVerifiedTicket) {
+          pendingVerifiedTicket.status = DocumentStatus.APPROVED;
+          order.timeline.push({
+            from: order.status,
+            to: order.status,
+            at: new Date().toISOString(),
+            reason:
+              "TICKET upload evidence accepted with final manual passport approval",
+          });
+        }
+      }
       const requiredTypes = [DocumentType.PASSPORT, DocumentType.TICKET];
       const allRequiredApproved = requiredTypes.every((type) =>
         order.documents.some(

@@ -121,6 +121,111 @@ function ordersService(
 }
 
 describe("OrdersService document decision invariants", () => {
+  it("releases manual review when Ops approves the passport and the pending ticket upload is verified", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const order = readyOrder({
+      id: "manual-passport-approval",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: customerTraveler(),
+      documentReviewStatus: "MANUAL_REVIEW",
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    });
+    const instance = ordersService(
+      [order],
+      {},
+      undefined,
+      undefined,
+      { enqueue: vi.fn().mockResolvedValue({ status: "QUEUED" }) },
+      undefined,
+      { save },
+    );
+    await instance.refreshFromPersistence();
+
+    const updated = await instance.reviewDocument(
+      order.id,
+      "passport",
+      "staff-1",
+      "APPROVE",
+    );
+
+    expect(updated.documentReviewStatus).toBe("MANUALLY_APPROVED");
+    expect(updated.documents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "passport",
+          status: DocumentStatus.APPROVED,
+        }),
+        expect.objectContaining({
+          id: "ticket",
+          status: DocumentStatus.APPROVED,
+        }),
+      ]),
+    );
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ documentReviewStatus: "MANUALLY_APPROVED" }),
+    );
+  });
+
+  it("does not release manual review when the ticket was not verified or needs replacement", async () => {
+    const order = readyOrder({
+      id: "manual-passport-blocked-ticket",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: customerTraveler(),
+      documentReviewStatus: "MANUAL_REVIEW",
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.REUPLOAD_REQUIRED,
+          uploadVerified: true,
+        },
+      ],
+    });
+    const instance = ordersService([order], {});
+    await instance.refreshFromPersistence();
+
+    const updated = await instance.reviewDocument(
+      order.id,
+      "passport",
+      "staff-1",
+      "APPROVE",
+    );
+
+    expect(updated.documentReviewStatus).toBe("MANUAL_REVIEW");
+    expect(
+      updated.documents.find((item) => item.id === "ticket")?.status,
+    ).toBe(DocumentStatus.REUPLOAD_REQUIRED);
+  });
+
   it("blocks payment when a required document needs replacement even if the aggregate review is stale", async () => {
     const order = readyOrder({
       id: "stale-document-review",
@@ -1815,7 +1920,7 @@ it("routes a partial extraction with no readable name to manual review", async (
   expect(add).not.toHaveBeenCalled();
 });
 
-it("routes a partial extraction with missing nationality evidence to manual review", async () => {
+it("accepts entered nationality when OCR omitted it and all extracted identity fields match", async () => {
   const add = vi.fn().mockResolvedValue({});
   const instance = ordersService(
     [
@@ -1874,8 +1979,8 @@ it("routes a partial extraction with missing nationality evidence to manual revi
     "customer-1",
   );
 
-  expect(result.documentReviewStatus).toBe("MANUAL_REVIEW");
-  expect(result.passportVerification?.status).toBe("PARTIAL");
+  expect(result.documentReviewStatus).toBe("VERIFIED");
+  expect(result.passportVerification?.status).toBe("VERIFIED");
   expect(result.passportVerification?.mismatchedFields).toBeUndefined();
   expect(result.passportExtraction?.correctionAttempts).toBe(0);
   expect(add).not.toHaveBeenCalled();

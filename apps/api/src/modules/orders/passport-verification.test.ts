@@ -188,7 +188,7 @@ describe("stored passport extraction comparison", () => {
     expect(result.status).toBe("PARTIAL");
   });
 
-  it("keeps missing nationality evidence in review without calling it a mismatch", () => {
+  it("accepts a valid submitted nationality when every extracted identity field matches", () => {
     const result = verifyStoredExtraction(
       {
         firstName: "ASHA",
@@ -201,7 +201,7 @@ describe("stored passport extraction comparison", () => {
       68,
     );
 
-    expect(result.status).toBe("PARTIAL");
+    expect(result.status).toBe("VERIFIED");
     expect(result.matchedFields).not.toContain("nationality");
     expect(result.mismatchedFields ?? []).not.toContain("nationality");
     expect(result.reasonCode).toBeUndefined();
