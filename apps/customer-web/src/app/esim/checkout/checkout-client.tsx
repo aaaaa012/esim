@@ -1023,6 +1023,12 @@ export default function CheckoutClient({
   };
   const [documentMessage, setDocumentMessage] = useState("");
   const [documentError, setDocumentError] = useState("");
+  const documentFailureMessage = (cause: unknown) => {
+    const message = cause instanceof Error ? cause.message : "";
+    return message === "Failed to fetch" || /network request failed/i.test(message)
+      ? "We couldn't reach the verification service. Your documents are securely saved. Check your connection and try again."
+      : message || "Could not complete the document check. Try again.";
+  };
   const uploadDocument = useRef(createDocumentUploader());
   const passportGatePassed = (target: Order | null) =>
     !target ||
@@ -1582,27 +1588,17 @@ export default function CheckoutClient({
             }));
           },
         );
-        const refreshed = await api<Order>(`/customer/orders/${order.id}`);
-        setOrder(refreshed);
         setEditingVerifiedDocuments(false);
+        // Confirmation is durable. Start the idempotent verification command
+        // directly instead of making OCR depend on a redundant order refresh.
+        const extractionOrder = await verifyPassport();
         if (
-          replacedPassport ||
-          !refreshed.documentReviewStatus ||
-          refreshed.documentReviewStatus === "NOT_STARTED"
-        ) {
-          const extractionOrder = await verifyPassport();
-          if (
-            extractionOrder &&
-            canEnterTravelerAfterExtraction(extractionOrder)
-          )
-            advance(3);
-        }
+          extractionOrder &&
+          canEnterTravelerAfterExtraction(extractionOrder)
+        )
+          advance(3);
       } catch (cause) {
-        setDocumentError(
-          cause instanceof Error
-            ? cause.message
-            : "Could not save your documents. Retry to continue.",
-        );
+        setDocumentError(documentFailureMessage(cause));
       } finally {
         setDocumentMessage("");
       }
@@ -1979,6 +1975,13 @@ export default function CheckoutClient({
               ))}
             </div>
             {error && <ErrorModal error={error} onClose={() => setError("")} />}
+            {documentError && (
+              <ErrorModal
+                error={documentError}
+                title="Document check could not complete"
+                onClose={() => setDocumentError("")}
+              />
+            )}
             {successMessage && (
               <ErrorModal
                 error={successMessage}
@@ -2497,7 +2500,7 @@ export default function CheckoutClient({
                         : effectiveDocumentReviewStatus
                     }
                     busy={busy || verifyingPassport}
-                    message={documentError || documentMessage}
+                    message={documentMessage}
                   />
                 )}
                 {passportGatePassed(order) && !editingVerifiedDocuments ? (

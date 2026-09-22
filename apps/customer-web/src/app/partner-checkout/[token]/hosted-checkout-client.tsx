@@ -264,6 +264,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [verifying, setVerifying] = useState(false);
   const [documentMessage, setDocumentMessage] = useState("");
   const [documentError, setDocumentError] = useState("");
+  const documentFailureMessage = (cause: unknown) => {
+    const message = cause instanceof Error ? cause.message : "";
+    return message === "Failed to fetch" || /network request failed/i.test(message)
+      ? "We couldn't reach the verification service. Your documents are securely saved. Check your connection and try again."
+      : message || "Could not complete the document check. Try again.";
+  };
   const uploadDocument = useRef(createDocumentUploader());
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
@@ -725,23 +731,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             [type]: current[type] === file ? undefined : current[type],
           }));
         }
-        const refreshed = await api<Session>(`/partner-checkout/${token}`);
-        setSession(refreshed);
         setEditingVerifiedDocuments(false);
-        setVerification({
-          status: refreshed.order.documentReviewStatus ?? "NOT_STARTED",
-        });
-        if (
-          !refreshed.order.documentReviewStatus ||
-          refreshed.order.documentReviewStatus === "NOT_STARTED"
-        )
-          await runVerification();
+        // The confirmed documents are durable; verification is the next
+        // idempotent command and must not depend on an additional GET.
+        await runVerification();
       } catch (cause) {
-        setDocumentError(
-          cause instanceof Error
-            ? cause.message
-            : "Could not save your documents. Retry to continue.",
-        );
+        setDocumentError(documentFailureMessage(cause));
       } finally {
         setDocumentMessage("");
       }
@@ -1251,6 +1246,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   : "Document check needs attention"
           }
           onClose={() => setDocumentAttentionMessage("")}
+        />
+      )}
+      {documentError && (
+        <ErrorModal
+          error={documentError}
+          title="Document check could not complete"
+          onClose={() => setDocumentError("")}
         />
       )}
       <div className="checkout-shell">
@@ -1981,7 +1983,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                             : effectiveVerificationStatus
                         }
                         busy={busy || verifying}
-                        message={documentError || documentMessage}
+                        message={documentMessage}
                       />
                     )}
                     {gatePassed && !editingVerifiedDocuments ? (

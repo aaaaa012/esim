@@ -729,6 +729,9 @@ it.each([false, true])(
         current.order.documents[0]!.passportVerificationStatus = "OCR_PENDING";
         return ok({});
       }
+      if (url.endsWith("/verify-passport")) {
+        return ok({ status: "OCR_PENDING" });
+      }
       return ok(current);
     });
     render(<HostedCheckoutClient token="private-token" />);
