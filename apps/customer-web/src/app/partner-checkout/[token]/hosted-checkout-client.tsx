@@ -172,6 +172,20 @@ const initial: Traveler = {
   passportExpiryDate: "",
 };
 
+const canEnterTravelerAfterExtraction = (order: Session["order"]) =>
+  order.documentReviewStatus !== "REUPLOAD_REQUIRED" &&
+  ![
+    "PASSPORT_EXPIRED",
+    "PASSPORT_BIODATA_NOT_DETECTED",
+    "MRZ_NOT_READABLE",
+  ].includes(order.passportExtraction?.failureCode ?? "") &&
+  Boolean(
+    order.passportExtraction &&
+      ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+        order.passportExtraction.status,
+      ),
+  );
+
 const api = async <T,>(path: string, init?: RequestInit) => {
   let response: Response;
   try {
@@ -628,6 +642,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const saveDocuments = () =>
     run(async () => {
       setDocumentError("");
+      if (files.PASSPORT) {
+        // Replacement uploads start a new verification generation. Do not
+        // carry a dialog or transition decision from the previous passport.
+        setDocumentAttentionMessage("");
+        previousVerificationStatus.current = "NOT_STARTED";
+      }
       try {
         const required = session?.order.requiredDocuments ?? [
           "PASSPORT",
@@ -759,10 +779,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         return { ...current, ...updates };
       });
     }
-    if (step === 2 && verification?.status !== "REUPLOAD_REQUIRED") stepPush(3);
+    if (step === 2 && session && canEnterTravelerAfterExtraction(session.order))
+      stepPush(3);
   }, [
     session?.order.id,
     session?.order.passportExtraction,
+    session?.order.documentReviewStatus,
     verification?.status,
     step,
   ]);

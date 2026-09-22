@@ -1156,7 +1156,7 @@ export default function CheckoutClient({
         return { ...current, ...updates };
       });
     }
-    if (step === 2 && order?.documentReviewStatus !== "REUPLOAD_REQUIRED")
+    if (step === 2 && order && canEnterTravelerAfterExtraction(order))
       advance(3);
   }, [order?.id, order?.passportExtraction, order?.documentReviewStatus, step]);
   useEffect(() => {
@@ -1527,6 +1527,12 @@ export default function CheckoutClient({
     run(async () => {
       setDocumentError("");
       const replacedPassport = Boolean(files.passport);
+      if (replacedPassport) {
+        // A verdict belongs to one uploaded passport. Retire its message before
+        // starting the replacement so it cannot flash over the new review.
+        setDocumentAttentionMessage("");
+        previousDocumentReviewStatus.current = "NOT_STARTED";
+      }
       try {
         if (
           !order ||

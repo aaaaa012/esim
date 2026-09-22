@@ -415,6 +415,14 @@ describe("first-purchase document verification", () => {
     expect(
       screen.queryByRole("heading", { name: "Traveller information" }),
     ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(
+      screen.queryByRole("heading", { name: "Traveller information" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Travel documents" }),
+    ).toBeDefined();
   });
 
   it("restores saved traveller names when a partial extraction omitted them", async () => {
