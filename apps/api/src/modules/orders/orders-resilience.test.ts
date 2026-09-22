@@ -1459,15 +1459,17 @@ it("starts OCR after confirming only a replacement passport with a saved ticket"
   );
   await instance.refreshFromPersistence();
   await instance.confirmDocument("passport-only", "new-passport", "customer-1");
-  expect(add).toHaveBeenCalledWith(
-    expect.any(String),
-    "verify-order-passport",
-    expect.objectContaining({
-      documentId: "new-passport",
-      privateAssetId: "new-passport-asset-finalized",
-    }),
-    expect.stringContaining("order-passport-passport-only-new-passport-"),
-    expect.any(Object),
+  await vi.waitFor(() =>
+    expect(add).toHaveBeenCalledWith(
+      expect.any(String),
+      "verify-order-passport",
+      expect.objectContaining({
+        documentId: "new-passport",
+        privateAssetId: "new-passport-asset-finalized",
+      }),
+      expect.stringContaining("order-passport-passport-only-new-passport-"),
+      expect.any(Object),
+    ),
   );
   expect(add.mock.calls[0]![3]).not.toBe(
     orderPassportOcrJobId(
@@ -1913,5 +1915,25 @@ describe("OrdersService cancellation attribution", () => {
         (event) => event.actorId !== undefined,
       ),
     ).toBe(false);
+  });
+});
+
+describe("OrdersService exclusive-operation cleanup", () => {
+  it("releases a failed operation without creating an unhandled rejection", async () => {
+    const instance = ordersService([], {});
+    const runExclusive = (
+      instance as unknown as {
+        runExclusive<T>(key: string, task: () => Promise<T>): Promise<T>;
+      }
+    ).runExclusive.bind(instance);
+
+    await expect(
+      runExclusive("document-confirmation", async () => {
+        throw new Error("transient confirmation failure");
+      }),
+    ).rejects.toThrow("transient confirmation failure");
+    await expect(
+      runExclusive("document-confirmation", async () => "recovered"),
+    ).resolves.toBe("recovered");
   });
 });

@@ -1166,8 +1166,17 @@ export class OrdersService implements OnModuleInit {
     if (
       allRequiredDocumentsConfirmed &&
       order.documentReviewStatus === "NOT_STARTED"
-    )
-      await this.verifyPassport(id, ownerId);
+    ) {
+      // Confirmation is the durable upload boundary and must not fail because
+      // queue/configuration work needed to start OCR is temporarily unhealthy.
+      // The checkout also invokes the idempotent verification endpoint, while
+      // this best-effort handoff preserves automatic startup for other clients.
+      void this.verifyPassport(id, ownerId).catch((error) =>
+        this.logger.error(
+          `Passport verification handoff failed for ${id}: ${error instanceof Error ? error.message : "unknown"}`,
+        ),
+      );
+    }
     return {
       id: document.id,
       type: document.type,
@@ -1738,9 +1747,15 @@ export class OrdersService implements OnModuleInit {
       Promise.resolve()) as Promise<unknown>;
     const run = previous.catch(() => undefined).then(task);
     this.confirmLocks.set(key, run);
-    void run.finally(() => {
+    const release = () => {
       if (this.confirmLocks.get(key) === run) this.confirmLocks.delete(key);
-    });
+    };
+    // Do not use an ignored `run.finally(release)` here. The promise returned
+    // by finally rejects when `run` rejects and, if left unobserved, reaches
+    // the process-level unhandledRejection handler and terminates the API.
+    // Handling both branches keeps cleanup detached without creating a new
+    // rejected promise; callers still receive the original `run` result.
+    void run.then(release, release);
     return run;
   }
   async cancel(
