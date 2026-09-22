@@ -20,6 +20,18 @@ type Item = {
   createdAt: string;
   sentAt?: string;
 };
+const NOTIFICATION_DESCRIPTIONS: Record<string, string> = {
+  DOCUMENT_APPROVED:
+    "Your documents were approved. You can continue the order.",
+  DOCUMENT_REUPLOAD:
+    "A replacement document is required before the order can continue.",
+  QR_READY: "Your eSIM is ready to install.",
+  PLAN_EXHAUSTED: "The plan's data allowance has been used.",
+  PLAN_EXPIRED: "The plan validity period has ended.",
+  ORDER_STATUS: "The order status changed.",
+};
+const notificationDescription = (template: string) =>
+  NOTIFICATION_DESCRIPTIONS[template] ?? "There is an update to your order.";
 export default function NotificationHistory() {
   const authFetch = useAuthenticatedFetch();
   const [items, setItems] = useState<Item[]>([]),
@@ -64,9 +76,20 @@ export default function NotificationHistory() {
           <Bell size={17} />
           <span>
             <b>{notificationTemplateLabel(item.template)}</b>
+            <p>{notificationDescription(item.template)}</p>
             <small>
-              {notificationChannelLabel(item.channel)} ·{" "}
-              {new Date(item.createdAt).toLocaleString()}
+              {notificationChannelLabel(item.channel)} · Created{" "}
+              <time dateTime={item.createdAt}>
+                {new Date(item.createdAt).toLocaleString()}
+              </time>
+              {item.sentAt && (
+                <>
+                  {" "}· Delivered{" "}
+                  <time dateTime={item.sentAt}>
+                    {new Date(item.sentAt).toLocaleString()}
+                  </time>
+                </>
+              )}
             </small>
           </span>
           <em>{notificationStatusLabel(item.status)}</em>

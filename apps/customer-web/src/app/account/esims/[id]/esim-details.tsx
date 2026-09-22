@@ -1,7 +1,10 @@
 "use client";
 import { useAuthenticatedFetch } from "../../../authenticated-api-provider";
 import ErrorModal from "../../../../components/error-modal";
-import { formatDataMb } from "../../../../lib/format-data";
+import {
+  formatDataMb,
+  formatPlanDataText,
+} from "../../../../lib/format-data";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
@@ -61,6 +64,11 @@ export default function EsimDetails({ id }: { id: string }) {
   const [loadError, setLoadError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [paymentCheckedAt, setPaymentCheckedAt] = useState<Date | null>(null);
+  const [paymentResult, setPaymentResult] = useState<{
+    title: string;
+    message: string;
+    tone: "success" | "info";
+  } | null>(null);
   const load = useCallback(
     (isCurrent: () => boolean = () => true) =>
       authFetch(`${API}/customer/orders/${id}`, { headers }).then(
@@ -274,6 +282,28 @@ export default function EsimDetails({ id }: { id: string }) {
       }
       setOrder(value.data);
       setPaymentCheckedAt(new Date());
+      const confirmed = [
+        "PAYMENT_CONFIRMED",
+        "APPROVED",
+        "PROVISIONING",
+        "QR_READY",
+        "COMPLETED",
+      ].includes(value.data.status);
+      setPaymentResult(
+        confirmed
+          ? {
+              title: "Payment confirmed",
+              message:
+                "Your payment has been confirmed. The latest order status is now shown on this page.",
+              tone: "success",
+            }
+          : {
+              title: "Payment confirmation pending",
+              message:
+                "The payment provider has not confirmed this transaction yet. Your order remains safe; check again after completing payment in your banking app or wallet.",
+              tone: "info",
+            },
+      );
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -339,7 +369,7 @@ export default function EsimDetails({ id }: { id: string }) {
             <span className={`status-chip ${order.status.toLowerCase()}`}>
               {orderStatusLabel(order.status)}
             </span>
-            <h1>{order.plan.name}</h1>
+            <h1>{formatPlanDataText(order.plan.name)}</h1>
             <p>
               {order.orderNumber} · Created{" "}
               {new Date(order.createdAt).toLocaleDateString()}
@@ -356,6 +386,14 @@ export default function EsimDetails({ id }: { id: string }) {
           </div>
         )}
         {error && <ErrorModal error={error} onClose={() => setError("")} />}
+        {paymentResult && (
+          <ErrorModal
+            error={paymentResult.message}
+            title={paymentResult.title}
+            tone={paymentResult.tone}
+            onClose={() => setPaymentResult(null)}
+          />
+        )}
         {notice && (
           <div className="qr-notice ok" role="status">
             {notice}

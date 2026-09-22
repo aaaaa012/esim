@@ -1528,6 +1528,14 @@ body {
   color: #ef4444;
   background: color-mix(in srgb, #ef4444 12%, transparent);
 }
+.error-modal-icon.info {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+.error-modal-icon.success {
+  color: var(--success-strong);
+  background: var(--success-soft);
+}
 .error-modal-close {
   position: absolute;
   top: 14px;

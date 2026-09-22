@@ -122,6 +122,36 @@ it("checks a pending payment in place without sending the customer back to check
   ).toBe(true);
 });
 
+it("shows a dismissible result dialog when payment is still pending", async () => {
+  const pending = {
+    ...order,
+    plan: { ...order.plan, name: "One-Off Germany 7168 MB 1 day" },
+    status: "PAYMENT_PENDING",
+    documentReviewStatus: "VERIFIED",
+    payment: {
+      provider: "FONEPAY",
+      status: "PENDING",
+      reference: "VCpayment2",
+    },
+  };
+  mocks.fetch.mockResolvedValue(ok(pending));
+
+  render(<Details id="order" />);
+  await screen.findByRole("heading", {
+    name: "One-Off Germany 7 GB 1 day",
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog.textContent).toContain("Payment confirmation pending");
+  expect(dialog.textContent).toContain("has not confirmed this transaction yet");
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    screen.getByRole("heading", { name: "One-Off Germany 7 GB 1 day" }),
+  ).toBeDefined();
+});
+
 it("confirms a replacement upload without clearing another selected document", async () => {
   const documents = ["PASSPORT", "TICKET"].map((type) => ({
     id: type,

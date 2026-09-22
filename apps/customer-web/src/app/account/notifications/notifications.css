@@ -39,6 +39,13 @@
   text-transform: capitalize;
 }
 
+.customer-notification-list p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .customer-notification-list small {
   color: var(--text-3);
   font-size: 12px;

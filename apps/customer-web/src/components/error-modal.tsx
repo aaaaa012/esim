@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, CheckCircle2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, X } from "lucide-react";
 import { useEffect, useId, useRef } from "react";
 
 export default function ErrorModal({
@@ -11,7 +11,7 @@ export default function ErrorModal({
 }: {
   error: string | null;
   title?: string;
-  tone?: "error" | "success";
+  tone?: "error" | "success" | "info";
   onClose: () => void;
 }) {
   const titleId = useId();
@@ -75,6 +75,8 @@ export default function ErrorModal({
         <span className={`error-modal-icon ${tone}`}>
           {tone === "success" ? (
             <CheckCircle2 size={22} />
+          ) : tone === "info" ? (
+            <Clock3 size={22} />
           ) : (
             <AlertCircle size={22} />
           )}
