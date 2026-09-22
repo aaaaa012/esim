@@ -148,6 +148,7 @@ describe("recharge creation transaction", () => {
       guestOrderAccessToken: { create: vi.fn() },
       notification: { create: vi.fn() },
       travelerDocument: { deleteMany: vi.fn() },
+      passportExtraction: { deleteMany: vi.fn(), upsert: vi.fn() },
       orderEvent: { createMany: vi.fn(), findMany: vi.fn(async () => []) },
     };
     const prisma = {
@@ -213,6 +214,9 @@ describe("recharge creation transaction", () => {
         status: "QUEUED",
         recoveryUrlEncrypted: "encrypted-link",
       }),
+    });
+    expect(tx.passportExtraction.deleteMany).toHaveBeenCalledWith({
+      where: { orderId: "recharge" },
     });
   });
 });

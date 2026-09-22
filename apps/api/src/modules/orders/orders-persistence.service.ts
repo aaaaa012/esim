@@ -640,66 +640,6 @@ export class OrdersPersistenceService {
                 status: order.payment.status as DbPaymentStatus,
               },
             });
-            if (order.passportExtraction) {
-              const passport = order.documents.find(
-                (document) => document.type === DocumentType.PASSPORT,
-              );
-              if (passport)
-                await tx.passportExtraction.upsert({
-                  where: { orderId: order.id },
-                  update: {
-                    passportAssetId: passport.privateAssetId,
-                    status: order.passportExtraction.status,
-                    payloadEncrypted: this.crypto.encrypt(
-                      JSON.stringify(order.passportExtraction.fields),
-                    ),
-                    fieldsRequiringInput: order.passportExtraction
-                      .fieldsRequiringInput as Prisma.InputJsonValue,
-                    confidence: order.passportExtraction.confidence ?? null,
-                    correctionAttempts:
-                      order.passportExtraction.correctionAttempts ?? 0,
-                    lastMismatchFingerprint:
-                      order.passportExtraction.lastMismatchFingerprint ?? null,
-                    lastMismatchFields: order.passportExtraction
-                      .lastMismatchFields
-                      ? (order.passportExtraction
-                          .lastMismatchFields as Prisma.InputJsonValue)
-                      : Prisma.JsonNull,
-                    confirmedMismatchFingerprint:
-                      order.passportExtraction.confirmedMismatchFingerprint ??
-                      null,
-                    failureCode: order.passportExtraction.failureCode ?? null,
-                  },
-                  create: {
-                    orderId: order.id,
-                    passportAssetId: passport.privateAssetId,
-                    status: order.passportExtraction.status,
-                    payloadEncrypted: this.crypto.encrypt(
-                      JSON.stringify(order.passportExtraction.fields),
-                    ),
-                    fieldsRequiringInput: order.passportExtraction
-                      .fieldsRequiringInput as Prisma.InputJsonValue,
-                    confidence: order.passportExtraction.confidence ?? null,
-                    correctionAttempts:
-                      order.passportExtraction.correctionAttempts ?? 0,
-                    lastMismatchFingerprint:
-                      order.passportExtraction.lastMismatchFingerprint ?? null,
-                    lastMismatchFields: order.passportExtraction
-                      .lastMismatchFields
-                      ? (order.passportExtraction
-                          .lastMismatchFields as Prisma.InputJsonValue)
-                      : Prisma.JsonNull,
-                    confirmedMismatchFingerprint:
-                      order.passportExtraction.confirmedMismatchFingerprint ??
-                      null,
-                    failureCode: order.passportExtraction.failureCode ?? null,
-                  },
-                });
-            } else {
-              await tx.passportExtraction.deleteMany({
-                where: { orderId: order.id },
-              });
-            }
             await tx.paymentEvent.createMany({
               data: [
                 {
@@ -717,6 +657,69 @@ export class OrdersPersistenceService {
                 },
               ],
               skipDuplicates: true,
+            });
+          }
+          // Passport evidence is created and replaced before payment exists.
+          // Keep its durable row synchronized on every order save so a refresh
+          // cannot resurrect a verdict belonging to a superseded upload.
+          if (order.passportExtraction) {
+            const passport = order.documents.find(
+              (document) => document.type === DocumentType.PASSPORT,
+            );
+            if (passport)
+              await tx.passportExtraction.upsert({
+                where: { orderId: order.id },
+                update: {
+                  passportAssetId: passport.privateAssetId,
+                  status: order.passportExtraction.status,
+                  payloadEncrypted: this.crypto.encrypt(
+                    JSON.stringify(order.passportExtraction.fields),
+                  ),
+                  fieldsRequiringInput: order.passportExtraction
+                    .fieldsRequiringInput as Prisma.InputJsonValue,
+                  confidence: order.passportExtraction.confidence ?? null,
+                  correctionAttempts:
+                    order.passportExtraction.correctionAttempts ?? 0,
+                  lastMismatchFingerprint:
+                    order.passportExtraction.lastMismatchFingerprint ?? null,
+                  lastMismatchFields: order.passportExtraction
+                    .lastMismatchFields
+                    ? (order.passportExtraction
+                        .lastMismatchFields as Prisma.InputJsonValue)
+                    : Prisma.JsonNull,
+                  confirmedMismatchFingerprint:
+                    order.passportExtraction.confirmedMismatchFingerprint ??
+                    null,
+                  failureCode: order.passportExtraction.failureCode ?? null,
+                },
+                create: {
+                  orderId: order.id,
+                  passportAssetId: passport.privateAssetId,
+                  status: order.passportExtraction.status,
+                  payloadEncrypted: this.crypto.encrypt(
+                    JSON.stringify(order.passportExtraction.fields),
+                  ),
+                  fieldsRequiringInput: order.passportExtraction
+                    .fieldsRequiringInput as Prisma.InputJsonValue,
+                  confidence: order.passportExtraction.confidence ?? null,
+                  correctionAttempts:
+                    order.passportExtraction.correctionAttempts ?? 0,
+                  lastMismatchFingerprint:
+                    order.passportExtraction.lastMismatchFingerprint ?? null,
+                  lastMismatchFields: order.passportExtraction
+                    .lastMismatchFields
+                    ? (order.passportExtraction
+                        .lastMismatchFields as Prisma.InputJsonValue)
+                    : Prisma.JsonNull,
+                  confirmedMismatchFingerprint:
+                    order.passportExtraction.confirmedMismatchFingerprint ??
+                    null,
+                  failureCode: order.passportExtraction.failureCode ?? null,
+                },
+              });
+          } else {
+            await tx.passportExtraction.deleteMany({
+              where: { orderId: order.id },
             });
           }
           const persistedEvents = await tx.orderEvent.findMany({
