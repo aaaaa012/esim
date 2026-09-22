@@ -52,17 +52,23 @@ export function ManualRefundCard({
   const [explanation, setExplanation] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
 
   const load = async () => {
-    const response = await authFetch(
-      `${API}/operations/manual-refunds?orderId=${orderId}`,
-    );
-    const value = await response.json();
-    if (!response.ok)
-      throw new Error(
-        apiError(value, "Manual refund status could not be loaded"),
+    setStatusLoading(true);
+    try {
+      const response = await authFetch(
+        `${API}/operations/manual-refunds?orderId=${orderId}`,
       );
-    setRefund(value.data?.items?.[0] ?? null);
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          apiError(value, "Manual refund status could not be loaded"),
+        );
+      setRefund(value.data?.items?.[0] ?? null);
+    } finally {
+      setStatusLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -78,7 +84,10 @@ export function ManualRefundCard({
   const activeRefund =
     refund && ["REQUESTED", "APPROVED"].includes(refund.status);
   const requestDisabled =
-    !hasPaymentAttempt || alreadyRefunded || Boolean(activeRefund);
+    statusLoading ||
+    !hasPaymentAttempt ||
+    alreadyRefunded ||
+    Boolean(activeRefund);
 
   const submit = async () => {
     setBusy(true);

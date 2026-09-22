@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { ManualRefundCard } from "./manual-refund-card";
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
@@ -45,7 +45,7 @@ describe("ManualRefundCard", () => {
     const button = await screen.findByRole("button", {
       name: "Request manual refund",
     });
-    expect(button).toHaveProperty("disabled", false);
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
   });
 
   it("keeps the action visible but prevents a duplicate active request", async () => {
@@ -72,7 +72,9 @@ describe("ManualRefundCard", () => {
     const button = await screen.findByRole("button", {
       name: "Request manual refund",
     });
-    expect(button).toHaveProperty("disabled", true);
-    expect(screen.getByText(/already has a refund awaiting/i)).toBeDefined();
+    await waitFor(() => {
+      expect(button).toHaveProperty("disabled", true);
+      expect(screen.getByText(/already has a refund awaiting/i)).toBeDefined();
+    });
   });
 });
