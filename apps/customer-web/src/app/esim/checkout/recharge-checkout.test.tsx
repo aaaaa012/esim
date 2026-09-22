@@ -64,7 +64,12 @@ describe("recharge checkout", () => {
         reference: "FONEPAY-REFERENCE",
         status: "PENDING",
       },
-      paymentRetry: { canRetry: false, canChangeProvider: false },
+      paymentRetry: {
+        canRetry: false,
+        canChangeProvider: false,
+        blockedReason:
+          "We are still confirming your current payment. Please check the status before starting another one.",
+      },
     };
     mocks.authFetch.mockImplementation(
       async (url: string, init?: RequestInit) => {
@@ -97,6 +102,9 @@ describe("recharge checkout", () => {
     ).toHaveProperty("src", "data:image/png;base64,restored");
     expect(screen.queryByText("Payment confirmation pending")).toBeNull();
     expect(screen.queryByText("Checking Fonepay payment status")).toBeNull();
+    expect(
+      screen.queryByText(/before starting another one/i),
+    ).toBeNull();
     expect(screen.getByText("Pay within")).toBeDefined();
     expect(
       mocks.authFetch.mock.calls.some(

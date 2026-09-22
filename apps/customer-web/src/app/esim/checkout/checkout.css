@@ -1485,6 +1485,9 @@
 }
 
 .fonepay-qr-card {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
   width: min(100%, 300px);
   margin-inline: auto;
   padding: 18px;
@@ -1492,6 +1495,19 @@
   border-radius: 14px;
   background: #ffffff;
   box-shadow: 0 8px 28px rgb(10 13 18 / 8%);
+}
+
+.fonepay-qr-card .fonepay-checkout-logo {
+  margin-bottom: 2px;
+}
+
+.fonepay-terminal-name {
+  margin: 0;
+  color: #3f3f3f;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .fonepay-qr {
@@ -1566,6 +1582,15 @@
 .fonepay-bank-heading {
   display: grid;
   gap: 5px;
+}
+
+.fonepay-bank-card {
+  width: 100%;
+  padding: clamp(16px, 3vw, 22px);
+  border: 1px solid #dedede;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 8px 28px rgb(10 13 18 / 6%);
 }
 
 .fonepay-bank-heading b {

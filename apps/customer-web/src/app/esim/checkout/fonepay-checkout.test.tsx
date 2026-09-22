@@ -35,7 +35,7 @@ function baseProps(overrides?: Partial<Parameters<typeof FonepayCheckout>[0]>) {
 
 describe("FonepayCheckout", () => {
   it("opens in bank selection view by default when banks are available", () => {
-    render(<FonepayCheckout {...baseProps()} />);
+    const { container } = render(<FonepayCheckout {...baseProps()} />);
 
     expect(
       screen.getByRole("heading", { name: /pay with your banking app/i }),
@@ -49,6 +49,14 @@ describe("FonepayCheckout", () => {
     expect(
       screen.getByRole("button", { name: /scan the qr code/i }),
     ).toBeInTheDocument();
+    const bankCard = container.querySelector(".fonepay-bank-card");
+    expect(bankCard).toBeInTheDocument();
+    expect(bankCard).toContainElement(
+      screen.getByRole("button", { name: /laxmi sunrise bank/i }),
+    );
+    expect(bankCard?.querySelector(".fonepay-qr-expiry")).toBeNull();
+    expect(bankCard?.querySelector(".fonepay-checkout-title")).toBeNull();
+    expect(bankCard?.querySelector(".fonepay-qr-prompt")).toBeNull();
   });
 
   it("navigates to the centered QR view and back", () => {
@@ -112,9 +120,13 @@ describe("FonepayCheckout", () => {
 
     const card = container.querySelector(".fonepay-qr-card");
     expect(card).toBeInTheDocument();
-    // The card holds only the QR image (or its fallback) — never the timer,
-    // the instruction steps, or the back link.
+    // The card holds only the brand, QR (or fallback), and merchant identity,
+    // never the timer, instructions, or navigation.
+    expect(card?.querySelector(".fonepay-checkout-logo")).toBeInTheDocument();
     expect(card?.querySelector(".fonepay-qr")).toBeInTheDocument();
+    expect(card?.querySelector(".fonepay-terminal-name")).toHaveTextContent(
+      "Visa Compass Services",
+    );
     expect(card?.querySelector(".fonepay-qr-expiry")).not.toBeInTheDocument();
     expect(card?.querySelector(".fonepay-qr-steps")).not.toBeInTheDocument();
     expect(card?.querySelector(".fonepay-qr-back")).not.toBeInTheDocument();

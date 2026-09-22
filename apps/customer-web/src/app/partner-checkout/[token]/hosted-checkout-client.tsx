@@ -1638,6 +1638,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       }
                       qrPayload={payment.qrPayload}
                       qrDataUrl={payment.qrDataUrl}
+                      expiresAt={payment.expiresAt}
                       socketReady={fonepaySocketReady}
                       onError={setError}
                       onTelemetry={(event) => reportTelemetry(event)}

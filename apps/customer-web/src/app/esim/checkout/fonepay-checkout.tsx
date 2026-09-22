@@ -87,37 +87,15 @@ export function FonepayCheckout({
 
   return (
     <section className="fonepay-checkout" aria-labelledby={titleId}>
-      <img
-        className="fonepay-checkout-logo"
-        src="/brand/fonepay-logo.png"
-        alt="Checkout by Fonepay"
-      />
       {expiresAt ? <PaymentExpiryCountdown expiresAt={expiresAt} /> : null}
       {qrView ? (
         <div className="fonepay-qr-view">
-          {hasBanks ? (
-            <button
-              type="button"
-              className="fonepay-qr-back"
-              onClick={() => setShowQr(false)}
-            >
-              <ChevronLeft size={16} aria-hidden="true" />
-              Back to banking apps
-            </button>
-          ) : null}
-          <h2 id={titleId} className="fonepay-checkout-title">
-            Scan to pay with any banking app
-          </h2>
-          <ol className="fonepay-qr-steps">
-            <li>
-              Open a Fonepay-supported banking app on your phone.
-            </li>
-            <li>
-              Choose &ldquo;Scan QR&rdquo; inside the app and scan this code.
-            </li>
-            <li>Approve the payment to confirm your order.</li>
-          </ol>
           <div className="fonepay-qr-card">
+            <img
+              className="fonepay-checkout-logo"
+              src="/brand/fonepay-logo.png"
+              alt="Checkout by Fonepay"
+            />
             {qrDataUrl ? (
               <img
                 className="fonepay-qr"
@@ -134,10 +112,36 @@ export function FonepayCheckout({
                 </span>
               </div>
             )}
+            <p className="fonepay-terminal-name">Visa Compass Services</p>
           </div>
+          <h2 id={titleId} className="fonepay-checkout-title">
+            Scan to pay with any banking app
+          </h2>
+          <ol className="fonepay-qr-steps">
+            <li>Open a Fonepay-supported banking app on your phone.</li>
+            <li>
+              Choose &ldquo;Scan QR&rdquo; inside the app and scan this code.
+            </li>
+            <li>Approve the payment to confirm your order.</li>
+          </ol>
+          {hasBanks ? (
+            <button
+              type="button"
+              className="fonepay-qr-back"
+              onClick={() => setShowQr(false)}
+            >
+              <ChevronLeft size={16} aria-hidden="true" />
+              Back to banking apps
+            </button>
+          ) : null}
         </div>
       ) : (
         <>
+          <img
+            className="fonepay-checkout-logo"
+            src="/brand/fonepay-logo.png"
+            alt="Checkout by Fonepay"
+          />
           <h2 id={titleId} className="fonepay-checkout-title">
             Pay with your banking app
           </h2>
@@ -153,13 +157,15 @@ export function FonepayCheckout({
             </button>
           ) : null}
           {hasBanks ? (
-            <FonepayBankPicker
-              banks={banks ?? []}
-              qrPayload={qrPayload}
-              socketReady={socketReady}
-              onError={onError}
-              onTelemetry={(event) => onTelemetry(event)}
-            />
+            <div className="fonepay-bank-card">
+              <FonepayBankPicker
+                banks={banks ?? []}
+                qrPayload={qrPayload}
+                socketReady={socketReady}
+                onError={onError}
+                onTelemetry={(event) => onTelemetry(event)}
+              />
+            </div>
           ) : null}
           {hint ? (
             <p className="fonepay-bank-hint" role="status">

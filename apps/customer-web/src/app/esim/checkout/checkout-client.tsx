@@ -3038,6 +3038,7 @@ export default function CheckoutClient({
                       )
                     ) : null}
                     {order?.paymentRetry &&
+                    !payment &&
                     !order.paymentRetry.canRetry &&
                     order.paymentRetry.blockedReason ? (
                       <p className="form-note" role="status">
