@@ -649,7 +649,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         await runVerification();
       } catch {
         setDocumentError(
-          "Could not connect to verification. Your saved files are safe. Try checking again.",
+          "We couldn't start document verification. Your documents are securely saved. Please try again.",
         );
       } finally {
         setVerifying(false);

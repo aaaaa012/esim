@@ -65,6 +65,14 @@ type Timeline = {
   reason?: string;
   actorId?: string;
 };
+export const PASSPORT_EXTRACTION_STATUSES = [
+  "PROCESSING",
+  "READY",
+  "PARTIAL",
+  "MANUAL_ENTRY_REQUIRED",
+  "SKIPPED",
+] as const;
+
 export type DemoOrder = {
   id: string;
   ownerId: string | null;
@@ -116,8 +124,7 @@ export type DemoOrder = {
   topUpMobile?: string;
   passportVerification?: PassportVerificationResult;
   passportExtraction?: {
-    status:
-      "PROCESSING" | "READY" | "PARTIAL" | "MANUAL_ENTRY_REQUIRED" | "SKIPPED";
+    status: (typeof PASSPORT_EXTRACTION_STATUSES)[number];
     fields: PassportExtractedFields;
     fieldsRequiringInput: string[];
     failureCode?: string;
@@ -1275,13 +1282,35 @@ export class OrdersService implements OnModuleInit {
         fieldsRequiringInput: [],
       };
     }
-    const config = this.prisma.enabled
-      ? await this.prisma.platformConfiguration.upsert({
+    // The order owns the review policy that governed its checkout. Starting
+    // verification must not require an unrelated global-configuration write:
+    // an upsert here made every OCR request vulnerable to configuration-table
+    // contention or migration drift before OCR could even be queued.
+    let config: {
+      documentReviewPolicy: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
+      ocrCheckoutWaitMs: number;
+    } = {
+      documentReviewPolicy: order.documentReviewPolicy ?? "AUTO_OCR",
+      ocrCheckoutWaitMs: 8000,
+    };
+    if (this.prisma.enabled) {
+      try {
+        const current = await this.prisma.platformConfiguration.findUnique({
           where: { id: "platform" },
-          update: {},
-          create: { id: "platform" },
-        })
-      : { documentReviewPolicy: "AUTO_OCR" as const, ocrCheckoutWaitMs: 8000 };
+          select: {
+            documentReviewPolicy: true,
+            ocrCheckoutWaitMs: true,
+          },
+        });
+        if (current) config = current;
+      } catch (error) {
+        // The snapshotted order policy is authoritative and keeps customer
+        // verification available while configuration storage is recovered.
+        this.logger.warn(
+          `Document review configuration unavailable for ${id}; using the order policy: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
     const now = new Date();
     order.documentReviewPolicy = config.documentReviewPolicy;
     order.documentReviewStartedAt ??= now.toISOString();

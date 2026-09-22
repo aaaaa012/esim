@@ -1937,3 +1937,70 @@ describe("OrdersService exclusive-operation cleanup", () => {
     ).resolves.toBe("recovered");
   });
 });
+
+describe("OrdersService document-review configuration resilience", () => {
+  it("queues passport extraction from the order policy when global configuration is unavailable", async () => {
+    const add = vi.fn().mockResolvedValue({});
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: "configuration-fallback",
+          ownerId: "customer-1",
+          status: OrderStatus.DRAFT,
+          documentReviewPolicy: "AUTO_OCR",
+          documentReviewStatus: "NOT_STARTED",
+          documents: [
+            {
+              id: "passport",
+              type: DocumentType.PASSPORT,
+              fileName: "passport.png",
+              privateAssetId: "passport-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+            {
+              id: "ticket",
+              type: DocumentType.TICKET,
+              fileName: "ticket.pdf",
+              privateAssetId: "ticket-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+      undefined,
+      {
+        enabled: true,
+        platformConfiguration: {
+          findUnique: vi.fn().mockRejectedValue(new Error("config unavailable")),
+        },
+      },
+      undefined,
+      undefined,
+      {},
+      { add },
+    );
+    await instance.refreshFromPersistence();
+
+    const result = await instance.verifyPassport(
+      "configuration-fallback",
+      "customer-1",
+    );
+
+    expect(result.documentReviewStatus).toBe("OCR_PENDING");
+    expect(result.passportExtraction?.status).toBe("PROCESSING");
+    expect(add).toHaveBeenCalledWith(
+      expect.any(String),
+      "extract-order-passport",
+      expect.objectContaining({
+        orderId: "configuration-fallback",
+        documentId: "passport",
+        privateAssetId: "passport-asset",
+      }),
+      expect.stringContaining("passport-extraction-configuration-fallback"),
+      expect.any(Object),
+    );
+  });
+});

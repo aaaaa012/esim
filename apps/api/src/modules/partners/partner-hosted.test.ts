@@ -88,7 +88,7 @@ describe("partner hosted checkout", () => {
             .mockResolvedValue({ id: "partner-1", status: "ACTIVE" }),
         },
         platformConfiguration: {
-          upsert: vi.fn().mockResolvedValue({
+          findUnique: vi.fn().mockResolvedValue({
             ocrCheckoutWaitMs: 10_000,
             documentReviewPolicy: "AUTO_OCR",
           }),
@@ -1081,7 +1081,10 @@ it("queues fresh OCR for a passport-only replacement while retaining the confirm
       }),
     ),
     platformConfiguration: {
-      upsert: vi.fn().mockResolvedValue({ documentReviewPolicy: "AUTO_OCR" }),
+      findUnique: vi.fn().mockResolvedValue({
+        documentReviewPolicy: "AUTO_OCR",
+        ocrCheckoutWaitMs: 8000,
+      }),
     },
   };
   const instance = new PartnerService(

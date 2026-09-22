@@ -92,6 +92,80 @@ describe("mapClerkActivationFailure", () => {
   });
 });
 
+describe("AdminService document review policy persistence", () => {
+  it("returns defaults without writing when the singleton row is absent", async () => {
+    const findUnique = vi.fn().mockResolvedValue(null);
+    const prisma = {
+      enabled: true,
+      platformConfiguration: { findUnique },
+    } as unknown as PrismaService;
+    const admin = new AdminService(prisma, connectivityStub());
+
+    await expect(admin.documentReviewPolicy()).resolves.toEqual({
+      policy: "AUTO_OCR",
+      ocrCheckoutWaitMs: 8000,
+    });
+    expect(findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates configuration and writes its audit record atomically", async () => {
+    const actor = { id: "admin-1", clerkId: "clerk-admin-1" };
+    const tx = {
+      platformConfiguration: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        upsert: vi.fn().mockResolvedValue({
+          id: "platform",
+          documentReviewPolicy: "MANUAL_REVIEW",
+          ocrCheckoutWaitMs: 12000,
+          updatedAt: new Date("2026-09-22T00:00:00.000Z"),
+        }),
+      },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      enabled: true,
+      user: { findUnique: vi.fn().mockResolvedValue(actor) },
+      $transaction: vi.fn(
+        async (work: (client: typeof tx) => Promise<unknown>) => work(tx),
+      ),
+    } as unknown as PrismaService;
+    const admin = new AdminService(prisma, connectivityStub());
+
+    await expect(
+      admin.updateDocumentReviewPolicy(
+        { policy: "MANUAL_REVIEW" as never, ocrCheckoutWaitMs: 12000 },
+        actor.clerkId,
+      ),
+    ).resolves.toMatchObject({
+      policy: "MANUAL_REVIEW",
+      ocrCheckoutWaitMs: 12000,
+    });
+    expect(tx.platformConfiguration.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          documentReviewPolicy: "MANUAL_REVIEW",
+          ocrCheckoutWaitMs: 12000,
+        }),
+        create: expect.objectContaining({
+          documentReviewPolicy: "MANUAL_REVIEW",
+          ocrCheckoutWaitMs: 12000,
+        }),
+      }),
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "DOCUMENT_REVIEW_POLICY_CHANGED",
+          previousValue: {
+            policy: "AUTO_OCR",
+            ocrCheckoutWaitMs: 8000,
+          },
+        }),
+      }),
+    );
+  });
+});
+
 describe("AdminService.correctCustomerEmail", () => {
   const customer = {
     id: "customer-1",

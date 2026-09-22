@@ -1012,7 +1012,7 @@ export default function CheckoutClient({
       if ((e as { code?: string }).code === "RATE_LIMITED")
         passportRetryNoBefore.current = Date.now() + 60_000;
       setDocumentError(
-        "Could not connect to verification. Your saved files are safe. Try checking again.",
+        "We couldn't start document verification. Your documents are securely saved. Please try again.",
       );
       return null;
     } finally {

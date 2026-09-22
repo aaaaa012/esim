@@ -137,15 +137,18 @@ export class AdminService {
   async documentReviewPolicy() {
     if (!this.prisma.enabled)
       return { policy: DocumentReviewPolicy.AUTO_OCR, ocrCheckoutWaitMs: 8000 };
-    const config = await this.prisma.platformConfiguration.upsert({
+    const config = await this.prisma.platformConfiguration.findUnique({
       where: { id: "platform" },
-      update: {},
-      create: { id: "platform" },
+      select: {
+        documentReviewPolicy: true,
+        ocrCheckoutWaitMs: true,
+        updatedAt: true,
+      },
     });
     return {
-      policy: config.documentReviewPolicy,
-      ocrCheckoutWaitMs: config.ocrCheckoutWaitMs,
-      updatedAt: config.updatedAt,
+      policy: config?.documentReviewPolicy ?? DocumentReviewPolicy.AUTO_OCR,
+      ocrCheckoutWaitMs: config?.ocrCheckoutWaitMs ?? 8000,
+      ...(config?.updatedAt ? { updatedAt: config.updatedAt } : {}),
     };
   }
 
@@ -161,35 +164,43 @@ export class AdminService {
         "OCR checkout wait must be between 1 and 30 seconds",
       );
     const actor = await this.actor(actorClerkId);
-    const previous = await this.prisma.platformConfiguration.upsert({
-      where: { id: "platform" },
-      update: {},
-      create: { id: "platform" },
-    });
-    const updated = await this.prisma.platformConfiguration.update({
-      where: { id: "platform" },
-      data: {
-        documentReviewPolicy: input.policy,
-        ocrCheckoutWaitMs: waitMs,
-        updatedById: actor?.id ?? null,
-      },
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        module: "DOCUMENT_RULES",
-        entity: "PlatformConfiguration",
-        entityId: updated.id,
-        action: "DOCUMENT_REVIEW_POLICY_CHANGED",
-        ...(actor ? { performedById: actor.id } : {}),
-        previousValue: {
-          policy: previous.documentReviewPolicy,
-          ocrCheckoutWaitMs: previous.ocrCheckoutWaitMs,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const previous = await tx.platformConfiguration.findUnique({
+        where: { id: "platform" },
+      });
+      const next = await tx.platformConfiguration.upsert({
+        where: { id: "platform" },
+        update: {
+          documentReviewPolicy: input.policy,
+          ocrCheckoutWaitMs: waitMs,
+          updatedById: actor?.id ?? null,
         },
-        newValue: {
-          policy: updated.documentReviewPolicy,
-          ocrCheckoutWaitMs: updated.ocrCheckoutWaitMs,
+        create: {
+          id: "platform",
+          documentReviewPolicy: input.policy,
+          ocrCheckoutWaitMs: waitMs,
+          updatedById: actor?.id ?? null,
         },
-      },
+      });
+      await tx.auditLog.create({
+        data: {
+          module: "DOCUMENT_RULES",
+          entity: "PlatformConfiguration",
+          entityId: next.id,
+          action: "DOCUMENT_REVIEW_POLICY_CHANGED",
+          ...(actor ? { performedById: actor.id } : {}),
+          previousValue: {
+            policy:
+              previous?.documentReviewPolicy ?? DocumentReviewPolicy.AUTO_OCR,
+            ocrCheckoutWaitMs: previous?.ocrCheckoutWaitMs ?? 8000,
+          },
+          newValue: {
+            policy: next.documentReviewPolicy,
+            ocrCheckoutWaitMs: next.ocrCheckoutWaitMs,
+          },
+        },
+      });
+      return next;
     });
     return {
       policy: updated.documentReviewPolicy,

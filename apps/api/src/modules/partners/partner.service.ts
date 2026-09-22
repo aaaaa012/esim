@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import {
   CustomerSource,
+  DocumentReviewPolicy,
   DocumentStatus,
   DocumentType,
   OrderChannel,
@@ -311,11 +312,17 @@ export class PartnerService {
     const activeExternalOrderKey = `${partnerId}:${input.externalOrderId}`;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 24 * 60 * 60_000);
-    const config = await this.prisma.platformConfiguration.upsert({
+    const storedConfig = await this.prisma.platformConfiguration.findUnique({
       where: { id: "platform" },
-      update: {},
-      create: { id: "platform" },
+      select: {
+        documentReviewPolicy: true,
+        ocrCheckoutWaitMs: true,
+      },
     });
+    const config = storedConfig ?? {
+      documentReviewPolicy: DocumentReviewPolicy.AUTO_OCR,
+      ocrCheckoutWaitMs: 8000,
+    };
     const checkoutReleaseAt = new Date(
       now.getTime() + config.ocrCheckoutWaitMs,
     );
