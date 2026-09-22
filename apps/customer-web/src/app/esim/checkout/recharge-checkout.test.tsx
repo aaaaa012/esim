@@ -361,6 +361,62 @@ describe("first-purchase document verification", () => {
     ).toBe(true);
   });
 
+  it("explains an expired passport in a dialog and marks it for replacement", async () => {
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      return ok({
+        id: "expired-passport",
+        orderNumber: "VC-EXPIRED",
+        status: "DRAFT",
+        purchaseType: "INITIAL_PURCHASE",
+        plan,
+        totalAmountNpr: 100,
+        traveler: null,
+        documentReviewStatus: "NOT_STARTED",
+        passportVerification: {
+          status: "FAILED",
+          detail: "The uploaded passport has expired",
+        },
+        passportExtraction: {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: { passportExpiryDate: "2020-01-01" },
+          fieldsRequiringInput: [],
+          failureCode: "PASSPORT_EXPIRED",
+        },
+        documents: [
+          {
+            type: "PASSPORT",
+            status: "PENDING",
+            fileName: "expired-passport.png",
+            uploadVerified: true,
+          },
+          {
+            type: "TICKET",
+            status: "PENDING",
+            fileName: "ticket.png",
+            uploadVerified: true,
+          },
+        ],
+      });
+    });
+
+    render(<Checkout planId="plan" orderId="expired-passport" />);
+
+    expect(
+      await screen.findByRole("alertdialog", { name: "Passport expired" }),
+    ).toBeDefined();
+    expect(
+      screen.getAllByText(
+        "This passport has expired. Upload a valid passport before continuing.",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText("Upload passport again")).toBeDefined();
+    expect(
+      screen.queryByRole("heading", { name: "Traveller information" }),
+    ).toBeNull();
+  });
+
   it("restores saved traveller names when a partial extraction omitted them", async () => {
     mocks.authFetch.mockImplementation(async (url: string) => {
       if (url.endsWith("/payments/providers"))

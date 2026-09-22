@@ -1024,7 +1024,18 @@ export default function CheckoutClient({
     ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
       target.documentReviewStatus ?? "",
     );
-  const effectiveDocumentReviewStatus = (order?.documents ?? []).some(
+  const passportFailureCode = order?.passportExtraction?.failureCode;
+  const hardPassportReplacementRequired = [
+    "PASSPORT_EXPIRED",
+    "PASSPORT_BIODATA_NOT_DETECTED",
+    "MRZ_NOT_READABLE",
+  ].includes(passportFailureCode ?? "");
+  const displayDocuments = (order?.documents ?? []).map((document) =>
+    hardPassportReplacementRequired && document.type === "PASSPORT"
+      ? { ...document, status: "REUPLOAD_REQUIRED" }
+      : document,
+  );
+  const effectiveDocumentReviewStatus = displayDocuments.some(
     (document) => document.status === "REUPLOAD_REQUIRED",
   )
     ? ("REUPLOAD_REQUIRED" as const)
@@ -1053,9 +1064,8 @@ export default function CheckoutClient({
           "We couldn't automatically match some details with your uploaded passport. Please check the highlighted fields.",
         );
       } else {
-        const expiredPassport =
-          order?.passportExtraction?.failureCode === "PASSPORT_EXPIRED";
-        const rejected = (order?.documents ?? [])
+        const expiredPassport = passportFailureCode === "PASSPORT_EXPIRED";
+        const rejected = displayDocuments
           .filter((document) => document.status === "REUPLOAD_REQUIRED")
           .map((document) =>
             document.type === "PASSPORT"
@@ -1078,7 +1088,7 @@ export default function CheckoutClient({
       jumpTo(2);
   }, [
     effectiveDocumentReviewStatus,
-    order?.passportExtraction?.failureCode,
+    passportFailureCode,
     step,
   ]);
   useEffect(() => {
@@ -1966,7 +1976,16 @@ export default function CheckoutClient({
             {documentAttentionMessage && (
               <ErrorModal
                 error={documentAttentionMessage}
-                title="Document check needs attention"
+                title={
+                  passportFailureCode === "PASSPORT_EXPIRED"
+                    ? "Passport expired"
+                    : passportFailureCode ===
+                        "PASSPORT_BIODATA_NOT_DETECTED"
+                      ? "Passport document not recognized"
+                      : passportFailureCode === "MRZ_NOT_READABLE"
+                        ? "Passport details could not be read"
+                        : "Document check needs attention"
+                }
                 onClose={() => setDocumentAttentionMessage("")}
               />
             )}
@@ -2470,7 +2489,7 @@ export default function CheckoutClient({
                 {passportGatePassed(order) && !editingVerifiedDocuments ? (
                   <>
                     <VerifiedDocumentsSummary
-                      documents={order?.documents}
+                      documents={displayDocuments}
                       reviewStatus={effectiveDocumentReviewStatus}
                     />
                     <div className="form-actions verified-document-actions">
@@ -2493,7 +2512,7 @@ export default function CheckoutClient({
                 ) : (
                   <>
                     {effectiveDocumentReviewStatus !== "REUPLOAD_REQUIRED" && (
-                      <SavedDocuments documents={order?.documents} />
+                      <SavedDocuments documents={displayDocuments} />
                     )}
                     {!["OCR_PENDING", "OCR_BACKGROUND"].includes(
                       effectiveDocumentReviewStatus ?? "",
@@ -2509,7 +2528,7 @@ export default function CheckoutClient({
                         {effectiveDocumentReviewStatus ===
                         "REUPLOAD_REQUIRED" ? (
                           <DocumentRecoveryFields
-                            documents={order?.documents ?? []}
+                            documents={displayDocuments}
                             types={["PASSPORT", "TICKET", "VISA"]}
                             files={{
                               PASSPORT: files.passport,
@@ -2523,6 +2542,7 @@ export default function CheckoutClient({
                               }))
                             }
                             disabled={busy}
+                            passportFailureCode={passportFailureCode}
                           />
                         ) : (
                           <fieldset

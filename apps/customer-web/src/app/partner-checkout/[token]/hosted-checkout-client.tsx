@@ -757,7 +757,18 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     step,
   ]);
 
-  const effectiveVerificationStatus = (session?.order.documents ?? []).some(
+  const passportFailureCode = session?.order.passportExtraction?.failureCode;
+  const hardPassportReplacementRequired = [
+    "PASSPORT_EXPIRED",
+    "PASSPORT_BIODATA_NOT_DETECTED",
+    "MRZ_NOT_READABLE",
+  ].includes(passportFailureCode ?? "");
+  const displayDocuments = (session?.order.documents ?? []).map((document) =>
+    hardPassportReplacementRequired && document.type === "PASSPORT"
+      ? { ...document, status: "REUPLOAD_REQUIRED" }
+      : document,
+  );
+  const effectiveVerificationStatus = displayDocuments.some(
     (document) => document.status === "REUPLOAD_REQUIRED",
   )
     ? "REUPLOAD_REQUIRED"
@@ -793,10 +804,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           "We couldn't automatically match some details with your uploaded passport. Please check the highlighted fields.",
         );
       } else {
-        const expiredPassport =
-          session?.order.passportExtraction?.failureCode ===
-          "PASSPORT_EXPIRED";
-        const rejected = (session?.order.documents ?? [])
+        const expiredPassport = passportFailureCode === "PASSPORT_EXPIRED";
+        const rejected = displayDocuments
           .filter((document) => document.status === "REUPLOAD_REQUIRED")
           .map((document) =>
             document.type === "PASSPORT"
@@ -819,7 +828,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       stepJump(2);
   }, [
     effectiveVerificationStatus,
-    session?.order.passportExtraction?.failureCode,
+    passportFailureCode,
     step,
   ]);
 
@@ -1189,7 +1198,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       {documentAttentionMessage && (
         <ErrorModal
           error={documentAttentionMessage}
-          title="Document check needs attention"
+          title={
+            passportFailureCode === "PASSPORT_EXPIRED"
+              ? "Passport expired"
+              : passportFailureCode === "PASSPORT_BIODATA_NOT_DETECTED"
+                ? "Passport document not recognized"
+                : passportFailureCode === "MRZ_NOT_READABLE"
+                  ? "Passport details could not be read"
+                  : "Document check needs attention"
+          }
           onClose={() => setDocumentAttentionMessage("")}
         />
       )}
@@ -1969,7 +1986,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                             )}
                             {effectiveVerificationStatus === "REUPLOAD_REQUIRED" ? (
                               <DocumentRecoveryFields
-                                documents={session?.order.documents}
+                                documents={displayDocuments}
                                 types={session!.order.requiredDocuments}
                                 files={files}
                                 onChange={(type, file) =>
@@ -1979,6 +1996,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                   }))
                                 }
                                 disabled={busy}
+                                passportFailureCode={passportFailureCode}
                               />
                             ) : (
                               <fieldset
