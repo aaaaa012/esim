@@ -188,6 +188,25 @@ describe("stored passport extraction comparison", () => {
     expect(result.status).toBe("PARTIAL");
   });
 
+  it("keeps missing nationality evidence in review without calling it a mismatch", () => {
+    const result = verifyStoredExtraction(
+      {
+        firstName: "ASHA",
+        surname: "SHRESTHA",
+        dateOfBirth: "1990-08-15",
+        passportNumber: "PA1234567",
+        passportExpiryDate: "2030-01-01",
+      },
+      traveler,
+      68,
+    );
+
+    expect(result.status).toBe("PARTIAL");
+    expect(result.matchedFields).not.toContain("nationality");
+    expect(result.mismatchedFields ?? []).not.toContain("nationality");
+    expect(result.reasonCode).toBeUndefined();
+  });
+
   it("never verifies when any mandatory identity field conflicts", () => {
     const evidence = {
       firstName: "ASHA",

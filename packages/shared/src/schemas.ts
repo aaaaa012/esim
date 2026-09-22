@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DocumentType, PaymentProvider } from "./contracts.js";
+import { isIsoAlpha2CountryCode } from "./countries.js";
 
 export const createOrderSchema = z.object({
   planId: z.string().uuid(),
@@ -19,9 +20,17 @@ export const travelerSchema = z.object({
       (value) => new Date(value) < new Date(),
       "Date of birth must be in the past",
     ),
-  nationality: z.string().length(2),
+  nationality: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .refine(isIsoAlpha2CountryCode, "Enter a valid two-letter country code"),
   city: z.string().trim().min(1).max(100),
-  countryOfResidence: z.string().length(2),
+  countryOfResidence: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .refine(isIsoAlpha2CountryCode, "Enter a valid two-letter country code"),
   employerOrBusinessName: z.string().trim().max(160).optional(),
   email: z.email(),
   mobile: z

@@ -431,8 +431,20 @@ export const mismatchedIdentityFields = (
   traveler: PassportComparisonTraveler,
   matchedFields: PassportField[],
 ) => {
+  const hasExtractedEvidence: Record<PassportField, boolean> = {
+    passportNumber: Boolean(canonicalPassportNumber(fields.passportNumber)),
+    surname: Boolean(canonicalName(fields.surname)),
+    givenNames: Boolean(canonicalName(fields.firstName)),
+    middleName: Boolean(canonicalName(fields.middleName)),
+    dateOfBirth: Boolean(canonicalDate(fields.dateOfBirth)),
+    passportExpiryDate: Boolean(canonicalDate(fields.passportExpiryDate)),
+    nationality: Boolean(canonicalNationality(fields.nationality)),
+  };
   const mismatches = requiredComparisonFields
-    .filter(({ passport }) => !matchedFields.includes(passport))
+    .filter(
+      ({ passport }) =>
+        hasExtractedEvidence[passport] && !matchedFields.includes(passport),
+    )
     .map(({ traveler: field }) => field);
   if (
     canonicalName(fields.middleName) &&
@@ -501,7 +513,7 @@ export const verifyStoredExtraction = (
   return {
     status:
       mandatoryMismatches.length === 0
-        ? "VERIFIED"
+        ? structuralVerdict
         : structuralVerdict === "VERIFIED"
           ? "PARTIAL"
           : structuralVerdict,

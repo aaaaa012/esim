@@ -19,7 +19,11 @@ import {
   Link2,
 } from "lucide-react";
 import { flagEmoji } from "../../country-picker";
-import { apiErrorMessage, PaymentProvider } from "@visa-compass/shared";
+import {
+  apiErrorMessage,
+  isIsoAlpha2CountryCode,
+  PaymentProvider,
+} from "@visa-compass/shared";
 import {
   DocumentProgress,
   SavedDocuments,
@@ -505,11 +509,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         new Date(traveler.passportExpiryDate) <= new Date()
       )
         nextErrors.passportExpiryDate = "Passport must not be expired";
-      if (traveler.nationality.trim().length !== 2)
-        nextErrors.nationality = "Use a two-letter country code, such as NP";
-      if (traveler.countryOfResidence.trim().length !== 2)
+      if (!isIsoAlpha2CountryCode(traveler.nationality))
+        nextErrors.nationality =
+          "Enter a valid two-letter country code, such as PL";
+      if (!isIsoAlpha2CountryCode(traveler.countryOfResidence))
         nextErrors.countryOfResidence =
-          "Use a two-letter country code, such as NP";
+          "Enter a valid two-letter country code, such as PL";
       setFieldErrors(nextErrors);
       const firstError = Object.keys(nextErrors)[0];
       if (firstError) {

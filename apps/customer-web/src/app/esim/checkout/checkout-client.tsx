@@ -1,5 +1,8 @@
 "use client";
-import { orderStatusLabel } from "@visa-compass/shared";
+import {
+  isIsoAlpha2CountryCode,
+  orderStatusLabel,
+} from "@visa-compass/shared";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { SignInButton, useAuth } from "@clerk/nextjs";
 
@@ -1484,11 +1487,12 @@ export default function CheckoutClient({
         new Date(traveler.passportExpiryDate) <= new Date()
       )
         nextErrors.passportExpiryDate = "Passport must not be expired";
-      if (traveler.nationality.trim().length !== 2)
-        nextErrors.nationality = "Use a two-letter country code, such as NP";
-      if (traveler.countryOfResidence.trim().length !== 2)
+      if (!isIsoAlpha2CountryCode(traveler.nationality))
+        nextErrors.nationality =
+          "Enter a valid two-letter country code, such as PL";
+      if (!isIsoAlpha2CountryCode(traveler.countryOfResidence))
         nextErrors.countryOfResidence =
-          "Use a two-letter country code, such as NP";
+          "Enter a valid two-letter country code, such as PL";
       setFieldErrors(nextErrors);
       const firstError = Object.keys(nextErrors)[0];
       if (firstError) {
