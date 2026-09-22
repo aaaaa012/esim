@@ -647,6 +647,7 @@ export default function CheckoutClient({
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
   const [verifyingPassport, setVerifyingPassport] = useState(false);
+  const passportVerificationInFlight = useRef(false);
   const [fonepayBankHint, setFonepayBankHint] = useState("");
   const [fonepaySocketReady, setFonepaySocketReady] = useState(false);
   const [lockedProvider, setLockedProvider] = useState<PaymentProvider | null>(
@@ -937,7 +938,7 @@ export default function CheckoutClient({
     setFieldErrors((current) => ({ ...current, [key]: undefined }));
   };
   const verifyPassport = async (): Promise<Order | null> => {
-    if (!order || verifyingPassport) return order;
+    if (!order || passportVerificationInFlight.current) return null;
     if (Date.now() < passportRetryNoBefore.current) {
       setDocumentError(
         "Please wait a minute before checking again. Your documents are saved.",
@@ -945,6 +946,7 @@ export default function CheckoutClient({
       return null;
     }
     setDocumentMessage("Checking your passport…");
+    passportVerificationInFlight.current = true;
     setVerifyingPassport(true);
     setError("");
     try {
@@ -1014,6 +1016,7 @@ export default function CheckoutClient({
       );
       return null;
     } finally {
+      passportVerificationInFlight.current = false;
       setVerifyingPassport(false);
       setDocumentMessage("");
     }

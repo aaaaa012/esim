@@ -239,6 +239,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [editingVerifiedDocuments, setEditingVerifiedDocuments] =
     useState(false);
   const [verification, setVerification] = useState<Verification | null>(null);
+  const verificationRequestInFlight = useRef(false);
   const previousVerificationStatus = useRef<string | undefined>(undefined);
   const [successMessage, setSuccessMessage] = useState("");
   const [documentAttentionMessage, setDocumentAttentionMessage] = useState("");
@@ -563,7 +564,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       }
     });
 
-  const runVerification = async (): Promise<boolean> => {
+  const runVerificationUnlocked = async (): Promise<boolean> => {
     setDocumentMessage("Checking your passport…");
     const result = await api<Verification>(
       `/partner-checkout/${token}/verify-passport`,
@@ -622,6 +623,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         : s,
     );
     return ok;
+  };
+
+  const runVerification = async (): Promise<boolean> => {
+    if (verificationRequestInFlight.current) return false;
+    verificationRequestInFlight.current = true;
+    try {
+      return await runVerificationUnlocked();
+    } finally {
+      verificationRequestInFlight.current = false;
+    }
   };
 
   const verifyPassport = () =>

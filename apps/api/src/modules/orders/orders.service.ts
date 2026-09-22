@@ -1198,6 +1198,21 @@ export class OrdersService implements OnModuleInit {
     };
   }
   async verifyPassport(id: string, ownerId: string | null) {
+    return this.runExclusive(`passport-verification:${id}`, async () => {
+      try {
+        return await this.verifyPassportUnlocked(id, ownerId);
+      } catch (error) {
+        if (!(error instanceof ConflictException)) throw error;
+        // Another API replica may have started the same idempotent check from
+        // the same order version. Return its durable result instead of turning
+        // a harmless race into a customer-visible 500.
+        await this.refreshOne(id, true);
+        return this.redact(this.get(id, ownerId ?? undefined));
+      }
+    });
+  }
+
+  private async verifyPassportUnlocked(id: string, ownerId: string | null) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
     if (order.purchaseType === "TOPUP")
