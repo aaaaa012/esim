@@ -1813,6 +1813,72 @@ it("routes a partial extraction with no readable name to manual review", async (
   expect(add).not.toHaveBeenCalled();
 });
 
+it("routes a partial extraction with missing nationality evidence to manual review", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "missing-ocr-nationality",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: customerTraveler(),
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "PARTIAL",
+          fields: {
+            firstName: "Jane",
+            surname: "Doe",
+            dateOfBirth: "1990-01-01",
+            passportNumber: "P1234567",
+            passportExpiryDate: "2030-01-01",
+          },
+          fieldsRequiringInput: ["nationality"],
+          passportAssetId: "passport-asset",
+          confidence: 68,
+          correctionAttempts: 0,
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "missing-ocr-nationality",
+    "customer-1",
+  );
+
+  expect(result.documentReviewStatus).toBe("MANUAL_REVIEW");
+  expect(result.passportVerification?.status).toBe("PARTIAL");
+  expect(result.passportVerification?.mismatchedFields).toBeUndefined();
+  expect(result.passportExtraction?.correctionAttempts).toBe(0);
+  expect(add).not.toHaveBeenCalled();
+});
+
 describe("OrdersService cancellation attribution", () => {
   it("records the acting staff on an operations cancellation and hides it from customers", async () => {
     const order = readyOrder({

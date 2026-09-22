@@ -665,14 +665,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             request: api,
             progress: setDocumentMessage,
           });
-          setSession((current) =>
-            current
-              ? {
+          setSession((current) => {
+            if (!current) return current;
+            const { passportExtraction: _staleExtraction, ...withoutExtraction } =
+              current.order;
+            return {
                   ...current,
                   order: {
-                    ...current.order,
                     ...(type === "PASSPORT"
-                      ? { documentReviewStatus: "NOT_STARTED" }
+                      ? withoutExtraction
+                      : current.order),
+                    ...(type === "PASSPORT"
+                      ? {
+                          documentReviewStatus: "NOT_STARTED",
+                        }
                       : {}),
                     documents: [
                       ...current.order.documents.filter(
@@ -681,9 +687,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       saved,
                     ],
                   },
-                }
-              : current,
-          );
+                };
+          });
           setFiles((current) => ({
             ...current,
             [type]: current[type] === file ? undefined : current[type],

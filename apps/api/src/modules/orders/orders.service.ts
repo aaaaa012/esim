@@ -1347,6 +1347,8 @@ export class OrdersService implements OnModuleInit {
       );
       const verified = result.status === "VERIFIED";
       const expired = result.failureCode === "PASSPORT_EXPIRED";
+      const hasIdentityConflict = Boolean(result.mismatchedFields?.length);
+      const incompleteEvidence = !verified && !expired && !hasIdentityConflict;
       const extractionHasName = Boolean(
         extraction.fields.firstName || extraction.fields.surname,
       );
@@ -1359,7 +1361,7 @@ export class OrdersService implements OnModuleInit {
         delete extraction.lastMismatchFingerprint;
         delete extraction.lastMismatchFields;
         delete extraction.confirmedMismatchFingerprint;
-      } else if (!expired && !repeatedMismatch) {
+      } else if (hasIdentityConflict && !repeatedMismatch) {
         extraction.correctionAttempts =
           (extraction.correctionAttempts ?? 0) + 1;
         extraction.lastMismatchFingerprint = fingerprint;
@@ -1374,7 +1376,10 @@ export class OrdersService implements OnModuleInit {
         ? "VERIFIED"
         : expired
           ? "REUPLOAD_REQUIRED"
-          : explicitlyConfirmed || !extractionHasName || correctionAttempts >= 3
+          : incompleteEvidence ||
+              explicitlyConfirmed ||
+              !extractionHasName ||
+              correctionAttempts >= 3
             ? "MANUAL_REVIEW"
             : "CORRECTION_REQUIRED";
       passport.status = verified

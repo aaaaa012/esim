@@ -1547,10 +1547,12 @@ export default function CheckoutClient({
               request: api,
               progress: setDocumentMessage,
             });
-            setOrder((current) =>
-              current
-                ? {
-                    ...current,
+            setOrder((current) => {
+              if (!current) return current;
+              const { passportExtraction: _staleExtraction, ...withoutExtraction } =
+                current;
+              return {
+                    ...(type === "PASSPORT" ? withoutExtraction : current),
                     ...(type === "PASSPORT"
                       ? {
                           documentReviewStatus: "NOT_STARTED" as const,
@@ -1563,9 +1565,8 @@ export default function CheckoutClient({
                       ),
                       saved,
                     ],
-                  }
-                : current,
-            );
+                  };
+            });
             setFiles((current) => ({
               ...current,
               [key]: current[key] === file ? undefined : current[key],
