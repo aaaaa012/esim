@@ -40,7 +40,7 @@ import {
   Smartphone,
   UserRound,
 } from "lucide-react";
-import { JourneyArtwork, JourneyTrustStrip } from "../../journey-chrome";
+import { JourneyArtwork } from "../../journey-chrome";
 import { flagEmoji } from "../../country-picker";
 import {
   DocumentProgress,
@@ -396,7 +396,7 @@ export default function CheckoutClient({
   // new-purchase compatibility form never flashes before effects run.
   const isTopUpIntent =
     Boolean((mobile && lookupToken) || targetEsimId) && !orderId;
-  const [step, setStep] = useState(() => (orderId || isTopUpIntent ? 4 : 1)),
+  const [step, setStep] = useState(() => (isTopUpIntent ? 4 : orderId ? 2 : 1)),
     [compatible, setCompatible] = useState(() => {
       try {
         return sessionStorage.getItem(consentKey) === "accepted";
@@ -453,6 +453,7 @@ export default function CheckoutClient({
     [payment, setPayment] = useState<Payment | null>(null),
     [uxResending, setUxResending] = useState(false);
   const [resumingOrder, setResumingOrder] = useState(Boolean(orderId));
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
   useEffect(() => {
     try {
       if (compatible && legalAccepted)
@@ -634,7 +635,13 @@ export default function CheckoutClient({
     return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
   }, [resumingOrder, step]);
   const summaryPlan = order?.plan ?? previewPlan;
+  const summaryPrice = order?.totalAmountNpr ?? summaryPlan?.sellingPriceNpr;
   const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
+  const manualNeedsTraveler =
+    order?.documentReviewStatus === "MANUAL_REVIEW" &&
+    !order.traveler &&
+    hasSavedDocument(order.documents, "PASSPORT") &&
+    hasSavedDocument(order.documents, "TICKET");
   const [provider, setProvider] = useState<PaymentProvider>(
       PaymentProvider.KHALTI,
     ),
@@ -744,7 +751,7 @@ export default function CheckoutClient({
         setBusy(false);
         setResumingOrder(false);
       });
-  }, [orderId, isLoaded, guestToken, recoveryReady]);
+  }, [orderId, isLoaded, guestToken, recoveryReady, restoreAttempt]);
   const VERIFY_DELAYS = [
     0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000,
   ];
@@ -1910,6 +1917,37 @@ export default function CheckoutClient({
         </div>
       </main>
     );
+  if (orderId && !order && !resumingOrder && recoveryReady)
+    return (
+      <main className="checkout-page">
+        <div className="checkout-recovery" role="alert">
+          <FileCheck2 aria-hidden="true" />
+          <h1>We couldn’t restore your order</h1>
+          <p>
+            Your uploaded documents have not been removed. Check your connection
+            and try again. If you opened a private recovery link, use that same
+            link to return to this order.
+          </p>
+          {error ? <p>{error}</p> : null}
+          <div>
+            <button
+              className="button"
+              type="button"
+              onClick={() => {
+                setError("");
+                setResumingOrder(true);
+                setRestoreAttempt((attempt) => attempt + 1);
+              }}
+            >
+              Try again
+            </button>
+            <Link className="button secondary" href="/destinations">
+              Browse plans
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
   return (
     <main
       className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}`}
@@ -2277,7 +2315,7 @@ export default function CheckoutClient({
                     <PassportCheck
                       result={order.passportVerification}
                       extracted={order.passportExtraction?.fields}
-                      failureCode={order.passportExtraction?.failureCode}
+                      failureCode={order?.passportExtraction?.failureCode}
                       replacementReason={order.timeline
                         ?.slice()
                         .reverse()
@@ -2311,9 +2349,11 @@ export default function CheckoutClient({
                   )}
                 <div
                   className="form-grid"
-                  hidden={["CORRECTION_REQUIRED", "MANUAL_REVIEW"].includes(
-                    order?.documentReviewStatus ?? "",
-                  )}
+                  hidden={
+                    order?.documentReviewStatus === "CORRECTION_REQUIRED" ||
+                    (order?.documentReviewStatus === "MANUAL_REVIEW" &&
+                      Boolean(order.traveler))
+                  }
                 >
                   <Field label="Title">
                     <select
@@ -2466,7 +2506,8 @@ export default function CheckoutClient({
                   <option value="JP">Japan</option>
                   <option value="KR">South Korea</option>
                 </datalist>
-                {order?.documentReviewStatus === "MANUAL_REVIEW" ? (
+                {order?.documentReviewStatus === "MANUAL_REVIEW" &&
+                order.traveler ? (
                   <ManualReviewTracking
                     traveler={traveler}
                     onBack={() => goBack()}
@@ -2547,6 +2588,8 @@ export default function CheckoutClient({
                     }
                     busy={busy || verifyingPassport}
                     message={documentMessage}
+                    needsTravelerDetails={manualNeedsTraveler}
+                    failureCode={order?.passportExtraction?.failureCode}
                   />
                 )}
                 {passportGatePassed(order) && !editingVerifiedDocuments ? (
@@ -2714,32 +2757,44 @@ export default function CheckoutClient({
                               "OCR_BACKGROUND",
                               "CORRECTION_REQUIRED",
                               "MANUAL_REVIEW",
-                            ].includes(order?.documentReviewStatus ?? "")) ||
+                            ].includes(order?.documentReviewStatus ?? "") &&
+                            !manualNeedsTraveler) ||
                           (!Object.values(files).some(Boolean) &&
                             order?.documentReviewStatus === "REUPLOAD_REQUIRED")
                         }
-                        onClick={() => void saveDocuments()}
+                        onClick={() => {
+                          if (
+                            manualNeedsTraveler &&
+                            !Object.values(files).some(Boolean)
+                          )
+                            advance(3);
+                          else void saveDocuments();
+                        }}
                       >
                         {busy
                           ? "Saving documents…"
                           : editingVerifiedDocuments
                             ? "Save changes"
-                            : !Object.values(files).some(Boolean) &&
-                                order?.documentReviewStatus === "MANUAL_REVIEW"
-                              ? "Awaiting approval"
+                            : manualNeedsTraveler &&
+                                !Object.values(files).some(Boolean)
+                              ? "Continue to traveller details"
                               : !Object.values(files).some(Boolean) &&
-                                  ["OCR_PENDING", "OCR_BACKGROUND"].includes(
-                                    order?.documentReviewStatus ?? "",
-                                  )
-                                ? "Verification in progress"
-                                : order?.documentReviewStatus ===
-                                    "REUPLOAD_REQUIRED"
-                                  ? files.passport
-                                    ? "Check new passport"
-                                    : Object.values(files).some(Boolean)
-                                      ? "Save document changes"
-                                      : "Choose a passport or change details"
-                                  : "Save documents"}
+                                  order?.documentReviewStatus ===
+                                    "MANUAL_REVIEW"
+                                ? "Awaiting approval"
+                                : !Object.values(files).some(Boolean) &&
+                                    ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+                                      order?.documentReviewStatus ?? "",
+                                    )
+                                  ? "Verification in progress"
+                                  : order?.documentReviewStatus ===
+                                      "REUPLOAD_REQUIRED"
+                                    ? files.passport
+                                      ? "Check new passport"
+                                      : Object.values(files).some(Boolean)
+                                        ? "Save document changes"
+                                        : "Choose a passport or change details"
+                                    : "Save documents"}
                       </button>
                     </div>
                   </>
@@ -3229,42 +3284,38 @@ export default function CheckoutClient({
               </span>
               <span className="summary-plan-info">
                 <span className="summary-label">Order summary</span>
-                <b>{summaryPlan?.name ?? "Selected eSIM plan"}</b>
+                <b>{summaryPlan?.name ?? "Loading selected plan"}</b>
                 <small>
                   {summaryPlan
                     ? `${summaryPlan.countryCode} · ${formatPlanDataText(summaryPlan.dataAllowance)}`
-                    : "Loaded securely"}
+                    : "Plan details loading"}
                 </small>
               </span>
             </div>
             <div>
               <small>Destination</small>
-              <b>{summaryPlan?.countryCode ?? "Not selected"}</b>
+              <b>{summaryPlan?.countryCode ?? "Loading destination"}</b>
             </div>
             <div>
               <small>Data & validity</small>
               <b>
                 {summaryPlan
                   ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
-                  : "Loaded securely"}
+                  : "Plan details loading"}
               </b>
             </div>
             <div className="summary-total">
               <small>Total</small>
               <b>
-                NPR{" "}
-                {(
-                  order?.totalAmountNpr ??
-                  summaryPlan?.sellingPriceNpr ??
-                  0
-                ).toLocaleString()}
+                {summaryPrice === undefined
+                  ? "Loading price"
+                  : "NPR " + summaryPrice.toLocaleString()}
               </b>
             </div>
             <p>
               <LockKeyhole size={14} /> Price is frozen when your order is
               created.
             </p>
-            {!isTopUp ? <JourneyTrustStrip compact /> : null}
           </aside>
         </div>
       </div>
@@ -3394,7 +3445,6 @@ function InitialOrderConfirmation({
           </button>
         ) : null}
       </div>
-      <JourneyTrustStrip compact />
     </section>
   );
 }

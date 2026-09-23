@@ -1,11 +1,7 @@
 import { Suspense } from "react";
 import { Globe2 } from "lucide-react";
 import CatalogPlans from "../catalog-plans";
-import {
-  JourneyArtwork,
-  JourneySkyline,
-  JourneyTrustStrip,
-} from "../journey-chrome";
+import { JourneyArtwork, JourneySkyline } from "../journey-chrome";
 import "../home.css";
 
 export default function DestinationsPage() {
@@ -31,7 +27,6 @@ export default function DestinationsPage() {
           >
             <CatalogPlans />
           </Suspense>
-          <JourneyTrustStrip compact />
         </div>
         <JourneySkyline />
       </section>

@@ -102,9 +102,7 @@ describe("recharge checkout", () => {
     ).toHaveProperty("src", "data:image/png;base64,restored");
     expect(screen.queryByText("Payment confirmation pending")).toBeNull();
     expect(screen.queryByText("Checking Fonepay payment status")).toBeNull();
-    expect(
-      screen.queryByText(/before starting another one/i),
-    ).toBeNull();
+    expect(screen.queryByText(/before starting another one/i)).toBeNull();
     expect(screen.getByText("Pay within")).toBeDefined();
     expect(
       mocks.authFetch.mock.calls.some(
@@ -139,32 +137,34 @@ describe("recharge checkout", () => {
       },
       paymentRetry: { canRetry: false, canChangeProvider: false },
     };
-    mocks.authFetch.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (url.endsWith("/payments/providers"))
-        return ok({ providers: ["FONEPAY"] });
-      if (
-        url.endsWith("/recharges/pending-recharge/payment/initiate") &&
-        init?.method === "POST"
-      )
-        return ok({
-          reference: "FONEPAY-REFERENCE",
-          redirectUrl: "",
-          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-          qrDataUrl: "data:image/png;base64,restored",
-        });
-      if (url.endsWith("/payment/verify"))
-        return {
-          ok: false,
-          status: 409,
-          json: async () => ({
-            error: {
-              code: "PAYMENT_RETRY_NOT_SAFE",
-              message: "A payment is still being confirmed for this order.",
-            },
-          }),
-        };
-      return ok(pending);
-    });
+    mocks.authFetch.mockImplementation(
+      async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/payments/providers"))
+          return ok({ providers: ["FONEPAY"] });
+        if (
+          url.endsWith("/recharges/pending-recharge/payment/initiate") &&
+          init?.method === "POST"
+        )
+          return ok({
+            reference: "FONEPAY-REFERENCE",
+            redirectUrl: "",
+            expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+            qrDataUrl: "data:image/png;base64,restored",
+          });
+        if (url.endsWith("/payment/verify"))
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              error: {
+                code: "PAYMENT_RETRY_NOT_SAFE",
+                message: "A payment is still being confirmed for this order.",
+              },
+            }),
+          };
+        return ok(pending);
+      },
+    );
 
     render(<Checkout planId="plan" orderId="pending-recharge" />);
     await screen.findByRole("heading", { name: "Complete your payment" });
@@ -661,6 +661,100 @@ describe("first-purchase document verification", () => {
       await screen.findByRole("status", { name: "Restoring your order" }),
     ).toBeDefined();
     expect(screen.queryByText(/verifying your khalti payment/i)).toBeNull();
+  });
+
+  it("shows a retry screen instead of a zero-price payment step when an order cannot be restored", async () => {
+    mocks.signedIn = true;
+    let orderRequests = 0;
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/customer/orders/first")) {
+        orderRequests += 1;
+        if (orderRequests === 1)
+          return {
+            ok: false,
+            status: 503,
+            json: async () => ({
+              error: {
+                code: "SERVICE_UNAVAILABLE",
+                message: "Temporarily unavailable",
+              },
+            }),
+          };
+        return ok({
+          id: "first",
+          orderNumber: "VC-FIRST",
+          status: "DRAFT",
+          purchaseType: "INITIAL_PURCHASE",
+          plan,
+          totalAmountNpr: 100,
+          documents: [],
+          documentReviewStatus: "NOT_STARTED",
+        });
+      }
+      return ok({});
+    });
+
+    render(<Checkout planId="" orderId="first" />);
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "We couldn’t restore your order",
+      }),
+    ).toBeDefined();
+    expect(screen.queryByText("NPR 0")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(
+      await screen.findByRole("heading", { name: "Travel documents" }),
+    ).toBeDefined();
+    expect(orderRequests).toBe(2);
+  });
+
+  it("allows first-time traveller entry while uploaded documents await manual review", async () => {
+    mocks.signedIn = true;
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      return ok({
+        id: "first",
+        orderNumber: "VC-FIRST",
+        status: "DRAFT",
+        purchaseType: "INITIAL_PURCHASE",
+        plan,
+        totalAmountNpr: 100,
+        documentReviewStatus: "MANUAL_REVIEW",
+        passportExtraction: { status: "MANUAL_ENTRY_REQUIRED", fields: {} },
+        documents: [
+          {
+            type: "PASSPORT",
+            status: "PENDING",
+            fileName: "passport.jpg",
+            uploadVerified: true,
+          },
+          {
+            type: "TICKET",
+            status: "PENDING",
+            fileName: "ticket.jpg",
+            uploadVerified: true,
+          },
+        ],
+      });
+    });
+
+    render(<Checkout planId="" orderId="first" />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Traveller information" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Save and continue" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText(
+        "These identity details are read-only while the review is open.",
+      ),
+    ).toBeNull();
   });
 
   it("restores accepted checkout consent within the active tab", async () => {

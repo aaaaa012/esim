@@ -14,11 +14,7 @@ import {
   Smartphone,
 } from "lucide-react";
 import "./help.css";
-import {
-  JourneyArtwork,
-  JourneySkyline,
-  JourneyTrustStrip,
-} from "../journey-chrome";
+import { JourneyArtwork, JourneySkyline } from "../journey-chrome";
 
 export const metadata: Metadata = {
   title: "Help and support | Visa Compass eSIM",
@@ -178,8 +174,6 @@ export default function HelpPage() {
             </article>
           </div>
         </section>
-
-        <JourneyTrustStrip />
 
         <section
           className="help-contact"

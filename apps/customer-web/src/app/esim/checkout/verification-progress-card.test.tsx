@@ -34,6 +34,21 @@ it("does not show automated verification for manual review or re-upload requests
     screen.getByText("One or more documents need replacement"),
   ).toBeDefined();
 });
+it("asks for traveller details when review starts before any identity was saved", () => {
+  render(
+    <DocumentProgress
+      status="MANUAL_REVIEW"
+      needsTravelerDetails
+      failureCode="MRZ_REVIEW_REQUIRED"
+    />,
+  );
+  expect(
+    screen.getByText("Documents saved — add traveller details"),
+  ).toBeDefined();
+  expect(
+    screen.getByText(/could not reliably read its code lines/i),
+  ).toBeDefined();
+});
 it("uses accurate labels for each accepted review outcome", () => {
   const view = render(<DocumentProgress status="VERIFIED" />);
   expect(screen.getByText("Passport verified")).toBeDefined();

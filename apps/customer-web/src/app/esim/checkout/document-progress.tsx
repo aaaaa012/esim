@@ -14,10 +14,14 @@ export function DocumentProgress({
   status,
   message,
   busy = false,
+  needsTravelerDetails = false,
+  failureCode,
 }: {
   status?: string | undefined;
   message?: string;
   busy?: boolean;
+  needsTravelerDetails?: boolean;
+  failureCode?: string | undefined;
 }) {
   const previousStatus = useRef(status);
   const successTitle = useRef<HTMLElement>(null);
@@ -33,9 +37,7 @@ export function DocumentProgress({
     "PARTIAL",
     "CORRECTION_REQUIRED",
     "REUPLOAD_REQUIRED",
-  ].includes(
-    status ?? "",
-  );
+  ].includes(status ?? "");
   useEffect(() => {
     const becameVerified =
       verified &&
@@ -94,7 +96,9 @@ export function DocumentProgress({
             : verified
               ? verifiedTitle
               : manual
-                ? "Documents awaiting review"
+                ? needsTravelerDetails
+                  ? "Documents saved — add traveller details"
+                  : "Documents awaiting review"
                 : pending
                   ? "Checking your passport"
                   : replacementRequired
@@ -112,7 +116,11 @@ export function DocumentProgress({
               : verified
                 ? "Your required documents are ready. Continue to payment when you’re ready."
                 : manual
-                  ? "Your documents are saved and awaiting review. This page updates automatically. Payment becomes available after approval."
+                  ? needsTravelerDetails
+                    ? failureCode === "MRZ_REVIEW_REQUIRED"
+                      ? "Your files are saved. We recognized the passport, but could not reliably read its code lines. Add traveller details while our team checks it; payment opens after approval."
+                      : "Your files are saved. Add traveller details while our team checks the passport; payment opens after approval."
+                    : "Your documents are saved and awaiting review. This page updates automatically. Payment becomes available after approval."
                   : pending
                     ? "Your documents are saved. We’re checking them against your traveller details. This page updates automatically."
                     : replacementRequired

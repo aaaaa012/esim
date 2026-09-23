@@ -10,11 +10,7 @@ import {
   Smartphone,
   Wifi,
 } from "lucide-react";
-import {
-  JourneyArtwork,
-  JourneySkyline,
-  JourneyTrustStrip,
-} from "../../journey-chrome";
+import { JourneyArtwork, JourneySkyline } from "../../journey-chrome";
 import "../help.css";
 import "./install.css";
 
@@ -104,7 +100,6 @@ export default function InstallGuidePage() {
             </a>
           </div>
         </aside>
-        <JourneyTrustStrip compact />
       </div>
       <JourneySkyline />
     </main>

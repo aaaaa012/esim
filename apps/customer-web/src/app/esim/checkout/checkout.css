@@ -2498,12 +2498,6 @@
   .initial-purchase-checkout .order-summary {
     padding: 20px;
   }
-  .initial-purchase-checkout .order-summary .journey-trust {
-    margin-top: 16px;
-  }
-  .initial-purchase-checkout .order-summary .journey-trust > div {
-    padding-inline: 6px;
-  }
 }
 
 @media (max-width: 540px) {

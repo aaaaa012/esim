@@ -3,7 +3,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   CheckCircle2,
-  CreditCard,
   Headset,
   Plane,
   QrCode,
@@ -197,38 +196,6 @@ export default async function Home({
                     <small>No hidden fees</small>
                   </span>
                 </div>
-              </div>
-            </div>
-            <div
-              className="shell hero-confidence"
-              aria-label="Why travellers choose Visa Compass"
-            >
-              <div>
-                <span>
-                  <CreditCard size={22} aria-hidden="true" />
-                </span>
-                <p>
-                  <b>Secure NPR payments</b>
-                  <small>Khalti and Fonepay</small>
-                </p>
-              </div>
-              <div>
-                <span>
-                  <Wifi size={22} aria-hidden="true" />
-                </span>
-                <p>
-                  <b>Reliable global coverage</b>
-                  <small>Powered by Ubigi</small>
-                </p>
-              </div>
-              <div>
-                <span>
-                  <Headset size={22} aria-hidden="true" />
-                </span>
-                <p>
-                  <b>Local support from Nepal</b>
-                  <small>Here to help</small>
-                </p>
               </div>
             </div>
             <div className="hero-skyline" aria-hidden="true">

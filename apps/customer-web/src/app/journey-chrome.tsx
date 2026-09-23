@@ -1,5 +1,4 @@
 import Image from "next/image";
-import { CreditCard, Headset, Wifi } from "lucide-react";
 import heroLight from "../../../../visa_compass_ui_assets/01_hero_light.webp";
 import heroDark from "../../../../visa_compass_ui_assets/02_hero_dark.webp";
 import skylineLight from "../../../../visa_compass_ui_assets/03_bottom_skyline_light.png";
@@ -26,43 +25,6 @@ export function JourneyArtwork({ className = "" }: { className?: string }) {
         priority
         sizes="(max-width: 880px) 100vw, 1px"
       />
-    </div>
-  );
-}
-
-export function JourneyTrustStrip({ compact = false }: { compact?: boolean }) {
-  return (
-    <div
-      className={`journey-trust${compact ? " compact" : ""}`}
-      aria-label="Why travellers choose Visa Compass"
-    >
-      <div>
-        <span>
-          <CreditCard aria-hidden="true" />
-        </span>
-        <p>
-          <b>Secure NPR payments</b>
-          <small>Khalti and Fonepay</small>
-        </p>
-      </div>
-      <div>
-        <span>
-          <Wifi aria-hidden="true" />
-        </span>
-        <p>
-          <b>Reliable global coverage</b>
-          <small>Powered by Ubigi</small>
-        </p>
-      </div>
-      <div>
-        <span>
-          <Headset aria-hidden="true" />
-        </span>
-        <p>
-          <b>Local support from Nepal</b>
-          <small>Here to help</small>
-        </p>
-      </div>
     </div>
   );
 }
