@@ -703,7 +703,7 @@ export default function CheckoutClient({
         if (value.traveler) setTraveler({ ...initial, ...value.traveler });
         awaitingVerificationAdvance.current =
           Boolean(value.traveler) &&
-          ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+          ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
             value.documentReviewStatus ?? "",
           );
         const resumeStep = checkoutResumeStep(value);
@@ -1040,9 +1040,8 @@ export default function CheckoutClient({
       target.documentReviewStatus ?? "",
     );
   const passportFailureCode = order?.passportExtraction?.failureCode;
-  const hardPassportReplacementRequired = passportRequiresReplacement(
-    passportFailureCode,
-  );
+  const hardPassportReplacementRequired =
+    passportRequiresReplacement(passportFailureCode);
   const displayDocuments = (order?.documents ?? []).map((document) =>
     hardPassportReplacementRequired && document.type === "PASSPORT"
       ? { ...document, status: "REUPLOAD_REQUIRED" }
@@ -1099,11 +1098,7 @@ export default function CheckoutClient({
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
       jumpTo(2);
-  }, [
-    effectiveDocumentReviewStatus,
-    passportFailureCode,
-    step,
-  ]);
+  }, [effectiveDocumentReviewStatus, passportFailureCode, step]);
   const technicalOcrNoticeShown = useRef<string | null>(null);
   useEffect(() => {
     if (
@@ -1948,6 +1943,32 @@ export default function CheckoutClient({
         </div>
       </main>
     );
+  if (
+    !isTopUp &&
+    !resumingOrder &&
+    order?.documentReviewStatus === "MANUAL_REVIEW" &&
+    order.traveler
+  )
+    return (
+      <main className="checkout-page manual-review-page">
+        <div className="checkout-shell">
+          <div className="manual-review-page-top">
+            <Link href="/">Visa Compass</Link>
+            <span>Order #{order.orderNumber}</span>
+          </div>
+          <ManualReviewTracking
+            traveler={traveler}
+            orderNumber={order.orderNumber}
+            failureCode={order.passportExtraction?.failureCode}
+          />
+          {documentError ? (
+            <p className="manual-review-refresh-error" role="status">
+              {documentError}
+            </p>
+          ) : null}
+        </div>
+      </main>
+    );
   return (
     <main
       className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}`}
@@ -2506,14 +2527,8 @@ export default function CheckoutClient({
                   <option value="JP">Japan</option>
                   <option value="KR">South Korea</option>
                 </datalist>
-                {order?.documentReviewStatus === "MANUAL_REVIEW" &&
-                order.traveler ? (
-                  <ManualReviewTracking
-                    traveler={traveler}
-                    onBack={() => goBack()}
-                  />
-                ) : order?.documentReviewStatus ===
-                  "CORRECTION_REQUIRED" ? null : (
+                {order?.documentReviewStatus ===
+                "CORRECTION_REQUIRED" ? null : (
                   <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
                 )}
                 {guest && order && recovery ? (

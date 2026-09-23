@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -755,6 +756,117 @@ describe("first-purchase document verification", () => {
         "These identity details are read-only while the review is open.",
       ),
     ).toBeNull();
+  });
+
+  it("restores a submitted manual review as its own screen instead of the traveller form", async () => {
+    mocks.signedIn = true;
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      return ok({
+        id: "review-order",
+        orderNumber: "VC-REVIEW",
+        status: "DRAFT",
+        purchaseType: "INITIAL_PURCHASE",
+        plan,
+        totalAmountNpr: 100,
+        documentReviewStatus: "MANUAL_REVIEW",
+        passportExtraction: {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: {},
+          failureCode: "MRZ_REVIEW_REQUIRED",
+        },
+        traveler: {
+          firstName: "Jane",
+          middleName: "",
+          surname: "Doe",
+          dateOfBirth: "1990-01-01",
+          passportNumber: "P1234567",
+          passportExpiryDate: "2030-01-01",
+          nationality: "NP",
+        },
+        documents: [
+          { type: "PASSPORT", status: "PENDING", uploadVerified: true },
+          { type: "TICKET", status: "PENDING", uploadVerified: true },
+        ],
+      });
+    });
+
+    render(<Checkout planId="" orderId="review-order" />);
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Your documents are awaiting approval",
+      }),
+    ).toBeDefined();
+    expect(screen.getByText("Payment after approval")).toBeDefined();
+    expect(
+      screen.queryByRole("heading", { name: "Traveller information" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Awaiting approval" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: /report an error/i }),
+    ).toBeDefined();
+  });
+
+  it("moves from the dedicated review screen to payment after approval arrives", async () => {
+    mocks.signedIn = true;
+    const manualOrder = {
+      id: "review-order",
+      orderNumber: "VC-REVIEW",
+      status: "DRAFT",
+      purchaseType: "INITIAL_PURCHASE",
+      plan,
+      totalAmountNpr: 100,
+      documentReviewStatus: "MANUAL_REVIEW",
+      passportVerification: { status: "NOT_READY" },
+      traveler: {
+        firstName: "Jane",
+        middleName: "",
+        surname: "Doe",
+        dateOfBirth: "1990-01-01",
+        passportNumber: "P1234567",
+        passportExpiryDate: "2030-01-01",
+        nationality: "NP",
+      },
+      documents: [
+        { type: "PASSPORT", status: "PENDING", uploadVerified: true },
+        { type: "TICKET", status: "PENDING", uploadVerified: true },
+      ],
+    };
+    let resolveReview: ((value: ReturnType<typeof ok>) => void) | undefined;
+    let orderRequests = 0;
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      orderRequests += 1;
+      if (orderRequests === 1) return ok(manualOrder);
+      return new Promise<ReturnType<typeof ok>>((resolve) => {
+        resolveReview = resolve;
+      });
+    });
+
+    render(<Checkout planId="" orderId="review-order" />);
+    expect(
+      await screen.findByRole("heading", {
+        name: "Your documents are awaiting approval",
+      }),
+    ).toBeDefined();
+    await waitFor(() => expect(resolveReview).toBeDefined());
+    await act(async () => {
+      resolveReview!(
+        ok({
+          ...manualOrder,
+          documentReviewStatus: "MANUALLY_APPROVED",
+          passportVerification: { status: "VERIFIED" },
+        }),
+      );
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Choose payment method" }),
+    ).toBeDefined();
   });
 
   it("restores accepted checkout consent within the active tab", async () => {

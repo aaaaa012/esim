@@ -3162,31 +3162,134 @@
 }
 .manual-review-tracking {
   display: grid;
-  gap: 18px;
-  margin-top: 18px;
-  padding: 20px;
-  border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border));
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--primary-soft) 42%, var(--surface));
+  gap: 20px;
+  width: min(100%, 680px);
+  margin: 0 auto;
+  padding: clamp(24px, 5vw, 42px);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: 0 22px 64px -40px rgba(12, 40, 58, 0.38);
 }
-.manual-review-heading {
+.manual-review-page {
+  min-height: calc(100vh - 150px);
+}
+.manual-review-page .checkout-shell {
+  position: relative;
+  z-index: 1;
+}
+.manual-review-page-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(100%, 680px);
+  margin: 0 auto 24px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+.manual-review-page-top a {
+  color: var(--primary);
+}
+.manual-review-refresh-error {
+  width: min(100%, 680px);
+  margin: 16px auto 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+.manual-review-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: start;
+  padding: 9px 12px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.manual-review-tracking h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(28px, 5vw, 40px);
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+}
+.manual-review-lead,
+.manual-review-order {
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+.manual-review-order {
+  font-size: 13px;
+  font-weight: 700;
+}
+.manual-review-timeline {
+  display: grid;
+  gap: 0;
+  margin: 2px 0;
+  padding: 0;
+  list-style: none;
+}
+.manual-review-timeline li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 0 0 13px;
+  border-left: 2px solid var(--border);
+  color: var(--text-3);
+  font-size: 14px;
+  font-weight: 700;
+}
+.manual-review-timeline li:first-child {
+  border-left-color: var(--primary);
+}
+.manual-review-timeline li.current {
+  border-left-color: var(--primary);
+  color: var(--text);
+}
+.manual-review-timeline li.complete svg,
+.manual-review-timeline li.current svg {
+  color: var(--primary);
+}
+.manual-review-explanation {
   display: flex;
   align-items: flex-start;
   gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--primary-soft);
 }
-.manual-review-heading > svg {
+.manual-review-explanation svg {
   flex: 0 0 auto;
   color: var(--primary);
 }
-.manual-review-heading h3,
-.manual-review-heading p {
+.manual-review-explanation p {
   margin: 0;
-}
-.manual-review-heading p {
-  max-width: 68ch;
-  margin-top: 5px;
   color: var(--text-2);
+  font-size: 14px;
   line-height: 1.55;
+}
+.manual-review-submission {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.manual-review-submission summary {
+  padding: 16px;
+  color: var(--text);
+  font-weight: 750;
+  cursor: pointer;
+}
+.manual-review-submission summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 .manual-review-details {
   display: grid;
@@ -3194,8 +3297,7 @@
   gap: 1px;
   overflow: hidden;
   margin: 0;
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border-top: 1px solid var(--border);
   background: var(--border);
 }
 .manual-review-details > div {
@@ -3212,15 +3314,26 @@
   color: var(--text);
   font-weight: 750;
 }
-.manual-review-lock {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.manual-review-help {
+  display: grid;
+  gap: 12px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.manual-review-help h2,
+.manual-review-help p {
   margin: 0;
+}
+.manual-review-help h2 {
+  font-size: 17px;
+}
+.manual-review-help p {
+  margin-top: 5px;
   color: var(--text-2);
   font-size: 13px;
+  line-height: 1.5;
 }
-.manual-review-tracking > .button {
+.manual-review-help .button {
   justify-self: start;
 }
 
@@ -3237,6 +3350,12 @@
   }
   .manual-review-details {
     grid-template-columns: 1fr;
+  }
+  .manual-review-page {
+    padding: 28px 16px 88px;
+  }
+  .manual-review-help .button {
+    width: 100%;
   }
   .passport-mismatch-actions .button {
     width: 100%;
