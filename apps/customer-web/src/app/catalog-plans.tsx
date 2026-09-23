@@ -357,13 +357,15 @@ export default function CatalogPlans() {
           >
             {visible.map((plan) => (
               <article className="card catalog-plan-card" key={plan.id}>
-                {plan.popular ? (
-                  <span className="badge">Most popular</span>
-                ) : null}
-                <div className="catalog-plan-main">
+                <div className="catalog-plan-topline">
                   <span className="catalog-plan-icon">
                     <Signal aria-hidden="true" />
                   </span>
+                  {plan.popular ? (
+                    <span className="badge">Most popular</span>
+                  ) : null}
+                </div>
+                <div className="catalog-plan-main">
                   <div>
                     <h3>{plan.name}</h3>
                     <p>
@@ -372,7 +374,6 @@ export default function CatalogPlans() {
                       {plan.validityDays === 1 ? "day" : "days"}
                     </p>
                   </div>
-                  <b>{npr(plan.sellingPriceNpr)}</b>
                 </div>
                 <div className="catalog-plan-facts">
                   <span>
@@ -393,6 +394,10 @@ export default function CatalogPlans() {
                       {plan.validityDays === 1 ? "day" : "days"}
                     </b>
                   </span>
+                </div>
+                <div className="catalog-plan-price">
+                  <span>Price</span>
+                  <strong>{npr(plan.sellingPriceNpr)}</strong>
                 </div>
                 <Link
                   className="button catalog-plan-select"

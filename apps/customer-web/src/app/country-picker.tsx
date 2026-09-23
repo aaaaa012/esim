@@ -387,6 +387,7 @@ export default function CountryPicker({
   }, [active]);
 
   const select = (code: string) => {
+    inputRef.current?.blur();
     onChange(code);
     setOpen(false);
   };

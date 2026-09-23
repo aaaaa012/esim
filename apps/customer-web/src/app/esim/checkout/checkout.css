@@ -2229,10 +2229,10 @@
   }
   .date-picker-popover {
     position: fixed;
-    inset: auto 12px 12px;
+    inset: max(12px, env(safe-area-inset-top)) 12px auto;
     width: auto;
     max-width: none;
-    max-height: calc(100dvh - 24px);
+    max-height: min(72dvh, 460px);
     overflow-y: auto;
     border-radius: 18px;
   }
