@@ -159,6 +159,12 @@ export class OrdersController {
   ) {
     return this.orders.verifyPassport(id, req.user!.id);
   }
+  @Post(":id/confirm-passport-details") confirmPassportDetails(
+    @Param("id") id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.orders.confirmPassportDetails(id, req.user!.id);
+  }
   @Patch(":id/cancel") cancel(
     @Param("id") id: string,
     @Body() body: { reason?: string },

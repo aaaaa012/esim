@@ -1213,6 +1213,37 @@ export class OrdersService implements OnModuleInit {
       fileName: document.fileName,
     };
   }
+  async confirmPassportDetails(id: string, ownerId: string | null) {
+    return this.runExclusive(`passport-verification:${id}`, async () => {
+      await this.refreshOne(id, true);
+      const order = this.get(id, ownerId ?? undefined);
+      if (order.status !== OrderStatus.DRAFT)
+        throw new BadRequestException("Submitted order is immutable");
+      if (order.documentReviewStatus !== "CORRECTION_REQUIRED")
+        throw new ConflictException(
+          "Passport details are not awaiting customer confirmation",
+        );
+      if (!order.traveler || !order.passportExtraction)
+        throw new ConflictException("Passport comparison is unavailable");
+      const fingerprint = this.travelerIdentityFingerprint(order.traveler);
+      if (order.passportExtraction.lastMismatchFingerprint !== fingerprint)
+        throw new ConflictException(
+          "Traveller details changed; save them before confirming",
+        );
+
+      order.passportExtraction.confirmedMismatchFingerprint = fingerprint;
+      order.documentReviewStatus = "NOT_STARTED";
+      delete order.documentReviewStartedAt;
+      delete order.documentCheckoutReleaseAt;
+      const passport = order.documents.find(
+        (document) => document.type === DocumentType.PASSPORT,
+      );
+      if (passport) passport.status = DocumentStatus.PENDING;
+      await this.persistence.save(order);
+
+      return this.verifyPassportUnlocked(id, ownerId);
+    });
+  }
   async verifyPassport(id: string, ownerId: string | null) {
     return this.runExclusive(`passport-verification:${id}`, async () => {
       try {

@@ -1,8 +1,5 @@
 "use client";
-import {
-  isIsoAlpha2CountryCode,
-  orderStatusLabel,
-} from "@visa-compass/shared";
+import { isIsoAlpha2CountryCode, orderStatusLabel } from "@visa-compass/shared";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { SignInButton, useAuth } from "@clerk/nextjs";
 
@@ -46,6 +43,7 @@ import {
   hasUploadedDocument,
 } from "./document-progress";
 import { createDocumentUploader } from "./document-upload";
+import ManualReviewTracking from "./manual-review-tracking";
 import { useDocumentRefresh } from "./use-document-refresh";
 import { DocumentFileField as FileField } from "./document-file-field";
 import { DocumentRecoveryFields } from "./document-recovery";
@@ -111,6 +109,7 @@ type Order = {
         | "dateOfBirth"
         | "passportNumber"
         | "passportExpiryDate"
+        | "nationality"
       >
     >;
     fieldsRequiringInput?: string[];
@@ -126,6 +125,7 @@ type Order = {
     | "REUPLOAD_REQUIRED"
     | "MANUALLY_APPROVED"
     | "SKIPPED";
+  timeline?: { reason?: string }[];
   refundStatus?: string;
   provisioningFailure?: { code: string; message: string };
   paymentRetry?: {
@@ -146,9 +146,9 @@ export const canEnterTravelerAfterExtraction = (
   ].includes(target.passportExtraction?.failureCode ?? "") &&
   Boolean(
     target.passportExtraction &&
-      ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
-        target.passportExtraction.status,
-      ),
+    ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+      target.passportExtraction.status,
+    ),
   );
 
 type Payment = {
@@ -1025,7 +1025,8 @@ export default function CheckoutClient({
   const [documentError, setDocumentError] = useState("");
   const documentFailureMessage = (cause: unknown) => {
     const message = cause instanceof Error ? cause.message : "";
-    return message === "Failed to fetch" || /network request failed/i.test(message)
+    return message === "Failed to fetch" ||
+      /network request failed/i.test(message)
       ? "We couldn't reach the verification service. Your documents are securely saved. Check your connection and try again."
       : message || "Could not complete the document check. Try again.";
   };
@@ -1098,11 +1099,7 @@ export default function CheckoutClient({
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
       jumpTo(2);
-  }, [
-    effectiveDocumentReviewStatus,
-    passportFailureCode,
-    step,
-  ]);
+  }, [effectiveDocumentReviewStatus, passportFailureCode, step]);
   useEffect(() => {
     if (
       step === 3 &&
@@ -1532,6 +1529,17 @@ export default function CheckoutClient({
         advance(4);
       }
     });
+  const confirmPassportDetails = () =>
+    run(async () => {
+      if (!order) return;
+      const updated = await api<Order>(
+        `/customer/orders/${order.id}/confirm-passport-details`,
+        { method: "POST", body: "{}" },
+      );
+      setOrder(updated);
+      setFieldErrors({});
+      if (passportGatePassed(updated)) advance(4);
+    });
   const saveDocuments = () =>
     run(async () => {
       setDocumentError("");
@@ -1564,23 +1572,25 @@ export default function CheckoutClient({
             });
             setOrder((current) => {
               if (!current) return current;
-              const { passportExtraction: _staleExtraction, ...withoutExtraction } =
-                current;
+              const {
+                passportExtraction: _staleExtraction,
+                ...withoutExtraction
+              } = current;
               return {
-                    ...(type === "PASSPORT" ? withoutExtraction : current),
-                    ...(type === "PASSPORT"
-                      ? {
-                          documentReviewStatus: "NOT_STARTED" as const,
-                          passportVerification: { status: "NOT_STARTED" },
-                        }
-                      : {}),
-                    documents: [
-                      ...(current.documents ?? []).filter(
-                        (doc) => doc.type !== type,
-                      ),
-                      saved,
-                    ],
-                  };
+                ...(type === "PASSPORT" ? withoutExtraction : current),
+                ...(type === "PASSPORT"
+                  ? {
+                      documentReviewStatus: "NOT_STARTED" as const,
+                      passportVerification: { status: "NOT_STARTED" },
+                    }
+                  : {}),
+                documents: [
+                  ...(current.documents ?? []).filter(
+                    (doc) => doc.type !== type,
+                  ),
+                  saved,
+                ],
+              };
             });
             setFiles((current) => ({
               ...current,
@@ -1592,10 +1602,7 @@ export default function CheckoutClient({
         // Confirmation is durable. Start the idempotent verification command
         // directly instead of making OCR depend on a redundant order refresh.
         const extractionOrder = await verifyPassport();
-        if (
-          extractionOrder &&
-          canEnterTravelerAfterExtraction(extractionOrder)
-        )
+        if (extractionOrder && canEnterTravelerAfterExtraction(extractionOrder))
           advance(3);
       } catch (cause) {
         setDocumentError(documentFailureMessage(cause));
@@ -1996,8 +2003,7 @@ export default function CheckoutClient({
                 title={
                   passportFailureCode === "PASSPORT_EXPIRED"
                     ? "Passport expired"
-                    : passportFailureCode ===
-                        "PASSPORT_BIODATA_NOT_DETECTED"
+                    : passportFailureCode === "PASSPORT_BIODATA_NOT_DETECTED"
                       ? "Passport document not recognized"
                       : passportFailureCode === "MRZ_NOT_READABLE"
                         ? "Passport details could not be read"
@@ -2260,11 +2266,22 @@ export default function CheckoutClient({
                   </p>
                 </div>
                 {order &&
-                  ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
-                    order.documentReviewStatus ?? "",
-                  ) && (
+                  [
+                    "OCR_PENDING",
+                    "OCR_BACKGROUND",
+                    "CORRECTION_REQUIRED",
+                    "MANUAL_REVIEW",
+                  ].includes(order.documentReviewStatus ?? "") && (
                     <PassportCheck
                       result={order.passportVerification}
+                      extracted={order.passportExtraction?.fields}
+                      failureCode={order.passportExtraction?.failureCode}
+                      replacementReason={order.timeline
+                        ?.slice()
+                        .reverse()
+                        .find((event) => event.reason?.startsWith("PASSPORT:"))
+                        ?.reason?.replace(/^PASSPORT:\s*/, "")}
+                      entered={traveler}
                       busy={busy}
                       reviewStatus={order.documentReviewStatus}
                       {...(order.payment?.status
@@ -2273,10 +2290,20 @@ export default function CheckoutClient({
                       onRecheck={() =>
                         void run(async () => void (await verifyPassport()))
                       }
+                      onFieldChange={(field, value) =>
+                        update(field as keyof Traveler, value)
+                      }
+                      onSave={() => void saveTraveler()}
+                      onConfirm={() => void confirmPassportDetails()}
                       onReplace={() => jumpTo(2)}
                     />
                   )}
-                <div className="form-grid">
+                <div
+                  className="form-grid"
+                  hidden={["CORRECTION_REQUIRED", "MANUAL_REVIEW"].includes(
+                    order?.documentReviewStatus ?? "",
+                  )}
+                >
                   <Field label="Title">
                     <select
                       value={traveler.title}
@@ -2428,7 +2455,15 @@ export default function CheckoutClient({
                   <option value="JP">Japan</option>
                   <option value="KR">South Korea</option>
                 </datalist>
-                <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
+                {order?.documentReviewStatus === "MANUAL_REVIEW" ? (
+                  <ManualReviewTracking
+                    traveler={traveler}
+                    onBack={() => goBack()}
+                  />
+                ) : order?.documentReviewStatus ===
+                  "CORRECTION_REQUIRED" ? null : (
+                  <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
+                )}
                 {guest && order && recovery ? (
                   <details className="draft-recovery-option">
                     <summary>Need to finish this order later?</summary>
@@ -2907,6 +2942,8 @@ export default function CheckoutClient({
                     {order && !isTopUp && !passportGatePassed(order) && (
                       <PassportCheck
                         result={order.passportVerification}
+                        extracted={order.passportExtraction?.fields}
+                        entered={order.traveler}
                         reviewStatus={order.documentReviewStatus}
                         {...(order.payment?.status
                           ? { paymentStatus: order.payment.status }
@@ -3409,25 +3446,36 @@ const FIELD_LABELS: Record<string, string> = {
 
 function PassportCheck({
   result,
+  extracted,
+  failureCode,
+  replacementReason: explicitReplacementReason,
+  entered,
   reviewStatus,
   paymentStatus,
   busy,
   onRecheck,
   onEdit,
+  onFieldChange,
+  onSave,
+  onConfirm,
   onReplace,
 }: {
   result: Order["passportVerification"];
+  extracted?: NonNullable<Order["passportExtraction"]>["fields"] | undefined;
+  failureCode?: string | undefined;
+  replacementReason?: string | undefined;
+  entered?: Partial<Traveler> | undefined;
   reviewStatus?: Order["documentReviewStatus"];
   paymentStatus?: string;
   busy: boolean;
   onRecheck: () => void;
   onEdit?: () => void;
+  onFieldChange?: (field: string, value: string) => void;
+  onSave?: () => void;
+  onConfirm?: () => void;
   onReplace?: () => void;
 }) {
   const status = result?.status;
-  const mismatchedFields = (result?.mismatchedFields ?? []).map(
-    (field) => FIELD_LABELS[field],
-  );
   const paymentLabel =
     paymentStatus === "PENDING"
       ? "Payment awaiting confirmation"
@@ -3466,35 +3514,110 @@ function PassportCheck({
     );
   }
   if (reviewStatus === "CORRECTION_REQUIRED") {
+    const fields = result?.mismatchedFields ?? [];
     return (
-      <div className="passport-check warning" role="status">
-        <AlertTriangle size={20} />
-        <span>
-          <b>Recheck your traveller details</b>
-          <small>
-            We couldn't automatically match some details with your uploaded
-            passport. Please check the highlighted fields
-            {mismatchedFields.length ? `: ${mismatchedFields.join(", ")}` : ""}.
-          </small>
-        </span>
-        {onEdit && (
-          <button type="button" className="button secondary" onClick={onEdit}>
-            Review traveller details
-          </button>
-        )}
+      <div
+        className="passport-mismatch"
+        role="region"
+        aria-labelledby="passport-mismatch-title"
+      >
+        <div className="passport-check warning" role="status">
+          <AlertTriangle size={20} aria-hidden="true" />
+          <span>
+            <b id="passport-mismatch-title">Check the details that differ</b>
+            <small>
+              We found {fields.length || "some"} detail
+              {fields.length === 1 ? "" : "s"} that did not match. Only these
+              fields need your attention.
+            </small>
+          </span>
+        </div>
+        <div
+          className="passport-comparison"
+          role="list"
+          aria-label="Passport differences"
+        >
+          {fields.map((field) => (
+            <div
+              className="passport-comparison-row"
+              role="listitem"
+              key={field}
+            >
+              <b>{FIELD_LABELS[field] ?? field}</b>
+              <span>
+                <small>We read</small>
+                <strong>
+                  {String(
+                    extracted?.[field as keyof typeof extracted] || "Not clear",
+                  )}
+                </strong>
+              </span>
+              <span>
+                <small>You entered</small>
+                {onFieldChange ? (
+                  <input
+                    aria-label={`Correct ${FIELD_LABELS[field] ?? field}`}
+                    value={String(entered?.[field as keyof Traveler] ?? "")}
+                    onChange={(event) =>
+                      onFieldChange(field, event.target.value)
+                    }
+                  />
+                ) : (
+                  <strong>
+                    {String(
+                      entered?.[field as keyof Traveler] || "Not entered",
+                    )}
+                  </strong>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="passport-mismatch-actions">
+          {onSave ? (
+            <button
+              type="button"
+              className="button"
+              disabled={busy}
+              onClick={onSave}
+            >
+              Save corrected details
+            </button>
+          ) : onEdit ? (
+            <button type="button" className="button" onClick={onEdit}>
+              Edit these details
+            </button>
+          ) : null}
+          {onConfirm ? (
+            <button
+              type="button"
+              className="button secondary"
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              I checked—my details are correct
+            </button>
+          ) : null}
+        </div>
       </div>
     );
   }
   if (reviewStatus === "REUPLOAD_REQUIRED") {
+    const replacementReason =
+      explicitReplacementReason ||
+      (failureCode === "PASSPORT_EXPIRED"
+        ? "This passport is expired. Upload the information page of a valid passport."
+        : failureCode === "PASSPORT_BIODATA_NOT_DETECTED"
+          ? "We could not find the passport information page. Upload the page showing your photo and identity details."
+          : failureCode === "MRZ_NOT_READABLE"
+            ? "The two machine-readable lines at the bottom were not clear. Upload a sharp, uncropped image with those lines visible."
+            : "The passport image could not be read reliably. Upload a sharp, uncropped image of the information page.");
     return (
       <div className="passport-check failed">
         <AlertTriangle size={20} />
         <span>
           <b>A clearer passport image is needed</b>
-          <small>
-            We could not match the uploaded passport reliably. Replace it with a
-            sharp image of the information page before continuing.
-          </small>
+          <small>{replacementReason}</small>
         </span>
         {onEdit && (
           <button type="button" className="button secondary" onClick={onEdit}>

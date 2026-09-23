@@ -221,9 +221,9 @@ describe("OrdersService document decision invariants", () => {
     );
 
     expect(updated.documentReviewStatus).toBe("MANUAL_REVIEW");
-    expect(
-      updated.documents.find((item) => item.id === "ticket")?.status,
-    ).toBe(DocumentStatus.REUPLOAD_REQUIRED);
+    expect(updated.documents.find((item) => item.id === "ticket")?.status).toBe(
+      DocumentStatus.REUPLOAD_REQUIRED,
+    );
   });
 
   it("blocks payment when a required document needs replacement even if the aggregate review is stale", async () => {
@@ -768,10 +768,9 @@ describe("OrdersService.beginPayment double-charge guard", () => {
         status: PaymentStatus.COMPLETED,
       },
     };
-    const orders = ordersService(
-      [order as DemoOrder],
-      { descriptor: () => ({ provider: "TRANSATEL" }) },
-    );
+    const orders = ordersService([order as DemoOrder], {
+      descriptor: () => ({ provider: "TRANSATEL" }),
+    });
     await orders.refreshFromPersistence();
 
     await expect(
@@ -800,10 +799,9 @@ describe("OrdersService.beginPayment double-charge guard", () => {
         redirectUrl: "https://khalti.example/pay",
       },
     };
-    const orders = ordersService(
-      [order as DemoOrder],
-      { descriptor: () => ({ provider: "TRANSATEL" }) },
-    );
+    const orders = ordersService([order as DemoOrder], {
+      descriptor: () => ({ provider: "TRANSATEL" }),
+    });
     await orders.refreshFromPersistence();
 
     const result = await orders.beginPayment(
@@ -1735,60 +1733,68 @@ it.each([
   },
 );
 
-it("routes an explicitly resubmitted unchanged mismatch to manual review", async () => {
+it("routes an explicitly confirmed unchanged mismatch to manual review", async () => {
   const entered = { ...customerTraveler(), passportNumber: "P7654321" };
   const fingerprint = createHash("sha256")
     .update(JSON.stringify(canonicalIdentity(entered)))
     .digest("hex");
   const instance = ordersService(
-    [readyOrder({
-      id: "confirmed-mismatch",
-      ownerId: "customer-1",
-      status: OrderStatus.DRAFT,
-      traveler: entered,
-      documentReviewStatus: "NOT_STARTED",
-      passportExtraction: {
-        status: "READY",
-        fields: {
-          firstName: "Jane",
-          surname: "Doe",
-          dateOfBirth: "1990-01-01",
-          nationality: "NP",
-          passportNumber: "P1234567",
-          passportExpiryDate: "2030-01-01",
+    [
+      readyOrder({
+        id: "confirmed-mismatch",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: entered,
+        documentReviewStatus: "CORRECTION_REQUIRED",
+        passportVerification: {
+          status: "PARTIAL",
+          matchedFields: ["firstName", "surname"],
+          mismatchedFields: ["passportNumber"],
+          checkedAt: new Date().toISOString(),
+          method: "stored-extraction",
         },
-        fieldsRequiringInput: [],
-        passportAssetId: "passport-asset",
-        confidence: 96,
-        correctionAttempts: 1,
-        lastMismatchFingerprint: fingerprint,
-        lastMismatchFields: ["passportNumber"],
-        confirmedMismatchFingerprint: fingerprint,
-      },
-      documents: [
-        {
-          id: "passport",
-          type: DocumentType.PASSPORT,
-          fileName: "passport.png",
-          privateAssetId: "passport-asset",
-          status: DocumentStatus.PENDING,
-          uploadVerified: true,
+        passportExtraction: {
+          status: "READY",
+          fields: {
+            firstName: "Jane",
+            surname: "Doe",
+            dateOfBirth: "1990-01-01",
+            nationality: "NP",
+            passportNumber: "P1234567",
+            passportExpiryDate: "2030-01-01",
+          },
+          fieldsRequiringInput: [],
+          passportAssetId: "passport-asset",
+          confidence: 96,
+          correctionAttempts: 1,
+          lastMismatchFingerprint: fingerprint,
+          lastMismatchFields: ["passportNumber"],
         },
-        {
-          id: "ticket",
-          type: DocumentType.TICKET,
-          fileName: "ticket.pdf",
-          privateAssetId: "ticket-asset",
-          status: DocumentStatus.PENDING,
-          uploadVerified: true,
-        },
-      ],
-    })],
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
     {},
   );
   await instance.refreshFromPersistence();
 
-  const result = await instance.verifyPassport(
+  const result = await instance.confirmPassportDetails(
     "confirmed-mismatch",
     "customer-1",
   );
@@ -2079,7 +2085,9 @@ describe("OrdersService document-review configuration resilience", () => {
       {
         enabled: true,
         platformConfiguration: {
-          findUnique: vi.fn().mockRejectedValue(new Error("config unavailable")),
+          findUnique: vi
+            .fn()
+            .mockRejectedValue(new Error("config unavailable")),
         },
       },
       undefined,
