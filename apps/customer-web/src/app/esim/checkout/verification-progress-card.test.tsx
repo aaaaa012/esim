@@ -11,27 +11,16 @@ afterEach(() => {
     value: false,
   });
 });
-it("restores the progress card while OCR runs and closes it after verification", () => {
+it("shows non-blocking inline progress while OCR runs and closes it after verification", () => {
   const view = render(<DocumentProgress status="OCR_PENDING" />);
-  expect(
-    screen.getByRole("dialog", {
-      name: "Your verification is still in progress",
-    }),
-  ).toBeDefined();
-  expect(
-    screen.getAllByText("Documents securely saved").length,
-  ).toBeGreaterThan(0);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByText("We’re checking your passport")).toBeDefined();
+  expect(screen.getByText("Documents securely saved")).toBeDefined();
   expect(screen.getByText("Checking your passport")).toBeDefined();
-  expect(screen.getAllByText("Ready for payment").length).toBeGreaterThan(0);
+  expect(screen.getByText("Ready for payment")).toBeDefined();
+  expect(screen.getByText(/continue with your contact details/i)).toBeDefined();
   expect(view.container.textContent).not.toMatch(/\d+%/);
-  fireEvent.click(screen.getByRole("button", { name: "Close" }));
-  expect(screen.queryByRole("dialog")).toBeNull();
-  fireEvent.click(
-    screen.getByRole("button", { name: "View verification progress" }),
-  );
-  expect(screen.getByRole("dialog")).toBeDefined();
   view.rerender(<DocumentProgress status="VERIFIED" />);
-  expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.getByText("Passport verified")).toBeDefined();
 });
 it("does not show automated verification for manual review or re-upload requests", () => {

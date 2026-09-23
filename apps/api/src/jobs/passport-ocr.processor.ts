@@ -141,7 +141,8 @@ export class PassportOcrProcessor implements OnModuleInit {
         });
         return true;
       });
-      if (!verdictReplayed) return { skipped: true, reviewAlreadyDecided: true };
+      if (!verdictReplayed)
+        return { skipped: true, reviewAlreadyDecided: true };
       return {
         status: terminalVerdict,
         documentType: "TICKET",
@@ -337,7 +338,12 @@ export class PassportOcrProcessor implements OnModuleInit {
     // equally mean that a traveller corrected (or mistyped) a field. Keep the
     // document available for correction and human review; only an explicit
     // reviewer decision may require a replacement image.
-    const reviewStatus = verified ? "VERIFIED" : "MANUAL_REVIEW";
+    const reviewStatus = verified
+      ? "VERIFIED"
+      : storedFields && !technicalFailure
+        ? "CORRECTION_REQUIRED"
+        : "MANUAL_REVIEW";
+    const correctionRequired = reviewStatus === "CORRECTION_REQUIRED";
     try {
       await this.prisma.$transaction(async (tx) => {
         const orderClaim = await tx.order.updateMany({
@@ -390,7 +396,9 @@ export class PassportOcrProcessor implements OnModuleInit {
             reason: verified
               ? "Passport verified automatically"
               : partial
-                ? "Passport partially matched; routed to manual review"
+                ? correctionRequired
+                  ? "Passport details require customer correction"
+                  : "Passport partially matched; routed to manual review"
                 : technicalFailure
                   ? "OCR technical failure; routed to non-blocking manual review"
                   : "Traveller details were not confirmed; correction or manual review required",
@@ -414,14 +422,15 @@ export class PassportOcrProcessor implements OnModuleInit {
       await this.resilience.attention({
         dedupeKey: `document-review:${order.id}`,
         category:
-          partial || technicalFailure
+          correctionRequired || partial || technicalFailure
             ? "DOCUMENT_MANUAL_REVIEW"
             : "DOCUMENT_REUPLOAD",
         entityType: "Order",
         entityId: order.id,
         orderId: order.id,
-        summary:
-          partial || technicalFailure
+        summary: correctionRequired
+          ? "Traveller details need customer confirmation"
+          : partial || technicalFailure
             ? "Document processing needs manual review"
             : "Document verification requires a clearer upload",
         ...(result.detail ? { detail: result.detail } : {}),
@@ -532,15 +541,14 @@ export class PassportOcrProcessor implements OnModuleInit {
             },
           ],
         } as never);
-        const nextStatus =
-          [
-            "MRZ_NOT_READABLE",
-            "PASSPORT_BIODATA_NOT_DETECTED",
-            "PASSPORT_EXPIRED",
-          ].includes(extraction.failureCode ?? "")
-            ? "REUPLOAD_REQUIRED"
-            : extraction.failureCode === "MRZ_REVIEW_REQUIRED"
-              ? "MANUAL_REVIEW"
+        const nextStatus = [
+          "MRZ_NOT_READABLE",
+          "PASSPORT_BIODATA_NOT_DETECTED",
+          "PASSPORT_EXPIRED",
+        ].includes(extraction.failureCode ?? "")
+          ? "REUPLOAD_REQUIRED"
+          : extraction.failureCode === "MRZ_REVIEW_REQUIRED"
+            ? "MANUAL_REVIEW"
             : extraction.status === "READY" || extraction.status === "PARTIAL"
               ? "AWAITING_TRAVELER_CONFIRMATION"
               : extraction.status;

@@ -255,12 +255,7 @@ describe("hosted checkout payment flow", () => {
     },
   );
 
-  it.each([
-    "FAILED",
-    "OCR_PENDING",
-    "CORRECTION_REQUIRED",
-    "MANUAL_REVIEW",
-  ])(
+  it.each(["FAILED", "OCR_PENDING", "CORRECTION_REQUIRED", "MANUAL_REVIEW"])(
     "blocks payment for %s documents",
     async (status) => {
       fetchMock.mockImplementation(async (url: string) =>
@@ -419,13 +414,17 @@ describe("hosted checkout payment flow", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Fonepay Mobile banking/ }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Fonepay" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue to Fonepay" }),
+    );
     await screen.findByRole("button", {
       name: "I've completed payment - check status",
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: "I've completed payment - check status" }),
+      screen.getByRole("button", {
+        name: "I've completed payment - check status",
+      }),
     );
     await screen.findByText(
       "That payment attempt has ended. Start a new one to continue.",
@@ -477,14 +476,20 @@ describe("hosted checkout payment flow", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Fonepay Mobile banking/ }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Fonepay" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue to Fonepay" }),
+    );
     await screen.findByRole("button", {
       name: "I've completed payment - check status",
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "I've completed payment - check status" }),
+      screen.getByRole("button", {
+        name: "I've completed payment - check status",
+      }),
     );
-    await screen.findByText(/A payment is still being confirmed for this order/);
+    await screen.findByText(
+      /A payment is still being confirmed for this order/,
+    );
     // The scan screen ended; the customer may not re-scan the same QR.
     expect(
       screen.queryByRole("button", {
@@ -534,10 +539,9 @@ describe("hosted document progress", () => {
     render(<HostedCheckoutClient token="private-token" />);
     await screen.findByRole("heading", { name: "Traveller information" });
     await waitFor(() =>
-      expect(screen.getByRole("textbox", { name: "First name" })).toHaveProperty(
-        "value",
-        "Anish",
-      ),
+      expect(
+        screen.getByRole("textbox", { name: "First name" }),
+      ).toHaveProperty("value", "Anish"),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
@@ -758,9 +762,8 @@ it.each([false, true])(
       },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check new passport" }));
-    await screen.findByRole("dialog", {
-      name: "Your verification is still in progress",
-    });
+    await screen.findByText("We’re checking your passport");
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(submitted).toEqual(["PASSPORT"]);
     expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
   },

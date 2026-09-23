@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, FileSearch2, LockKeyhole } from "lucide-react";
 
 function VerificationJourney({ compact = false }: { compact?: boolean }) {
@@ -47,10 +47,22 @@ export default function VerificationProgressCard({
 }: {
   message?: string | undefined;
 }) {
-  const [expanded, setExpanded] = useState(true);
   const [pageVisible, setPageVisible] = useState(true);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const title = useId();
+  const [elapsedBand, setElapsedBand] = useState<
+    "initial" | "delayed" | "extended"
+  >("initial");
+
+  useEffect(() => {
+    const delayed = window.setTimeout(() => setElapsedBand("delayed"), 10_000);
+    const extended = window.setTimeout(
+      () => setElapsedBand("extended"),
+      60_000,
+    );
+    return () => {
+      window.clearTimeout(delayed);
+      window.clearTimeout(extended);
+    };
+  }, []);
 
   useEffect(() => {
     const updateVisibility = () => setPageVisible(!document.hidden);
@@ -60,76 +72,33 @@ export default function VerificationProgressCard({
       document.removeEventListener("visibilitychange", updateVisibility);
   }, []);
 
-  useEffect(() => {
-    const element = dialog.current;
-    if (!element || !expanded) return;
-    if (element.showModal) element.showModal();
-    else element.setAttribute("open", "");
-    return () => {
-      if (element.close) element.close();
-    };
-  }, [expanded]);
+  const statusCopy =
+    elapsedBand === "initial"
+      ? "You can continue with your contact details while we read the passport."
+      : elapsedBand === "delayed"
+        ? "This is taking a little longer than usual. Your documents are safe and the check is still running."
+        : "You do not need to keep this page open. We will email you and update your order when the check finishes.";
 
   return (
     <div className={pageVisible ? "" : "verification-animation-paused"}>
       <div
-        className="passport-check checking verification-inline"
+        className="passport-check checking verification-inline verification-processing-card"
         role="status"
+        aria-live="polite"
       >
-        <VerificationJourney compact />
-        <span className="sr-only">
-          Documents securely saved. Checking your passport. Payment becomes
-          available when verification succeeds.
-        </span>
-        {message && (
+        <div className="verification-processing-copy">
+          <b>We’re checking your passport</b>
+          <small>{statusCopy}</small>
+        </div>
+        <VerificationJourney />
+        {message ? (
           <small className="verification-refresh-note">{message}</small>
-        )}
-        {!expanded && (
-          <button
-            type="button"
-            className="button secondary"
-            onClick={() => setExpanded(true)}
-          >
-            View verification progress
-          </button>
-        )}
+        ) : null}
+        <span className="sr-only">
+          Documents securely saved. Passport check in progress. We will update
+          this order automatically.
+        </span>
       </div>
-      {expanded && (
-        <dialog
-          className="verification-progress-dialog"
-          ref={dialog}
-          aria-labelledby={title}
-          aria-describedby={`${title}-description`}
-          onCancel={(event) => {
-            event.preventDefault();
-            setExpanded(false);
-          }}
-        >
-          <div className="verify-modal checking verification-modal-card">
-            <b id={title}>Your verification is still in progress</b>
-            <p id={`${title}-description`}>
-              Your files are securely saved. This page updates automatically
-              when verification finishes.
-            </p>
-            <VerificationJourney />
-            {message && (
-              <p className="verification-refresh-note" role="status">
-                {message}
-              </p>
-            )}
-            <div className="form-actions">
-              <button
-                type="button"
-                className="button secondary"
-                autoFocus
-                onClick={() => setExpanded(false)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </dialog>
-      )}
     </div>
   );
 }
