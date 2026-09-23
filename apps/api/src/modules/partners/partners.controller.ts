@@ -94,14 +94,8 @@ export const completeCreateSchema = z
     planId: z.string().uuid(),
     purchaseType: z.enum(["INITIAL_PURCHASE", "TOPUP"]).optional(),
     settlement: z
-      .discriminatedUnion("method", [
-        z.object({ method: z.literal("PARTNER_ACCOUNT") }),
-        z.object({
-          method: z.literal("HOSTED_PAYMENT"),
-          provider: z.enum(PaymentProvider),
-          redirectUrl: z.url(),
-        }),
-      ])
+      .object({ method: z.literal("PARTNER_ACCOUNT") })
+      .strict()
       .optional(),
     documentVerificationId: z.string().uuid().optional(),
     topUpMobile: z
@@ -170,6 +164,10 @@ export const listSchema = z.object({
   cursor: z.string().trim().min(1).max(256).optional(),
   status: z.enum(OrderStatus).optional(),
   externalOrderId: z.string().max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+export const eventListSchema = z.object({
+  cursor: z.string().trim().min(1).max(256).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 const reasonSchema = z.object({ reason: z.string().trim().min(3).max(1000) });
@@ -285,7 +283,8 @@ export class PartnersController {
         mode: {
           type: "string",
           enum: ["EXTRACT_FIRST"],
-          description: "Passport extraction must precede traveller confirmation.",
+          description:
+            "Passport extraction must precede traveller confirmation.",
         },
         externalOrderId: { type: "string", example: "agency-order-1042" },
         documents: {
@@ -702,8 +701,16 @@ export class PartnersController {
 
   @Get("orders/:id/events")
   @PartnerScopes("orders:read")
-  events(@Param("id") id: string, @Req() request: PartnerRequest) {
-    return this.partners.events(request.partner!.id, id);
+  events(
+    @Param("id") id: string,
+    @Query() query: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.events(
+      request.partner!.id,
+      id,
+      eventListSchema.parse(query),
+    );
   }
 
   @Post("orders/:id/notifications")

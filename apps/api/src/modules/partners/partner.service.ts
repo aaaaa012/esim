@@ -80,6 +80,17 @@ function decodeCursor(
   return { createdAt, id };
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value))
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
+
 type CreateOrderInput = {
   quoteId: string;
   externalOrderId: string;
@@ -344,8 +355,10 @@ export class PartnerService {
               message:
                 "The active document session uses a different verification mode",
             });
-          if (resumable)
+          if (resumable) {
+            this.assertUploadDeclarationsMatch(existing.documents, input);
             return await this.uploadSessionResponse(existing, true);
+          }
           await tx.partnerDocumentVerification.update({
             where: { id: existing.id },
             data: {
@@ -423,8 +436,38 @@ export class PartnerService {
         },
       );
       if (!existing) throw error;
+      this.assertUploadDeclarationsMatch(existing.documents, input);
       return this.uploadSessionResponse(existing, true);
     }
+  }
+
+  private assertUploadDeclarationsMatch(
+    existing: Array<{
+      type: DocumentType;
+      fileName: string;
+      contentType: string;
+      declaredSizeBytes: number;
+    }>,
+    input: UploadSessionInput,
+  ) {
+    const declarations = (items: typeof existing) =>
+      items
+        .map((item) => ({
+          type: item.type,
+          fileName: item.fileName,
+          contentType: item.contentType,
+          sizeBytes: item.declaredSizeBytes,
+        }))
+        .sort((left, right) => left.type.localeCompare(right.type));
+    const requested = input.documents
+      .map((item) => ({ ...item }))
+      .sort((left, right) => left.type.localeCompare(right.type));
+    if (canonicalJson(declarations(existing)) !== canonicalJson(requested))
+      throw new ConflictException({
+        code: "DOCUMENT_SESSION_DECLARATION_MISMATCH",
+        message:
+          "The active document session was created with different file declarations",
+      });
   }
 
   private async uploadSessionResponse(
@@ -939,8 +982,23 @@ export class PartnerService {
         where: { id: verification.id },
         select: { travelerSnapshot: true, status: true },
       });
-      if (current?.travelerSnapshot)
-        return { id: verification.id, status: current.status, confirmed: true };
+      if (current?.travelerSnapshot) {
+        const requested = this.travelerData(traveler);
+        if (
+          canonicalJson(current.travelerSnapshot) !== canonicalJson(requested)
+        )
+          throw new ConflictException({
+            code: "TRAVELER_ALREADY_CONFIRMED",
+            message:
+              "Traveller details were already confirmed with different values; retrieve the verification before correcting them",
+          });
+        return {
+          id: verification.id,
+          status: current.status,
+          confirmed: true,
+          replayed: true,
+        };
+      }
       throw new ConflictException({
         code: "TRAVELER_CONFIRMATION_CONFLICT",
         message: "The verification changed; retrieve it before trying again",
@@ -2143,45 +2201,56 @@ export class PartnerService {
       update: {},
       create: { partnerId },
     });
-    const [debits, credits, refunds, adjustments, orders] = await Promise.all([
-      this.prisma.partnerLedgerEntry.aggregate({
-        where: {
-          partnerId,
-          type: {
-            in: [PartnerLedgerEntryType.DEBIT, PartnerLedgerEntryType.CAPTURE],
+    const [debits, credits, refunds, adjustments, orderGroups] =
+      await Promise.all([
+        this.prisma.partnerLedgerEntry.aggregate({
+          where: {
+            partnerId,
+            type: {
+              in: [
+                PartnerLedgerEntryType.DEBIT,
+                PartnerLedgerEntryType.CAPTURE,
+              ],
+            },
           },
-        },
-        _sum: { amountPaisa: true },
-      }),
-      this.prisma.partnerLedgerEntry.aggregate({
-        where: {
-          partnerId,
-          type: PartnerLedgerEntryType.CREDIT,
-        },
-        _sum: { amountPaisa: true },
-      }),
-      this.prisma.partnerLedgerEntry.aggregate({
-        where: { partnerId, type: PartnerLedgerEntryType.REFUND },
-        _sum: { amountPaisa: true },
-      }),
-      this.prisma.partnerLedgerEntry.aggregate({
-        where: { partnerId, type: PartnerLedgerEntryType.ADJUSTMENT },
-        _sum: { amountPaisa: true },
-      }),
-      this.prisma.order.findMany({
-        where: { partnerId },
-        select: { status: true, totalAmount: true },
-      }),
-    ]);
-    const ordersByStatus = orders.reduce<Record<string, number>>(
-      (result, order) => ({
+          _sum: { amountPaisa: true },
+        }),
+        this.prisma.partnerLedgerEntry.aggregate({
+          where: {
+            partnerId,
+            type: PartnerLedgerEntryType.CREDIT,
+          },
+          _sum: { amountPaisa: true },
+        }),
+        this.prisma.partnerLedgerEntry.aggregate({
+          where: { partnerId, type: PartnerLedgerEntryType.REFUND },
+          _sum: { amountPaisa: true },
+        }),
+        this.prisma.partnerLedgerEntry.aggregate({
+          where: { partnerId, type: PartnerLedgerEntryType.ADJUSTMENT },
+          _sum: { amountPaisa: true },
+        }),
+        this.prisma.order.groupBy({
+          by: ["status"],
+          where: { partnerId },
+          _count: { _all: true },
+          _sum: { totalAmount: true },
+        }),
+      ]);
+    const ordersByStatus = orderGroups.reduce<Record<string, number>>(
+      (result, group) => ({
         ...result,
-        [order.status]: (result[order.status] ?? 0) + 1,
+        [group.status]: group._count._all,
       }),
       {},
     );
-    const totalOrderValuePaisa = orders.reduce(
-      (total, order) => total + Math.round(Number(order.totalAmount) * 100),
+    const ordersCreated = orderGroups.reduce(
+      (total, group) => total + group._count._all,
+      0,
+    );
+    const totalOrderValuePaisa = orderGroups.reduce(
+      (total, group) =>
+        total + Math.round(Number(group._sum.totalAmount ?? 0) * 100),
       0,
     );
     return {
@@ -2197,14 +2266,14 @@ export class PartnerService {
       totalCreditsPaisa: credits._sum.amountPaisa ?? 0,
       totalRefundedPaisa: refunds._sum.amountPaisa ?? 0,
       totalAdjustedPaisa: adjustments._sum.amountPaisa ?? 0,
-      ordersCreated: orders.length,
+      ordersCreated,
       ordersByStatus,
       fulfilledOrders:
         (ordersByStatus.QR_READY ?? 0) + (ordersByStatus.COMPLETED ?? 0),
       failedOrders: ordersByStatus.PROVISIONING_FAILED ?? 0,
       totalOrderValuePaisa,
-      averageOrderValuePaisa: orders.length
-        ? Math.round(totalOrderValuePaisa / orders.length)
+      averageOrderValuePaisa: ordersCreated
+        ? Math.round(totalOrderValuePaisa / ordersCreated)
         : 0,
       updatedAt: account.updatedAt,
     };
@@ -3767,10 +3836,36 @@ export class PartnerService {
     return request;
   }
 
-  async events(partnerId: string, orderId: string) {
-    await this.order(partnerId, orderId);
-    return this.prisma.partnerEvent.findMany({
-      where: { partnerId, orderId },
+  async events(
+    partnerId: string,
+    orderId: string,
+    input: { cursor?: string | undefined; limit?: number | undefined },
+  ) {
+    const ownedOrder = await this.prisma.order.findFirst({
+      where: { id: orderId, partnerId },
+      select: { id: true },
+    });
+    if (!ownedOrder)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
+    const bound = decodeCursor(input.cursor);
+    const limit = input.limit ?? 50;
+    const rows = await this.prisma.partnerEvent.findMany({
+      where: {
+        partnerId,
+        orderId,
+        ...(bound
+          ? {
+              OR: [
+                { occurredAt: { gt: bound.createdAt } },
+                { occurredAt: bound.createdAt, id: { gt: bound.id } },
+              ],
+            }
+          : {}),
+      },
       select: {
         id: true,
         type: true,
@@ -3780,8 +3875,17 @@ export class PartnerService {
         payload: true,
         occurredAt: true,
       },
-      orderBy: { occurredAt: "asc" },
+      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      take: limit + 1,
     });
+    const more = rows.length > limit;
+    const items = rows.slice(0, limit);
+    return {
+      items,
+      nextCursor: more
+        ? (encodeCursor(items.at(-1)?.occurredAt, items.at(-1)?.id) ?? null)
+        : null,
+    };
   }
 
   async usage(partnerId: string, orderId: string) {
@@ -3825,6 +3929,13 @@ export class PartnerService {
   }
 
   async customerUsage(partnerId: string, externalCustomerId: string) {
+    const usageService = this.usageService;
+    if (!usageService)
+      throw new ApiException({
+        code: "PARTNER_USAGE_UNAVAILABLE",
+        message: "Usage service is unavailable",
+        status: 503,
+      });
     const partnerCustomer = await this.prisma.partnerCustomer.findUnique({
       where: {
         partnerId_externalCustomerId: { partnerId, externalCustomerId },
@@ -3846,7 +3957,7 @@ export class PartnerService {
       links.map(async (link) =>
         this.partnerUsageView(
           partnerId,
-          await this.usageService!.cached(link.inventoryId),
+          await usageService.cached(link.inventoryId),
         ),
       ),
     );

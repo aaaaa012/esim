@@ -114,15 +114,23 @@ describe("simplified partner order contract", () => {
     ).toBe(false);
   });
 
-  it("requires hosted payment provider and redirect URL", () => {
+  it("rejects hosted payment settlement from the server-to-server order contract", () => {
     const result = completeCreateSchema.safeParse({
       externalOrderId: "agency-order-1042",
       externalCustomerId: "customer-91",
       planId: "f17d6006-69fe-42ed-9ec8-47777f7569f1",
-      settlement: { method: "HOSTED_PAYMENT" },
-      traveler,
-      documents: [],
-      consent: {},
+      settlement: {
+        method: "HOSTED_PAYMENT",
+        provider: "KHALTI",
+        redirectUrl: "https://partner.example/return",
+      },
+      documentVerificationId: "00000000-0000-4000-8000-000000000003",
+      consent: {
+        compatibilityAccepted: true,
+        termsAccepted: true,
+        privacyAccepted: true,
+        acceptedAt: "2026-08-08T00:00:00.000Z",
+      },
     });
     expect(result.success).toBe(false);
   });
@@ -174,7 +182,10 @@ describe("simplified partner order contract", () => {
       contentType: "application/pdf" as const,
       sizeBytes: 100,
     });
-    const base = { mode: "EXTRACT_FIRST" as const, externalOrderId: "agency-order-1045" };
+    const base = {
+      mode: "EXTRACT_FIRST" as const,
+      externalOrderId: "agency-order-1045",
+    };
     expect(
       uploadSessionSchema.safeParse({
         ...base,

@@ -8,6 +8,8 @@ import { PartnerWebhookDeliveryStatus } from "@prisma/client";
 import type { Job } from "bullmq";
 import { createHmac } from "node:crypto";
 import { lookup } from "node:dns/promises";
+import { request as requestHttp } from "node:http";
+import { request as requestHttps } from "node:https";
 import { isIP } from "node:net";
 import { CryptoService } from "../infrastructure/crypto.service.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
@@ -31,7 +33,15 @@ export function signPartnerWebhook(
 }
 
 /** Blocks destinations that could be used for SSRF (metadata, private, link-local, loopback). */
-export async function assertSafeWebhookUrl(url: string): Promise<void> {
+type SafeWebhookTarget = {
+  url: URL;
+  address: string;
+  family: 4 | 6;
+};
+
+export async function resolveSafeWebhookTarget(
+  url: string,
+): Promise<SafeWebhookTarget> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -40,6 +50,8 @@ export async function assertSafeWebhookUrl(url: string): Promise<void> {
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
     throw new Error("Webhook URL must use http(s)");
+  if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:")
+    throw new Error("Webhook URL must use HTTPS in production");
   const host = parsed.hostname.toLowerCase();
   if (
     host === "localhost" ||
@@ -52,7 +64,7 @@ export async function assertSafeWebhookUrl(url: string): Promise<void> {
   const ipv = isIP(host);
   if (ipv !== 0) {
     assertSafeIp(ipv, host);
-    return;
+    return { url: parsed, address: host, family: ipv as 4 | 6 };
   }
   let addresses: string[];
   try {
@@ -63,6 +75,45 @@ export async function assertSafeWebhookUrl(url: string): Promise<void> {
     throw new Error("Webhook URL host cannot be resolved");
   }
   for (const address of addresses) assertSafeIp(isIP(address), address);
+  const address = addresses[0];
+  const family = address ? isIP(address) : 0;
+  if (!address || (family !== 4 && family !== 6))
+    throw new Error("Webhook URL host did not resolve to a usable address");
+  return { url: parsed, address, family };
+}
+
+export async function assertSafeWebhookUrl(url: string): Promise<void> {
+  await resolveSafeWebhookTarget(url);
+}
+
+function postPartnerWebhook(
+  target: SafeWebhookTarget,
+  headers: Record<string, string>,
+  body: string,
+  timeoutMs: number,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const requester =
+      target.url.protocol === "https:" ? requestHttps : requestHttp;
+    const request = requester(
+      target.url,
+      {
+        method: "POST",
+        headers,
+        lookup: (_hostname, _options, callback) =>
+          callback(null, target.address, target.family),
+      },
+      (response) => {
+        response.resume();
+        response.once("end", () => resolve(response.statusCode ?? 0));
+      },
+    );
+    request.setTimeout(timeoutMs, () =>
+      request.destroy(new Error("Partner webhook request timed out")),
+    );
+    request.once("error", reject);
+    request.end(body);
+  });
 }
 
 function addressOf(entry: string | { address: string }): string {
@@ -233,10 +284,10 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
     const signature = signPartnerWebhook(secret, timestamp, body);
     const started = Date.now();
     try {
-      await assertSafeWebhookUrl(delivery.endpoint.url);
-      const response = await fetch(delivery.endpoint.url, {
-        method: "POST",
-        headers: {
+      const target = await resolveSafeWebhookTarget(delivery.endpoint.url);
+      const responseStatus = await postPartnerWebhook(
+        target,
+        {
           "content-type": "application/json",
           "user-agent": "VisaCompass-Partner-Webhooks/1.0",
           "vc-event-id": delivery.event.id,
@@ -244,19 +295,18 @@ export class PartnerWebhookProcessor implements OnModuleInit, OnModuleDestroy {
           "vc-webhook-signature": `v1=${signature}`,
         },
         body,
-        redirect: "manual",
-        signal: AbortSignal.timeout(resiliencePolicy.partnerWebhookTimeoutMs()),
-      });
-      if (response.status >= 300 && response.status < 400)
+        resiliencePolicy.partnerWebhookTimeoutMs(),
+      );
+      if (responseStatus >= 300 && responseStatus < 400)
         throw new Error("Partner endpoint redirects are not allowed");
-      if (!response.ok)
-        throw new Error(`Partner endpoint returned HTTP ${response.status}`);
+      if (responseStatus < 200 || responseStatus >= 300)
+        throw new Error(`Partner endpoint returned HTTP ${responseStatus}`);
       await this.prisma.partnerWebhookDelivery.update({
         where: { id: delivery.id },
         data: {
           status: PartnerWebhookDeliveryStatus.DELIVERED,
           attempt: { increment: 1 },
-          responseStatus: response.status,
+          responseStatus,
           latencyMs: Date.now() - started,
           deliveredAt: new Date(),
           nextRetryAt: null,

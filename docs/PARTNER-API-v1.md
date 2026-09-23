@@ -16,12 +16,14 @@ This is the partner-facing, server-to-server integration specification. It cover
 3. POST /partners/document-upload-sessions
 4. PUT  each file to its returned signed upload URL
 5. POST /partners/document-verifications/{verificationId}/documents/{documentId}/confirm
-6. GET  /partners/document-verifications/{verificationId} until orderCreationAllowed=true
-7. POST /partners/orders (creates a `REVIEW_PENDING` order; no debit or provisioning yet)
-8. GET  /partners/document-verifications/{verificationId} or the order until fulfillmentAllowed=true
-9. POST /partners/orders/{id}/finalize
-10. GET /partners/orders/{id}, receive webhook, or both
-11. GET /partners/orders/{id}/esim when status is QR_READY, ACTIVATION_ATTENTION, or COMPLETED
+6. GET  /partners/document-verifications/{verificationId} until passport extraction is ready
+7. POST /partners/document-verifications/{verificationId}/traveler
+8. GET  /partners/document-verifications/{verificationId} until orderCreationAllowed=true
+9. POST /partners/orders (creates a pending order and reserves partner funds; no provisioning yet)
+10. GET /partners/document-verifications/{verificationId} or the order until fulfillmentAllowed=true
+11. POST /partners/orders/{id}/finalize (captures the reservation exactly once)
+12. GET /partners/orders/{id}, receive webhook, or both
+13. GET /partners/orders/{id}/esim when status is QR_READY, ACTIVATION_ATTENTION, or COMPLETED
 ```
 
 ### Existing eSIM top-up
@@ -111,15 +113,17 @@ All JSON examples use illustrative UUIDs, dates, prices, names, and secrets. The
 
 ## 3. Access scopes
 
-| Scope             | Endpoints                                                   |
-| ----------------- | ----------------------------------------------------------- |
-| `catalog:read`    | Capabilities and plans                                      |
-| `documents:write` | Document upload sessions, confirmation, verification lookup |
-| `orders:read`     | Orders, events, account, ledger                             |
-| `orders:write`    | Create order, cancel, notifications                         |
-| `esims:read`      | eSIM details                                                |
-| `usage:read`      | Usage                                                       |
-| `refunds:write`   | Refund requests                                             |
+| Scope             | Endpoints                                                                                                   |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| `catalog:read`    | Capabilities and plans                                                                                      |
+| `documents:write` | Upload sessions, confirmation, verification lookup, traveller confirmation/correction, document replacement |
+| `orders:read`     | Orders, events, account, ledger                                                                             |
+| `orders:write`    | Create/finalize/cancel orders and queue notifications                                                       |
+| `esims:read`      | eSIM details                                                                                                |
+| `usage:read`      | Usage                                                                                                       |
+| `refunds:write`   | Refund requests                                                                                             |
+
+`checkout:write` exists for separately contracted hosted-checkout integrations. Hosted checkout is intentionally outside this server-to-server specification and is not a settlement option for `POST /partners/orders`.
 
 ## 4. Response field reference
 
@@ -132,10 +136,12 @@ Examples below use illustrative IDs, dates, and prices; their field names, nesti
 | upload session `documents[].upload`                   | Direct-upload instructions; `endpoint` is short-lived and sensitive.                                        |
 | verification `orderCreationAllowed`                   | Authoritative permission to submit an initial order.                                                        |
 | verification/order `fulfillmentAllowed`               | Authoritative permission to finalize the pending initial order and debit the partner account.               |
+| verification `suggestedTraveler`                      | OCR-derived suggestions; confirm or correct them through the traveller endpoint before order creation.      |
+| verification `travelerConfirmationRequired`           | `true` until a traveller snapshot has been immutably confirmed for the verification.                        |
 | verification `consumedAt`                             | Non-null means it has already been used for an order.                                                       |
 | order `id`                                            | Visa Compass order ID for all `/orders/{id}` endpoints.                                                     |
 | order `externalOrderId`                               | Partner sale ID for reconciliation and lookup.                                                              |
-| order `totalAmountPaisa`                              | Final debit amount in paisa.                                                                                |
+| order `totalAmountPaisa`                              | Settlement amount in paisa. Initial purchases reserve it at creation and capture it at finalization.        |
 | order `links`                                         | Relative API paths; prefix with the API host.                                                               |
 | order `esimDetailsAvailable`                          | Whether eSIM details may be retrieved.                                                                      |
 | order `documentReviewPolicy` / `documentReviewStatus` | Configured review path and the current document-review state.                                               |
@@ -168,6 +174,11 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "settlementMethods": ["PARTNER_ACCOUNT"],
     "payments": [],
     "notifications": ["EMAIL", "WHATSAPP"],
+    "documentVerification": {
+      "recommendedMode": "EXTRACT_FIRST",
+      "travelerConfirmationRequired": true,
+      "compatibilityModes": []
+    },
     "connectivity": { "available": true },
     "idempotencyRequiredForMutations": true,
     "outboundWebhooks": true
@@ -243,20 +254,8 @@ Idempotency-Key: agency-order-1042-documents-v1
 Content-Type: application/json
 
 {
+  "mode": "EXTRACT_FIRST",
   "externalOrderId": "agency-order-1042",
-  "traveler": {
-    "title": "MS",
-    "firstName": "Asha",
-    "surname": "Shrestha",
-    "dateOfBirth": "1990-05-14",
-    "nationality": "NP",
-    "city": "Kathmandu",
-    "countryOfResidence": "NP",
-    "email": "asha@example.com",
-    "mobile": "+9779812345678",
-    "passportNumber": "PA1234567",
-    "passportExpiryDate": "2030-05-14"
-  },
   "documents": [
     { "type": "PASSPORT", "fileName": "passport.pdf", "contentType": "application/pdf", "sizeBytes": 483120 },
     { "type": "TICKET", "fileName": "ticket.jpg", "contentType": "image/jpeg", "sizeBytes": 342991 }
@@ -266,21 +265,15 @@ Content-Type: application/json
 
 **Request fields:**
 
-| Field                                                              | Required | Rules                                                                                                     |
-| ------------------------------------------------------------------ | -------- | --------------------------------------------------------------------------------------------------------- |
-| `externalOrderId`                                                  | Yes      | Your unique sale ID, 1-120 characters. Reuse it in §7.1.                                                  |
-| `traveler.title`                                                   | Yes      | `MR`, `MS`, or `MRS`.                                                                                     |
-| `traveler.firstName`, `surname`, `city`                            | Yes      | Trimmed non-empty strings.                                                                                |
-| `traveler.dateOfBirth`                                             | Yes      | ISO date in the past.                                                                                     |
-| `traveler.nationality`, `countryOfResidence`                       | Yes      | Two-character country codes.                                                                              |
-| `traveler.email`, `mobile`                                         | Yes      | Valid email; phone-like 7-20 character number.                                                            |
-| `traveler.passportNumber`, `passportExpiryDate`                    | Yes      | Passport number 5-30 alphanumeric/hyphen chars; future ISO expiry date.                                   |
-| `traveler.middleName`, `employerOrBusinessName`, `pointOfSaleCode` | No       | Optional values.                                                                                          |
-| `documents`                                                        | Yes      | 2-3 unique entries. Must include `PASSPORT` and `TICKET`; `VISA` is accepted as the optional third entry. |
-| `documents[].type`                                                 | Yes      | `PASSPORT`, `TICKET`, or `VISA`.                                                                          |
-| `documents[].fileName`                                             | Yes      | 1-180 characters.                                                                                         |
-| `documents[].contentType`                                          | Yes      | `application/pdf`, `image/jpeg`, or `image/png`.                                                          |
-| `documents[].sizeBytes`                                            | Yes      | Integer from 1 through 10,485,760.                                                                        |
+| Field                     | Required | Rules                                                                                                     |
+| ------------------------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| `externalOrderId`         | Yes      | Your unique sale ID, 1-120 characters. Reuse it in §7.1.                                                  |
+| `mode`                    | Yes      | Must be `EXTRACT_FIRST`. Traveller-first submission is not accepted.                                      |
+| `documents`               | Yes      | 2-3 unique entries. Must include `PASSPORT` and `TICKET`; `VISA` is accepted as the optional third entry. |
+| `documents[].type`        | Yes      | `PASSPORT`, `TICKET`, or `VISA`.                                                                          |
+| `documents[].fileName`    | Yes      | 1-180 characters.                                                                                         |
+| `documents[].contentType` | Yes      | `application/pdf`, `image/jpeg`, or `image/png`.                                                          |
+| `documents[].sizeBytes`   | Yes      | Integer from 1 through 10,485,760.                                                                        |
 
 **201 response:**
 
@@ -289,6 +282,7 @@ Content-Type: application/json
   "data": {
     "verificationId": "20000000-0000-4000-8000-000000000001",
     "externalOrderId": "agency-order-1042",
+    "mode": "EXTRACT_FIRST",
     "status": "AWAITING_UPLOAD",
     "expiresAt": "2026-09-01T04:15:02.000Z",
     "checkoutReleaseAt": "2026-08-31T04:16:02.000Z",
@@ -331,7 +325,7 @@ Content-Type: application/json
 
 **Carry forward:** keep `verificationId` for §6.3/§7.1; keep every `documents[].id` for confirmation; perform the direct upload using each `documents[].upload` object. `endpoint` is sensitive and expires after `expiresInSeconds`; do not log it.
 
-**Relevant failures:** `400 VALIDATION_ERROR` for invalid fields. A still-valid request with the same external order returns a resumed session (`resumed: true`) rather than a second active verification.
+**Relevant failures:** `400 VALIDATION_ERROR` for invalid fields. A still-valid request with the same external order and identical declarations returns the existing active session (`resumed: true`) rather than creating a second verification. Changed file names, types, content types, sizes, or document sets return `409 DOCUMENT_SESSION_DECLARATION_MISMATCH`; finish or expire the original session before declaring different files.
 
 ### 6.2 Upload the actual files
 
@@ -411,11 +405,95 @@ There is no body.
 Partner documents receive the same server-side passport verification used by the customer and hosted-checkout flows. The server does not trust the upload declaration alone:
 
 - The signed-upload object is checked on confirmation. The service validates the stored object, its actual byte count, and that the detected file format matches the declared PDF, JPEG, or PNG content type.
-- For `AUTO_OCR` review, Visa Compass downloads and OCRs the passport, parses its machine-readable zone (MRZ) when present, and validates the MRZ passport-number check digit. It then compares the passport with the traveler information submitted in §6.1. A passport is `VERIFIED` only when its number matches and at least one additional identity field matches: surname, given names, date of birth, or passport expiry date. The verifier uses normalized OCR as a fallback when an MRZ is absent or cannot be parsed; an MRZ is not the only accepted passport layout.
+- For `AUTO_OCR` review, Visa Compass downloads and OCRs the passport, parses its machine-readable zone (MRZ) when present, and validates its check digits. After section 6.3b, it compares the passport with the confirmed traveller. A passport is `VERIFIED` only when its number matches and at least one additional identity field matches: surname, given names, date of birth, or passport expiry date. The verifier uses normalized OCR as a fallback when an MRZ is absent or cannot be parsed; an MRZ is not the only accepted passport layout.
 - A partial match or an OCR technical failure is routed to manual review; a failed identity match requires a document replacement. A ticket is required and its upload is verified, but it is not subject to passport identity-field matching.
 - The configured `reviewPolicy` is authoritative. `MANUAL_REVIEW` requires an operational decision; `NO_REVIEW` marks documents as skipped. A partner must never infer approval from upload success, `orderCreationAllowed`, or a storage `2xx`.
 
 Only `fulfillmentAllowed=true` permits §7.1a finalization and provisioning.
+
+### 6.3b Confirm the extracted traveller
+
+After the required uploads are confirmed, poll section 6.4 until `suggestedTraveler` is available or extraction requires manual entry. Show the suggestions to the traveller, collect every required field, and submit one confirmation.
+
+**Scope:** `documents:write`
+**Request:**
+
+```http
+POST /api/v1/partners/document-verifications/20000000-0000-4000-8000-000000000001/traveler
+Authorization: Bearer vc_partner_<key-prefix>.<secret>
+Idempotency-Key: agency-order-1042-traveler-v1
+Content-Type: application/json
+
+{
+  "title": "MS",
+  "firstName": "Asha",
+  "surname": "Shrestha",
+  "dateOfBirth": "1990-05-14",
+  "nationality": "NP",
+  "city": "Kathmandu",
+  "countryOfResidence": "NP",
+  "email": "asha@example.com",
+  "mobile": "+9779812345678",
+  "passportNumber": "PA1234567",
+  "passportExpiryDate": "2030-05-14"
+}
+```
+
+The shown fields are required. `middleName`, `employerOrBusinessName`, and `pointOfSaleCode` are optional. Country values are ISO alpha-2 codes; dates are ISO dates; passport expiry must be in the future.
+
+**200 response:**
+
+```json
+{
+  "data": {
+    "id": "20000000-0000-4000-8000-000000000001",
+    "status": "PROCESSING",
+    "confirmed": true,
+    "verificationQueued": true
+  },
+  "meta": {
+    "correlationId": "<correlation-id>",
+    "timestamp": "2026-08-31T04:15:20.000Z"
+  }
+}
+```
+
+The first accepted confirmation creates an immutable revision. A simultaneous duplicate cannot overwrite it. Retry an uncertain response with the same idempotency key and identical body, then retrieve section 6.4. Later corrections are accepted only through section 6.3c.
+
+**Relevant failures:** `409 PASSPORT_EXTRACTION_NOT_READY`, `409 DOCUMENT_UPLOADS_INCOMPLETE`, `409 TRAVELER_CONFIRMATION_CONFLICT`, `409 TRAVELER_ALREADY_CONFIRMED` when different values are submitted after confirmation, and `410 DOCUMENT_VERIFICATION_EXPIRED`.
+
+### 6.3c Correct a confirmed traveller after a mismatch
+
+This endpoint is available only when section 6.4 reports `status: MANUAL_REVIEW` and `failureCode: TRAVELLER_DETAILS_UNCONFIRMED`.
+
+```http
+POST /api/v1/partners/document-verifications/20000000-0000-4000-8000-000000000001/traveler-corrections
+Authorization: Bearer vc_partner_<key-prefix>.<secret>
+Idempotency-Key: agency-order-1042-traveler-correction-1
+Content-Type: application/json
+
+{
+  "traveler": {
+    "title": "MS",
+    "firstName": "Asha",
+    "surname": "Shrestha",
+    "dateOfBirth": "1990-05-14",
+    "nationality": "NP",
+    "city": "Kathmandu",
+    "countryOfResidence": "NP",
+    "email": "asha@example.com",
+    "mobile": "+9779812345678",
+    "passportNumber": "PA1234567",
+    "passportExpiryDate": "2030-05-14"
+  },
+  "reason": "Corrected the passport number after traveller review"
+}
+```
+
+`reason` must contain 10-500 characters. The endpoint stores an immutable revision and re-runs verification. Only one concurrent correction wins; another receives `409 TRAVELER_CORRECTION_CONFLICT`. At most four traveller revisions are retained, including the initial confirmation. After that, manual review is required.
+
+**200 response:** `verificationId`, `revision`, `status: PROCESSING`, and `replayed`.
+**Relevant failures:** `409 TRAVELER_CORRECTION_NOT_ALLOWED`, `409 TRAVELER_CORRECTION_CONFLICT`, `409 TRAVELER_CORRECTION_LIMIT_REACHED`, and `410 DOCUMENT_VERIFICATION_EXPIRED`.
 
 ### 6.4 Check verification status
 
@@ -435,10 +513,26 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
     "id": "20000000-0000-4000-8000-000000000001",
     "externalOrderId": "agency-order-1042",
     "status": "VERIFIED",
+    "mode": "EXTRACT_FIRST",
     "failureCode": null,
     "expiresAt": "2026-09-01T04:15:02.000Z",
     "consumedAt": null,
+    "travelerConfirmationRequired": false,
+    "suggestedTraveler": {
+      "status": "READY",
+      "fields": {
+        "firstName": "Asha",
+        "surname": "Shrestha",
+        "dateOfBirth": "1990-05-14",
+        "nationality": "NP",
+        "passportNumber": "PA1234567",
+        "passportExpiryDate": "2030-05-14"
+      },
+      "fieldsRequiringInput": []
+    },
+    "draftCreationAllowed": true,
     "orderCreationAllowed": true,
+    "fulfillmentAllowed": true,
     "documents": [
       {
         "id": "30000000-0000-4000-8000-000000000001",
@@ -587,7 +681,7 @@ Content-Type: application/json
 }
 ```
 
-**Carry forward:** persist `data.id` as Visa Compass `orderId`; use it for all order endpoints. Persist `data.externalOrderId` for reconciliation. An initial purchase normally returns `REVIEW_PENDING`; poll the order or its verification. Call §7.1a only when `fulfillmentAllowed=true`. Do not create a second order while a pending, approved, or provisioning order already exists.
+**Carry forward:** persist `data.id` as Visa Compass `orderId`; use it for all order endpoints. Persist `data.externalOrderId` for reconciliation. An initial purchase normally returns `REVIEW_PENDING` and atomically reserves `totalAmountPaisa`; it does not yet debit the balance or provision an eSIM. Poll the order or its verification. Call section 7.1a only when `fulfillmentAllowed=true`. Do not create a second order while a pending, approved, or provisioning order already exists.
 
 **Relevant failures:**
 
@@ -597,7 +691,7 @@ Content-Type: application/json
 | 400  | `DOCUMENT_VERIFICATION_REQUIRED` | `Document verification is required for an initial purchase`       | Complete §6.                                               |
 | 400  | `VERIFICATION_ORDER_MISMATCH`    | `Document verification does not match this order`                 | Use verification for this external order only.             |
 | 400  | `DOCUMENT_REQUIRED`              | `Missing required documents: ...`                                 | Supply the named document type.                            |
-| 400  | `INSUFFICIENT_PARTNER_BALANCE`   | `Partner prepaid balance is insufficient`                         | Top up partner account; then submit a new request.         |
+| 402  | `INSUFFICIENT_PARTNER_BALANCE`   | `Partner prepaid balance is insufficient`                         | Top up partner account; then submit a new request.         |
 | 409  | `VERIFICATION_NOT_READY`         | `Document verification is not complete`                           | Poll §6.4.                                                 |
 | 409  | `DOCUMENT_UPLOAD_NOT_CONFIRMED`  | `Confirm every required document upload before placing the order` | Confirm all files.                                         |
 | 409  | `EXTERNAL_ORDER_ID_EXISTS`       | `External order ID already exists`                                | Call §8.3 by external order ID; do not duplicate the sale. |
@@ -616,7 +710,7 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 Idempotency-Key: agency-order-1042-finalize-v1
 ```
 
-There is no request body. This endpoint performs the final partner-account debit, changes the order to `APPROVED`, and starts provisioning. It is safe to call again after success: for an already `APPROVED`, provisioning, ready, attention, or completed order it returns the current order with **200**. Call it only when the order response's `fulfillmentAllowed` is `true`. Relevant failures are `404 PARTNER_ORDER_NOT_FOUND`, `409 VERIFICATION_NOT_READY`, `422 DOCUMENT_REUPLOAD_REQUIRED`, `409 PLAN_UNAVAILABLE`, `409 ORDER_CONFLICT`, `400 INSUFFICIENT_PARTNER_BALANCE`, and `409 ESIM_INVENTORY_UNAVAILABLE` / `No eSIM inventory is currently available`. For inventory exhaustion, do not retry immediately; refresh availability later or choose another plan.
+There is no request body. This endpoint atomically captures the existing reservation as the final partner-account debit, changes the order to `APPROVED`, and creates one fulfillment outbox command. It is safe to call again after success: for an already `APPROVED`, provisioning, ready, attention, or completed order it returns the current order with **200** and does not debit again. Call it only when the order response's `fulfillmentAllowed` is `true`. Relevant failures are `404 PARTNER_ORDER_NOT_FOUND`, `409 VERIFICATION_NOT_READY`, `422 DOCUMENT_REUPLOAD_REQUIRED`, `409 PLAN_UNAVAILABLE`, `409 ORDER_CONFLICT`, `402 INSUFFICIENT_PARTNER_BALANCE`, and `409 ESIM_INVENTORY_UNAVAILABLE` / `No eSIM inventory is currently available`. For inventory exhaustion, do not retry immediately; refresh availability later or choose another plan.
 
 ### 7.1b Replace a document requested during review
 
@@ -988,7 +1082,7 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 **Request:**
 
 ```http
-GET /api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events
+GET /api/v1/partners/orders/40000000-0000-4000-8000-000000000001/events?limit=50
 Authorization: Bearer vc_partner_<key-prefix>.<secret>
 ```
 
@@ -996,25 +1090,28 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 
 ```json
 {
-  "data": [
-    {
-      "id": "70000000-0000-4000-8000-000000000001",
-      "type": "order.accepted",
-      "version": 0,
-      "resourceId": "40000000-0000-4000-8000-000000000001",
-      "correlationId": "<correlation-id>",
-      "payload": {
-        "orderId": "40000000-0000-4000-8000-000000000001",
-        "externalOrderId": "agency-order-1042",
-        "status": "REVIEW_PENDING",
-        "fulfillmentStatus": "NOT_READY",
+  "data": {
+    "items": [
+      {
+        "id": "70000000-0000-4000-8000-000000000001",
+        "type": "order.accepted",
         "version": 0,
-        "amountPaisa": 250000,
-        "currency": "NPR"
-      },
-      "occurredAt": "2026-08-31T04:15:20.000Z"
-    }
-  ],
+        "resourceId": "40000000-0000-4000-8000-000000000001",
+        "correlationId": "<correlation-id>",
+        "payload": {
+          "orderId": "40000000-0000-4000-8000-000000000001",
+          "externalOrderId": "agency-order-1042",
+          "status": "REVIEW_PENDING",
+          "fulfillmentStatus": "NOT_READY",
+          "version": 0,
+          "amountPaisa": 250000,
+          "currency": "NPR"
+        },
+        "occurredAt": "2026-08-31T04:15:20.000Z"
+      }
+    ],
+    "nextCursor": null
+  },
   "meta": {
     "correlationId": "<correlation-id>",
     "timestamp": "2026-08-31T04:16:20.000Z"
@@ -1022,7 +1119,7 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 }
 ```
 
-Use events for audit/reconciliation; treat the current order endpoint as authoritative.
+`limit` defaults to 50 and is capped at 100. Pass the opaque `nextCursor` as `cursor` to read the next page. Events are ordered by `occurredAt` and ID so equal timestamps remain stable. Use events for audit/reconciliation; treat the current order endpoint as authoritative.
 
 ### 8.6 Get usage
 
@@ -1041,18 +1138,85 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 ```json
 {
   "data": {
+    "scope": "PHYSICAL_ESIM",
+    "anchorOrderId": "40000000-0000-4000-8000-000000000001",
+    "esim": {
+      "id": "70000000-0000-4000-8000-000000000001",
+      "iccid": "<sensitive-iccid>",
+      "msisdn": "<sensitive-msisdn>",
+      "status": "ACTIVATED"
+    },
+    "usageStatus": "AVAILABLE",
+    "completeness": "COMPLETE",
+    "freshness": "FRESH",
+    "lastConfirmedAt": "2026-08-31T04:16:55.000Z",
+    "oldestConfirmedAt": "2026-08-31T04:16:55.000Z",
+    "summary": {
+      "usedMb": 1024,
+      "totalMb": 10240,
+      "remainingMb": 9216
+    },
+    "packages": [
+      {
+        "packageReference": "provider-subscription-1",
+        "ownedByRequester": true,
+        "plan": { "name": "Japan 10 GB / 30 days" },
+        "status": "ACTIVE",
+        "balanceStatus": "AVAILABLE",
+        "usedMb": 1024,
+        "totalMb": 10240,
+        "remainingMb": 9216,
+        "activatedAt": "2026-08-31T04:15:55.000Z",
+        "expiresAt": "2026-09-30T04:15:55.000Z",
+        "lastConfirmedAt": "2026-08-31T04:16:55.000Z",
+        "orderId": "40000000-0000-4000-8000-000000000001",
+        "orderNumber": "VC-2026-40000000",
+        "externalOrderId": "agency-order-1042",
+        "purchaseType": "INITIAL_PURCHASE",
+        "providerSubscriptionId": "provider-subscription-1"
+      }
+    ],
     "usedMb": 1024,
     "totalMb": 10240,
     "usageAvailable": true,
     "subscriptions": [
       {
-        "providerSubscriptionId": "provider-subscription-1",
-        "status": "active",
+        "packageReference": "provider-subscription-1",
+        "ownedByRequester": true,
+        "plan": { "name": "Japan 10 GB / 30 days" },
+        "status": "ACTIVE",
+        "balanceStatus": "AVAILABLE",
         "usedMb": 1024,
         "totalMb": 10240,
-        "priority": 1
+        "remainingMb": 9216,
+        "activatedAt": "2026-08-31T04:15:55.000Z",
+        "expiresAt": "2026-09-30T04:15:55.000Z",
+        "lastConfirmedAt": "2026-08-31T04:16:55.000Z",
+        "orderId": "40000000-0000-4000-8000-000000000001",
+        "orderNumber": "VC-2026-40000000",
+        "externalOrderId": "agency-order-1042",
+        "purchaseType": "INITIAL_PURCHASE",
+        "providerSubscriptionId": "provider-subscription-1"
       }
-    ]
+    ],
+    "anchorPackage": {
+      "packageReference": "provider-subscription-1",
+      "ownedByRequester": true,
+      "plan": { "name": "Japan 10 GB / 30 days" },
+      "status": "ACTIVE",
+      "balanceStatus": "AVAILABLE",
+      "usedMb": 1024,
+      "totalMb": 10240,
+      "remainingMb": 9216,
+      "activatedAt": "2026-08-31T04:15:55.000Z",
+      "expiresAt": "2026-09-30T04:15:55.000Z",
+      "lastConfirmedAt": "2026-08-31T04:16:55.000Z",
+      "orderId": "40000000-0000-4000-8000-000000000001",
+      "orderNumber": "VC-2026-40000000",
+      "externalOrderId": "agency-order-1042",
+      "purchaseType": "INITIAL_PURCHASE",
+      "providerSubscriptionId": "provider-subscription-1"
+    }
   },
   "meta": {
     "correlationId": "<correlation-id>",
@@ -1061,7 +1225,13 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 }
 ```
 
-**Relevant failures:** `404 PARTNER_ORDER_NOT_FOUND` / `Order not found`; `400 PARTNER_USAGE_UNAVAILABLE` / `Usage details are available once the eSIM is active`. Wait for `COMPLETED` before retrying usage.
+`subscriptions` is a compatibility alias of `packages`, and `anchorPackage` is the matching package for an order-scoped lookup. Packages not sold by the requesting partner expose usage totals but omit that seller's private order and provider-subscription identifiers.
+
+Equivalent reads are available at `GET /partners/esims/{esimId}/usage` and `GET /partners/customers/{externalCustomerId}/usage`. Customer usage returns an array of authorized physical eSIM views, not eSIMs obtained from another seller.
+
+To request an upstream refresh, use `POST /partners/orders/{orderId}/usage/refresh` or `POST /partners/esims/{esimId}/usage/refresh` with a unique idempotency key. Refresh is limited per physical eSIM; repeated calls inside the cooldown return `429 USAGE_REFRESH_RATE_LIMITED` with `Retry-After`. The read response explicitly reports freshness and completeness so a partner can distinguish fresh, stale, partial, and unavailable provider data.
+
+**Relevant failures:** `404 PARTNER_ORDER_NOT_FOUND`, `404 PARTNER_ESIM_NOT_FOUND`, `400 PARTNER_USAGE_UNAVAILABLE`, and `429 USAGE_REFRESH_RATE_LIMITED`. Wait until the physical eSIM exists before requesting usage; do not interpret unavailable or stale data as zero consumption.
 
 ### 8.7 Get account
 
@@ -1080,7 +1250,9 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
   "data": {
     "currency": "NPR",
     "balancePaisa": 9750000,
-    "availableBalancePaisa": 9750000,
+    "reservedPaisa": 250000,
+    "creditLimitPaisa": 0,
+    "availableBalancePaisa": 9500000,
     "totalDebitsPaisa": 250000,
     "totalCreditsPaisa": 10000000,
     "totalRefundedPaisa": 0,
@@ -1100,7 +1272,7 @@ Authorization: Bearer vc_partner_<key-prefix>.<secret>
 }
 ```
 
-Use `balancePaisa` before creating sales. It is an informative read, not a reservation; the order endpoint performs the final debit check.
+`availableBalancePaisa` is `balancePaisa - reservedPaisa`. Initial-order creation reserves funds atomically; finalization captures that reservation; cancellation or an eligible failure releases it. Top-ups debit immediately because they enter provisioning without document review. `creditLimitPaisa` is always `0` in Partner API v1 because settlement is prepaid-only; credit is reserved for a future separately contracted capability. This read is informative: the mutation performs the authoritative concurrency-safe balance check.
 
 ### 8.8 Get ledger
 
@@ -1112,7 +1284,7 @@ GET /api/v1/partners/ledger?externalOrderId=agency-order-1042&limit=25
 Authorization: Bearer vc_partner_<key-prefix>.<secret>
 ```
 
-Optional query fields: `cursor`, `from`/`to` ISO datetimes, `externalOrderId`, `orderNumber`, `reference`, `type` (`CREDIT`, `DEBIT`, `REFUND`, `ADJUSTMENT`), and `limit` 1-100.
+Optional query fields: `cursor`, `from`/`to` ISO datetimes, `externalOrderId`, `orderNumber`, `reference`, `type` (`CREDIT`, `DEBIT`, `RESERVATION`, `CAPTURE`, `RELEASE`, `REFUND`, `ADJUSTMENT`), and `limit` 1-100.
 
 **200 response:**
 
@@ -1122,11 +1294,11 @@ Optional query fields: `cursor`, `from`/`to` ISO datetimes, `externalOrderId`, `
     "items": [
       {
         "id": "60000000-0000-4000-8000-000000000001",
-        "type": "DEBIT",
+        "type": "CAPTURE",
         "amountPaisa": 250000,
         "balanceAfterPaisa": 9750000,
         "currency": "NPR",
-        "reference": "debit:<partner-id>:agency-order-1042",
+        "reference": "capture:<partner-id>:agency-order-1042",
         "order": {
           "id": "40000000-0000-4000-8000-000000000001",
           "externalOrderId": "agency-order-1042",
@@ -1144,7 +1316,7 @@ Optional query fields: `cursor`, `from`/`to` ISO datetimes, `externalOrderId`, `
 }
 ```
 
-Use `nextCursor` for pagination. Use `DEBIT`/`REFUND` entries to reconcile order settlement.
+Use `nextCursor` for pagination. Reconcile `RESERVATION` followed by `CAPTURE` or `RELEASE` for initial purchases, `DEBIT` for immediate top-ups, and `REFUND` for returned funds. Never infer financial state from order status alone.
 
 ## 9. Mutate an existing order
 
@@ -1325,7 +1497,7 @@ VC-Webhook-Signature: v1=<hex-hmac>
   "id": "event-uuid",
   "partnerId": "partner-uuid",
   "type": "order.accepted",
-  "version": 0,
+  "version": "1.0",
   "resourceId": "40000000-0000-4000-8000-000000000001",
   "occurredAt": "2026-08-31T04:15:20.000Z",
   "correlationId": "<correlation-id>",
@@ -1348,14 +1520,17 @@ Verify `VC-Webhook-Signature` using:
 HMAC_SHA256(webhook_secret, "<VC-Webhook-Timestamp>.<exact-raw-request-body>")
 ```
 
-Deduplicate on `VC-Event-Id`, reject stale timestamps under your replay policy, and do not follow webhook payloads with assumptions about event order. Visa Compass does not follow redirects, times out after 10 seconds, and attempts delivery at most three times.
+Deduplicate on `VC-Event-Id`, reject stale timestamps under your replay policy, and do not follow webhook payloads with assumptions about event order. Production webhook destinations must use HTTPS. Visa Compass validates and pins the public destination address for each delivery, does not follow redirects, times out after 10 seconds, and makes up to eight delivery attempts with exponential backoff. A background reconciler re-enqueues eligible pending deliveries, so duplicate receipt must remain safe.
 
 ## 12. Partner implementation checklist
 
 - Store the API key and webhook secret only in server-side secret storage.
-- Persist idempotency keys, `externalOrderId`, `verificationId`, document IDs, order ID, and correlation IDs.
+- Persist idempotency keys, `externalOrderId`, `verificationId`, document IDs, traveller revision numbers, order ID, and correlation IDs.
 - Do not log documents, signed upload URLs, activation codes, ICCIDs, or MSISDNs.
-- Call order creation only with `orderCreationAllowed: true`.
+- Confirm the extracted traveller before order creation; correct it only through the versioned correction endpoint.
+- Call order creation only with `orderCreationAllowed: true`, and finalization only with `fulfillmentAllowed: true`.
+- Reconcile reservations, captures, releases, direct debits, and refunds from the ledger.
+- Persist and deduplicate webhook `VC-Event-Id` values before returning `2xx`.
 - After any uncertain POST result, retry the exact request with the same idempotency key or query by `externalOrderId`.
 - On `409` state conflicts, GET the resource before performing another mutation.
 - On `429`, follow `Retry-After`. On `5xx`, use bounded exponential backoff and contact support with correlation ID if persistent.

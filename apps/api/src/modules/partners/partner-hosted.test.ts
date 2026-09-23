@@ -75,6 +75,8 @@ describe("partner hosted checkout", () => {
           id: "document-1",
           type: "PASSPORT",
           fileName: "passport.pdf",
+          contentType: "application/pdf",
+          declaredSizeBytes: 100,
           expiresAt: new Date(Date.now() + 60_000),
         },
       ],
@@ -131,6 +133,65 @@ describe("partner hosted checkout", () => {
       resumed: true,
     });
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a changed declaration when an active upload session is resumed", async () => {
+    const existing = {
+      id: "verification-1",
+      externalOrderId: "ext-1",
+      mode: "EXTRACT_FIRST",
+      status: "AWAITING_UPLOAD",
+      expiresAt: new Date(Date.now() + 60_000),
+      checkoutReleaseAt: new Date(Date.now() + 10_000),
+      consumedAt: null,
+      documents: [
+        {
+          id: "document-1",
+          type: "PASSPORT",
+          fileName: "passport.pdf",
+          contentType: "application/pdf",
+          declaredSizeBytes: 100,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      ],
+    };
+    const instance = service({
+      partner: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ id: "partner-1", status: "ACTIVE" }),
+      },
+      platformConfiguration: {
+        findUnique: vi.fn().mockResolvedValue({
+          ocrCheckoutWaitMs: 10_000,
+          documentReviewPolicy: "AUTO_OCR",
+        }),
+      },
+      $transaction: vi.fn((callback) =>
+        callback({
+          partnerDocumentVerification: {
+            findUnique: vi.fn().mockResolvedValue(existing),
+          },
+        }),
+      ),
+    });
+
+    await expect(
+      instance.createUploadSessions("partner-1", {
+        mode: "EXTRACT_FIRST",
+        externalOrderId: "ext-1",
+        documents: [
+          {
+            type: "PASSPORT",
+            fileName: "different.pdf",
+            contentType: "application/pdf",
+            sizeBytes: 100,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      response: { code: "DOCUMENT_SESSION_DECLARATION_MISMATCH" },
+    });
   });
 
   it("accepts a valid hosted checkout session request", () => {
@@ -1282,6 +1343,80 @@ describe("partner extract-first traveler confirmation", () => {
     });
   });
 
+  it("rejects changed traveller data after the initial confirmation", async () => {
+    const encryptedSnapshot = {
+      title: "MR",
+      firstName: "Samir",
+      middleName: null,
+      surname: "Majhi",
+      dateOfBirthEncrypted: "encrypted:1995-01-01",
+      nationality: "NP",
+      city: "Kathmandu",
+      countryOfResidence: "NP",
+      employerOrBusinessName: null,
+      email: "customer@example.com",
+      mobile: "+9779800000000",
+      passportNumberEncrypted: "encrypted:PA1234567",
+      passportNumberHash: "index:PA1234567",
+      passportExpiryEncrypted: "encrypted:2030-01-01",
+      pointOfSaleCode: null,
+    };
+    const prisma = {
+      partnerDocumentVerification: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "verification-1",
+          partnerId: "partner-1",
+          mode: "EXTRACT_FIRST",
+          status: "PROCESSING",
+          reviewPolicy: "AUTO_OCR",
+          expiresAt: new Date(Date.now() + 60_000),
+          consumedAt: null,
+          documents: [
+            { type: "PASSPORT", uploadVerified: true },
+            { type: "TICKET", uploadVerified: true },
+          ],
+          passportExtraction: {
+            status: "READY",
+            passportAssetId: "passport-asset",
+          },
+        }),
+        findUnique: vi.fn().mockResolvedValue({
+          travelerSnapshot: encryptedSnapshot,
+          status: "PROCESSING",
+        }),
+      },
+      $transaction: vi.fn((callback) =>
+        callback({
+          partnerDocumentVerification: {
+            updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+          },
+        }),
+      ),
+    };
+    const instance = new PartnerService(
+      prisma as never,
+      {
+        encrypt: (value: string) => `encrypted:${value}`,
+        blindIndex: (value: string) => `index:${value}`,
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      instance.confirmExtractedTraveler("partner-1", "verification-1", {
+        ...traveler,
+        passportNumber: "PA7654321",
+      }),
+    ).rejects.toMatchObject({
+      response: { code: "TRAVELER_ALREADY_CONFIRMED" },
+    });
+  });
+
   it("requires an idempotency key for a traveler correction", async () => {
     const instance = service({});
     await expect(
@@ -1317,7 +1452,10 @@ describe("partner extract-first traveler confirmation", () => {
       $transaction: vi.fn((callback) =>
         callback({
           partnerDocumentVerification: { findFirst, updateMany },
-          partnerTravelerRevision: { findUnique: vi.fn(), create: revisionCreate },
+          partnerTravelerRevision: {
+            findUnique: vi.fn(),
+            create: revisionCreate,
+          },
         }),
       ),
       passportExtraction: {
