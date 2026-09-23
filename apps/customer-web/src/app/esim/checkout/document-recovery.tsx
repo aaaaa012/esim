@@ -20,6 +20,7 @@ export function DocumentRecoveryFields({
   disabled,
   capture = true,
   passportFailureCode,
+  replacementReason,
 }: {
   documents?: SavedDocument[] | undefined;
   types: string[];
@@ -28,6 +29,7 @@ export function DocumentRecoveryFields({
   disabled?: boolean;
   capture?: boolean;
   passportFailureCode?: string | undefined;
+  replacementReason?: string | undefined;
 }) {
   const [expanded, setExpanded] = useState<DocumentType[]>(["PASSPORT"]);
   return (
@@ -56,11 +58,14 @@ export function DocumentRecoveryFields({
                   </b>
                   <small>
                     {type === "PASSPORT" && needsReplacement
-                      ? passportFailureCode === "PASSPORT_EXPIRED"
-                        ? "This passport has expired. Upload a valid passport before continuing."
-                        : passportFailureCode === "PASSPORT_BIODATA_NOT_DETECTED"
-                          ? "Upload the passport information page, including the photo and machine-readable lines."
-                          : "Use a clear, complete photo of the information page."
+                      ? replacementReason
+                        ? replacementReason
+                        : passportFailureCode === "PASSPORT_EXPIRED"
+                          ? "This passport has expired. Upload a valid passport before continuing."
+                          : passportFailureCode ===
+                              "PASSPORT_BIODATA_NOT_DETECTED"
+                            ? "Upload the passport information page, including the photo and machine-readable lines."
+                            : "Use a clear, complete photo of the information page."
                       : optional
                         ? "Optional document"
                         : "Replace this document if it is incorrect or unclear."}

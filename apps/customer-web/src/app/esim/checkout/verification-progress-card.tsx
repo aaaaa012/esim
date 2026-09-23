@@ -26,7 +26,7 @@ function VerificationJourney({ compact = false }: { compact?: boolean }) {
           <i>
             <LockKeyhole size={13} />
           </i>
-          <b>Ready for payment</b>
+          <b>Your next step</b>
         </span>
       </div>
       <div className="verification-progress-track" aria-hidden="true">
@@ -74,7 +74,7 @@ export default function VerificationProgressCard({
 
   const statusCopy =
     elapsedBand === "initial"
-      ? "You can continue with your contact details while we read the passport."
+      ? "Your files are saved. You can safely leave while we read the passport."
       : elapsedBand === "delayed"
         ? "This is taking a little longer than usual. Your documents are safe and the check is still running."
         : "You do not need to keep this page open. We will email you and update your order when the check finishes.";

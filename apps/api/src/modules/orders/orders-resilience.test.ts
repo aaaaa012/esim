@@ -1748,7 +1748,7 @@ it("routes an explicitly confirmed unchanged mismatch to manual review", async (
         documentReviewStatus: "CORRECTION_REQUIRED",
         passportVerification: {
           status: "PARTIAL",
-          matchedFields: ["firstName", "surname"],
+          matchedFields: ["givenNames", "surname"],
           mismatchedFields: ["passportNumber"],
           checkedAt: new Date().toISOString(),
           method: "stored-extraction",

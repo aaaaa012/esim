@@ -39,9 +39,9 @@ export default function ManualReviewTracking({
         <div>
           <h3 id="manual-review-title">Review in progress</h3>
           <p>
-            No action is needed right now. We will update this order and email
-            you when payment is available. If a replacement is needed, we will
-            show the exact document and reason here.
+            No action is needed right now. You can leave and check this order
+            later for the decision. If a replacement is needed, we will show
+            the exact document and reason here.
           </p>
         </div>
       </div>

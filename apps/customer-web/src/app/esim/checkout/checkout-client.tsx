@@ -2270,7 +2270,6 @@ export default function CheckoutClient({
                     "OCR_PENDING",
                     "OCR_BACKGROUND",
                     "CORRECTION_REQUIRED",
-                    "MANUAL_REVIEW",
                   ].includes(order.documentReviewStatus ?? "") && (
                     <PassportCheck
                       result={order.passportVerification}
@@ -2294,6 +2293,15 @@ export default function CheckoutClient({
                         update(field as keyof Traveler, value)
                       }
                       onSave={() => void saveTraveler()}
+                      confirmationDisabled={(
+                        order.passportVerification?.mismatchedFields ?? []
+                      ).some(
+                        (field) =>
+                          String(traveler[field as keyof Traveler] ?? "") !==
+                          String(
+                            order.traveler?.[field as keyof Traveler] ?? "",
+                          ),
+                      )}
                       onConfirm={() => void confirmPassportDetails()}
                       onReplace={() => jumpTo(2)}
                     />
@@ -2595,6 +2603,13 @@ export default function CheckoutClient({
                             }
                             disabled={busy}
                             passportFailureCode={passportFailureCode}
+                            replacementReason={order?.timeline
+                              ?.slice()
+                              .reverse()
+                              .find((event) =>
+                                event.reason?.startsWith("PASSPORT:"),
+                              )
+                              ?.reason?.replace(/^PASSPORT:\s*/, "")}
                           />
                         ) : (
                           <fieldset
@@ -3457,6 +3472,7 @@ function PassportCheck({
   onEdit,
   onFieldChange,
   onSave,
+  confirmationDisabled = false,
   onConfirm,
   onReplace,
 }: {
@@ -3472,6 +3488,7 @@ function PassportCheck({
   onEdit?: () => void;
   onFieldChange?: (field: string, value: string) => void;
   onSave?: () => void;
+  confirmationDisabled?: boolean;
   onConfirm?: () => void;
   onReplace?: () => void;
 }) {
@@ -3489,8 +3506,8 @@ function PassportCheck({
         <span>
           <b>Verifying your passport</b>
           <small>
-            Payment unlocks as soon as the check completes. This usually takes
-            only a few seconds.
+            Your files are saved. We will show the next step when the check
+            completes; you can safely leave this page.
           </small>
         </span>
         <span className="passport-check-tag">{paymentLabel}</span>
@@ -3592,13 +3609,19 @@ function PassportCheck({
             <button
               type="button"
               className="button secondary"
-              disabled={busy}
+              disabled={busy || confirmationDisabled}
               onClick={onConfirm}
             >
               I checked—my details are correct
             </button>
           ) : null}
         </div>
+        {confirmationDisabled ? (
+          <p className="passport-mismatch-note" role="status">
+            Save your edits and check again before confirming that the original
+            details were correct.
+          </p>
+        ) : null}
       </div>
     );
   }

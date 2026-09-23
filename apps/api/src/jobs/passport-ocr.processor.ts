@@ -1,12 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { DocumentStatus, DocumentType, type Prisma } from "@prisma/client";
 import type { Job } from "bullmq";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { CryptoService } from "../infrastructure/crypto.service.js";
 import { S3StorageService } from "../infrastructure/s3-storage.service.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 import {
   PassportVerificationService,
+  canonicalIdentity,
   verifyStoredExtraction,
   type PassportExtractedFields,
 } from "../modules/orders/passport-verification.service.js";
@@ -334,13 +335,30 @@ export class PassportOcrProcessor implements OnModuleInit {
     const verified =
       result.status === "VERIFIED" || result.status === "SKIPPED";
     const partial = result.status === "PARTIAL";
+    const hasIdentityConflict = Boolean(result.mismatchedFields?.length);
+    const extractionHasName = Boolean(
+      storedFields?.firstName || storedFields?.surname,
+    );
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(canonicalIdentity(traveler)))
+      .digest("hex");
+    const repeatedMismatch =
+      order.passportExtraction?.lastMismatchFingerprint === fingerprint;
+    const correctionAttempts = hasIdentityConflict
+      ? (order.passportExtraction?.correctionAttempts ?? 0) +
+        (repeatedMismatch ? 0 : 1)
+      : (order.passportExtraction?.correctionAttempts ?? 0);
     // A comparison failure does not prove that the image is unusable. It can
     // equally mean that a traveller corrected (or mistyped) a field. Keep the
     // document available for correction and human review; only an explicit
     // reviewer decision may require a replacement image.
     const reviewStatus = verified
       ? "VERIFIED"
-      : storedFields && !technicalFailure
+      : storedFields &&
+          !technicalFailure &&
+          hasIdentityConflict &&
+          extractionHasName &&
+          correctionAttempts < 3
         ? "CORRECTION_REQUIRED"
         : "MANUAL_REVIEW";
     const correctionRequired = reviewStatus === "CORRECTION_REQUIRED";
@@ -357,6 +375,24 @@ export class PassportOcrProcessor implements OnModuleInit {
           },
         });
         if (orderClaim.count === 0) throw new ManualDocumentDecisionWon();
+
+        if (storedFields && hasIdentityConflict) {
+          const extractionClaim = await tx.passportExtraction.updateMany({
+            where: {
+              orderId: order.id,
+              passportAssetId: passport.privateAssetId,
+            },
+            data: {
+              correctionAttempts,
+              lastMismatchFingerprint: fingerprint,
+              lastMismatchFields:
+                result.mismatchedFields as Prisma.InputJsonValue,
+              confirmedMismatchFingerprint: null,
+            },
+          });
+          if (extractionClaim.count === 0)
+            throw new ManualDocumentDecisionWon();
+        }
 
         const documentClaim = await tx.travelerDocument.updateMany({
           where: {

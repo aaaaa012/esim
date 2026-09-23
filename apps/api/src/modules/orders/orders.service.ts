@@ -914,15 +914,6 @@ export class OrdersService implements OnModuleInit {
     const retryExistingPassport =
       replacingPassport || correctingMismatch || reverifyApprovedIdentity;
     order.traveler = traveler;
-    if (correctingMismatch && order.passportExtraction) {
-      if (
-        order.passportExtraction.lastMismatchFingerprint ===
-        submittedFingerprint
-      )
-        order.passportExtraction.confirmedMismatchFingerprint =
-          submittedFingerprint;
-      else delete order.passportExtraction.confirmedMismatchFingerprint;
-    }
     if (retryExistingPassport) {
       order.documentReviewStatus = "NOT_STARTED";
       delete order.documentReviewStartedAt;
@@ -1217,6 +1208,8 @@ export class OrdersService implements OnModuleInit {
     return this.runExclusive(`passport-verification:${id}`, async () => {
       await this.refreshOne(id, true);
       const order = this.get(id, ownerId ?? undefined);
+      if (order.documentReviewStatus === "MANUAL_REVIEW")
+        return this.redact(order);
       if (order.status !== OrderStatus.DRAFT)
         throw new BadRequestException("Submitted order is immutable");
       if (order.documentReviewStatus !== "CORRECTION_REQUIRED")
@@ -1232,16 +1225,19 @@ export class OrdersService implements OnModuleInit {
         );
 
       order.passportExtraction.confirmedMismatchFingerprint = fingerprint;
-      order.documentReviewStatus = "NOT_STARTED";
-      delete order.documentReviewStartedAt;
+      order.documentReviewStatus = "MANUAL_REVIEW";
+      order.documentReviewStartedAt = new Date().toISOString();
       delete order.documentCheckoutReleaseAt;
-      const passport = order.documents.find(
-        (document) => document.type === DocumentType.PASSPORT,
-      );
-      if (passport) passport.status = DocumentStatus.PENDING;
+      order.timeline.push({
+        from: order.status,
+        to: order.status,
+        at: new Date().toISOString(),
+        reason:
+          "Customer confirmed unchanged passport details for manual review",
+      });
       await this.persistence.save(order);
-
-      return this.verifyPassportUnlocked(id, ownerId);
+      await this.ensureDocumentReviewAttention(order);
+      return this.redact(order);
     });
   }
   async verifyPassport(id: string, ownerId: string | null) {

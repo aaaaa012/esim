@@ -17,8 +17,10 @@ it("shows non-blocking inline progress while OCR runs and closes it after verifi
   expect(screen.getByText("We’re checking your passport")).toBeDefined();
   expect(screen.getByText("Documents securely saved")).toBeDefined();
   expect(screen.getByText("Checking your passport")).toBeDefined();
-  expect(screen.getByText("Ready for payment")).toBeDefined();
-  expect(screen.getByText(/continue with your contact details/i)).toBeDefined();
+  expect(screen.getByText("Your next step")).toBeDefined();
+  expect(
+    screen.getByText(/safely leave while we read the passport/i),
+  ).toBeDefined();
   expect(view.container.textContent).not.toMatch(/\d+%/);
   view.rerender(<DocumentProgress status="VERIFIED" />);
   expect(screen.getByText("Passport verified")).toBeDefined();
