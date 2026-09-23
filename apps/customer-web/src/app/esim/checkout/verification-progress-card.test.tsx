@@ -23,7 +23,7 @@ it("shows non-blocking inline progress while OCR runs and closes it after verifi
   ).toBeDefined();
   expect(view.container.textContent).not.toMatch(/\d+%/);
   view.rerender(<DocumentProgress status="VERIFIED" />);
-  expect(screen.getByText("Passport verified")).toBeDefined();
+  expect(screen.getByText("Documents verified")).toBeDefined();
 });
 it("does not show automated verification for manual review or re-upload requests", () => {
   const view = render(<DocumentProgress status="MANUAL_REVIEW" />);
@@ -51,11 +51,11 @@ it("asks for traveller details when review starts before any identity was saved"
 });
 it("uses accurate labels for each accepted review outcome", () => {
   const view = render(<DocumentProgress status="VERIFIED" />);
-  expect(screen.getByText("Passport verified")).toBeDefined();
+  expect(screen.getByText("Documents verified")).toBeDefined();
   view.rerender(<DocumentProgress status="MANUALLY_APPROVED" />);
-  expect(screen.getByText("Documents approved")).toBeDefined();
+  expect(screen.getByText("Documents verified")).toBeDefined();
   view.rerender(<DocumentProgress status="SKIPPED" />);
-  expect(screen.getByText("Documents accepted")).toBeDefined();
+  expect(screen.getByText("Document check skipped")).toBeDefined();
 });
 it("pauses decorative verification motion while the page is hidden", () => {
   const view = render(<DocumentProgress status="OCR_PENDING" />);

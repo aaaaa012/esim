@@ -3324,6 +3324,257 @@
 .manual-review-help p {
   margin: 0;
 }
+
+/* Compact payment choice: the approved mobile payment reference. */
+.payment-verified-strip,
+.payment-mobile-summary {
+  display: none;
+}
+
+@media (max-width: 880px) {
+  .payment-selection {
+    padding: 12px 14px 72px;
+    background: var(--bg);
+  }
+  .payment-selection .checkout-shell {
+    display: flex;
+    flex-direction: column;
+  }
+  .payment-selection .compact-checkout-progress,
+  .payment-selection .checkout-progress {
+    order: 1;
+    width: 100%;
+    max-width: none;
+    margin: 0 0 20px;
+  }
+  .payment-selection .checkout-heading {
+    order: 2;
+    margin: 0 0 18px;
+  }
+  .payment-selection .checkout-heading h1 {
+    margin: 0;
+    font-size: clamp(27px, 7vw, 34px);
+    line-height: 1.12;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+  .payment-selection .checkout-heading > .back-link,
+  .payment-selection .checkout-heading > .eyebrow,
+  .payment-selection .checkout-heading > p {
+    display: none;
+  }
+  .payment-selection .checkout-layout {
+    order: 3;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 14px;
+  }
+  .payment-selection .checkout-layout > .order-summary {
+    display: none;
+  }
+  .payment-selection .payment-verified-strip {
+    order: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 11px 14px;
+    border: 1px solid color-mix(in srgb, var(--success) 25%, var(--border));
+    border-radius: 13px;
+    background: var(--success-soft);
+    color: var(--success);
+    font-size: 15px;
+    font-weight: 750;
+    width: 100%;
+  }
+  .payment-selection .payment-verified-strip svg {
+    flex: 0 0 auto;
+  }
+  .payment-selection .payment-mobile-summary {
+    order: 1;
+    display: block;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--surface);
+    width: 100%;
+  }
+  .payment-mobile-summary-main {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+  }
+  .payment-mobile-summary-main .summary-flag {
+    width: 42px;
+    height: 42px;
+    font-size: 24px;
+  }
+  .payment-mobile-summary-main > span:nth-child(2) {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+  .payment-mobile-summary-main small {
+    color: var(--text-3);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .payment-mobile-summary-main b {
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+  .payment-mobile-summary-main strong {
+    color: var(--primary);
+    font-size: 18px;
+    white-space: nowrap;
+  }
+  .payment-mobile-summary details {
+    margin-top: 13px;
+    border-top: 1px solid var(--border);
+  }
+  .payment-mobile-summary summary {
+    min-height: 44px;
+    padding-top: 13px;
+    color: var(--primary);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .payment-mobile-summary details > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 0;
+    font-size: 12px;
+  }
+  .payment-mobile-summary details > div span {
+    color: var(--text-2);
+  }
+  .payment-mobile-summary details > div b {
+    max-width: 60%;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+  .payment-selection .checkout-card {
+    order: 2;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
+  .payment-selection .step-tabs,
+  .payment-selection .form-section > .form-icon,
+  .payment-selection .form-section > h2 {
+    display: none;
+  }
+  .payment-selection .form-section {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    background: transparent;
+  }
+  .payment-selection .form-section > p {
+    margin: 0 0 12px;
+    font-size: 13px;
+  }
+  .payment-selection .payment-method-intro {
+    display: none;
+  }
+  .payment-selection .payment-security-note {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 1px 0 14px;
+    color: var(--text-2);
+    font-size: 12px;
+  }
+  .payment-selection .gateway-grid {
+    gap: 10px;
+    margin: 0 0 14px;
+  }
+  .payment-selection .payment-gateway-grid button {
+    position: relative;
+    align-items: center;
+    min-height: 76px;
+    padding: 12px 48px 12px 12px;
+    border-radius: 14px;
+  }
+  .payment-selection .payment-gateway-grid img {
+    width: 86px;
+    max-height: 38px;
+    flex-basis: 86px;
+  }
+  .payment-selection .payment-gateway-grid .gateway-copy b {
+    font-size: 15px;
+  }
+  .payment-selection .payment-gateway-grid .gateway-copy small {
+    font-size: 12px;
+  }
+  .payment-selection .payment-gateway-grid button::after {
+    content: "";
+    position: absolute;
+    right: 15px;
+    top: 50%;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--text-3);
+    border-radius: 50%;
+    transform: translateY(-50%);
+  }
+  .payment-selection .payment-gateway-grid button.selected::after {
+    border: 6px solid var(--primary);
+    background: white;
+  }
+  .payment-selection .payment-step-back {
+    order: 10;
+    align-self: center;
+    width: auto;
+    min-height: 44px;
+    margin-top: 10px;
+    padding: 8px 12px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--primary);
+    font-size: 14px;
+  }
+  .hosted-payment-selection .checkout-progress {
+    display: none;
+  }
+  .hosted-payment-selection .form-actions {
+    order: 10;
+    margin-top: 4px;
+    text-align: center;
+  }
+  .hosted-payment-selection .form-actions .payment-step-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+  }
+}
+
+@media (max-width: 380px) {
+  .payment-selection .payment-mobile-summary-main {
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 7px;
+  }
+  .payment-selection .payment-mobile-summary-main .summary-flag {
+    width: 36px;
+    height: 36px;
+  }
+  .payment-selection .payment-mobile-summary-main strong {
+    font-size: 16px;
+  }
+}
 .manual-review-help h2 {
   font-size: 17px;
 }

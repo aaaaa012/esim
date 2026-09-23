@@ -91,6 +91,26 @@ describe("homepage destination discovery", () => {
     expect(screen.getByText("NPR 999")).toBeTruthy();
   });
 
+  it("makes destinations usable while featured plans are still loading", async () => {
+    let resolvePlans!: (value: ReturnType<typeof ok>) => void;
+    const pendingPlans = new Promise<ReturnType<typeof ok>>((resolve) => {
+      resolvePlans = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        url.includes("countries")
+          ? Promise.resolve(ok(countries))
+          : pendingPlans,
+      ),
+    );
+    renderExplorer();
+    fireEvent.click(await screen.findByRole("button", { name: /India/i }));
+    expect(navigation.push).toHaveBeenCalledWith("/destinations?country=IN");
+    resolvePlans(ok(plans.map((plan) => ({ plan }))));
+    expect(await screen.findByRole("heading", { name: "India" })).toBeTruthy();
+  });
+
   it("uses backend popular plans when no curated favourites are configured", async () => {
     vi.stubGlobal(
       "fetch",

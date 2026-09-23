@@ -57,7 +57,6 @@ export default async function Home({
                 className="hero-scene-image hero-scene-dark"
                 src={heroDark}
                 alt=""
-                priority
                 sizes="(max-width: 860px) 100vw, 58vw"
               />
             </div>
@@ -120,7 +119,6 @@ export default async function Home({
                       alt=""
                       width={933}
                       height={371}
-                      priority
                     />
                     <div className="screen-head">
                       <div className="app-ident">

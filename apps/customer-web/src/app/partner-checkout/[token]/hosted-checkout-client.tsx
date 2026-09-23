@@ -18,7 +18,7 @@ import {
   Copy,
   Link2,
 } from "lucide-react";
-import { flagEmoji } from "../../country-picker";
+import { countryDisplayName, flagEmoji } from "../../country-picker";
 import {
   apiErrorMessage,
   canEnterTravelerFromPassport,
@@ -1227,8 +1227,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
 
   const plan = session!.order.plan;
   const isTopUp = session!.order.orderType === "TOPUP";
+  const showPaymentChoice = step === 4 && !isTopUp && !payment && !outcome;
+  const documentsVerified =
+    effectiveVerificationStatus === "VERIFIED" ||
+    effectiveVerificationStatus === "MANUALLY_APPROVED";
   return (
-    <main className="checkout-page">
+    <main className={`checkout-page${showPaymentChoice ? " payment-selection hosted-payment-selection" : ""}`}>
       <ErrorModal error={error || null} onClose={() => setError("")} />
       {successMessage && (
         <ErrorModal
@@ -1270,16 +1274,44 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               </span>
             </div>
           )}
-          <h1>Your travel eSIM</h1>
+          <h1>{showPaymentChoice ? "Choose how to pay" : "Your travel eSIM"}</h1>
           <p>
-            Complete your traveller details and documents to activate your{" "}
-            {plan.name} eSIM securely.
+            {showPaymentChoice
+              ? "Review your plan and select a secure payment method."
+              : `Complete your traveller details and documents to activate your ${plan.name} eSIM securely.`}
           </p>
         </div>
+        {showPaymentChoice ? (
+          <div className="compact-checkout-progress" role="progressbar" aria-label="Checkout step 4 of 4" aria-valuemin={1} aria-valuemax={4} aria-valuenow={4}>
+            <b>Step 4 of 4</b>
+            <span aria-hidden="true">{[1, 2, 3, 4].map((item) => <i className="complete" key={item} />)}</span>
+          </div>
+        ) : null}
         <div className="checkout-progress">
           <span style={{ width: `${step * (100 / 4)}%` }} />
         </div>
         <div className="checkout-layout">
+          {showPaymentChoice && documentsVerified ? (
+            <div className="payment-verified-strip" role="status">
+              <CheckCircle2 size={21} aria-hidden="true" />
+              <span>Documents verified</span>
+            </div>
+          ) : null}
+          {showPaymentChoice ? (
+            <div className="payment-mobile-summary">
+              <div className="payment-mobile-summary-main">
+                <span className="summary-flag" aria-hidden="true">{flagEmoji(plan.countryCode)}</span>
+                <span><small>Order summary</small><b>{countryDisplayName(plan.countryCode)} · {formatPlanDataText(plan.dataAllowance)} / {plan.validityDays} days</b></span>
+                <strong>{session!.order.currency} {session!.order.amountNpr.toLocaleString()}</strong>
+              </div>
+              <details>
+                <summary>View details</summary>
+                <div><span>Plan</span><b>{plan.name}</b></div>
+                <div><span>Destination</span><b>{countryDisplayName(plan.countryCode)}</b></div>
+                <div><span>Data & validity</span><b>{formatPlanDataText(plan.dataAllowance)} · {plan.validityDays} days</b></div>
+              </details>
+            </div>
+          ) : null}
           <section className="checkout-card" ref={transitionRef}>
             {checkoutAccessMode === "guest" && !outcome && (
               <div className="guest-recovery-card" role="note">
@@ -1488,7 +1520,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                   Pay {session!.order.currency}{" "}
                   {session!.order.amountNpr.toLocaleString()}
                 </h2>
-                <p>
+                <p className="payment-method-intro">
                   {orderNumber || session!.order.orderNumber} · Choose how you
                   would like to pay.
                 </p>
@@ -1577,9 +1609,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       <button
                         type="button"
                         className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
+                        aria-pressed={provider === PaymentProvider.KHALTI}
                         onClick={() => {
                           setProvider(PaymentProvider.KHALTI);
-                          setLockedProvider(PaymentProvider.KHALTI);
                         }}
                       >
                         <img src="/brand/khalti-logo.png" alt="Khalti" />
@@ -1594,9 +1626,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         <button
                           type="button"
                           className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
+                          aria-pressed={provider === PaymentProvider.FONEPAY}
                           onClick={() => {
                             setProvider(PaymentProvider.FONEPAY);
-                            setLockedProvider(PaymentProvider.FONEPAY);
                           }}
                         >
                           <img
@@ -1613,6 +1645,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       ) : null}
                     </div>
                   )
+                ) : null}
+                {showPaymentChoice && !lockedProvider ? (
+                  <p className="payment-security-note">
+                    <LockKeyhole size={15} aria-hidden="true" /> Secure payment in NPR
+                  </p>
                 ) : null}
                 {payment ? (
                   SIMULATOR ? (
@@ -1670,11 +1707,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     {!submitted && (
                       <div className="form-actions">
                         <button
-                          className="button secondary"
-                          onClick={() => stepJump(isTopUp ? 1 : 3)}
+                          className="button secondary payment-step-back"
+                          onClick={() => stepJump(isTopUp ? 1 : 2)}
                         >
                           <ChevronLeft size={16} />{" "}
-                          {isTopUp ? "Back" : "Traveller details"}
+                          {isTopUp ? "Back" : "Back to documents"}
                         </button>
                       </div>
                     )}
@@ -2191,7 +2228,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             </p>
             <p>
               <ShieldCheck size={14} /> Your documents are encrypted and
-              verified securely.
+              handled securely.
             </p>
           </aside>
         </div>
@@ -2306,7 +2343,7 @@ function PassportCheck({
       <div className="passport-check verified">
         <CheckCircle2 size={20} />
         <span>
-          <b>Passport verified</b>
+          <b>Documents verified</b>
           <small>Your passport matches your traveller details.</small>
         </span>
       </div>
@@ -2316,7 +2353,7 @@ function PassportCheck({
       <div className="passport-check verified">
         <CheckCircle2 size={20} />
         <span>
-          <b>Documents approved</b>
+          <b>Documents verified</b>
           <small>Your documents were reviewed and approved.</small>
         </span>
       </div>

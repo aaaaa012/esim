@@ -3871,17 +3871,17 @@
     padding: 16px;
   }
   .hero-discovery .country-picker-menu {
-    position: fixed;
-    z-index: 80;
-    top: auto;
-    right: 12px;
-    bottom: calc(74px + env(safe-area-inset-bottom));
-    left: 12px;
-    width: auto;
-    max-height: min(68dvh, 520px);
+    position: static;
+    width: 100%;
+    max-height: 260px;
+    margin-top: 8px;
+    box-shadow: 0 10px 24px -18px rgba(7, 66, 91, 0.4);
   }
   .hero-discovery .country-picker-options {
-    max-height: min(52dvh, 390px);
+    max-height: 204px;
+  }
+  .hero-note-journey {
+    display: none;
   }
   .hero-popular {
     flex-wrap: nowrap;
@@ -5065,7 +5065,15 @@
 /* ---------- Compact mobile refinement ---------- */
 @media (max-width: 540px) {
   .hero {
-    padding-block: 18px calc(148px + env(safe-area-inset-bottom));
+    min-height: 0;
+    padding-block: 18px calc(88px + env(safe-area-inset-bottom));
+  }
+  .hero-confidence {
+    margin-bottom: 0;
+  }
+  .hero-skyline {
+    bottom: 0;
+    height: 80px;
   }
   .hero h1 {
     margin-block: 18px 16px;

@@ -310,6 +310,10 @@ export function flagEmoji(countryCode?: string | null) {
   );
 }
 
+export function countryDisplayName(countryCode: string) {
+  return new Intl.DisplayNames(["en"], { type: "region" }).of(countryCode) ?? countryCode;
+}
+
 type Country = { code: string; name: string };
 
 export default function CountryPicker({

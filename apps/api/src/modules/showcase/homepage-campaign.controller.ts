@@ -153,7 +153,9 @@ export class HomepageCampaignPublicController {
   constructor(private readonly campaigns: HomepageCampaignService) {}
 
   @Get()
-  list() {
+  list(@Res({ passthrough: true }) response: Response) {
+    response.setHeader("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
+    response.vary("Origin");
     return this.campaigns.listActive();
   }
 }
@@ -169,7 +171,11 @@ const featuredPlanSchema = z.object({
 @Controller("public/homepage-featured-plans")
 export class HomepageFeaturedPlanPublicController {
   constructor(private readonly campaigns: HomepageCampaignService) {}
-  @Get() list() { return this.campaigns.listFeaturedPlans(); }
+  @Get() list(@Res({ passthrough: true }) response: Response) {
+    response.setHeader("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
+    response.vary("Origin");
+    return this.campaigns.listFeaturedPlans();
+  }
 }
 
 @Controller("admin/homepage-featured-plans")

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { Response } from "express";
 import {
   CatalogController,
   type CatalogService,
@@ -30,6 +31,22 @@ describe("catalog allowance normalization", () => {
 });
 
 describe("public catalog plan filters", () => {
+  it("allows short caching for public countries only", () => {
+    const countries = vi.fn().mockReturnValue([]);
+    const response = {
+      setHeader: vi.fn(),
+      vary: vi.fn(),
+    } as unknown as Response;
+    const controller = new CatalogController({ countries } as unknown as CatalogService);
+
+    expect(controller.countries(response)).toEqual([]);
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "Cache-Control",
+      "public, max-age=30, stale-while-revalidate=60",
+    );
+    expect(response.vary).toHaveBeenCalledWith("Origin");
+  });
+
   it("passes popular-only and a capped limit to the catalog service", () => {
     const plans = vi.fn().mockReturnValue([]);
     const controller = new CatalogController({

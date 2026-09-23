@@ -41,7 +41,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { JourneyArtwork } from "../../journey-chrome";
-import { flagEmoji } from "../../country-picker";
+import { countryDisplayName, flagEmoji } from "../../country-picker";
 import {
   DocumentProgress,
   SavedDocuments,
@@ -637,6 +637,14 @@ export default function CheckoutClient({
   const summaryPlan = order?.plan ?? previewPlan;
   const summaryPrice = order?.totalAmountNpr ?? summaryPlan?.sellingPriceNpr;
   const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
+  const showPaymentChoice =
+    !isTopUp &&
+    step === 4 &&
+    !payment &&
+    (!order || ["DRAFT", "PAYMENT_FAILED"].includes(order.status));
+  const documentsVerified =
+    order?.documentReviewStatus === "VERIFIED" ||
+    order?.documentReviewStatus === "MANUALLY_APPROVED";
   const manualNeedsTraveler =
     order?.documentReviewStatus === "MANUAL_REVIEW" &&
     !order.traveler &&
@@ -1971,7 +1979,7 @@ export default function CheckoutClient({
     );
   return (
     <main
-      className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}`}
+      className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}${showPaymentChoice ? " payment-selection" : ""}`}
     >
       {!isTopUp ? <JourneyArtwork /> : null}
       <div className="checkout-shell">
@@ -1983,11 +1991,13 @@ export default function CheckoutClient({
             <LockKeyhole size={13} />
             Secure checkout
           </span>
-          <h1>{isTopUp ? "Top up your eSIM" : "Your travel eSIM"}</h1>
+          <h1>{isTopUp ? "Top up your eSIM" : showPaymentChoice ? "Choose how to pay" : "Your travel eSIM"}</h1>
           <p>
             {isTopUp
               ? "Add a package to the authorized eSIM. Review your plan, pay, and track the recharge here."
-              : "Complete verification once. We’ll keep your order safe while our team reviews it."}
+              : showPaymentChoice
+                ? "Review your plan and select a secure payment method."
+                : "Complete verification once. We’ll keep your order safe while our team reviews it."}
           </p>
         </div>
         {!isTopUp ? (
@@ -2013,6 +2023,32 @@ export default function CheckoutClient({
         <div
           className={`checkout-layout${!isTopUp ? " initial-checkout" : ""}${!isTopUp && step === 4 ? " step-payment" : ""}`}
         >
+          {showPaymentChoice && documentsVerified ? (
+            <div className="payment-verified-strip" role="status">
+              <CheckCircle2 size={21} aria-hidden="true" />
+              <span>Documents verified</span>
+            </div>
+          ) : null}
+          {showPaymentChoice ? (
+            <div className="payment-mobile-summary">
+              <div className="payment-mobile-summary-main">
+                <span className="summary-flag" aria-hidden="true">
+                  {summaryPlan ? flagEmoji(summaryPlan.countryCode) : <Signal size={22} />}
+                </span>
+                <span>
+                  <small>Order summary</small>
+                  <b>{summaryPlan ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)} / ${summaryPlan.validityDays} days` : "Loading plan"}</b>
+                </span>
+                <strong>{summaryPrice === undefined ? "—" : `NPR ${summaryPrice.toLocaleString()}`}</strong>
+              </div>
+              <details>
+                <summary>View details</summary>
+                <div><span>Plan</span><b>{summaryPlan?.name ?? "Loading plan"}</b></div>
+                <div><span>Destination</span><b>{summaryPlan ? countryDisplayName(summaryPlan.countryCode) : "—"}</b></div>
+                <div><span>Data & validity</span><b>{summaryPlan ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days` : "—"}</b></div>
+              </details>
+            </div>
+          ) : null}
           <section className="checkout-card" ref={transitionRef}>
             <div className="step-tabs">
               {(isTopUp
@@ -2848,7 +2884,7 @@ export default function CheckoutClient({
                 </h2>
                 {!isTopUp && !checkoutDetailsLocked(order) ? (
                   <button
-                    className="button secondary"
+                    className="button secondary payment-step-back"
                     type="button"
                     onClick={goBack}
                     disabled={busy || verifying}
@@ -3058,7 +3094,7 @@ export default function CheckoutClient({
                           try again below.
                         </p>
                       )}
-                    <p>
+                    <p className="payment-method-intro">
                       {order?.status === "PAYMENT_PENDING"
                         ? payment?.qrDataUrl
                           ? "Scan the QR or choose your banking app below. Your order remains unpaid until Fonepay confirms the payment."
@@ -3113,6 +3149,7 @@ export default function CheckoutClient({
                           <button
                             type="button"
                             className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
+                            aria-pressed={provider === PaymentProvider.KHALTI}
                             disabled={
                               !retryDeclaredAllowed(
                                 order?.paymentRetry,
@@ -3121,7 +3158,6 @@ export default function CheckoutClient({
                             }
                             onClick={() => {
                               setProvider(PaymentProvider.KHALTI);
-                              setLockedProvider(PaymentProvider.KHALTI);
                             }}
                           >
                             <img src="/brand/khalti-logo.png" alt="Khalti" />
@@ -3136,6 +3172,7 @@ export default function CheckoutClient({
                             <button
                               type="button"
                               className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
+                              aria-pressed={provider === PaymentProvider.FONEPAY}
                               disabled={
                                 !retryDeclaredAllowed(
                                   order?.paymentRetry,
@@ -3144,7 +3181,6 @@ export default function CheckoutClient({
                               }
                               onClick={() => {
                                 setProvider(PaymentProvider.FONEPAY);
-                                setLockedProvider(PaymentProvider.FONEPAY);
                               }}
                             >
                               <img
@@ -3161,6 +3197,11 @@ export default function CheckoutClient({
                           ) : null}
                         </div>
                       )
+                    ) : null}
+                    {showPaymentChoice && !lockedProvider ? (
+                      <p className="payment-security-note">
+                        <LockKeyhole size={15} aria-hidden="true" /> Secure payment in NPR
+                      </p>
                     ) : null}
                     {order?.paymentRetry &&
                     !payment &&
@@ -3723,7 +3764,7 @@ function PassportCheck({
       <div className="passport-check verified">
         <CheckCircle2 size={20} />
         <span>
-          <b>Documents approved</b>
+          <b>Documents verified</b>
           <small>
             Our team reviewed and approved your documents. You can continue to
             payment.
@@ -3737,7 +3778,7 @@ function PassportCheck({
       <div className="passport-check verified">
         <CheckCircle2 size={20} />
         <span>
-          <b>Passport verified</b>
+          <b>Documents verified</b>
           <small>
             We matched your passport against your traveller details before
             payment.

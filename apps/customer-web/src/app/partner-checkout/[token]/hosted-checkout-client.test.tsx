@@ -216,7 +216,7 @@ describe("hosted checkout payment flow", () => {
       expect(
         screen.queryByRole("button", { name: "Complete order" }),
       ).toBeNull();
-      expect(screen.queryByText("Passport verified")).toBeNull();
+      expect(screen.getByText("Documents verified")).toBeTruthy();
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(
         fetchMock.mock.calls.some(
@@ -226,6 +226,7 @@ describe("hosted checkout payment flow", () => {
       fireEvent.click(
         screen.getByRole("button", { name: /Fonepay Mobile banking/ }),
       );
+      expect(screen.getByRole("button", { name: /Khalti wallet/ })).toBeTruthy();
       const pay = screen.getByRole("button", {
         name: "Continue to Fonepay",
       }) as HTMLButtonElement;

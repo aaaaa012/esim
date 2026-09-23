@@ -63,11 +63,7 @@ export function DocumentProgress({
     return () => window.clearTimeout(timer);
   }, [status, verified]);
   const verifiedTitle =
-    status === "MANUALLY_APPROVED"
-      ? "Documents approved"
-      : status === "SKIPPED"
-        ? "Documents accepted"
-        : "Passport verified";
+    status === "SKIPPED" ? "Document check skipped" : "Documents verified";
   if (pending && !busy) return <VerificationProgressCard message={message} />;
   return (
     <div

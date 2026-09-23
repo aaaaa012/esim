@@ -48,7 +48,7 @@ type FeaturedPlan = { plan: Plan };
 type ExplorerState = {
   countries: Country[];
   popularPlans: Plan[];
-  loading: boolean;
+  plansLoading: boolean;
   error: boolean;
   retry: () => void;
 };
@@ -68,26 +68,34 @@ export function HomepageExplorerProvider({
 }) {
   const [countries, setCountries] = useState<Country[]>([]);
   const [popularPlans, setPopularPlans] = useState<Plan[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [plansLoading, setPlansLoading] = useState(true);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
+    setPlansLoading(true);
     setError(false);
-    Promise.all([
-      fetch(`${API}/public/countries`, { signal: controller.signal }),
-      fetch(`${API}/public/homepage-featured-plans`, {
-        signal: controller.signal,
-      }),
-    ])
-      .then(async ([countriesResponse, plansResponse]) => {
-        if (!countriesResponse.ok || !plansResponse.ok) throw new Error();
-        const [countryData, planData] = (await Promise.all([
-          countriesResponse.json(),
-          plansResponse.json(),
-        ])) as [Envelope<Country[]>, Envelope<FeaturedPlan[]>];
+    fetch(`${API}/public/countries`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Destinations unavailable");
+        return (await response.json()) as Envelope<Country[]>;
+      })
+      .then((response) => {
+        if (!controller.signal.aborted) setCountries(response.data);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setCountries([]);
+          setError(true);
+        }
+      });
+    fetch(`${API}/public/homepage-featured-plans`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Featured plans unavailable");
+        const planData = (await response.json()) as Envelope<FeaturedPlan[]>;
         let homepagePlans = planData.data
           .map((feature) => feature?.plan)
           .filter((plan): plan is Plan => Boolean(plan));
@@ -111,18 +119,18 @@ export function HomepageExplorerProvider({
             // fallback should not prevent destinations from loading.
           }
         }
-        setCountries(countryData.data);
-        setPopularPlans(homepagePlans.slice(0, 24));
+        return homepagePlans.slice(0, 24);
       })
-      .catch((reason: unknown) => {
-        if (!(reason instanceof DOMException && reason.name === "AbortError")) {
-          setCountries([]);
+      .then((homepagePlans) => {
+        if (!controller.signal.aborted) setPopularPlans(homepagePlans);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
           setPopularPlans([]);
-          setError(true);
         }
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) setPlansLoading(false);
       });
     return () => controller.abort();
   }, [attempt]);
@@ -132,7 +140,7 @@ export function HomepageExplorerProvider({
       value={{
         countries,
         popularPlans,
-        loading,
+        plansLoading,
         error,
         retry: () => setAttempt((value) => value + 1),
       }}
@@ -144,7 +152,7 @@ export function HomepageExplorerProvider({
 
 export function HeroDestinationSearch() {
   const router = useRouter();
-  const { countries, loading, error, retry } = useHomepageExplorer();
+  const { countries, error, retry } = useHomepageExplorer();
   const [selected, setSelected] = useState("");
   const availableCountries = countries.length
     ? countries
@@ -169,9 +177,8 @@ export function HeroDestinationSearch() {
         countries={availableCountries}
         value={selected}
         onChange={setSelected}
-        disabled={loading && countries.length === 0}
         label="Where are you headed?"
-        placeholder={loading ? "Loading destinations…" : "Search destination"}
+        placeholder="Search destination"
         searchPlaceholder="Search destinations…"
         triggerIcon="search"
       />
@@ -227,7 +234,7 @@ function npr(amount: number) {
 }
 
 export function PopularRightNow() {
-  const { popularPlans, loading } = useHomepageExplorer();
+  const { popularPlans, plansLoading } = useHomepageExplorer();
   const railRef = useRef<HTMLDivElement>(null);
   const interactionPaused = useRef(false);
   const [paused, setPaused] = useState(false);
@@ -264,7 +271,7 @@ export function PopularRightNow() {
     }, 7000);
     return () => window.clearInterval(timer);
   }, [canRotate, paused, popularPlans.length]);
-  if (!loading && !popularPlans.length) return null;
+  if (!plansLoading && !popularPlans.length) return null;
 
   return (
     <section
@@ -313,7 +320,7 @@ export function PopularRightNow() {
         <div
           className="homepage-popular-rail"
           ref={railRef}
-          aria-busy={loading}
+          aria-busy={plansLoading}
           onMouseEnter={() => (interactionPaused.current = true)}
           onMouseLeave={() => (interactionPaused.current = false)}
           onFocusCapture={() => (interactionPaused.current = true)}
@@ -321,7 +328,7 @@ export function PopularRightNow() {
           onPointerDown={() => (interactionPaused.current = true)}
           onPointerUp={() => (interactionPaused.current = false)}
         >
-          {loading
+          {plansLoading
             ? [0, 1, 2].map((item) => (
                 <div className="homepage-plan-card is-loading" key={item} />
               ))

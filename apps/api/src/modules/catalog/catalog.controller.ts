@@ -6,8 +6,10 @@ import {
   NotFoundException,
   Param,
   Query,
+  Res,
 } from "@nestjs/common";
 import { RESTRICTED_PLAN_COUNTRY_CODES } from "@visa-compass/shared";
+import type { Response } from "express";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 export type CatalogPlan = {
   id: string;
@@ -206,7 +208,9 @@ export class CatalogService {
 @Controller("public")
 export class CatalogController {
   constructor(private readonly catalog: CatalogService) {}
-  @Get("countries") countries() {
+  @Get("countries") countries(@Res({ passthrough: true }) response: Response) {
+    response.setHeader("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
+    response.vary("Origin");
     return this.catalog.countries();
   }
   @Get("plans") plans(
