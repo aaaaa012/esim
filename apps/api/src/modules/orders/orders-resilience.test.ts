@@ -1926,6 +1926,74 @@ it("routes a partial extraction with no readable name to manual review", async (
   expect(add).not.toHaveBeenCalled();
 });
 
+it("routes customer-entered details directly to manual review when OCR produced no evidence", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "ocr-unavailable-manual-entry",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: customerTraveler(),
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: {},
+          fieldsRequiringInput: [
+            "firstName",
+            "surname",
+            "dateOfBirth",
+            "passportNumber",
+            "passportExpiryDate",
+            "nationality",
+          ],
+          passportAssetId: "passport-asset",
+          correctionAttempts: 0,
+          failureCode: "OCR_UNAVAILABLE",
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.pdf",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "ocr-unavailable-manual-entry",
+    "customer-1",
+  );
+
+  expect(result.documentReviewStatus).toBe("MANUAL_REVIEW");
+  expect(result.passportVerification).toMatchObject({
+    status: "NOT_READY",
+    method: "ocr-error",
+  });
+  expect(add).not.toHaveBeenCalled();
+});
+
 it("accepts entered nationality when OCR omitted it and all extracted identity fields match", async () => {
   const add = vi.fn().mockResolvedValue({});
   const instance = ordersService(

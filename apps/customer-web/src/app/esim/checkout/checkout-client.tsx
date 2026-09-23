@@ -1,5 +1,12 @@
 "use client";
-import { isIsoAlpha2CountryCode, orderStatusLabel } from "@visa-compass/shared";
+import {
+  canEnterTravelerFromPassport,
+  isIsoAlpha2CountryCode,
+  orderStatusLabel,
+  passportAutomationUnavailable,
+  passportFailurePresentation,
+  passportRequiresReplacement,
+} from "@visa-compass/shared";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { SignInButton, useAuth } from "@clerk/nextjs";
 
@@ -137,19 +144,7 @@ type Order = {
 
 export const canEnterTravelerAfterExtraction = (
   target: Pick<Order, "documentReviewStatus" | "passportExtraction">,
-) =>
-  target.documentReviewStatus !== "REUPLOAD_REQUIRED" &&
-  ![
-    "PASSPORT_EXPIRED",
-    "PASSPORT_BIODATA_NOT_DETECTED",
-    "MRZ_NOT_READABLE",
-  ].includes(target.passportExtraction?.failureCode ?? "") &&
-  Boolean(
-    target.passportExtraction &&
-    ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
-      target.passportExtraction.status,
-    ),
-  );
+) => canEnterTravelerFromPassport(target);
 
 type Payment = {
   reference: string;
@@ -1038,11 +1033,9 @@ export default function CheckoutClient({
       target.documentReviewStatus ?? "",
     );
   const passportFailureCode = order?.passportExtraction?.failureCode;
-  const hardPassportReplacementRequired = [
-    "PASSPORT_EXPIRED",
-    "PASSPORT_BIODATA_NOT_DETECTED",
-    "MRZ_NOT_READABLE",
-  ].includes(passportFailureCode ?? "");
+  const hardPassportReplacementRequired = passportRequiresReplacement(
+    passportFailureCode,
+  );
   const displayDocuments = (order?.documents ?? []).map((document) =>
     hardPassportReplacementRequired && document.type === "PASSPORT"
       ? { ...document, status: "REUPLOAD_REQUIRED" }
@@ -1099,7 +1092,25 @@ export default function CheckoutClient({
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
       jumpTo(2);
-  }, [effectiveDocumentReviewStatus, passportFailureCode, step]);
+  }, [
+    effectiveDocumentReviewStatus,
+    passportFailureCode,
+    step,
+  ]);
+  const technicalOcrNoticeShown = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      step === 3 &&
+      passportAutomationUnavailable(passportFailureCode) &&
+      technicalOcrNoticeShown.current !== passportFailureCode
+    ) {
+      technicalOcrNoticeShown.current = passportFailureCode ?? null;
+      setDocumentAttentionMessage(
+        passportFailurePresentation(passportFailureCode).message,
+      );
+    } else if (!passportAutomationUnavailable(passportFailureCode))
+      technicalOcrNoticeShown.current = null;
+  }, [passportFailureCode, step]);
   useEffect(() => {
     if (
       step === 3 &&
@@ -2000,15 +2011,7 @@ export default function CheckoutClient({
             {documentAttentionMessage && (
               <ErrorModal
                 error={documentAttentionMessage}
-                title={
-                  passportFailureCode === "PASSPORT_EXPIRED"
-                    ? "Passport expired"
-                    : passportFailureCode === "PASSPORT_BIODATA_NOT_DETECTED"
-                      ? "Passport document not recognized"
-                      : passportFailureCode === "MRZ_NOT_READABLE"
-                        ? "Passport details could not be read"
-                        : "Document check needs attention"
-                }
+                title={passportFailurePresentation(passportFailureCode).title}
                 onClose={() => setDocumentAttentionMessage("")}
               />
             )}

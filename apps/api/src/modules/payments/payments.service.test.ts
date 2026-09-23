@@ -7,6 +7,10 @@ import {
 } from "@visa-compass/shared";
 import { ApiException } from "../../common/api-error.js";
 import { PaymentsService } from "./payments.service.js";
+import {
+  initiationFailedBeforeRemoteIntent,
+  initiationRemoteOutcomeUnknown,
+} from "./payment-gateway.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyRecord = Record<string, any>;
@@ -283,6 +287,63 @@ describe("PaymentsService inventory admission", () => {
     expect(second.reference).toBe("shared-pidx");
     expect(initiate).toHaveBeenCalledOnce();
     expect(beginPayment).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [
+      "releases the claim when failure proves no remote intent exists",
+      initiationFailedBeforeRemoteIntent(new Error("authentication rejected")),
+      "FAILED",
+      "REMOTE_INTENT_NOT_CREATED",
+    ],
+    [
+      "holds the claim when the remote outcome is unknown",
+      initiationRemoteOutcomeUnknown(new Error("response timed out")),
+      "RECONCILIATION_REQUIRED",
+      "PROVIDER_OUTCOME_UNKNOWN",
+    ],
+  ])("%s", async (_name, gatewayError, expectedStatus, expectedCode) => {
+    const order = orderFor({
+      status: OrderStatus.DRAFT,
+      purchaseType: "TOPUP",
+      payment: undefined,
+    });
+    let record: AnyRecord | null = null;
+    const prisma = {
+      enabled: true,
+      paymentInitiation: {
+        create: vi.fn(async ({ data }: AnyRecord) => {
+          record = { id: "init-1", status: "PROCESSING", ...data };
+          return record;
+        }),
+        updateMany: vi.fn(async ({ data }: AnyRecord) => {
+          record = { ...record, ...data };
+          return { count: 1 };
+        }),
+      },
+      paymentEvent: { create: vi.fn(), createMany: vi.fn() },
+    };
+    const initiate = vi.fn().mockRejectedValue(gatewayError);
+    const service = new PaymentsService(
+      {
+        refreshOne: vi.fn(),
+        get: vi.fn().mockReturnValue(order),
+        assertInventoryAvailableForNewOrder: vi.fn(),
+      } as never,
+      { initiate } as never,
+      { initiate } as never,
+      undefined,
+      undefined,
+      prisma as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.KHALTI),
+    ).rejects.toThrow();
+    expect(record).toMatchObject({
+      status: expectedStatus,
+      errorCode: expectedCode,
+    });
   });
 
   it("blocks provider switching while a persisted session is active", async () => {

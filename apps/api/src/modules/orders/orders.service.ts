@@ -16,6 +16,7 @@ import {
   PaymentProvider,
   PaymentStatus,
   declarePaymentRetry,
+  passportRequiresManualReview,
   provisioningFailure,
   type PaymentRetryDeclaration,
   type ProvisioningFailure,
@@ -1414,6 +1415,29 @@ export class OrdersService implements OnModuleInit {
       return this.redact(order);
     }
     const extraction = order.passportExtraction;
+    if (
+      extraction?.status === "MANUAL_ENTRY_REQUIRED" &&
+      order.traveler &&
+      passportRequiresManualReview(extraction.failureCode)
+    ) {
+      // There is no OCR evidence to compare against. Re-running the same failed
+      // extraction after the customer enters data creates a loop and can never
+      // establish identity. Preserve the document and route deterministically
+      // to human review; payment remains blocked until explicit approval.
+      order.documentReviewStatus = "MANUAL_REVIEW";
+      order.passportVerification = {
+        status: "NOT_READY",
+        matchedFields: [],
+        checkedAt: now.toISOString(),
+        method: "ocr-error",
+        detail:
+          "Automatic extraction was unavailable; customer-entered details require manual comparison with the saved passport",
+      };
+      passport.status = DocumentStatus.PENDING;
+      await this.persistence.save(order);
+      await this.ensureDocumentReviewAttention(order);
+      return this.redact(order);
+    }
     if (
       extraction &&
       ["READY", "PARTIAL"].includes(extraction.status) &&

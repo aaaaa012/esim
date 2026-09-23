@@ -20,6 +20,7 @@ import { MetricsService } from "../../observability/metrics.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { PaymentInitiationStatus, Prisma } from "@prisma/client";
+import { PaymentInitiationError } from "./payment-gateway.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
@@ -535,6 +536,9 @@ export class PaymentsService {
       });
       return result;
     } catch (error) {
+      const definitelyNotCreated =
+        error instanceof PaymentInitiationError &&
+        error.certainty === "NO_REMOTE_INTENT";
       await prisma.paymentInitiation.updateMany({
         where: {
           orderId: order.id,
@@ -542,9 +546,15 @@ export class PaymentsService {
           status: PaymentInitiationStatus.PROCESSING,
         },
         data: {
-          status: PaymentInitiationStatus.RECONCILIATION_REQUIRED,
-          errorCode: "PROVIDER_OUTCOME_UNKNOWN",
-          leaseExpiresAt: new Date(Date.now() + 5 * 60_000),
+          status: definitelyNotCreated
+            ? PaymentInitiationStatus.FAILED
+            : PaymentInitiationStatus.RECONCILIATION_REQUIRED,
+          errorCode: definitelyNotCreated
+            ? "REMOTE_INTENT_NOT_CREATED"
+            : "PROVIDER_OUTCOME_UNKNOWN",
+          leaseExpiresAt: definitelyNotCreated
+            ? new Date()
+            : new Date(Date.now() + 5 * 60_000),
         },
       });
       await prisma.paymentEvent?.createMany({
@@ -552,7 +562,9 @@ export class PaymentsService {
           {
             orderId: order.id,
             provider: provider as never,
-            eventType: "PAYMENT_INITIATION_RECONCILIATION_REQUIRED",
+            eventType: definitelyNotCreated
+              ? "PAYMENT_INITIATION_FAILED_SAFE_TO_RETRY"
+              : "PAYMENT_INITIATION_RECONCILIATION_REQUIRED",
             source: "CHECKOUT",
             amount: order.totalAmountNpr,
             currency: "NPR",
@@ -560,12 +572,14 @@ export class PaymentsService {
               ? error.message
               : String(error)
             ).slice(0, 500),
-            dedupeKey: `payment-initiation-uncertain:${claimToken}`,
+            dedupeKey: definitelyNotCreated
+              ? `payment-initiation-failed:${claimToken}`
+              : `payment-initiation-uncertain:${claimToken}`,
           },
         ],
         skipDuplicates: true,
       });
-      void this.resilience?.attention({
+      if (!definitelyNotCreated) void this.resilience?.attention({
         dedupeKey: `payment-initiation-uncertain:${order.id}`,
         category: "PAYMENT",
         entityType: "PaymentInitiation",
@@ -575,7 +589,7 @@ export class PaymentsService {
         summary: `Payment initiation outcome requires reconciliation for ${order.orderNumber}`,
         failureCategory: "PAYMENT_PROVIDER_OUTCOME_UNKNOWN",
       });
-      throw error;
+      throw error instanceof PaymentInitiationError ? error.cause : error;
     }
   }
 

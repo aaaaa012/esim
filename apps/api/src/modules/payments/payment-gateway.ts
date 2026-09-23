@@ -1,4 +1,29 @@
 import type { PaymentStatus } from "@visa-compass/shared";
+
+export type PaymentInitiationCertainty =
+  | "NO_REMOTE_INTENT"
+  | "REMOTE_OUTCOME_UNKNOWN";
+
+/** Records whether a failed initiation could still have created a chargeable remote intent. */
+export class PaymentInitiationError extends Error {
+  constructor(
+    readonly certainty: PaymentInitiationCertainty,
+    readonly cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), {
+      cause: cause instanceof Error ? cause : undefined,
+    });
+    this.name = "PaymentInitiationError";
+    if (cause && typeof cause === "object") Object.assign(this, cause);
+    this.name = "PaymentInitiationError";
+  }
+}
+
+export const initiationFailedBeforeRemoteIntent = (cause: unknown) =>
+  new PaymentInitiationError("NO_REMOTE_INTENT", cause);
+
+export const initiationRemoteOutcomeUnknown = (cause: unknown) =>
+  new PaymentInitiationError("REMOTE_OUTCOME_UNKNOWN", cause);
 export type PaymentInitiation = {
   reference: string;
   redirectUrl: string;

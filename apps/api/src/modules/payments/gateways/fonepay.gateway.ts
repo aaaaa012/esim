@@ -9,7 +9,12 @@ import { ApiException } from "../../../common/api-error.js";
 import { logRedactionEnabled } from "../../../common/redact.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
-import { PaymentCapability } from "../payment-gateway.js";
+import {
+  PaymentCapability,
+  PaymentInitiationError,
+  initiationFailedBeforeRemoteIntent,
+  initiationRemoteOutcomeUnknown,
+} from "../payment-gateway.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -150,6 +155,13 @@ export class FonepayGateway implements PaymentGateway {
       status: 503,
       details,
     });
+  }
+  private failBeforeIntent(details: string): never {
+    try {
+      return this.fail(details);
+    } catch (error) {
+      throw initiationFailedBeforeRemoteIntent(error);
+    }
   }
   private terminalId(): string {
     const terminalId = process.env.FONEPAY_TERMINAL_ID;
@@ -401,8 +413,15 @@ export class FonepayGateway implements PaymentGateway {
       requestBody: this.redact(payload),
       responseBody: this.redact(data),
     });
-    if (!response.ok)
-      return this.fail(`Fonepay ${path} failed (${response.status})`);
+    if (!response.ok) {
+      try {
+        return this.fail(`Fonepay ${path} failed (${response.status})`);
+      } catch (error) {
+        if (path.endsWith("/generate-intent-qr"))
+          throw initiationFailedBeforeRemoteIntent(error);
+        throw error;
+      }
+    }
     return data as Record<string, unknown>;
   }
 
@@ -618,11 +637,11 @@ export class FonepayGateway implements PaymentGateway {
       input.amountNpr < FONEPAY_AMOUNT_MIN ||
       input.amountNpr > FONEPAY_AMOUNT_MAX
     )
-      return this.fail(
+      return this.failBeforeIntent(
         `Fonepay amount must be between NPR ${FONEPAY_AMOUNT_MIN} and NPR ${FONEPAY_AMOUNT_MAX.toLocaleString()}`,
       );
     if (!input.orderNumber.trim())
-      return this.fail("Fonepay billId must not be blank");
+      return this.failBeforeIntent("Fonepay billId must not be blank");
     // Fonepay requested a shorter billId. The QR/status flows only correlate
     // via referenceLabel/prn, so billId is a pure invoice label: derive a
     // compact alphanumeric value (VC + year-tail + order-id tail) from the
@@ -632,41 +651,68 @@ export class FonepayGateway implements PaymentGateway {
       ? `VC${billMatch[1]!.slice(-2)}${billMatch[2]!.toUpperCase()}`
       : (input.orderNumber.replace(/[^A-Za-z0-9]/g, "").slice(0, 12).toUpperCase() ||
           input.orderNumber);
-    const terminalId = this.terminalId();
+    let terminalId: string;
+    try {
+      terminalId = this.terminalId();
+    } catch (error) {
+      throw initiationFailedBeforeRemoteIntent(error);
+    }
     const alnumOnly = input.attemptId.replace(/[^A-Za-z0-9]/g, "");
     if (!alnumOnly)
-      return this.fail(
+      return this.failBeforeIntent(
         "Fonepay referenceLabel: attemptId produced no alphanumeric characters",
       );
     const reference = `VC${alnumOnly.slice(0, FONEPAY_REFERENCE_MAX - 2)}`;
     if (!REFERENCE_LABEL_RE.test(reference))
-      return this.fail(
+      return this.failBeforeIntent(
         "Fonepay referenceLabel must be alphanumeric only (V1.10 §9.4)",
       );
+    try {
+      // Authentication and signing complete before the payment-creating call.
+      // A failure here proves that no remote intent exists.
+      await this.auth(input.orderId);
+    } catch (error) {
+      throw initiationFailedBeforeRemoteIntent(error);
+    }
     // Bank discovery is optional checkout enhancement data. A failed refresh
     // returns cached data (or an empty list) and must never block QR creation.
     const banks = await this.banksForCheckout(input.orderId);
-    const qrRaw = await this.request(
-      `${this.basePath}/generate-intent-qr`,
-      "POST",
-      {
-        amount: input.amountNpr,
-        billId,
-        terminalId,
-        paymentMode: "QR",
-        referenceLabel: reference,
-        qrType: "INTENT_QR",
-      },
-      {},
-      input.orderId,
-    );
+    let qrRaw: Record<string, unknown>;
+    try {
+      qrRaw = await this.request(
+        `${this.basePath}/generate-intent-qr`,
+        "POST",
+        {
+          amount: input.amountNpr,
+          billId,
+          terminalId,
+          paymentMode: "QR",
+          referenceLabel: reference,
+          qrType: "INTENT_QR",
+        },
+        {},
+        input.orderId,
+      );
+    } catch (error) {
+      if (error instanceof PaymentInitiationError) throw error;
+      // Once the intent request has been sent, a lost/invalid response cannot
+      // prove that Fonepay did not create the QR.
+      throw initiationRemoteOutcomeUnknown(error);
+    }
     const parsedQr = qrResponseSchema.safeParse(qrRaw);
-    if (!parsedQr.success) return this.fail("Fonepay QR response was invalid");
+    if (!parsedQr.success)
+      throw initiationRemoteOutcomeUnknown(
+        new Error("Fonepay QR response was invalid"),
+      );
     const qr = parsedQr.data;
     if (qr.status.toLowerCase() !== "success")
-      return this.fail(`Fonepay QR generation returned status: ${qr.status}`);
+      return this.failBeforeIntent(
+        `Fonepay QR generation returned status: ${qr.status}`,
+      );
     if (qr.prn !== reference)
-      return this.fail("Fonepay QR reference did not match the request");
+      throw initiationRemoteOutcomeUnknown(
+        new Error("Fonepay QR reference did not match the request"),
+      );
     // V1.10 assigns distinct semantics: qrString is rendered for scanning,
     // while qrMessage is passed to an issuer app through its deep link.
     const qrPayload = qr.qrMessage?.trim();

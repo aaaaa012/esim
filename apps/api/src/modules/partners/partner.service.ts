@@ -25,6 +25,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   documentTypeLabel,
   DocumentType as SharedDocumentType,
+  passportRequiresManualReview,
   RESTRICTED_PLAN_COUNTRY_CODES,
   type TravelerInput,
 } from "@visa-compass/shared";
@@ -927,6 +928,9 @@ export class PartnerService {
       });
 
     const confirmedAt = new Date();
+    const automationUnavailable = passportRequiresManualReview(
+      verification.passportExtraction.failureCode,
+    );
     const claimed = await this.prisma.$transaction(async (tx) => {
       const claim = await tx.partnerDocumentVerification.updateMany({
         where: {
@@ -948,11 +952,15 @@ export class PartnerService {
           ) as unknown as Prisma.InputJsonValue,
           status:
             verification.reviewPolicy === "AUTO_OCR"
-              ? "PROCESSING"
+              ? automationUnavailable
+                ? "MANUAL_REVIEW"
+                : "PROCESSING"
               : verification.reviewPolicy === "NO_REVIEW"
                 ? "SKIPPED"
                 : "MANUAL_REVIEW",
-          failureCode: null,
+          failureCode: automationUnavailable
+            ? "OCR_EVIDENCE_UNAVAILABLE_MANUAL_REVIEW"
+            : null,
         },
       });
       if (claim.count)
@@ -1004,7 +1012,7 @@ export class PartnerService {
         message: "The verification changed; retrieve it before trying again",
       });
     }
-    if (verification.reviewPolicy === "AUTO_OCR") {
+    if (verification.reviewPolicy === "AUTO_OCR" && !automationUnavailable) {
       try {
         const attemptKey = createHash("sha256")
           .update(
@@ -1039,12 +1047,15 @@ export class PartnerService {
       id: verification.id,
       status:
         verification.reviewPolicy === "AUTO_OCR"
-          ? "PROCESSING"
+          ? automationUnavailable
+            ? "MANUAL_REVIEW"
+            : "PROCESSING"
           : verification.reviewPolicy === "NO_REVIEW"
             ? "SKIPPED"
             : "MANUAL_REVIEW",
       confirmed: true,
-      verificationQueued: verification.reviewPolicy === "AUTO_OCR",
+      verificationQueued:
+        verification.reviewPolicy === "AUTO_OCR" && !automationUnavailable,
     };
   }
 

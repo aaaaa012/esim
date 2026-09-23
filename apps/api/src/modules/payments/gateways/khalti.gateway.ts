@@ -5,7 +5,11 @@ import { ApiException } from "../../../common/api-error.js";
 import { logRedactionEnabled } from "../../../common/redact.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
-import { PaymentCapability } from "../payment-gateway.js";
+import {
+  PaymentCapability,
+  initiationFailedBeforeRemoteIntent,
+  initiationRemoteOutcomeUnknown,
+} from "../payment-gateway.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -292,44 +296,57 @@ export class KhaltiGateway implements PaymentGateway {
     amountNpr: number;
     returnUrl: string;
   }): Promise<PaymentInitiation> {
-    const response = await this.post(
-      "/epayment/initiate/",
-      {
-        return_url: input.returnUrl,
-        website_url: new URL(input.returnUrl).origin,
-        amount: Math.round(input.amountNpr * 100),
-        purchase_order_id: input.orderId,
-        purchase_order_name: input.orderNumber,
-      },
-      "initiation",
-      input.orderId,
-    );
-    if (!response.ok)
-      throw this.providerError(
+    try {
+      this.ensureConfigured();
+      new URL(input.returnUrl);
+    } catch (error) {
+      throw initiationFailedBeforeRemoteIntent(error);
+    }
+    let response: Response;
+    try {
+      response = await this.post(
+        "/epayment/initiate/",
+        {
+          return_url: input.returnUrl,
+          website_url: new URL(input.returnUrl).origin,
+          amount: Math.round(input.amountNpr * 100),
+          purchase_order_id: input.orderId,
+          purchase_order_name: input.orderNumber,
+        },
         "initiation",
-        response,
-        await this.providerDetail(response),
+        input.orderId,
+      );
+    } catch (error) {
+      throw initiationRemoteOutcomeUnknown(error);
+    }
+    if (!response.ok)
+      throw initiationFailedBeforeRemoteIntent(
+        this.providerError(
+          "initiation",
+          response,
+          await this.providerDetail(response),
+        ),
       );
     let data: { pidx?: string; payment_url?: string; expires_at?: string };
     try {
       data = (await response.json()) as typeof data;
     } catch {
-      throw new ApiException({
+      throw initiationRemoteOutcomeUnknown(new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
         message:
           "The payment provider is temporarily unavailable. Please try again or use another method.",
         status: 502,
         details: "Khalti initiation returned a non-JSON response",
-      });
+      }));
     }
     if (!data.pidx || !data.payment_url)
-      throw new ApiException({
+      throw initiationRemoteOutcomeUnknown(new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
         message:
           "The payment provider is temporarily unavailable. Please try again or use another method.",
         status: 502,
         details: `Khalti initiation response is missing pidx/payment_url: ${JSON.stringify(data)}`,
-      });
+      }));
     return {
       reference: data.pidx,
       redirectUrl: data.payment_url,

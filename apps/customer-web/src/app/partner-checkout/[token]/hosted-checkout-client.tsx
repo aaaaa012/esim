@@ -21,8 +21,12 @@ import {
 import { flagEmoji } from "../../country-picker";
 import {
   apiErrorMessage,
+  canEnterTravelerFromPassport,
   isIsoAlpha2CountryCode,
   PaymentProvider,
+  passportAutomationUnavailable,
+  passportFailurePresentation,
+  passportRequiresReplacement,
 } from "@visa-compass/shared";
 import {
   DocumentProgress,
@@ -173,18 +177,7 @@ const initial: Traveler = {
 };
 
 const canEnterTravelerAfterExtraction = (order: Session["order"]) =>
-  order.documentReviewStatus !== "REUPLOAD_REQUIRED" &&
-  ![
-    "PASSPORT_EXPIRED",
-    "PASSPORT_BIODATA_NOT_DETECTED",
-    "MRZ_NOT_READABLE",
-  ].includes(order.passportExtraction?.failureCode ?? "") &&
-  Boolean(
-    order.passportExtraction &&
-      ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
-        order.passportExtraction.status,
-      ),
-  );
+  canEnterTravelerFromPassport(order);
 
 const api = async <T,>(path: string, init?: RequestInit) => {
   let response: Response;
@@ -794,13 +787,25 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     verification?.status,
     step,
   ]);
-
   const passportFailureCode = session?.order.passportExtraction?.failureCode;
-  const hardPassportReplacementRequired = [
-    "PASSPORT_EXPIRED",
-    "PASSPORT_BIODATA_NOT_DETECTED",
-    "MRZ_NOT_READABLE",
-  ].includes(passportFailureCode ?? "");
+  const technicalOcrNoticeShown = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      step === 3 &&
+      passportAutomationUnavailable(passportFailureCode) &&
+      technicalOcrNoticeShown.current !== passportFailureCode
+    ) {
+      technicalOcrNoticeShown.current = passportFailureCode ?? null;
+      setDocumentAttentionMessage(
+        passportFailurePresentation(passportFailureCode).message,
+      );
+    } else if (!passportAutomationUnavailable(passportFailureCode))
+      technicalOcrNoticeShown.current = null;
+  }, [passportFailureCode, step]);
+
+  const hardPassportReplacementRequired = passportRequiresReplacement(
+    passportFailureCode,
+  );
   const displayDocuments = (session?.order.documents ?? []).map((document) =>
     hardPassportReplacementRequired && document.type === "PASSPORT"
       ? { ...document, status: "REUPLOAD_REQUIRED" }
@@ -1236,15 +1241,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       {documentAttentionMessage && (
         <ErrorModal
           error={documentAttentionMessage}
-          title={
-            passportFailureCode === "PASSPORT_EXPIRED"
-              ? "Passport expired"
-              : passportFailureCode === "PASSPORT_BIODATA_NOT_DETECTED"
-                ? "Passport document not recognized"
-                : passportFailureCode === "MRZ_NOT_READABLE"
-                  ? "Passport details could not be read"
-                  : "Document check needs attention"
-          }
+          title={passportFailurePresentation(passportFailureCode).title}
           onClose={() => setDocumentAttentionMessage("")}
         />
       )}
