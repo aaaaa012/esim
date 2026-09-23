@@ -3559,8 +3559,8 @@ function PassportCheck({
         <span>
           <b>Verifying your passport</b>
           <small>
-            Your files are saved. We will show the next step when the check
-            completes; you can safely leave this page.
+            Your latest saved traveller details are being compared with the
+            passport. We will show the next step when this check completes.
           </small>
         </span>
         <span className="passport-check-tag">{paymentLabel}</span>

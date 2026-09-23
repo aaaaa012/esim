@@ -38,6 +38,7 @@ export function DocumentFileField({
       )}
       <label className="file-input">
         <input
+          className="native-document-input"
           type="file"
           aria-label={label}
           accept="application/pdf,image/jpeg,image/png"
@@ -57,7 +58,7 @@ export function DocumentFileField({
             {file
               ? `${Math.ceil(file.size / 1024)} KB · Ready to upload`
               : savedName
-                ? `${label} · Securely saved`
+                ? label
                 : replacementRequired
                   ? "The previous file could not be confirmed"
                   : "PDF, JPG or PNG · Up to 10 MB"}
@@ -75,6 +76,7 @@ export function DocumentFileField({
         <>
           <input
             ref={captureRef}
+            className="native-document-input"
             type="file"
             aria-label={`Take photo of ${label.toLowerCase()}`}
             accept="image/jpeg,image/png"

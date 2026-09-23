@@ -367,6 +367,11 @@ export class PassportOcrProcessor implements OnModuleInit {
         const orderClaim = await tx.order.updateMany({
           where: {
             id: order.id,
+            // Traveller edits increment the order version. Never publish a
+            // verdict calculated from the identity snapshot loaded before a
+            // concurrent Save and Continue; that submission starts a new OCR
+            // generation with the latest persisted traveller data.
+            version: order.version,
             documentReviewStatus: { in: ["OCR_PENDING", "OCR_BACKGROUND"] },
           },
           data: {

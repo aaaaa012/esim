@@ -76,7 +76,7 @@ export default function VerificationProgressCard({
     elapsedBand === "initial"
       ? "Your files are saved. You can safely leave while we read the passport."
       : elapsedBand === "delayed"
-        ? "This is taking a little longer than usual. Your documents are safe and the check is still running."
+        ? "This is taking a little longer than usual. Your latest saved details remain queued for comparison."
         : "You do not need to keep this page open. We will email you and update your order when the check finishes.";
 
   return (

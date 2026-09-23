@@ -912,8 +912,16 @@ export class OrdersService implements OnModuleInit {
       ["PARTIAL", "FAILED"].includes(order.passportVerification?.status ?? "");
     const reverifyApprovedIdentity =
       identityChanged && order.documentReviewStatus === "VERIFIED";
+    const reverifyPendingIdentity =
+      identityChanged &&
+      ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+        order.documentReviewStatus ?? "",
+      );
     const retryExistingPassport =
-      replacingPassport || correctingMismatch || reverifyApprovedIdentity;
+      replacingPassport ||
+      correctingMismatch ||
+      reverifyApprovedIdentity ||
+      reverifyPendingIdentity;
     order.traveler = traveler;
     if (retryExistingPassport) {
       order.documentReviewStatus = "NOT_STARTED";

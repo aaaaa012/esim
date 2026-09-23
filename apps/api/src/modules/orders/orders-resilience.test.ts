@@ -1651,6 +1651,55 @@ it("restarts validation after confirming only a replacement ticket with a verifi
   expect(restarted.status).toBe(OrderStatus.REVIEW_PENDING);
 });
 
+it("invalidates an in-flight OCR generation when traveller identity changes", async () => {
+  const instance = ordersService(
+    [readyOrder({
+      id: "pending-identity-edit",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: customerTraveler(),
+      documentReviewStatus: "OCR_PENDING",
+      documentReviewStartedAt: new Date().toISOString(),
+      passportVerification: {
+        status: "NOT_READY",
+        matchedFields: [],
+        checkedAt: new Date().toISOString(),
+        method: "ocr-error",
+      },
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    })],
+    {},
+  );
+  await instance.refreshFromPersistence();
+
+  const updated = await instance.setTraveler(
+    "pending-identity-edit",
+    "customer-1",
+    { ...customerTraveler(), passportNumber: "P7654321" },
+  );
+
+  expect(updated.documentReviewStatus).toBe("NOT_STARTED");
+  expect(updated.documentReviewStartedAt).toBeUndefined();
+  expect(updated.passportVerification).toBeUndefined();
+});
+
 it.each([
   ["matching", customerTraveler(), "VERIFIED", 0],
   [
