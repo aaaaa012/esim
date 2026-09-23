@@ -71,7 +71,7 @@ const baseSchema = z.object({
     .min(300)
     .max(2_592_000)
     .optional(),
-  PASSPORT_OCR_MAX_PAGES: z.coerce.number().int().min(1).max(8).optional(),
+  PASSPORT_OCR_MAX_PAGES: z.coerce.number().int().min(1).max(16).optional(),
   PARTNER_WEBHOOK_TIMEOUT_MS: z.coerce
     .number()
     .int()

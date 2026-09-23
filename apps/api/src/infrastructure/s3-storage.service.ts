@@ -23,10 +23,10 @@ import type { DocumentType } from "@visa-compass/shared";
 const execFileAsync = promisify(execFile);
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 export const passportOcrMaxPages = () => {
-  const configured = Number(process.env.PASSPORT_OCR_MAX_PAGES ?? 4);
-  return Number.isInteger(configured) && configured >= 1 && configured <= 8
+  const configured = Number(process.env.PASSPORT_OCR_MAX_PAGES ?? 8);
+  return Number.isInteger(configured) && configured >= 1 && configured <= 16
     ? configured
-    : 4;
+    : 8;
 };
 const ALLOWED_CONTENT_TYPES = new Set([
   "application/pdf",

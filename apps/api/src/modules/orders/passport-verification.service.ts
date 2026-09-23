@@ -640,8 +640,8 @@ export const mrzCandidateScore = (mrz: ParsedMrz | null): number => {
  *
  * Documents are auto-approved after payment today, so a mismatch between the
  * traveller form and the uploaded passport would otherwise never be caught.
- * This service downloads the uploaded passport (rasterizing PDFs to their
- * first page from S3), runs Tesseract OCR, and compares the extracted
+ * This service downloads the uploaded passport (rasterizing bounded PDF
+ * pages from S3), runs Tesseract OCR, and compares the extracted
  * text against the traveller details. The passport number is the primary
  * signal; the order only reaches "VERIFIED" when at least one more field
  * (name, date of birth or expiry) also matches.
@@ -1192,9 +1192,31 @@ export class PassportVerificationService implements OnModuleDestroy {
     let best: Awaited<
       ReturnType<PassportVerificationService["recognize"]>
     > | null = null;
-    for (const image of images.slice(0, passportOcrMaxPages())) {
-      const recognized = await this.recognize(image.bytes);
-      best ??= recognized;
+    const pageErrors: string[] = [];
+    const pages = images.slice(0, passportOcrMaxPages());
+    for (const [index, image] of pages.entries()) {
+      let recognized: Awaited<
+        ReturnType<PassportVerificationService["recognize"]>
+      >;
+      try {
+        recognized = await this.recognize(image.bytes);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        pageErrors.push(`page ${index + 1}: ${message}`);
+        this.logger.warn(
+          `Passport OCR page ${index + 1}/${pages.length} failed; continuing with remaining pages: ${message}`,
+        );
+        continue;
+      }
+      if (
+        !best ||
+        mrzCandidateScore(parseMrz(recognized.bandText ?? recognized.text)) >
+          mrzCandidateScore(parseMrz(best.bandText ?? best.text)) ||
+        ((recognized.confidence ?? 0) > (best.confidence ?? 0) &&
+          mrzCandidateScore(parseMrz(recognized.bandText ?? recognized.text)) ===
+            mrzCandidateScore(parseMrz(best.bandText ?? best.text)))
+      )
+        best = recognized;
       const parsedBand = recognized.bandText
         ? parseMrz(recognized.bandText)
         : null;
@@ -1207,7 +1229,10 @@ export class PassportVerificationService implements OnModuleDestroy {
       )
         return recognized;
     }
-    return best!;
+    if (best) return best;
+    throw new Error(
+      `OCR failed for all ${pages.length} rendered passport page(s): ${pageErrors.join("; ")}`,
+    );
   }
 
   private async loadPassportImages(assetId: string) {

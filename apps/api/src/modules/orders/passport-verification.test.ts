@@ -627,6 +627,50 @@ describe("multi-page passport extraction", () => {
       },
     });
   });
+
+  it("continues after an unreadable page and finds a later passport page", async () => {
+    const storage = {
+      isConfigured: () => true,
+      downloadDocumentImages: vi.fn().mockResolvedValue([
+        { bytes: Buffer.from("broken-page"), contentType: "image/jpeg" },
+        { bytes: Buffer.from("other-document"), contentType: "image/jpeg" },
+        { bytes: Buffer.from("passport-page"), contentType: "image/jpeg" },
+      ]),
+    };
+    const service = new PassportVerificationService(storage as never);
+    const recognize = vi
+      .spyOn(service as never, "recognize" as never)
+      .mockRejectedValueOnce(new Error("page OCR timed out"))
+      .mockResolvedValueOnce({ text: "TRAVEL TICKET", confidence: 80 } as never)
+      .mockResolvedValueOnce({
+        text: US_MRZ,
+        bandText: US_MRZ,
+        confidence: 92,
+      } as never);
+
+    const result = await service.extract({
+      id: "order-mixed-pdf",
+      purchaseType: "INITIAL_PURCHASE",
+      documents: [{
+        id: "passport-mixed",
+        type: "PASSPORT",
+        fileName: "mixed-documents.pdf",
+        privateAssetId: "mixed-passport-asset",
+        status: "PENDING",
+        uploadVerified: true,
+      }],
+    } as never);
+
+    expect(recognize).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({
+      status: "READY",
+      fields: {
+        firstName: "HAPPY",
+        surname: "TRAVELER",
+        passportNumber: "E00007730",
+      },
+    });
+  });
 });
 
 describe("verdictFor", () => {
