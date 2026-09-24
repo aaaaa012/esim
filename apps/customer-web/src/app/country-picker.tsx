@@ -342,7 +342,7 @@ export default function CountryPicker({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputId = useId();
-  const triggerId = `${inputId}-trigger`;
+  const listId = `${inputId}-options`;
 
   const selectedLabel = useMemo(
     () => countries.find((country) => country.code === value)?.name ?? "",
@@ -373,15 +373,7 @@ export default function CountryPicker({
 
   useEffect(() => {
     if (open) {
-      setQuery("");
-      setActive(
-        Math.max(
-          0,
-          filtered.findIndex((country) => country.code === value),
-        ),
-      );
-      const frame = requestAnimationFrame(() => inputRef.current?.focus());
-      return () => cancelAnimationFrame(frame);
+      setActive(0);
     }
   }, [open]);
 
@@ -399,79 +391,73 @@ export default function CountryPicker({
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActive((index) => Math.min(index + 1, filtered.length - 1));
+      if (!open) setOpen(true);
+      else setActive((index) => Math.min(index + 1, Math.max(filtered.length - 1, 0)));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setActive((index) => Math.max(index - 1, 0));
     } else if (event.key === "Enter") {
+      if (!open) { setOpen(true); return; }
       event.preventDefault();
       const country = filtered[active];
       if (country) select(country.code);
     } else if (event.key === "Escape") {
       setOpen(false);
+      inputRef.current?.blur();
     }
   };
 
   return (
-    <div className="country-picker" ref={rootRef}>
-      <label htmlFor={triggerId}>{label}</label>
-      <button
-        id={triggerId}
-        type="button"
-        className="country-picker-trigger"
-        aria-label={value ? `${label}: ${selectedLabel || value}` : placeholder}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="country-picker-value">
-          {value ? (
-            <>
-              <span className="cp-flag">{flagEmoji(value)}</span>
-              <span className="cp-selected-name">{selectedLabel || value}</span>
-            </>
-          ) : (
-            <>
-              {triggerIcon === "search" ? (
-                <Search size={22} />
-              ) : (
-                <Globe2 size={18} />
-              )}
-              <span>{placeholder}</span>
-            </>
-          )}
+    <div className={`country-picker${open ? " is-open" : ""}`} ref={rootRef}>
+      <label htmlFor={inputId}>{label}</label>
+      <div className="country-picker-trigger">
+        <span className="country-picker-leading" aria-hidden="true">
+          {!open && value ? flagEmoji(value) : triggerIcon === "search" ? <Search size={22} /> : <Globe2 size={18} />}
         </span>
-        <ChevronDown
-          size={18}
-          className={`cp-chevron${open ? " is-open" : ""}`}
+        <input
+          id={inputId}
+          ref={inputRef}
+          type="search"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls={listId}
+          aria-expanded={open}
+          aria-activedescendant={open && filtered[active] ? `${listId}-${filtered[active].code}` : undefined}
+          autoComplete="off"
+          disabled={disabled}
+          value={open ? query : selectedLabel}
+          placeholder={open ? searchPlaceholder : placeholder}
+          onFocus={() => { setQuery(""); setOpen(true); }}
+          onChange={(event) => { setQuery(event.target.value); setActive(0); setOpen(true); }}
+          onKeyDown={onKeyDown}
         />
-      </button>
+        <button
+          type="button"
+          className="country-picker-toggle"
+          aria-label={open ? "Close destinations" : "Show destinations"}
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={() => {
+            if (open) { setOpen(false); inputRef.current?.blur(); }
+            else inputRef.current?.focus();
+          }}
+        >
+          <ChevronDown size={18} className={`cp-chevron${open ? " is-open" : ""}`} />
+        </button>
+      </div>
       {open && (
         <div
+          id={listId}
           className="country-picker-menu"
           role="listbox"
-          onKeyDown={onKeyDown}
         >
-          <div className="country-picker-search">
-            <Search size={16} />
-            <input
-              id={inputId}
-              ref={inputRef}
-              value={query}
-              placeholder={searchPlaceholder}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActive(0);
-              }}
-            />
-          </div>
           <div className="country-picker-options" ref={listRef}>
             {filtered.length ? (
               filtered.map((country, index) => (
                 <button
                   type="button"
                   role="option"
+                  id={`${listId}-${country.code}`}
                   aria-selected={country.code === value}
                   data-active={index === active}
                   key={country.code}

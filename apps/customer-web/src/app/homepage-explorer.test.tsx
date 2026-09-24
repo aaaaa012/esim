@@ -73,10 +73,9 @@ describe("homepage destination discovery", () => {
     });
     expect(explore.getAttribute("href")).toBe("/destinations");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /Search destination/i }),
-    );
-    fireEvent.change(screen.getByPlaceholderText("Search destinations…"), {
+    const search = screen.getByRole("combobox", { name: /where are you headed/i });
+    fireEvent.focus(search);
+    fireEvent.change(search, {
       target: { value: "Australia" },
     });
     fireEvent.click(screen.getByRole("option", { name: /Australia/i }));

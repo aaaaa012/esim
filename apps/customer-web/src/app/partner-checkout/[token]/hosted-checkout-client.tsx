@@ -1275,7 +1275,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     effectiveVerificationStatus === "MANUALLY_APPROVED";
   return (
     <main
-      className={`checkout-page${showPaymentChoice ? " payment-selection hosted-payment-selection" : ""}`}
+      className={`checkout-page${!isTopUp && step === 4 ? " payment-summary-stage" : ""}${showPaymentChoice ? " payment-selection hosted-payment-selection" : ""}`}
     >
       <ErrorModal error={error || null} onClose={() => setError("")} />
       {successMessage && (
@@ -1348,13 +1348,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           <span style={{ width: `${step * (100 / 4)}%` }} />
         </div>
         <div className="checkout-layout">
-          {showPaymentChoice && documentsVerified ? (
+          {!isTopUp && step === 4 && documentsVerified ? (
             <div className="payment-verified-strip" role="status">
               <CheckCircle2 size={21} aria-hidden="true" />
               <span>Documents verified</span>
             </div>
           ) : null}
-          {showPaymentChoice ? (
+          {!isTopUp && step === 4 ? (
             <div className="payment-mobile-summary">
               <div className="payment-mobile-summary-main">
                 <span className="summary-flag" aria-hidden="true">
@@ -2311,13 +2311,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                 <span className="summary-label">Order summary</span>
                 <b>{plan.name}</b>
                 <small>
-                  {plan.countryCode} · {formatPlanDataText(plan.dataAllowance)}
+                  {countryDisplayName(plan.countryCode)} · {formatPlanDataText(plan.dataAllowance)}
                 </small>
               </span>
             </div>
             <div>
               <small>Destination</small>
-              <b>{plan.countryCode}</b>
+              <b>{countryDisplayName(plan.countryCode)}</b>
             </div>
             <div>
               <small>Data &amp; validity</small>

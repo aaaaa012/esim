@@ -1984,7 +1984,7 @@ export default function CheckoutClient({
     );
   return (
     <main
-      className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}${showPaymentChoice ? " payment-selection" : ""}`}
+      className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}${!isTopUp && step === 4 ? " payment-summary-stage" : ""}${showPaymentChoice ? " payment-selection" : ""}`}
     >
       {!isTopUp ? <JourneyArtwork /> : null}
       <div className="checkout-shell">
@@ -2028,13 +2028,13 @@ export default function CheckoutClient({
         <div
           className={`checkout-layout${!isTopUp ? " initial-checkout" : ""}${!isTopUp && step === 4 ? " step-payment" : ""}`}
         >
-          {showPaymentChoice && documentsVerified ? (
+          {!isTopUp && step === 4 && documentsVerified ? (
             <div className="payment-verified-strip" role="status">
               <CheckCircle2 size={21} aria-hidden="true" />
               <span>Documents verified</span>
             </div>
           ) : null}
-          {showPaymentChoice ? (
+          {!isTopUp && step === 4 ? (
             <div className="payment-mobile-summary">
               <div className="payment-mobile-summary-main">
                 <span className="summary-flag" aria-hidden="true">
@@ -3365,14 +3365,14 @@ export default function CheckoutClient({
                 <b>{summaryPlan?.name ?? "Loading selected plan"}</b>
                 <small>
                   {summaryPlan
-                    ? `${summaryPlan.countryCode} · ${formatPlanDataText(summaryPlan.dataAllowance)}`
+                    ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)}`
                     : "Plan details loading"}
                 </small>
               </span>
             </div>
             <div>
               <small>Destination</small>
-              <b>{summaryPlan?.countryCode ?? "Loading destination"}</b>
+              <b>{summaryPlan ? countryDisplayName(summaryPlan.countryCode) : "Loading destination"}</b>
             </div>
             <div>
               <small>Data & validity</small>
