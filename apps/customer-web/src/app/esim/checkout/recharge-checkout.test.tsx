@@ -105,6 +105,12 @@ describe("recharge checkout", () => {
     expect(screen.queryByText("Checking Fonepay payment status")).toBeNull();
     expect(screen.queryByText(/before starting another one/i)).toBeNull();
     expect(screen.getByText("Pay within")).toBeDefined();
+    expect(screen.getAllByText("NPR 100").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("View details").every((summary) =>
+        summary.closest("details")?.hasAttribute("open") === false,
+      ),
+    ).toBe(true);
     expect(
       mocks.authFetch.mock.calls.some(
         ([url, init]) =>

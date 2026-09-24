@@ -1994,7 +1994,7 @@ export default function CheckoutClient({
     );
   return (
     <main
-      className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}${!isTopUp && step === 4 ? " payment-summary-stage" : ""}${showPaymentChoice ? " payment-selection" : ""}`}
+      className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}${!isTopUp && step === 4 ? " payment-summary-stage" : ""}${provider === PaymentProvider.FONEPAY && payment ? " fonepay-active" : ""}${showPaymentChoice ? " payment-selection" : ""}`}
     >
       {!isTopUp ? <JourneyArtwork /> : null}
       <div className="checkout-shell">
@@ -2044,7 +2044,8 @@ export default function CheckoutClient({
               <span>Documents verified</span>
             </div>
           ) : null}
-          {!isTopUp && step === 4 ? (
+          {(!isTopUp && step === 4) ||
+          (isTopUp && provider === PaymentProvider.FONEPAY && payment) ? (
             <div className="payment-mobile-summary">
               <div className="payment-mobile-summary-main">
                 <span className="summary-flag" aria-hidden="true">
@@ -3368,6 +3369,28 @@ export default function CheckoutClient({
               </div>
             )}
           </section>
+          {provider === PaymentProvider.FONEPAY && payment ? (
+            <aside className="order-summary compact-order-summary">
+              <div className="payment-mobile-summary">
+                <div className="payment-mobile-summary-main">
+                  <span className="summary-flag" aria-hidden="true">
+                    {summaryPlan ? flagEmoji(summaryPlan.countryCode) : <Signal size={22} />}
+                  </span>
+                  <span>
+                    <small>Order summary</small>
+                    <b>{summaryPlan ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)} / ${summaryPlan.validityDays} days` : "Loading plan"}</b>
+                  </span>
+                  <strong>{summaryPrice === undefined ? "—" : `NPR ${summaryPrice.toLocaleString()}`}</strong>
+                </div>
+                <details>
+                  <summary>View details</summary>
+                  <div><span>Plan</span><b>{summaryPlan?.name ?? "Loading plan"}</b></div>
+                  <div><span>Destination</span><b>{summaryPlan ? countryDisplayName(summaryPlan.countryCode) : "—"}</b></div>
+                  <div><span>Data & validity</span><b>{summaryPlan ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days` : "—"}</b></div>
+                </details>
+              </div>
+            </aside>
+          ) : (
           <aside className="order-summary">
             <div className="summary-plan">
               <span className="summary-flag">
@@ -3412,6 +3435,7 @@ export default function CheckoutClient({
               created.
             </p>
           </aside>
+          )}
         </div>
       </div>
     </main>

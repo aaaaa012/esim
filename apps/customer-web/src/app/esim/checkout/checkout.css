@@ -3388,7 +3388,104 @@
   display: none;
 }
 
+.compact-order-summary > .payment-mobile-summary {
+  display: block;
+  width: 100%;
+}
+
+.compact-order-summary.order-summary > div:not(.summary-plan) {
+  display: block;
+  padding: 0;
+  border: 0;
+}
+
+.compact-order-summary .payment-mobile-summary-main {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.compact-order-summary .payment-mobile-summary-main .summary-flag {
+  width: 42px;
+  height: 42px;
+  font-size: 24px;
+}
+
+.compact-order-summary .payment-mobile-summary-main > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.compact-order-summary .payment-mobile-summary-main small {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.compact-order-summary .payment-mobile-summary-main b {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.compact-order-summary .payment-mobile-summary-main strong {
+  color: var(--primary);
+  font-size: 18px;
+  white-space: nowrap;
+}
+
+.compact-order-summary .payment-mobile-summary details {
+  margin-top: 13px;
+  border-top: 1px solid var(--border);
+}
+
+.compact-order-summary .payment-mobile-summary summary {
+  min-height: 44px;
+  padding-top: 13px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.compact-order-summary .payment-mobile-summary details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  font-size: 12px;
+}
+
+.compact-order-summary .payment-mobile-summary details > div span {
+  color: var(--text-2);
+}
+
+.compact-order-summary .payment-mobile-summary details > div b {
+  max-width: 60%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 880px) {
+  .fonepay-active .checkout-layout > .order-summary {
+    display: none;
+  }
+
+  .fonepay-active .checkout-layout > .payment-mobile-summary {
+    display: block;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--surface);
+    width: 100%;
+  }
+
   .payment-summary-stage .checkout-layout {
     display: flex;
     flex-direction: column;
