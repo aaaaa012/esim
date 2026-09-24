@@ -37,10 +37,7 @@ import {
   Signal,
   AlertTriangle,
   Copy,
-  Mail,
-  Plane,
   Link2,
-  Smartphone,
   UserRound,
 } from "lucide-react";
 import { JourneyArtwork } from "../../journey-chrome";
@@ -53,6 +50,7 @@ import {
   hasUploadedDocument,
 } from "./document-progress";
 import { createDocumentUploader } from "./document-upload";
+import PaymentJourneyConfirmation from "./post-payment-confirmation";
 import ManualReviewTracking from "./manual-review-tracking";
 import { useDocumentRefresh } from "./use-document-refresh";
 import { DocumentFileField as FileField } from "./document-file-field";
@@ -2925,46 +2923,25 @@ export default function CheckoutClient({
                   !isTopUp ? (
                     <InitialOrderConfirmation
                       order={order}
-                      plan={summaryPlan}
-                      stage="ready"
                       signedIn={isSignedIn === true}
                       guestRecoveryUrl={recoveryUrl}
                       onResend={isSignedIn === true ? resendQrEmail : undefined}
                       resending={uxResending}
                     />
                   ) : (
-                    <div className="success-panel">
-                      <CheckCircle2 size={42} />
-                      <b>Package added to your existing eSIM</b>
-                      <span>{order.orderNumber}</span>
-                      <p>
-                        No new QR code or installation is required. The package
-                        will become active on your existing eSIM when the
-                        provider confirms first use.
-                      </p>
-                    </div>
+                    <RechargeConfirmation order={order} signedIn={isSignedIn === true} guestRecoveryUrl={recoveryUrl} />
                   )
                 ) : order?.status === "COMPLETED" ? (
                   !isTopUp ? (
                     <InitialOrderConfirmation
                       order={order}
-                      plan={summaryPlan}
-                      stage="complete"
                       signedIn={isSignedIn === true}
                       guestRecoveryUrl={recoveryUrl}
                       onResend={isSignedIn === true ? resendQrEmail : undefined}
                       resending={uxResending}
                     />
                   ) : (
-                    <div className="success-panel">
-                      <CheckCircle2 size={42} />
-                      <b>Your top-up is active</b>
-                      <span>{order.orderNumber}</span>
-                      <p>
-                        The package is active on your existing eSIM. No new QR
-                        code or installation is required.
-                      </p>
-                    </div>
+                    <RechargeConfirmation order={order} signedIn={isSignedIn === true} guestRecoveryUrl={recoveryUrl} />
                   )
                 ) : order?.status === "PAYMENT_REVIEW_REQUIRED" ? (
                   <div className="info-panel">
@@ -3030,26 +3007,11 @@ export default function CheckoutClient({
                   !isTopUp ? (
                     <InitialOrderConfirmation
                       order={order}
-                      plan={summaryPlan}
-                      stage="preparing"
                       signedIn={isSignedIn === true}
                       guestRecoveryUrl={recoveryUrl}
                     />
                   ) : (
-                    <div className="success-panel">
-                      <LoaderCircle className="spin" size={42} />
-                      <b>Payment verified. Activating your eSIM</b>
-                      <span>{order.orderNumber}</span>
-                      <p>
-                        Payment received. Your recharge is processing. You can
-                        close this page and return using your tracking link.
-                      </p>
-                      {isSignedIn === true && (
-                        <Link className="button" href="/account/esims">
-                          View my eSIMs
-                        </Link>
-                      )}
-                    </div>
+                    <RechargeConfirmation order={order} signedIn={isSignedIn === true} guestRecoveryUrl={recoveryUrl} />
                   )
                 ) : verifying ? (
                   <div className="success-panel">
@@ -3433,127 +3395,50 @@ export default function CheckoutClient({
 
 function InitialOrderConfirmation({
   order,
-  plan,
-  stage,
   signedIn,
   guestRecoveryUrl,
   onResend,
   resending = false,
 }: {
   order: Order;
-  plan: PlanSummary | null;
-  stage: "preparing" | "ready" | "complete";
   signedIn: boolean;
   guestRecoveryUrl?: string;
   onResend?: (() => void) | undefined;
   resending?: boolean;
 }) {
-  const copy =
-    stage === "preparing"
-      ? {
-          title: "Payment received. We are preparing your eSIM.",
-          description: "Your QR will be emailed after provisioning succeeds.",
-          badge: "Preparing eSIM",
-        }
-      : stage === "ready"
-        ? {
-            title: "Your eSIM is ready to install.",
-            description:
-              "Your installation QR and instructions have been sent to your purchase email.",
-            badge: "Ready to install",
-          }
-        : {
-            title: "Your eSIM is ready.",
-            description:
-              "Open My eSIM for installation details, usage, and plan status.",
-            badge: "Ready",
-          };
   return (
-    <section
-      className="initial-order-confirmation"
-      aria-labelledby="initial-order-confirmation-title"
-    >
-      <div className="initial-confirmation-heading">
-        <span className="initial-confirmation-check">
-          <Check aria-hidden="true" />
-        </span>
-        <div>
-          <small>Your eSIM order</small>
-          <h3 id="initial-order-confirmation-title">{copy.title}</h3>
-          <p>{copy.description}</p>
-        </div>
-      </div>
-      <div className="initial-confirmation-order">
-        <div>
-          <small>{plan?.name ?? "Travel eSIM"}</small>
-          <b>
-            {plan
-              ? `${formatPlanDataText(plan.dataAllowance)} · ${plan.validityDays} days`
-              : `Order ${order.orderNumber}`}
-          </b>
-          <span>Order #{order.orderNumber}</span>
-        </div>
-        <strong>{copy.badge}</strong>
-      </div>
-      <ol className="initial-confirmation-timeline">
-        <li>
-          <span>
-            <Mail aria-hidden="true" />
-          </span>
-          <div>
-            <b>QR sent to your email</b>
-            <p>
-              We send the QR and instructions after successful provisioning.
-            </p>
-          </div>
-        </li>
-        <li>
-          <span>
-            <Smartphone aria-hidden="true" />
-          </span>
-          <div>
-            <b>Install before departure</b>
-            <p>Use the public setup guide while you have reliable Wi-Fi.</p>
-          </div>
-        </li>
-        <li>
-          <span>
-            <Plane aria-hidden="true" />
-          </span>
-          <div>
-            <b>Enable Ubigi near arrival</b>
-            <p>
-              Select the installed Ubigi line for mobile data when you are ready
-              to connect.
-            </p>
-          </div>
-        </li>
-      </ol>
-      <div className="initial-confirmation-actions">
-        {signedIn ? (
-          <Link className="button" href="/account/esims">
-            Go to My eSIM <ChevronRight />
-          </Link>
-        ) : guestRecoveryUrl ? (
-          <a className="button" href={guestRecoveryUrl}>
-            Check this order <ChevronRight />
-          </a>
-        ) : null}
-        <Link className="button secondary" href="/help/install">
-          Open install guide <ChevronRight />
-        </Link>
-        {onResend ? (
-          <button
-            className="button secondary"
-            type="button"
-            onClick={onResend}
-            disabled={resending}
-          >
-            {resending ? "Sending QR…" : "Re-send QR email"}
-          </button>
-        ) : null}
-      </div>
-    </section>
+    <PaymentJourneyConfirmation
+      orderNumber={order.orderNumber}
+      amountNpr={order.totalAmountNpr}
+      status={order.status}
+      trackingHref={signedIn ? `/account/orders/${order.id}` : guestRecoveryUrl}
+      trackingLabel={signedIn ? "View order" : "Track this order"}
+      deliveryNote="Your installation QR is ready and is being sent to the email you entered at checkout. Open your order if it does not arrive."
+      pendingDeliveryNote="We’ll email the installation QR to the address you entered at checkout as soon as your eSIM is ready."
+      onResend={onResend}
+      resending={resending}
+    />
+  );
+}
+
+function RechargeConfirmation({
+  order,
+  signedIn,
+  guestRecoveryUrl,
+}: {
+  order: Order;
+  signedIn: boolean;
+  guestRecoveryUrl?: string;
+}) {
+  return (
+    <PaymentJourneyConfirmation
+      mode="recharge"
+      orderNumber={order.orderNumber}
+      amountNpr={order.totalAmountNpr}
+      status={order.status}
+      trackingHref={signedIn ? "/account/esims" : guestRecoveryUrl}
+      trackingLabel={signedIn ? "View my eSIM" : "Track this recharge"}
+    />
   );
 }
 

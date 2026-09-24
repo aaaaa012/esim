@@ -45,6 +45,49 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+it("shows a paid first-purchase receipt and honest preparation status", async () => {
+  mocks.signedIn = true;
+  const paid = {
+    id: "paid-order",
+    orderNumber: "VC-PAID",
+    status: "PROVISIONING",
+    purchaseType: "INITIAL_PURCHASE",
+    plan,
+    totalAmountNpr: 652,
+    documents: [],
+    payment: { provider: "KHALTI", reference: "paid-ref", status: "COMPLETED" },
+  };
+  mocks.authFetch.mockImplementation(async (url: string) =>
+    url.endsWith("/payments/providers") ? ok({ providers: ["KHALTI"] }) : ok(paid),
+  );
+  render(<Checkout planId="" orderId="paid-order" />);
+  expect(await screen.findByRole("heading", { name: "Payment confirmed" })).toBeDefined();
+  expect(screen.getAllByText("NPR 652").length).toBeGreaterThan(0);
+  expect(screen.getByRole("link", { name: /View order/i }).getAttribute("href")).toBe("/account/orders/paid-order");
+  expect(screen.getByText(/We’ll email the installation QR/i)).toBeDefined();
+  expect(screen.queryByText("QR sent to your email")).toBeNull();
+});
+it("shows a confirmed recharge as data added to the existing eSIM", async () => {
+  mocks.signedIn = true;
+  window.history.replaceState({}, "", "/esim/checkout?order=topup-ready&recharge=1");
+  const topup = {
+    id: "topup-ready",
+    orderNumber: "VC-TOPUP",
+    status: "QR_READY",
+    purchaseType: "TOPUP",
+    plan,
+    totalAmountNpr: 450,
+    documents: [],
+    payment: { provider: "KHALTI", reference: "topup-ref", status: "COMPLETED" },
+  };
+  mocks.authFetch.mockImplementation(async (url: string) =>
+    url.endsWith("/payments/providers") ? ok({ providers: ["KHALTI"] }) : ok(topup),
+  );
+  render(<Checkout planId="" orderId="topup-ready" />);
+  expect(await screen.findByText("Data has been added to your eSIM")).toBeDefined();
+  expect(screen.queryByText("Ready to install")).toBeNull();
+  expect(screen.getByRole("link", { name: /View my eSIM/i })).toBeDefined();
+});
 describe("recharge checkout", () => {
   it("restores an unpaid Fonepay QR when a pending recharge is reopened", async () => {
     window.history.replaceState(

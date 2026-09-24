@@ -8,7 +8,65 @@ import {
   LoaderCircle,
   AlertTriangle,
   FileText,
+  FileUp,
+  ShieldCheck,
 } from "lucide-react";
+
+function DocumentSavingCard({ message }: { message?: string | undefined }) {
+  const phase = message?.startsWith("Uploading")
+    ? "uploading"
+    : message?.startsWith("Confirming")
+      ? "confirming"
+      : message?.endsWith("securely saved.")
+        ? "saved"
+        : "preparing";
+  const currentStep = phase === "preparing" ? 0 : phase === "uploading" ? 1 : 2;
+  const steps = ["Prepare", "Upload", "Secure save"];
+
+  return (
+    <div
+      className={`document-saving-card${phase === "saved" ? " is-saved" : ""}`}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <div className="document-saving-icon" aria-hidden="true">
+        {phase === "saved" ? <ShieldCheck size={26} /> : <FileUp size={26} />}
+        <span className="document-saving-orbit" />
+      </div>
+      <div className="document-saving-copy">
+        <b>
+          {phase === "saved" ? "File securely saved" : "Saving your documents"}
+        </b>
+        <p>{message || "Preparing your files for secure upload…"}</p>
+        <small>Keep this page open until every file is confirmed.</small>
+      </div>
+      <div className="document-saving-steps" aria-hidden="true">
+        {steps.map((step, index) => (
+          <span
+            key={step}
+            className={
+              index < currentStep || phase === "saved"
+                ? "complete"
+                : index === currentStep
+                  ? "active"
+                  : ""
+            }
+          >
+            <i>
+              {index < currentStep || phase === "saved" ? (
+                <CheckCircle2 size={13} />
+              ) : (
+                index + 1
+              )}
+            </i>
+            {step}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function DocumentProgress({
   status,
@@ -64,6 +122,8 @@ export function DocumentProgress({
   }, [status, verified]);
   const verifiedTitle =
     status === "SKIPPED" ? "Document check skipped" : "Documents verified";
+  if (busy && !message?.startsWith("Checking"))
+    return <DocumentSavingCard message={message} />;
   if (pending && !busy) return <VerificationProgressCard message={message} />;
   return (
     <div

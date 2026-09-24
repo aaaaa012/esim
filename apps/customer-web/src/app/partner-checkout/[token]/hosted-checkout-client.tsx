@@ -36,6 +36,7 @@ import {
   hasUploadedDocument,
 } from "../../esim/checkout/document-progress";
 import { createDocumentUploader } from "../../esim/checkout/document-upload";
+import PaymentJourneyConfirmation from "../../esim/checkout/post-payment-confirmation";
 import { useDocumentRefresh } from "../../esim/checkout/use-document-refresh";
 import { DocumentFileField as FileField } from "../../esim/checkout/document-file-field";
 import { DocumentRecoveryFields } from "../../esim/checkout/document-recovery";
@@ -948,6 +949,31 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     "ACTIVATION_ATTENTION",
     "COMPLETED",
   ]);
+  useEffect(() => {
+    if (
+      !outcome ||
+      !["PAYMENT_CONFIRMED", "REVIEW_PENDING", "APPROVED", "PROVISIONING"].includes(outcome.status)
+    )
+      return;
+    let cancelled = false;
+    let timer: number;
+    const refresh = async () => {
+      try {
+        const latest = await api<Session>(`/partner-checkout/${token}`);
+        if (cancelled) return;
+        setSession(latest);
+        if (latest.order.status !== outcome.status) {
+          setOutcome({ status: latest.order.status, orderNumber: latest.order.orderNumber });
+          return;
+        }
+      } catch {
+        // Keep the paid confirmation visible through a transient refresh error.
+      }
+      if (!cancelled) timer = window.setTimeout(refresh, 5_000);
+    };
+    timer = window.setTimeout(refresh, 5_000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [outcome?.status, token]);
   const FAILED_STATUSES = new Set([
     "PAYMENT_FAILED",
     "CANCELLED",
@@ -1566,34 +1592,25 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               <div className="form-section">
                 <div
                   className={
-                    outcome.status === "PAYMENT_PENDING" ||
+                    PAID_STATUSES.has(outcome.status)
+                      ? "payment-journey-shell"
+                      : outcome.status === "PAYMENT_PENDING" ||
                     PAID_STATUSES.has(outcome.status)
                       ? "success-panel"
                       : "error-panel"
                   }
                 >
-                  {outcome.status === "REVIEW_PENDING" ? (
-                    <>
-                      <CheckCircle2 size={42} />
-                      <b>Replacement received — review in progress</b>
-                      <span>{outcome.orderNumber}</span>
-                      <p>
-                        Your replacement documents are saved. Payment is already
-                        complete; our team will review the new files before your
-                        eSIM can be activated.
-                      </p>
-                    </>
-                  ) : PAID_STATUSES.has(outcome.status) ? (
-                    <>
-                      <CheckCircle2 size={42} />
-                      <b>Payment confirmed</b>
-                      <span>{outcome.orderNumber}</span>
-                      <p>
-                        Thanks! Your order is paid and the partner is activating
-                        your eSIM. The activation QR will be shared with you
-                        shortly.
-                      </p>
-                    </>
+                  {PAID_STATUSES.has(outcome.status) ? (
+                    <PaymentJourneyConfirmation
+                      mode={session?.order.orderType === "TOPUP" ? "recharge" : "new-esim"}
+                      orderNumber={outcome.orderNumber}
+                      amountNpr={session?.order.amountNpr ?? 0}
+                      status={outcome.status}
+                      trackingHref={checkoutAccessMode === "account" && session ? session.order.orderType === "TOPUP" ? "/account/esims" : `/account/orders/${session.order.id}` : `/partner-checkout/${token}`}
+                      trackingLabel={session?.order.orderType === "TOPUP" ? checkoutAccessMode === "account" ? "View my eSIM" : "Track this recharge" : checkoutAccessMode === "account" ? "View order" : "Track this order"}
+                      deliveryNote="Your installation QR is ready and is being sent to the email entered at checkout. Your partner can also help if you need it."
+                      pendingDeliveryNote="We’ll email the installation QR to the address entered at checkout as soon as your eSIM is ready."
+                    />
                   ) : outcome.status === "PAYMENT_PENDING" ? (
                     <>
                       <LoaderCircle className="spin" size={42} />

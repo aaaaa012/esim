@@ -25,6 +25,42 @@ it("shows non-blocking inline progress while OCR runs and closes it after verifi
   view.rerender(<DocumentProgress status="VERIFIED" />);
   expect(screen.getByText("Documents verified")).toBeDefined();
 });
+it("shows real save phases without claiming verification or fake percentages", () => {
+  const view = render(
+    <DocumentProgress
+      status="NOT_STARTED"
+      busy
+      message="Uploading passport.jpg…"
+    />,
+  );
+  expect(screen.getByText("Saving your documents")).toBeDefined();
+  expect(screen.getByText("Uploading passport.jpg…")).toBeDefined();
+  expect(
+    view.container.querySelector(".document-saving-steps .active")?.textContent,
+  ).toContain("Upload");
+  expect(view.container.textContent).not.toMatch(/\d+%|Documents verified/);
+  view.rerender(
+    <DocumentProgress
+      status="NOT_STARTED"
+      busy
+      message="Confirming passport.jpg is securely saved…"
+    />,
+  );
+  expect(
+    view.container.querySelector(".document-saving-steps .active")?.textContent,
+  ).toContain("Secure save");
+  view.rerender(
+    <DocumentProgress
+      status="NOT_STARTED"
+      busy
+      message="passport.jpg securely saved."
+    />,
+  );
+  expect(screen.getByText("File securely saved")).toBeDefined();
+  expect(
+    view.container.querySelector(".document-saving-card.is-saved"),
+  ).not.toBeNull();
+});
 it("does not show automated verification for manual review or re-upload requests", () => {
   const view = render(<DocumentProgress status="MANUAL_REVIEW" />);
   expect(screen.queryByRole("dialog")).toBeNull();

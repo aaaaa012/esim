@@ -24,6 +24,7 @@ const session = (verification = "VERIFIED", status = "DRAFT") => ({
   order: {
     id: "order",
     orderNumber: "VC-HOSTED",
+    orderType: "INITIAL_PURCHASE",
     status,
     amountNpr: 2,
     currency: "NPR",
@@ -808,9 +809,40 @@ it("reopens a paid guest order for the requested replacement without another pay
   fireEvent.click(
     screen.getByRole("button", { name: "Submit replacement for review" }),
   );
-  await screen.findByText("Replacement received — review in progress");
+  await screen.findByText("Reviewing documents");
+  expect(screen.getByRole("heading", { name: "Payment confirmed" })).toBeDefined();
   expect(submitted).toEqual(["TICKET"]);
   expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+});
+
+it.each([
+  { signedIn: false, status: "PROVISIONING", action: "Track this order" },
+  { signedIn: true, status: "QR_READY", action: "Track this order" },
+])("shows the paid order journey for signed-in and guest customers ($status)", async ({ signedIn, status, action }) => {
+  mocks.signedIn = signedIn;
+  const current = session("VERIFIED", status);
+  fetchMock.mockImplementation(async (url: string) =>
+    url.endsWith("/payments/providers") ? ok({ providers: ["KHALTI"] }) : ok(current),
+  );
+  render(<HostedCheckoutClient token="private-token" />);
+  await screen.findByRole("heading", { name: "Payment confirmed" });
+  expect(screen.getAllByText("NPR 2").length).toBeGreaterThan(0);
+  expect(screen.getByRole("link", { name: action })).toBeDefined();
+  if (status === "PROVISIONING")
+    expect(screen.getByText(/We’ll email the installation QR/i)).toBeDefined();
+  else expect(screen.getByText("Your eSIM is ready")).toBeDefined();
+});
+
+it("shows a hosted recharge as added data without promising an installation QR", async () => {
+  const current = session("VERIFIED", "QR_READY");
+  current.order.orderType = "TOPUP";
+  fetchMock.mockImplementation(async (url: string) =>
+    url.endsWith("/payments/providers") ? ok({ providers: ["KHALTI"] }) : ok(current),
+  );
+  render(<HostedCheckoutClient token="private-token" />);
+  expect(await screen.findByText("Data has been added to your eSIM")).toBeDefined();
+  expect(screen.queryByText("Ready to install")).toBeNull();
+  expect(screen.getByRole("link", { name: "Track this recharge" })).toBeDefined();
 });
 
 it.each([false, true])(

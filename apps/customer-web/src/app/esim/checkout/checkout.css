@@ -1125,6 +1125,81 @@
 
 /* ---------- Passport verification ---------- */
 
+.document-saving-card {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin: 18px 0 2px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+}
+.document-saving-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+}
+.document-saving-orbit {
+  position: absolute;
+  inset: -4px;
+  border: 2px solid transparent;
+  border-top-color: var(--primary);
+  border-radius: 19px;
+  animation: document-saving-orbit 1.7s linear infinite;
+}
+.document-saving-card.is-saved .document-saving-orbit { display: none; }
+.document-saving-copy { min-width: 0; }
+.document-saving-copy b { color: var(--text); font-size: 15px; }
+.document-saving-copy p {
+  margin: 5px 0 2px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.document-saving-copy small { color: var(--text-2); line-height: 1.5; }
+.document-saving-steps {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.document-saving-steps > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 650;
+}
+.document-saving-steps i {
+  display: grid;
+  place-items: center;
+  flex: 0 0 20px;
+  height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 10px;
+  font-style: normal;
+}
+.document-saving-steps .active { color: var(--primary); }
+.document-saving-steps .active i {
+  border-color: var(--primary);
+  animation: document-saving-pulse 1.5s ease-in-out infinite;
+}
+.document-saving-steps .complete { color: var(--success-strong); }
+.document-saving-steps .complete i { border-color: var(--success-strong); }
+@keyframes document-saving-orbit { to { transform: rotate(360deg); } }
+@keyframes document-saving-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 12%, transparent); } }
+
 .passport-check {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -2362,100 +2437,6 @@
 .compact-checkout-progress {
   display: none;
 }
-.initial-order-confirmation {
-  display: grid;
-  gap: 18px;
-}
-.initial-confirmation-heading {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-.initial-confirmation-check {
-  display: grid;
-  width: 58px;
-  height: 58px;
-  flex: 0 0 58px;
-  place-items: center;
-  border-radius: 50%;
-  background: #16a36a;
-  color: white;
-  box-shadow: 0 0 0 12px color-mix(in srgb, #16a36a 12%, transparent);
-}
-.initial-confirmation-heading h3 {
-  margin: 4px 0 5px;
-  font-size: 24px;
-  line-height: 1.1;
-}
-.initial-confirmation-heading p,
-.initial-confirmation-order span,
-.initial-confirmation-timeline p {
-  margin: 0;
-  color: var(--text-2);
-  font-size: 13px;
-  line-height: 1.45;
-}
-.initial-confirmation-heading small,
-.initial-confirmation-order small {
-  color: var(--text-3);
-}
-.initial-confirmation-order {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px;
-  border-block: 1px solid var(--border);
-}
-.initial-confirmation-order > div {
-  display: grid;
-  gap: 3px;
-}
-.initial-confirmation-order strong {
-  padding: 7px 11px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.initial-confirmation-timeline {
-  display: grid;
-  gap: 14px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.initial-confirmation-timeline li {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 12px;
-}
-.initial-confirmation-timeline li > span {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--primary-soft);
-  color: var(--primary);
-}
-.initial-confirmation-timeline svg {
-  width: 19px;
-}
-.initial-confirmation-timeline b {
-  display: block;
-  margin-bottom: 3px;
-}
-.initial-confirmation-actions {
-  display: grid;
-  gap: 9px;
-}
-.initial-confirmation-actions .button {
-  width: 100%;
-  min-height: 48px;
-}
-
 @media (max-width: 880px) {
   .initial-purchase-checkout {
     position: relative;
@@ -2583,25 +2564,6 @@
   .initial-purchase-checkout .account-choice-primary,
   .initial-purchase-checkout .account-choice-guest {
     padding: 16px;
-  }
-  .initial-confirmation-heading {
-    display: grid;
-  }
-  .initial-confirmation-check {
-    width: 52px;
-    height: 52px;
-    flex-basis: 52px;
-  }
-  .initial-confirmation-heading h3 {
-    font-size: 22px;
-  }
-  .initial-confirmation-order {
-    align-items: flex-start;
-    flex-direction: column;
-    padding-inline: 0;
-  }
-  .initial-confirmation-timeline {
-    gap: 12px;
   }
 }
 
@@ -3141,6 +3103,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .document-saving-orbit,
+  .document-saving-steps .active i,
   .confirmation-choice,
   .confirmation-choice-check,
   .verification-scan > span,
