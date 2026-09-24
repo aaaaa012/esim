@@ -61,18 +61,37 @@ export function declarePaymentRetry(
       blockedReason: REVIEW_REQUIRED_REASON,
     };
 
+  // Payment evidence outranks a stale or contradictory order status. This
+  // prevents a partially persisted DRAFT/PAYMENT_FAILED order from advertising
+  // a retry while an earlier provider session can still charge.
+  if (
+    payment?.status === PaymentStatus.PENDING ||
+    payment?.status === PaymentStatus.INITIATED
+  ) {
+    const activeSession = Boolean(
+      payment.expiresAt && new Date(payment.expiresAt).getTime() > now,
+    );
+    return {
+      canRetry: false,
+      canChangeProvider: false,
+      blockedReason: activeSession ? SESSION_ACTIVE_REASON : RECONCILING_REASON,
+    };
+  }
+
+  if (
+    payment?.status === PaymentStatus.COMPLETED ||
+    payment?.status === PaymentStatus.REFUNDED
+  )
+    return {
+      canRetry: false,
+      canChangeProvider: false,
+      blockedReason:
+        payment.status === PaymentStatus.REFUNDED
+          ? REVIEW_REQUIRED_REASON
+          : FULFILLMENT_REASON,
+    };
+
   if (status === OrderStatus.PAYMENT_PENDING) {
-    if (payment?.status === PaymentStatus.PENDING) {
-      const activeSession = Boolean(
-        payment.expiresAt &&
-          new Date(payment.expiresAt).getTime() > now,
-      );
-      return {
-        canRetry: false,
-        canChangeProvider: false,
-        blockedReason: activeSession ? SESSION_ACTIVE_REASON : RECONCILING_REASON,
-      };
-    }
     return { canRetry: false, canChangeProvider: false };
   }
 

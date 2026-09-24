@@ -2,11 +2,78 @@
 
 import { ChevronLeft, ChevronRight, LoaderCircle, QrCode } from "lucide-react";
 import { useEffect, useState } from "react";
-import {
-  FonepayBankPicker,
-  type FonepayBank,
-} from "./fonepay-bank-picker";
+import { FonepayBankPicker, type FonepayBank } from "./fonepay-bank-picker";
 import type { FonepayTelemetryPayload } from "./fonepay-telemetry";
+
+export function ActiveFonepayPaymentMethods({
+  canChangeProvider,
+  busy,
+  onResume,
+  onCheck,
+  onChooseKhalti,
+}: {
+  canChangeProvider: boolean;
+  busy: boolean;
+  onResume: () => void;
+  onCheck: () => void;
+  onChooseKhalti: () => void;
+}) {
+  return (
+    <section
+      className="active-payment-methods"
+      aria-labelledby="active-payment-title"
+    >
+      <div className="active-payment-heading">
+        <h2 id="active-payment-title">Choose payment method</h2>
+        <p role="status">
+          {canChangeProvider
+            ? "Your earlier Fonepay attempt has ended. You can resume Fonepay or choose Khalti."
+            : "Fonepay is still awaiting confirmation. Resume it or check its status before choosing another payment method."}
+        </p>
+      </div>
+      <div className="gateway-grid payment-gateway-grid">
+        <button
+          type="button"
+          className="fonepay-provider selected"
+          onClick={onResume}
+        >
+          <img src="/brand/fonepay-logo.png" alt="Checkout by Fonepay" />
+          <span className="gateway-copy">
+            <b>Resume mobile banking</b>
+            <small>Return to your active bank-list or QR payment.</small>
+          </span>
+        </button>
+        <button
+          type="button"
+          className="khalti-provider"
+          disabled={!canChangeProvider || busy}
+          onClick={onChooseKhalti}
+        >
+          <img src="/brand/khalti-logo.png" alt="Khalti" />
+          <span className="gateway-copy">
+            <b>Khalti wallet</b>
+            <small>
+              {canChangeProvider
+                ? "Pay from your Khalti balance."
+                : "Available after the active payment is resolved."}
+            </small>
+          </span>
+        </button>
+      </div>
+      {!canChangeProvider ? (
+        <button
+          type="button"
+          className="button secondary"
+          disabled={busy}
+          onClick={onCheck}
+        >
+          {busy ? <LoaderCircle className="spin" size={18} /> : null}
+          Check Fonepay status
+        </button>
+      ) : null}
+    </section>
+  );
+}
 
 function PaymentExpiryCountdown({ expiresAt }: { expiresAt: string }) {
   const expiry = new Date(expiresAt).getTime();
@@ -66,6 +133,7 @@ export function FonepayCheckout({
   disabled,
   checkLabel,
   onCheck,
+  onBackToMethods,
 }: {
   titleId: string;
   banks?: FonepayBank[] | undefined;
@@ -80,6 +148,7 @@ export function FonepayCheckout({
   disabled?: boolean;
   checkLabel: string;
   onCheck: () => void;
+  onBackToMethods: () => void;
 }) {
   const [showQr, setShowQr] = useState(false);
   const hasBanks = Boolean(banks?.length);
@@ -87,6 +156,14 @@ export function FonepayCheckout({
 
   return (
     <section className="fonepay-checkout" aria-labelledby={titleId}>
+      <button
+        type="button"
+        className="fonepay-methods-back"
+        onClick={onBackToMethods}
+      >
+        <ChevronLeft size={16} aria-hidden="true" />
+        Back to payment methods
+      </button>
       {expiresAt ? <PaymentExpiryCountdown expiresAt={expiresAt} /> : null}
       {qrView ? (
         <div className="fonepay-qr-view">

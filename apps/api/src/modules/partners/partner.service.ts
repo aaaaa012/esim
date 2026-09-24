@@ -23,6 +23,7 @@ import {
 } from "@prisma/client";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
+  declarePaymentRetry,
   documentTypeLabel,
   DocumentType as SharedDocumentType,
   passportRequiresManualReview,
@@ -2805,6 +2806,7 @@ export class PartnerService {
           },
         },
         partner: { select: { name: true, slug: true, brand: true } },
+        payments: { orderBy: { createdAt: "desc" }, take: 1 },
       },
     });
     if (!order)
@@ -2871,6 +2873,7 @@ export class PartnerService {
                 },
               },
               partner: { select: { name: true, slug: true, brand: true } },
+              payments: { orderBy: { createdAt: "desc" }, take: 1 },
             },
           })) ?? order;
     }
@@ -2916,6 +2919,17 @@ export class PartnerService {
         documents: order.documents,
         documentReviewStatus: order.documentReviewStatus,
         requiredDocuments,
+        paymentRetry: declarePaymentRetry({
+          status: order.status,
+          payment: order.payments?.[0]
+            ? {
+                status: order.payments[0]!.status,
+                ...(order.payments[0]!.expiresAt
+                  ? { expiresAt: order.payments[0]!.expiresAt.toISOString() }
+                  : {}),
+              }
+            : null,
+        }),
       },
     };
   }

@@ -461,13 +461,49 @@ export const passportComparisonDiagnostics = (
   matchedFields: PassportField[],
 ) => {
   const checks = [
-    ["firstName", fields.firstName, traveler.firstName, canonicalName, "givenNames"],
-    ["middleName", fields.middleName, traveler.middleName, canonicalName, "middleName"],
+    [
+      "firstName",
+      fields.firstName,
+      traveler.firstName,
+      canonicalName,
+      "givenNames",
+    ],
+    [
+      "middleName",
+      fields.middleName,
+      traveler.middleName,
+      canonicalName,
+      "middleName",
+    ],
     ["surname", fields.surname, traveler.surname, canonicalName, "surname"],
-    ["dateOfBirth", fields.dateOfBirth, traveler.dateOfBirth, canonicalDate, "dateOfBirth"],
-    ["nationality", fields.nationality, traveler.nationality, canonicalNationality, "nationality"],
-    ["passportNumber", fields.passportNumber, traveler.passportNumber, canonicalPassportNumber, "passportNumber"],
-    ["passportExpiryDate", fields.passportExpiryDate, traveler.passportExpiryDate, canonicalDate, "passportExpiryDate"],
+    [
+      "dateOfBirth",
+      fields.dateOfBirth,
+      traveler.dateOfBirth,
+      canonicalDate,
+      "dateOfBirth",
+    ],
+    [
+      "nationality",
+      fields.nationality,
+      traveler.nationality,
+      canonicalNationality,
+      "nationality",
+    ],
+    [
+      "passportNumber",
+      fields.passportNumber,
+      traveler.passportNumber,
+      canonicalPassportNumber,
+      "passportNumber",
+    ],
+    [
+      "passportExpiryDate",
+      fields.passportExpiryDate,
+      traveler.passportExpiryDate,
+      canonicalDate,
+      "passportExpiryDate",
+    ],
   ] as const;
   return checks.map(([field, extracted, submitted, normalize, matchField]) => {
     const extractedText = extracted ?? "";
@@ -475,7 +511,8 @@ export const passportComparisonDiagnostics = (
     return {
       field,
       source: "stored-extraction",
-      extractionNormalizationChanged: normalize(extractedText) !== extractedText,
+      extractionNormalizationChanged:
+        normalize(extractedText) !== extractedText,
       submittedNormalizationChanged: normalize(submittedText) !== submittedText,
       matched: matchedFields.includes(matchField),
       checksumSupported: null,
@@ -506,9 +543,7 @@ export const verifyStoredExtraction = (
       reasonCode: "PASSPORT_EXPIRED",
       mismatchedFields,
     };
-  const nationalityEvidence = Boolean(
-    canonicalNationality(fields.nationality),
-  );
+  const nationalityEvidence = Boolean(canonicalNationality(fields.nationality));
   const validSubmittedNationality = Boolean(
     canonicalNationality(traveler.nationality),
   );
@@ -635,6 +670,20 @@ export const mrzCandidateScore = (mrz: ParsedMrz | null): number => {
   return score;
 };
 
+/** Select the strongest MRZ across independent OCR passes. A noisy crop must
+ * never hide a checksum-valid full-page result, or vice versa. */
+export const bestMrzCandidate = (
+  ...texts: Array<string | undefined>
+): ParsedMrz | null => {
+  let best: ParsedMrz | null = null;
+  for (const text of texts) {
+    if (!text?.trim()) continue;
+    const parsed = parseMrz(text);
+    if (mrzCandidateScore(parsed) > mrzCandidateScore(best)) best = parsed;
+  }
+  return best;
+};
+
 /**
  * Server-side passport verification used to gate checkout before payment.
  *
@@ -709,19 +758,7 @@ export class PassportVerificationService implements OnModuleDestroy {
       const recognized = await this.recognizePassportDocument(
         passport.privateAssetId,
       );
-      // The band pass runs with the MRZ alphabet whitelisted, so when Tesseract
-      // managed to read both MRZ lines in the crop, its name zone is trusted
-      // over the unfiltered full-page copy.
-      const parsedBand = recognized.bandText
-        ? parseMrz(recognized.bandText)
-        : null;
-      const parsedFull = parseMrz(recognized.text);
-      const mrz =
-        parsedBand &&
-        parsedBand.passportNumber.value &&
-        (parsedBand.surname || parsedBand.givenNames)
-          ? parsedBand
-          : parsedFull;
+      const mrz = bestMrzCandidate(recognized.bandText, recognized.text);
       if (!mrz)
         return {
           status: "MANUAL_ENTRY_REQUIRED",
@@ -1000,7 +1037,9 @@ export class PassportVerificationService implements OnModuleDestroy {
         this.worker = null;
         this.workerPromise = null;
       }
-      if (!parseMrz(bandText) && !parseMrz(text)) {
+      // A merely parseable partial read is not enough to stop recovery. Keep
+      // searching until ICAO checksums prove the MRZ or recovery is exhausted.
+      if (!bestMrzCandidate(bandText, text)?.valid) {
         try {
           const recovered = await this.recoverMrz(worker, image);
           if (recovered.text) {
@@ -1094,10 +1133,12 @@ export class PassportVerificationService implements OnModuleDestroy {
    * validation; image enhancement never weakens the identity decision.
    */
   private async recoverMrz(worker: Worker, image: Buffer) {
-    const deadline = Date.now() + Math.max(
-      10_000,
-      Number(process.env.PASSPORT_OCR_RECOVERY_TIMEOUT_MS ?? 45_000),
-    );
+    const deadline =
+      Date.now() +
+      Math.max(
+        10_000,
+        Number(process.env.PASSPORT_OCR_RECOVERY_TIMEOUT_MS ?? 45_000),
+      );
     let best = { text: "", score: -1 };
     await worker.setParameters({
       tessedit_char_whitelist: PassportVerificationService.MRZ_ALPHABET,
@@ -1132,10 +1173,7 @@ export class PassportVerificationService implements OnModuleDestroy {
         const normalizedHeight = normalizedMeta.height ?? 0;
         for (const ratio of PassportVerificationService.RECOVERY_BAND_RATIOS) {
           if (Date.now() >= deadline) break;
-          const bandHeight = Math.max(
-            80,
-            Math.round(normalizedHeight * ratio),
-          );
+          const bandHeight = Math.max(80, Math.round(normalizedHeight * ratio));
           const band = sharp(normalized).extract({
             left: 0,
             top: Math.max(0, normalizedHeight - bandHeight),
@@ -1208,24 +1246,22 @@ export class PassportVerificationService implements OnModuleDestroy {
         );
         continue;
       }
+      const recognizedMrz = bestMrzCandidate(
+        recognized.bandText,
+        recognized.text,
+      );
+      const bestMrz = best ? bestMrzCandidate(best.bandText, best.text) : null;
       if (
         !best ||
-        mrzCandidateScore(parseMrz(recognized.bandText ?? recognized.text)) >
-          mrzCandidateScore(parseMrz(best.bandText ?? best.text)) ||
+        mrzCandidateScore(recognizedMrz) > mrzCandidateScore(bestMrz) ||
         ((recognized.confidence ?? 0) > (best.confidence ?? 0) &&
-          mrzCandidateScore(parseMrz(recognized.bandText ?? recognized.text)) ===
-            mrzCandidateScore(parseMrz(best.bandText ?? best.text)))
+          mrzCandidateScore(recognizedMrz) === mrzCandidateScore(bestMrz))
       )
         best = recognized;
-      const parsedBand = recognized.bandText
-        ? parseMrz(recognized.bandText)
-        : null;
-      const parsedFull = parseMrz(recognized.text);
       if (
-        (parsedBand?.passportNumber.value &&
-          (parsedBand.surname || parsedBand.givenNames)) ||
-        (parsedFull?.passportNumber.value &&
-          (parsedFull.surname || parsedFull.givenNames))
+        recognizedMrz?.valid &&
+        recognizedMrz.passportNumber.value &&
+        (recognizedMrz.surname || recognizedMrz.givenNames)
       )
         return recognized;
     }

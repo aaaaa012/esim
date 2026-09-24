@@ -52,7 +52,10 @@ import {
   postFonepayTelemetry,
   type FonepayTelemetryPayload,
 } from "../../esim/checkout/fonepay-telemetry";
-import { FonepayCheckout } from "../../esim/checkout/fonepay-checkout";
+import {
+  ActiveFonepayPaymentMethods,
+  FonepayCheckout,
+} from "../../esim/checkout/fonepay-checkout";
 import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
@@ -108,6 +111,11 @@ type Session = {
       passportVerificationStatus?: string | null;
     }[];
     requiredDocuments: string[];
+    paymentRetry?: {
+      canRetry: boolean;
+      canChangeProvider: boolean;
+      blockedReason?: string;
+    };
   };
 };
 type Verification = {
@@ -259,7 +267,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [documentError, setDocumentError] = useState("");
   const documentFailureMessage = (cause: unknown) => {
     const message = cause instanceof Error ? cause.message : "";
-    return message === "Failed to fetch" || /network request failed/i.test(message)
+    return message === "Failed to fetch" ||
+      /network request failed/i.test(message)
       ? "We couldn't reach the verification service. Your documents are securely saved. Check your connection and try again."
       : message || "Could not complete the document check. Try again.";
   };
@@ -277,6 +286,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   );
   const [fonepayBankHint, setFonepayBankHint] = useState("");
   const [fonepaySocketReady, setFonepaySocketReady] = useState(false);
+  const [showPaymentMethods, setShowPaymentMethods] = useState(false);
   const [lockedProvider, setLockedProvider] = useState<PaymentProvider | null>(
     null,
   );
@@ -574,25 +584,46 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       const mismatched = new Set(result.mismatchedFields ?? []);
       setFieldErrors({
         ...(mismatched.has("firstName")
-          ? { firstName: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+          ? {
+              firstName:
+                "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+            }
           : {}),
         ...(mismatched.has("middleName")
-          ? { middleName: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+          ? {
+              middleName:
+                "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+            }
           : {}),
         ...(mismatched.has("surname")
-          ? { surname: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+          ? {
+              surname:
+                "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+            }
           : {}),
         ...(mismatched.has("dateOfBirth")
-          ? { dateOfBirth: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+          ? {
+              dateOfBirth:
+                "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+            }
           : {}),
         ...(mismatched.has("passportNumber")
-          ? { passportNumber: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+          ? {
+              passportNumber:
+                "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+            }
           : {}),
         ...(mismatched.has("passportExpiryDate")
-          ? { passportExpiryDate: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+          ? {
+              passportExpiryDate:
+                "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+            }
           : {}),
         ...(mismatched.has("nationality")
-          ? { nationality: "We couldn't automatically match this detail with your uploaded passport. Please check it." }
+          ? {
+              nationality:
+                "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+            }
           : {}),
       });
     } else if (result.status === "MANUAL_REVIEW") {
@@ -697,27 +728,25 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           });
           setSession((current) => {
             if (!current) return current;
-            const { passportExtraction: _staleExtraction, ...withoutExtraction } =
-              current.order;
+            const {
+              passportExtraction: _staleExtraction,
+              ...withoutExtraction
+            } = current.order;
             return {
-                  ...current,
-                  order: {
-                    ...(type === "PASSPORT"
-                      ? withoutExtraction
-                      : current.order),
-                    ...(type === "PASSPORT"
-                      ? {
-                          documentReviewStatus: "NOT_STARTED",
-                        }
-                      : {}),
-                    documents: [
-                      ...current.order.documents.filter(
-                        (doc) => doc.type !== type,
-                      ),
-                      saved,
-                    ],
-                  },
-                };
+              ...current,
+              order: {
+                ...(type === "PASSPORT" ? withoutExtraction : current.order),
+                ...(type === "PASSPORT"
+                  ? {
+                      documentReviewStatus: "NOT_STARTED",
+                    }
+                  : {}),
+                documents: [
+                  ...current.order.documents.filter((doc) => doc.type !== type),
+                  saved,
+                ],
+              },
+            };
           });
           setFiles((current) => ({
             ...current,
@@ -803,9 +832,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       technicalOcrNoticeShown.current = null;
   }, [passportFailureCode, step]);
 
-  const hardPassportReplacementRequired = passportRequiresReplacement(
-    passportFailureCode,
-  );
+  const hardPassportReplacementRequired =
+    passportRequiresReplacement(passportFailureCode);
   const displayDocuments = (session?.order.documents ?? []).map((document) =>
     hardPassportReplacementRequired && document.type === "PASSPORT"
       ? { ...document, status: "REUPLOAD_REQUIRED" }
@@ -861,19 +889,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           expiredPassport
             ? "This passport has expired. Upload a valid passport before continuing."
             : rejected.length
-            ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
-            : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
+              ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
+              : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
         );
       }
     }
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
       stepJump(2);
-  }, [
-    effectiveVerificationStatus,
-    passportFailureCode,
-    step,
-  ]);
+  }, [effectiveVerificationStatus, passportFailureCode, step]);
 
   useEffect(() => {
     if (step === 3 && awaitingVerificationAdvance.current && gatePassed) {
@@ -913,14 +937,28 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       return true;
     }
   };
+  const refreshPaymentDeclaration = async () => {
+    const refreshed = await api<Session>(`/partner-checkout/${token}`);
+    setSession(refreshed);
+    return refreshed;
+  };
   const requestPayment = async () => {
-    const value = await api<Payment>(`/partner-checkout/${token}/payment`, {
-      method: "POST",
-      body: JSON.stringify({ provider }),
-    });
-    setPayment(value);
-    if (value.redirectUrl && external(value.redirectUrl))
-      window.location.assign(value.redirectUrl);
+    try {
+      const value = await api<Payment>(`/partner-checkout/${token}/payment`, {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      });
+      setPayment(value);
+      setShowPaymentMethods(false);
+      void refreshPaymentDeclaration().catch(() => undefined);
+      if (value.redirectUrl && external(value.redirectUrl))
+        window.location.assign(value.redirectUrl);
+    } catch (cause) {
+      // Initiation can fail before or after a provider attempt is persisted.
+      // Refresh the server declaration so retry/switch controls never guess.
+      await refreshPaymentDeclaration().catch(() => undefined);
+      throw cause;
+    }
   };
   const initiatePayment = () => run(requestPayment);
   const settleTerminalVerdict = (code?: string) => {
@@ -956,13 +994,17 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         }
         if (FAILED_STATUSES.has(result.status)) {
           setPayment(null);
+          await refreshPaymentDeclaration();
           return;
         }
       } catch (cause) {
         const code = (cause as { code?: string })?.code;
         if (settleTerminalVerdict(code)) {
+          await refreshPaymentDeclaration().catch(() => undefined);
           if (code === "PAYMENT_RETRY_NOT_SAFE") throw cause;
-          setError("That payment attempt has ended. Start a new one to continue.");
+          setError(
+            "That payment attempt has ended. Start a new one to continue.",
+          );
           return;
         }
         throw cause;
@@ -1232,7 +1274,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     effectiveVerificationStatus === "VERIFIED" ||
     effectiveVerificationStatus === "MANUALLY_APPROVED";
   return (
-    <main className={`checkout-page${showPaymentChoice ? " payment-selection hosted-payment-selection" : ""}`}>
+    <main
+      className={`checkout-page${showPaymentChoice ? " payment-selection hosted-payment-selection" : ""}`}
+    >
       <ErrorModal error={error || null} onClose={() => setError("")} />
       {successMessage && (
         <ErrorModal
@@ -1274,7 +1318,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               </span>
             </div>
           )}
-          <h1>{showPaymentChoice ? "Choose how to pay" : "Your travel eSIM"}</h1>
+          <h1>
+            {showPaymentChoice ? "Choose how to pay" : "Your travel eSIM"}
+          </h1>
           <p>
             {showPaymentChoice
               ? "Review your plan and select a secure payment method."
@@ -1282,9 +1328,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           </p>
         </div>
         {showPaymentChoice ? (
-          <div className="compact-checkout-progress" role="progressbar" aria-label="Checkout step 4 of 4" aria-valuemin={1} aria-valuemax={4} aria-valuenow={4}>
+          <div
+            className="compact-checkout-progress"
+            role="progressbar"
+            aria-label="Checkout step 4 of 4"
+            aria-valuemin={1}
+            aria-valuemax={4}
+            aria-valuenow={4}
+          >
             <b>Step 4 of 4</b>
-            <span aria-hidden="true">{[1, 2, 3, 4].map((item) => <i className="complete" key={item} />)}</span>
+            <span aria-hidden="true">
+              {[1, 2, 3, 4].map((item) => (
+                <i className="complete" key={item} />
+              ))}
+            </span>
           </div>
         ) : null}
         <div className="checkout-progress">
@@ -1300,15 +1357,39 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           {showPaymentChoice ? (
             <div className="payment-mobile-summary">
               <div className="payment-mobile-summary-main">
-                <span className="summary-flag" aria-hidden="true">{flagEmoji(plan.countryCode)}</span>
-                <span><small>Order summary</small><b>{countryDisplayName(plan.countryCode)} · {formatPlanDataText(plan.dataAllowance)} / {plan.validityDays} days</b></span>
-                <strong>{session!.order.currency} {session!.order.amountNpr.toLocaleString()}</strong>
+                <span className="summary-flag" aria-hidden="true">
+                  {flagEmoji(plan.countryCode)}
+                </span>
+                <span>
+                  <small>Order summary</small>
+                  <b>
+                    {countryDisplayName(plan.countryCode)} ·{" "}
+                    {formatPlanDataText(plan.dataAllowance)} /{" "}
+                    {plan.validityDays} days
+                  </b>
+                </span>
+                <strong>
+                  {session!.order.currency}{" "}
+                  {session!.order.amountNpr.toLocaleString()}
+                </strong>
               </div>
               <details>
                 <summary>View details</summary>
-                <div><span>Plan</span><b>{plan.name}</b></div>
-                <div><span>Destination</span><b>{countryDisplayName(plan.countryCode)}</b></div>
-                <div><span>Data & validity</span><b>{formatPlanDataText(plan.dataAllowance)} · {plan.validityDays} days</b></div>
+                <div>
+                  <span>Plan</span>
+                  <b>{plan.name}</b>
+                </div>
+                <div>
+                  <span>Destination</span>
+                  <b>{countryDisplayName(plan.countryCode)}</b>
+                </div>
+                <div>
+                  <span>Data & validity</span>
+                  <b>
+                    {formatPlanDataText(plan.dataAllowance)} ·{" "}
+                    {plan.validityDays} days
+                  </b>
+                </div>
               </details>
             </div>
           ) : null}
@@ -1610,6 +1691,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         type="button"
                         className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
                         aria-pressed={provider === PaymentProvider.KHALTI}
+                        disabled={
+                          session?.order.paymentRetry?.canChangeProvider ===
+                          false
+                        }
                         onClick={() => {
                           setProvider(PaymentProvider.KHALTI);
                         }}
@@ -1627,6 +1712,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           type="button"
                           className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
                           aria-pressed={provider === PaymentProvider.FONEPAY}
+                          disabled={
+                            session?.order.paymentRetry?.canChangeProvider ===
+                            false
+                          }
                           onClick={() => {
                             setProvider(PaymentProvider.FONEPAY);
                           }}
@@ -1648,10 +1737,28 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                 ) : null}
                 {showPaymentChoice && !lockedProvider ? (
                   <p className="payment-security-note">
-                    <LockKeyhole size={15} aria-hidden="true" /> Secure payment in NPR
+                    <LockKeyhole size={15} aria-hidden="true" /> Secure payment
+                    in NPR
                   </p>
                 ) : null}
-                {payment ? (
+                {payment && showPaymentMethods ? (
+                  <ActiveFonepayPaymentMethods
+                    canChangeProvider={Boolean(
+                      session?.order.paymentRetry?.canChangeProvider,
+                    )}
+                    busy={busy}
+                    onResume={() => setShowPaymentMethods(false)}
+                    onCheck={checkPayment}
+                    onChooseKhalti={() => {
+                      if (!session?.order.paymentRetry?.canChangeProvider)
+                        return;
+                      setPayment(null);
+                      setProvider(PaymentProvider.KHALTI);
+                      setLockedProvider(null);
+                      setShowPaymentMethods(false);
+                    }}
+                  />
+                ) : payment ? (
                   SIMULATOR ? (
                     <div className="simulator-box">
                       <span>Local signed simulator</span>
@@ -1678,8 +1785,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       onTelemetry={(event) => reportTelemetry(event)}
                       hint={fonepayBankHint}
                       busy={busy}
-                      checkLabel="I&apos;ve completed payment - check status"
+                      checkLabel="I've completed payment - check status"
                       onCheck={checkPayment}
+                      onBackToMethods={() => setShowPaymentMethods(true)}
                     />
                   ) : (
                     <Action busy={busy} onClick={checkPayment}>
@@ -2046,7 +2154,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       </>
                     ) : (
                       <>
-                        {effectiveVerificationStatus !== "REUPLOAD_REQUIRED" && (
+                        {effectiveVerificationStatus !==
+                          "REUPLOAD_REQUIRED" && (
                           <SavedDocuments
                             documents={session?.order.documents}
                           />
@@ -2064,7 +2173,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 again.
                               </p>
                             )}
-                            {effectiveVerificationStatus === "REUPLOAD_REQUIRED" ? (
+                            {effectiveVerificationStatus ===
+                            "REUPLOAD_REQUIRED" ? (
                               <DocumentRecoveryFields
                                 documents={displayDocuments}
                                 types={session!.order.requiredDocuments}
@@ -2227,8 +2337,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
               <LockKeyhole size={14} /> Price is frozen by your agent.
             </p>
             <p>
-              <ShieldCheck size={14} /> Your documents are encrypted and
-              handled securely.
+              <ShieldCheck size={14} /> Your documents are encrypted and handled
+              securely.
             </p>
           </aside>
         </div>

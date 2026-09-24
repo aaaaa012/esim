@@ -387,6 +387,27 @@ describe("PaymentsService inventory admission", () => {
     ).rejects.toMatchObject({ code: "PAYMENT_SESSION_ACTIVE" });
   });
 
+  it("blocks provider switching from an active payment even without persistence", async () => {
+    const order = orderFor({ purchaseType: "TOPUP" });
+    const khaltiInitiate = vi.fn();
+    const fonepayInitiate = vi.fn();
+    const service = new PaymentsService(
+      {
+        refreshOne: vi.fn(),
+        get: vi.fn().mockReturnValue(order),
+        assertPaymentPrerequisites: vi.fn(),
+      } as never,
+      { initiate: khaltiInitiate } as never,
+      { initiate: fonepayInitiate } as never,
+    );
+
+    await expect(
+      service.initiate(order.id, order.ownerId, PaymentProvider.FONEPAY),
+    ).rejects.toMatchObject({ code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE });
+    expect(khaltiInitiate).not.toHaveBeenCalled();
+    expect(fonepayInitiate).not.toHaveBeenCalled();
+  });
+
   it("blocks a second charge when a remote initiation is unresolved", async () => {
     const order = orderFor({
       status: OrderStatus.DRAFT,

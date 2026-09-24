@@ -18,7 +18,10 @@ import {
   postFonepayTelemetry,
   type FonepayTelemetryPayload,
 } from "./fonepay-telemetry";
-import { FonepayCheckout } from "./fonepay-checkout";
+import {
+  ActiveFonepayPaymentMethods,
+  FonepayCheckout,
+} from "./fonepay-checkout";
 import { paymentActionDisabled, retryDeclaredAllowed } from "./payment-gates";
 import Link from "next/link";
 import {
@@ -660,6 +663,7 @@ export default function CheckoutClient({
   const passportVerificationInFlight = useRef(false);
   const [fonepayBankHint, setFonepayBankHint] = useState("");
   const [fonepaySocketReady, setFonepaySocketReady] = useState(false);
+  const [showPaymentMethods, setShowPaymentMethods] = useState(false);
   const [lockedProvider, setLockedProvider] = useState<PaymentProvider | null>(
     null,
   );
@@ -1229,6 +1233,7 @@ export default function CheckoutClient({
       body: JSON.stringify({ provider }),
     });
     setPayment(value);
+    setShowPaymentMethods(false);
     // The initiation endpoint only returns the provider session. It has already
     // persisted PAYMENT_PENDING before responding, so keep the local order in
     // step immediately; otherwise a freshly returned Fonepay QR is hidden by
@@ -2886,7 +2891,7 @@ export default function CheckoutClient({
                   <button
                     className="button secondary payment-step-back"
                     type="button"
-                    onClick={goBack}
+                    onClick={() => jumpTo(2)}
                     disabled={busy || verifying}
                   >
                     Back to documents
@@ -3238,7 +3243,23 @@ export default function CheckoutClient({
                         ) : null}
                       </>
                     ) : null}
-                    {payment ? (
+                    {payment && showPaymentMethods ? (
+                      <ActiveFonepayPaymentMethods
+                        canChangeProvider={Boolean(
+                          order?.paymentRetry?.canChangeProvider,
+                        )}
+                        busy={busy}
+                        onResume={() => setShowPaymentMethods(false)}
+                        onCheck={complete}
+                        onChooseKhalti={() => {
+                          if (!order?.paymentRetry?.canChangeProvider) return;
+                          setPayment(null);
+                          setProvider(PaymentProvider.KHALTI);
+                          setLockedProvider(PaymentProvider.KHALTI);
+                          setShowPaymentMethods(false);
+                        }}
+                      />
+                    ) : payment ? (
                       SIMULATOR ? (
                         <div className="simulator-box">
                           <span>Local signed simulator</span>
@@ -3282,6 +3303,7 @@ export default function CheckoutClient({
                           })}
                           checkLabel="Check payment status"
                           onCheck={complete}
+                          onBackToMethods={() => setShowPaymentMethods(true)}
                         />
                       ) : (
                         <Action

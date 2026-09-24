@@ -1407,6 +1407,63 @@
   color: var(--fonepay-black);
 }
 
+.fonepay-methods-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fonepay-red);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.fonepay-methods-back:hover {
+  text-decoration: underline;
+}
+
+.active-payment-methods {
+  display: grid;
+  gap: 18px;
+  margin-top: 22px;
+}
+
+.active-payment-heading {
+  display: grid;
+  gap: 7px;
+}
+
+.active-payment-heading h2,
+.active-payment-heading p {
+  margin: 0;
+}
+
+.active-payment-heading h2 {
+  font-size: 20px;
+}
+
+.active-payment-heading p {
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.active-payment-methods .gateway-grid {
+  margin: 0;
+}
+
+.gateway-grid button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.gateway-grid button:disabled:hover {
+  border-color: var(--border-strong);
+}
+
 .fonepay-checkout-logo {
   width: auto;
   height: 35px;

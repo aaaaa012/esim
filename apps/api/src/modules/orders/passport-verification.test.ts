@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TravelerInput } from "@visa-compass/shared";
 import { parseMrz } from "./mrz-parser.js";
 import {
+  bestMrzCandidate,
   canonicalDate,
   canonicalName,
   canonicalNationality,
@@ -465,23 +466,25 @@ describe("imageDimensions", () => {
 
 describe("strict MRZ recovery decisions", () => {
   it("distinguishes a passport-like OCR result from an unrelated upload", () => {
-    expect(looksLikePassport("Government of Nepal PASSPORT No. 123"))
-      .toBe(true);
+    expect(looksLikePassport("Government of Nepal PASSPORT No. 123")).toBe(
+      true,
+    );
     expect(looksLikePassport("BOARDING PASS KATHMANDU TO DELHI")).toBe(false);
   });
 
   it("ranks a checksum-valid MRZ above an unparseable candidate", () => {
     expect(mrzCandidateScore(null)).toBe(0);
-    expect(mrzCandidateScore(parseMrz(US_MRZ)))
-      .toBeGreaterThan(100);
+    expect(mrzCandidateScore(parseMrz(US_MRZ))).toBeGreaterThan(100);
   });
 
   it("routes a passport-like but unparseable image to review, not re-upload", async () => {
     const storage = {
       isConfigured: () => true,
-      downloadDocumentImages: vi.fn().mockResolvedValue([
-        { bytes: Buffer.from("passport"), contentType: "image/jpeg" },
-      ]),
+      downloadDocumentImages: vi
+        .fn()
+        .mockResolvedValue([
+          { bytes: Buffer.from("passport"), contentType: "image/jpeg" },
+        ]),
     };
     const service = new PassportVerificationService(storage as never);
     vi.spyOn(service as never, "recognize" as never).mockResolvedValue({
@@ -491,14 +494,16 @@ describe("strict MRZ recovery decisions", () => {
     const result = await service.extract({
       id: "order-review",
       purchaseType: "INITIAL_PURCHASE",
-      documents: [{
-        id: "passport-review",
-        type: "PASSPORT",
-        fileName: "passport.jpg",
-        privateAssetId: "passport-review-asset",
-        status: "PENDING",
-        uploadVerified: true,
-      }],
+      documents: [
+        {
+          id: "passport-review",
+          type: "PASSPORT",
+          fileName: "passport.jpg",
+          privateAssetId: "passport-review-asset",
+          status: "PENDING",
+          uploadVerified: true,
+        },
+      ],
     } as never);
     expect(result).toMatchObject({
       status: "MANUAL_ENTRY_REQUIRED",
@@ -509,9 +514,11 @@ describe("strict MRZ recovery decisions", () => {
   it("requires replacement when no passport biodata evidence is detected", async () => {
     const storage = {
       isConfigured: () => true,
-      downloadDocumentImages: vi.fn().mockResolvedValue([
-        { bytes: Buffer.from("ticket"), contentType: "image/jpeg" },
-      ]),
+      downloadDocumentImages: vi
+        .fn()
+        .mockResolvedValue([
+          { bytes: Buffer.from("ticket"), contentType: "image/jpeg" },
+        ]),
     };
     const service = new PassportVerificationService(storage as never);
     vi.spyOn(service as never, "recognize" as never).mockResolvedValue({
@@ -521,24 +528,35 @@ describe("strict MRZ recovery decisions", () => {
     const result = await service.extract({
       id: "order-wrong-document",
       purchaseType: "INITIAL_PURCHASE",
-      documents: [{
-        id: "passport-wrong",
-        type: "PASSPORT",
-        fileName: "ticket.jpg",
-        privateAssetId: "ticket-asset",
-        status: "PENDING",
-        uploadVerified: true,
-      }],
+      documents: [
+        {
+          id: "passport-wrong",
+          type: "PASSPORT",
+          fileName: "ticket.jpg",
+          privateAssetId: "ticket-asset",
+          status: "PENDING",
+          uploadVerified: true,
+        },
+      ],
     } as never);
     expect(result.failureCode).toBe("PASSPORT_BIODATA_NOT_DETECTED");
+  });
+
+  it("selects checksum-valid full-page evidence over a weaker crop", () => {
+    const weakMrz = US_MRZ.slice(0, -1) + "0";
+    const selected = bestMrzCandidate(weakMrz, US_MRZ);
+    expect(selected?.valid).toBe(true);
+    expect(selected?.passportNumber.value).toBe("E00007730");
   });
 
   it("requires replacement before traveller entry when the MRZ passport is expired", async () => {
     const storage = {
       isConfigured: () => true,
-      downloadDocumentImages: vi.fn().mockResolvedValue([
-        { bytes: Buffer.from("passport"), contentType: "image/jpeg" },
-      ]),
+      downloadDocumentImages: vi
+        .fn()
+        .mockResolvedValue([
+          { bytes: Buffer.from("passport"), contentType: "image/jpeg" },
+        ]),
     };
     const service = new PassportVerificationService(storage as never);
     const expiredMrz = [
@@ -554,14 +572,16 @@ describe("strict MRZ recovery decisions", () => {
     const result = await service.extract({
       id: "order-expired",
       purchaseType: "INITIAL_PURCHASE",
-      documents: [{
-        id: "passport-expired",
-        type: "PASSPORT",
-        fileName: "passport.jpg",
-        privateAssetId: "passport-expired-asset",
-        status: "PENDING",
-        uploadVerified: true,
-      }],
+      documents: [
+        {
+          id: "passport-expired",
+          type: "PASSPORT",
+          fileName: "passport.jpg",
+          privateAssetId: "passport-expired-asset",
+          status: "PENDING",
+          uploadVerified: true,
+        },
+      ],
     } as never);
 
     expect(result).toMatchObject({
@@ -651,14 +671,16 @@ describe("multi-page passport extraction", () => {
     const result = await service.extract({
       id: "order-mixed-pdf",
       purchaseType: "INITIAL_PURCHASE",
-      documents: [{
-        id: "passport-mixed",
-        type: "PASSPORT",
-        fileName: "mixed-documents.pdf",
-        privateAssetId: "mixed-passport-asset",
-        status: "PENDING",
-        uploadVerified: true,
-      }],
+      documents: [
+        {
+          id: "passport-mixed",
+          type: "PASSPORT",
+          fileName: "mixed-documents.pdf",
+          privateAssetId: "mixed-passport-asset",
+          status: "PENDING",
+          uploadVerified: true,
+        },
+      ],
     } as never);
 
     expect(recognize).toHaveBeenCalledTimes(3);

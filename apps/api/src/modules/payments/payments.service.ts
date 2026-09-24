@@ -201,7 +201,10 @@ export class PaymentsService {
    * payment are blocked with PAYMENT_RETRY_NOT_SAFE / a reconcile-first error;
    * the checkout UI reads the same declaration before it even renders actions.
    */
-  private assertSafeToInitiate(order: DemoOrder): void {
+  private assertSafeToInitiate(
+    order: DemoOrder,
+    requestedProvider: PaymentProvider,
+  ): void {
     // A COMPLETED payment is the strongest form of double-charge protection:
     // the order may never be handed a second payment session regardless of how
     // the order's own status drifted (e.g. a split-state after a partial boot
@@ -246,6 +249,16 @@ export class PaymentsService {
       throw new BadRequestException(
         "Reconcile the pending payment before another attempt",
       );
+    if (
+      order.payment?.status === PaymentStatus.PENDING &&
+      order.payment.provider !== requestedProvider
+    )
+      throw new ApiException({
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "The active payment must be resolved before choosing another provider.",
+        status: 409,
+      });
   }
 
   private async assertNoUnresolvedRemoteInitiation(orderId: string) {
@@ -288,7 +301,7 @@ export class PaymentsService {
     await this.orders.assertPaymentPrerequisites?.(orderId, ownerId);
     if (order.purchaseType !== "TOPUP")
       await this.orders.assertInventoryAvailableForNewOrder();
-    this.assertSafeToInitiate(order);
+    this.assertSafeToInitiate(order, provider);
     await this.assertNoUnresolvedRemoteInitiation(orderId);
     const existing = order.payment;
     if (
@@ -579,16 +592,17 @@ export class PaymentsService {
         ],
         skipDuplicates: true,
       });
-      if (!definitelyNotCreated) void this.resilience?.attention({
-        dedupeKey: `payment-initiation-uncertain:${order.id}`,
-        category: "PAYMENT",
-        entityType: "PaymentInitiation",
-        entityId: order.id,
-        orderId: order.id,
-        severity: "WARNING",
-        summary: `Payment initiation outcome requires reconciliation for ${order.orderNumber}`,
-        failureCategory: "PAYMENT_PROVIDER_OUTCOME_UNKNOWN",
-      });
+      if (!definitelyNotCreated)
+        void this.resilience?.attention({
+          dedupeKey: `payment-initiation-uncertain:${order.id}`,
+          category: "PAYMENT",
+          entityType: "PaymentInitiation",
+          entityId: order.id,
+          orderId: order.id,
+          severity: "WARNING",
+          summary: `Payment initiation outcome requires reconciliation for ${order.orderNumber}`,
+          failureCategory: "PAYMENT_PROVIDER_OUTCOME_UNKNOWN",
+        });
       throw error instanceof PaymentInitiationError ? error.cause : error;
     }
   }
