@@ -1154,15 +1154,25 @@
   border-radius: 19px;
   animation: document-saving-orbit 1.7s linear infinite;
 }
-.document-saving-card.is-saved .document-saving-orbit { display: none; }
-.document-saving-copy { min-width: 0; }
-.document-saving-copy b { color: var(--text); font-size: 15px; }
+.document-saving-card.is-saved .document-saving-orbit {
+  display: none;
+}
+.document-saving-copy {
+  min-width: 0;
+}
+.document-saving-copy b {
+  color: var(--text);
+  font-size: 15px;
+}
 .document-saving-copy p {
   margin: 5px 0 2px;
   color: var(--text);
   overflow-wrap: anywhere;
 }
-.document-saving-copy small { color: var(--text-2); line-height: 1.5; }
+.document-saving-copy small {
+  color: var(--text-2);
+  line-height: 1.5;
+}
 .document-saving-steps {
   grid-column: 1 / -1;
   display: grid;
@@ -1190,15 +1200,29 @@
   font-size: 10px;
   font-style: normal;
 }
-.document-saving-steps .active { color: var(--primary); }
+.document-saving-steps .active {
+  color: var(--primary);
+}
 .document-saving-steps .active i {
   border-color: var(--primary);
   animation: document-saving-pulse 1.5s ease-in-out infinite;
 }
-.document-saving-steps .complete { color: var(--success-strong); }
-.document-saving-steps .complete i { border-color: var(--success-strong); }
-@keyframes document-saving-orbit { to { transform: rotate(360deg); } }
-@keyframes document-saving-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 12%, transparent); } }
+.document-saving-steps .complete {
+  color: var(--success-strong);
+}
+.document-saving-steps .complete i {
+  border-color: var(--success-strong);
+}
+@keyframes document-saving-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes document-saving-pulse {
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 12%, transparent);
+  }
+}
 
 .passport-check {
   display: grid;
@@ -3224,6 +3248,18 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+.passport-mismatch-error {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--text);
+  line-height: 1.5;
+}
+.checkout-page .form-grid[hidden] {
+  display: none;
 }
 .passport-mismatch-note {
   margin: 0;

@@ -54,7 +54,10 @@ import PaymentJourneyConfirmation from "./post-payment-confirmation";
 import ManualReviewTracking from "./manual-review-tracking";
 import { useDocumentRefresh } from "./use-document-refresh";
 import { DocumentFileField as FileField } from "./document-file-field";
-import { DocumentRecoveryFields, replacementReasonsFromTimeline } from "./document-recovery";
+import {
+  DocumentRecoveryFields,
+  replacementReasonsFromTimeline,
+} from "./document-recovery";
 import {
   CompatibilityConfirmation,
   PurchaseConsent,
@@ -259,6 +262,7 @@ export default function CheckoutClient({
   const [pendingSignIn, setPendingSignIn] = useState(false);
   const [claimIntent, setClaimIntent] = useState(false);
   const [copiedRecovery, setCopiedRecovery] = useState(false);
+  const [mismatchError, setMismatchError] = useState("");
   const [recovery, setRecovery] = useState<{
     token: string;
     expiresAt: string;
@@ -477,11 +481,6 @@ export default function CheckoutClient({
         const fragmentToken = fragment.get("resume");
         if (fragmentToken) {
           saved = { token: fragmentToken };
-          window.history.replaceState(
-            window.history.state,
-            "",
-            `${window.location.pathname}${window.location.search}`,
-          );
         } else {
           const stored = sessionStorage.getItem(recoveryKey(orderId));
           saved = stored ? (JSON.parse(stored) as typeof saved) : null;
@@ -753,7 +752,11 @@ export default function CheckoutClient({
       })
       .catch((cause) =>
         setError(
-          cause instanceof Error ? cause.message : "Order could not be resumed",
+          isSignedIn !== true && !currentToken()
+            ? "Open the private recovery link sent to your email to continue this guest order."
+            : cause instanceof Error
+              ? cause.message
+              : "Order could not be resumed",
         ),
       )
       .finally(() => {
@@ -947,6 +950,7 @@ export default function CheckoutClient({
   const update = (key: keyof Traveler, value: string) => {
     setTraveler((v) => ({ ...v, [key]: value }));
     setFieldErrors((current) => ({ ...current, [key]: undefined }));
+    setMismatchError("");
   };
   const verifyPassport = async (): Promise<Order | null> => {
     if (!order || passportVerificationInFlight.current) return null;
@@ -1081,9 +1085,9 @@ export default function CheckoutClient({
       ["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(current)
     ) {
       if (current === "CORRECTION_REQUIRED") {
-        setDocumentAttentionMessage(
-          "We couldn't automatically match some details with your uploaded passport. Please check the highlighted fields.",
-        );
+        // The comparison panel itself explains mismatches; a second modal
+        // would cover it and make the customer dismiss an unrelated sheet.
+        setDocumentAttentionMessage("");
       } else setDocumentAttentionMessage("");
     }
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
@@ -1317,7 +1321,7 @@ export default function CheckoutClient({
         window.history.replaceState(
           window.history.state,
           "",
-          `/esim/checkout?order=${encodeURIComponent(created.order.id)}&recharge=1`,
+          `/esim/checkout?order=${encodeURIComponent(created.order.id)}&recharge=1${isSignedIn === true ? "" : `#resume=${encodeURIComponent(created.recovery.token)}`}`,
         );
         setStep(4);
         await requestPayment(created.order);
@@ -1352,6 +1356,7 @@ export default function CheckoutClient({
         try {
           const url = new URL(window.location.href);
           url.searchParams.set("order", created.order.id);
+          url.hash = `resume=${encodeURIComponent(created.recovery.token)}`;
           window.history.replaceState(window.history.state, "", url.toString());
         } catch {
           /* history unavailable; the recovery card remains copyable */
@@ -1546,16 +1551,29 @@ export default function CheckoutClient({
       }
     });
   const confirmPassportDetails = () =>
-    run(async () => {
+    (async () => {
       if (!order) return;
-      const updated = await api<Order>(
-        `/customer/orders/${order.id}/confirm-passport-details`,
-        { method: "POST", body: "{}" },
-      );
-      setOrder(updated);
-      setFieldErrors({});
-      if (passportGatePassed(updated)) advance(4);
-    });
+      setBusy(true);
+      setMismatchError("");
+      try {
+        const updated = await api<Order>(
+          `/customer/orders/${order.id}/confirm-passport-details`,
+          { method: "POST", body: "{}" },
+        );
+        setOrder(updated);
+        setFieldErrors({});
+        if (passportGatePassed(updated)) advance(4);
+      } catch (cause) {
+        const status = (cause as { status?: number }).status;
+        setMismatchError(
+          status === 409
+            ? "Your details changed since the last check. Save them and compare again before requesting review."
+            : "We couldn't send your details for review. Please try again; your saved details are still here.",
+        );
+      } finally {
+        setBusy(false);
+      }
+    })();
   const saveDocuments = () =>
     run(async () => {
       setDocumentError("");
@@ -1565,10 +1583,15 @@ export default function CheckoutClient({
       if (
         effectiveDocumentReviewStatus === "REUPLOAD_REQUIRED" &&
         requestedReplacements.some(
-          (document) => !files[document.type.toLowerCase() as "passport" | "ticket" | "visa"],
+          (document) =>
+            !files[
+              document.type.toLowerCase() as "passport" | "ticket" | "visa"
+            ],
         )
       ) {
-        setDocumentError("Choose a new file for every document marked for replacement.");
+        setDocumentError(
+          "Choose a new file for every document marked for replacement.",
+        );
         return;
       }
       const replacedPassport = Boolean(files.passport);
@@ -1998,7 +2021,13 @@ export default function CheckoutClient({
             <LockKeyhole size={13} />
             Secure checkout
           </span>
-          <h1>{isTopUp ? "Top up your eSIM" : showPaymentChoice ? "Choose how to pay" : "Your travel eSIM"}</h1>
+          <h1>
+            {isTopUp
+              ? "Top up your eSIM"
+              : showPaymentChoice
+                ? "Choose how to pay"
+                : "Your travel eSIM"}
+          </h1>
           <p>
             {isTopUp
               ? "Add a package to the authorized eSIM. Review your plan, pay, and track the recharge here."
@@ -2041,19 +2070,48 @@ export default function CheckoutClient({
             <div className="payment-mobile-summary">
               <div className="payment-mobile-summary-main">
                 <span className="summary-flag" aria-hidden="true">
-                  {summaryPlan ? flagEmoji(summaryPlan.countryCode) : <Signal size={22} />}
+                  {summaryPlan ? (
+                    flagEmoji(summaryPlan.countryCode)
+                  ) : (
+                    <Signal size={22} />
+                  )}
                 </span>
                 <span>
                   <small>Order summary</small>
-                  <b>{summaryPlan ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)} / ${summaryPlan.validityDays} days` : "Loading plan"}</b>
+                  <b>
+                    {summaryPlan
+                      ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)} / ${summaryPlan.validityDays} days`
+                      : "Loading plan"}
+                  </b>
                 </span>
-                <strong>{summaryPrice === undefined ? "—" : `NPR ${summaryPrice.toLocaleString()}`}</strong>
+                <strong>
+                  {summaryPrice === undefined
+                    ? "—"
+                    : `NPR ${summaryPrice.toLocaleString()}`}
+                </strong>
               </div>
               <details>
                 <summary>View details</summary>
-                <div><span>Plan</span><b>{summaryPlan?.name ?? "Loading plan"}</b></div>
-                <div><span>Destination</span><b>{summaryPlan ? countryDisplayName(summaryPlan.countryCode) : "—"}</b></div>
-                <div><span>Data & validity</span><b>{summaryPlan ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days` : "—"}</b></div>
+                <div>
+                  <span>Plan</span>
+                  <b>{summaryPlan?.name ?? "Loading plan"}</b>
+                </div>
+                <div>
+                  <span>Destination</span>
+                  <b>
+                    {summaryPlan
+                      ? countryDisplayName(summaryPlan.countryCode)
+                      : "—"}
+                  </b>
+                </div>
+                <div>
+                  <span>Data & validity</span>
+                  <b>
+                    {summaryPlan
+                      ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
+                      : "—"}
+                  </b>
+                </div>
               </details>
             </div>
           ) : null}
@@ -2207,38 +2265,43 @@ export default function CheckoutClient({
                 </button>
               </div>
             )}
-            {!showAccountChoice && isTopUp && order && recovery && (
-              <div className="guest-recovery-card" role="note">
-                <span className="guest-recovery-icon">
-                  <Link2 />
-                </span>
-                <div>
-                  <b>Keep your private order link</b>
-                  <p>
-                    Save this link before closing the tab. It restores order{" "}
-                    {order.orderNumber} and its verification status for 24
-                    hours. Anyone with the link can access this order.
-                  </p>
-                  <small>
-                    A tracking link is queued for the original purchase email.
-                    You can also copy it here.
-                  </small>
-                  <div className="guest-recovery-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      onClick={() => void copyRecoveryLink()}
-                    >
-                      <Copy size={16} />{" "}
-                      {copiedRecovery ? "Link copied" : "Copy private link"}
-                    </button>
-                  </div>
-                  <span className="sr-only" aria-live="polite">
-                    {copiedRecovery ? "Private recovery link copied" : ""}
+            {!showAccountChoice &&
+              isTopUp &&
+              order &&
+              recovery &&
+              guest &&
+              isSignedIn !== true && (
+                <div className="guest-recovery-card" role="note">
+                  <span className="guest-recovery-icon">
+                    <Link2 />
                   </span>
+                  <div>
+                    <b>Keep your private order link</b>
+                    <p>
+                      Save this link before closing the tab. It restores order{" "}
+                      {order.orderNumber} and its verification status for 24
+                      hours. Anyone with the link can access this order.
+                    </p>
+                    <small>
+                      A tracking link is queued for the original purchase email.
+                      You can also copy it here.
+                    </small>
+                    <div className="guest-recovery-actions">
+                      <button
+                        className="button secondary"
+                        type="button"
+                        onClick={() => void copyRecoveryLink()}
+                      >
+                        <Copy size={16} />{" "}
+                        {copiedRecovery ? "Link copied" : "Copy private link"}
+                      </button>
+                    </div>
+                    <span className="sr-only" aria-live="polite">
+                      {copiedRecovery ? "Private recovery link copied" : ""}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
             {isTopUp && order && (
               <div
                 className="guest-recovery-card recharge-status-card"
@@ -2389,6 +2452,7 @@ export default function CheckoutClient({
                       entered={traveler}
                       busy={busy}
                       reviewStatus={order.documentReviewStatus}
+                      actionError={mismatchError}
                       {...(order.payment?.status
                         ? { paymentStatus: order.payment.status }
                         : {})}
@@ -2715,7 +2779,9 @@ export default function CheckoutClient({
                             }
                             disabled={busy}
                             passportFailureCode={passportFailureCode}
-                            replacementReasons={replacementReasonsFromTimeline(order?.timeline)}
+                            replacementReasons={replacementReasonsFromTimeline(
+                              order?.timeline,
+                            )}
                           />
                         ) : (
                           <fieldset
@@ -2820,11 +2886,17 @@ export default function CheckoutClient({
                             ].includes(order?.documentReviewStatus ?? "") &&
                             !manualNeedsTraveler) ||
                           (!Object.values(files).some(Boolean) &&
-                            order?.documentReviewStatus === "REUPLOAD_REQUIRED")
-                          || (effectiveDocumentReviewStatus === "REUPLOAD_REQUIRED" &&
-                            displayDocuments.some((document) =>
-                              document.status === "REUPLOAD_REQUIRED" &&
-                              !files[document.type.toLowerCase() as "passport" | "ticket" | "visa"],
+                            order?.documentReviewStatus ===
+                              "REUPLOAD_REQUIRED") ||
+                          (effectiveDocumentReviewStatus ===
+                            "REUPLOAD_REQUIRED" &&
+                            displayDocuments.some(
+                              (document) =>
+                                document.status === "REUPLOAD_REQUIRED" &&
+                                !files[
+                                  document.type.toLowerCase() as
+                                    "passport" | "ticket" | "visa"
+                                ],
                             ))
                         }
                         onClick={() => {
@@ -2853,7 +2925,7 @@ export default function CheckoutClient({
                                     )
                                   ? "Verification in progress"
                                   : order?.documentReviewStatus ===
-                                  "REUPLOAD_REQUIRED"
+                                      "REUPLOAD_REQUIRED"
                                     ? "Submit replacement for review"
                                     : "Save documents"}
                       </button>
@@ -2929,7 +3001,11 @@ export default function CheckoutClient({
                       resending={uxResending}
                     />
                   ) : (
-                    <RechargeConfirmation order={order} signedIn={isSignedIn === true} guestRecoveryUrl={recoveryUrl} />
+                    <RechargeConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                    />
                   )
                 ) : order?.status === "COMPLETED" ? (
                   !isTopUp ? (
@@ -2941,7 +3017,11 @@ export default function CheckoutClient({
                       resending={uxResending}
                     />
                   ) : (
-                    <RechargeConfirmation order={order} signedIn={isSignedIn === true} guestRecoveryUrl={recoveryUrl} />
+                    <RechargeConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                    />
                   )
                 ) : order?.status === "PAYMENT_REVIEW_REQUIRED" ? (
                   <div className="info-panel">
@@ -3011,7 +3091,11 @@ export default function CheckoutClient({
                       guestRecoveryUrl={recoveryUrl}
                     />
                   ) : (
-                    <RechargeConfirmation order={order} signedIn={isSignedIn === true} guestRecoveryUrl={recoveryUrl} />
+                    <RechargeConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                    />
                   )
                 ) : verifying ? (
                   <div className="success-panel">
@@ -3146,7 +3230,9 @@ export default function CheckoutClient({
                             <button
                               type="button"
                               className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
-                              aria-pressed={provider === PaymentProvider.FONEPAY}
+                              aria-pressed={
+                                provider === PaymentProvider.FONEPAY
+                              }
                               disabled={
                                 !retryDeclaredAllowed(
                                   order?.paymentRetry,
@@ -3174,7 +3260,8 @@ export default function CheckoutClient({
                     ) : null}
                     {showPaymentChoice && !lockedProvider ? (
                       <p className="payment-security-note">
-                        <LockKeyhole size={15} aria-hidden="true" /> Secure payment in NPR
+                        <LockKeyhole size={15} aria-hidden="true" /> Secure
+                        payment in NPR
                       </p>
                     ) : null}
                     {order?.paymentRetry &&
@@ -3325,67 +3412,100 @@ export default function CheckoutClient({
               <div className="payment-mobile-summary">
                 <div className="payment-mobile-summary-main">
                   <span className="summary-flag" aria-hidden="true">
-                    {summaryPlan ? flagEmoji(summaryPlan.countryCode) : <Signal size={22} />}
+                    {summaryPlan ? (
+                      flagEmoji(summaryPlan.countryCode)
+                    ) : (
+                      <Signal size={22} />
+                    )}
                   </span>
                   <span>
                     <small>Order summary</small>
-                    <b>{summaryPlan ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)} / ${summaryPlan.validityDays} days` : "Loading plan"}</b>
+                    <b>
+                      {summaryPlan
+                        ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)} / ${summaryPlan.validityDays} days`
+                        : "Loading plan"}
+                    </b>
                   </span>
-                  <strong>{summaryPrice === undefined ? "—" : `NPR ${summaryPrice.toLocaleString()}`}</strong>
+                  <strong>
+                    {summaryPrice === undefined
+                      ? "—"
+                      : `NPR ${summaryPrice.toLocaleString()}`}
+                  </strong>
                 </div>
                 <details>
                   <summary>View details</summary>
-                  <div><span>Plan</span><b>{summaryPlan?.name ?? "Loading plan"}</b></div>
-                  <div><span>Destination</span><b>{summaryPlan ? countryDisplayName(summaryPlan.countryCode) : "—"}</b></div>
-                  <div><span>Data & validity</span><b>{summaryPlan ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days` : "—"}</b></div>
+                  <div>
+                    <span>Plan</span>
+                    <b>{summaryPlan?.name ?? "Loading plan"}</b>
+                  </div>
+                  <div>
+                    <span>Destination</span>
+                    <b>
+                      {summaryPlan
+                        ? countryDisplayName(summaryPlan.countryCode)
+                        : "—"}
+                    </b>
+                  </div>
+                  <div>
+                    <span>Data & validity</span>
+                    <b>
+                      {summaryPlan
+                        ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
+                        : "—"}
+                    </b>
+                  </div>
                 </details>
               </div>
             </aside>
           ) : (
-          <aside className="order-summary">
-            <div className="summary-plan">
-              <span className="summary-flag">
-                {summaryPlan ? (
-                  flagEmoji(summaryPlan.countryCode)
-                ) : (
-                  <Signal size={22} />
-                )}
-              </span>
-              <span className="summary-plan-info">
-                <span className="summary-label">Order summary</span>
-                <b>{summaryPlan?.name ?? "Loading selected plan"}</b>
-                <small>
+            <aside className="order-summary">
+              <div className="summary-plan">
+                <span className="summary-flag">
+                  {summaryPlan ? (
+                    flagEmoji(summaryPlan.countryCode)
+                  ) : (
+                    <Signal size={22} />
+                  )}
+                </span>
+                <span className="summary-plan-info">
+                  <span className="summary-label">Order summary</span>
+                  <b>{summaryPlan?.name ?? "Loading selected plan"}</b>
+                  <small>
+                    {summaryPlan
+                      ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)}`
+                      : "Plan details loading"}
+                  </small>
+                </span>
+              </div>
+              <div>
+                <small>Destination</small>
+                <b>
                   {summaryPlan
-                    ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)}`
+                    ? countryDisplayName(summaryPlan.countryCode)
+                    : "Loading destination"}
+                </b>
+              </div>
+              <div>
+                <small>Data & validity</small>
+                <b>
+                  {summaryPlan
+                    ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
                     : "Plan details loading"}
-                </small>
-              </span>
-            </div>
-            <div>
-              <small>Destination</small>
-              <b>{summaryPlan ? countryDisplayName(summaryPlan.countryCode) : "Loading destination"}</b>
-            </div>
-            <div>
-              <small>Data & validity</small>
-              <b>
-                {summaryPlan
-                  ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
-                  : "Plan details loading"}
-              </b>
-            </div>
-            <div className="summary-total">
-              <small>Total</small>
-              <b>
-                {summaryPrice === undefined
-                  ? "Loading price"
-                  : "NPR " + summaryPrice.toLocaleString()}
-              </b>
-            </div>
-            <p>
-              <LockKeyhole size={14} /> Price is frozen when your order is
-              created.
-            </p>
-          </aside>
+                </b>
+              </div>
+              <div className="summary-total">
+                <small>Total</small>
+                <b>
+                  {summaryPrice === undefined
+                    ? "Loading price"
+                    : "NPR " + summaryPrice.toLocaleString()}
+                </b>
+              </div>
+              <p>
+                <LockKeyhole size={14} /> Price is frozen when your order is
+                created.
+              </p>
+            </aside>
           )}
         </div>
       </div>
@@ -3521,6 +3641,7 @@ function PassportCheck({
   confirmationDisabled = false,
   onConfirm,
   onReplace,
+  actionError,
 }: {
   result: Order["passportVerification"];
   extracted?: NonNullable<Order["passportExtraction"]>["fields"] | undefined;
@@ -3537,6 +3658,7 @@ function PassportCheck({
   confirmationDisabled?: boolean;
   onConfirm?: () => void;
   onReplace?: () => void;
+  actionError?: string;
 }) {
   const status = result?.status;
   const paymentLabel =
@@ -3662,6 +3784,11 @@ function PassportCheck({
             </button>
           ) : null}
         </div>
+        {actionError ? (
+          <p className="passport-mismatch-error" role="alert">
+            {actionError}
+          </p>
+        ) : null}
         {confirmationDisabled ? (
           <p className="passport-mismatch-note" role="status">
             Save your edits and check again before confirming that the original

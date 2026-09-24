@@ -58,18 +58,28 @@ it("shows a paid first-purchase receipt and honest preparation status", async ()
     payment: { provider: "KHALTI", reference: "paid-ref", status: "COMPLETED" },
   };
   mocks.authFetch.mockImplementation(async (url: string) =>
-    url.endsWith("/payments/providers") ? ok({ providers: ["KHALTI"] }) : ok(paid),
+    url.endsWith("/payments/providers")
+      ? ok({ providers: ["KHALTI"] })
+      : ok(paid),
   );
   render(<Checkout planId="" orderId="paid-order" />);
-  expect(await screen.findByRole("heading", { name: "Payment confirmed" })).toBeDefined();
+  expect(
+    await screen.findByRole("heading", { name: "Payment confirmed" }),
+  ).toBeDefined();
   expect(screen.getAllByText("NPR 652").length).toBeGreaterThan(0);
-  expect(screen.getByRole("link", { name: /View order/i }).getAttribute("href")).toBe("/account/orders/paid-order");
+  expect(
+    screen.getByRole("link", { name: /View order/i }).getAttribute("href"),
+  ).toBe("/account/orders/paid-order");
   expect(screen.getByText(/We’ll email the installation QR/i)).toBeDefined();
   expect(screen.queryByText("QR sent to your email")).toBeNull();
 });
 it("shows a confirmed recharge as data added to the existing eSIM", async () => {
   mocks.signedIn = true;
-  window.history.replaceState({}, "", "/esim/checkout?order=topup-ready&recharge=1");
+  window.history.replaceState(
+    {},
+    "",
+    "/esim/checkout?order=topup-ready&recharge=1",
+  );
   const topup = {
     id: "topup-ready",
     orderNumber: "VC-TOPUP",
@@ -78,13 +88,21 @@ it("shows a confirmed recharge as data added to the existing eSIM", async () => 
     plan,
     totalAmountNpr: 450,
     documents: [],
-    payment: { provider: "KHALTI", reference: "topup-ref", status: "COMPLETED" },
+    payment: {
+      provider: "KHALTI",
+      reference: "topup-ref",
+      status: "COMPLETED",
+    },
   };
   mocks.authFetch.mockImplementation(async (url: string) =>
-    url.endsWith("/payments/providers") ? ok({ providers: ["KHALTI"] }) : ok(topup),
+    url.endsWith("/payments/providers")
+      ? ok({ providers: ["KHALTI"] })
+      : ok(topup),
   );
   render(<Checkout planId="" orderId="topup-ready" />);
-  expect(await screen.findByText("Data has been added to your eSIM")).toBeDefined();
+  expect(
+    await screen.findByText("Data has been added to your eSIM"),
+  ).toBeDefined();
   expect(screen.queryByText("Ready to install")).toBeNull();
   expect(screen.getByRole("link", { name: /View my eSIM/i })).toBeDefined();
 });
@@ -150,9 +168,12 @@ describe("recharge checkout", () => {
     expect(screen.getByText("Pay within")).toBeDefined();
     expect(screen.getAllByText("NPR 100").length).toBeGreaterThan(0);
     expect(
-      screen.getAllByText("View details").every((summary) =>
-        summary.closest("details")?.hasAttribute("open") === false,
-      ),
+      screen
+        .getAllByText("View details")
+        .every(
+          (summary) =>
+            summary.closest("details")?.hasAttribute("open") === false,
+        ),
     ).toBe(true);
     expect(
       mocks.authFetch.mock.calls.some(
@@ -315,9 +336,16 @@ describe("recharge checkout", () => {
       );
       expect(screen.queryByText("How would you like to continue?")).toBeNull();
       expect(screen.queryByText("Save to My eSIMs")).toBeNull();
-      expect(
-        screen.getByRole("button", { name: "Copy private link" }),
-      ).toBeDefined();
+      if (signedIn) {
+        expect(
+          screen.queryByRole("button", { name: "Copy private link" }),
+        ).toBeNull();
+      } else {
+        expect(
+          screen.getByRole("button", { name: "Copy private link" }),
+        ).toBeDefined();
+        expect(window.location.hash).toBe("#resume=recovery");
+      }
       expect(screen.getByRole("status").classList).toContain(
         "recharge-status-card",
       );
@@ -461,7 +489,9 @@ describe("first-purchase document verification", () => {
 
     render(<Checkout planId="plan" orderId="expired-passport" />);
 
-    expect(await screen.findByText("Passport needs a new upload")).toBeDefined();
+    expect(
+      await screen.findByText("Passport needs a new upload"),
+    ).toBeDefined();
     expect(
       screen.getAllByText(
         "This passport has expired. Upload a valid passport before continuing.",
@@ -602,7 +632,12 @@ describe("first-purchase document verification", () => {
           totalAmountNpr: 100,
           traveler: { firstName: "Traveller" },
           documentReviewStatus: "REUPLOAD_REQUIRED",
-          timeline: [{ reason: "PASSPORT: The photo page is cropped (requested by staff-1)" }],
+          timeline: [
+            {
+              reason:
+                "PASSPORT: The photo page is cropped (requested by staff-1)",
+            },
+          ],
           passportVerification: { status: "FAILED" },
           documents: [
             {
@@ -622,7 +657,9 @@ describe("first-purchase document verification", () => {
       });
       render(<Checkout planId="plan" orderId="recovery" />);
       await screen.findByRole("heading", { name: "Travel documents" });
-      expect(await screen.findByText("Passport needs a new upload")).toBeDefined();
+      expect(
+        await screen.findByText("Passport needs a new upload"),
+      ).toBeDefined();
       expect(screen.getByText("The photo page is cropped")).toBeDefined();
       expect(
         screen.getByRole("button", { name: "Check traveller details" }),
@@ -851,6 +888,176 @@ describe("first-purchase document verification", () => {
     expect(
       screen.getByRole("link", { name: /report an error/i }),
     ).toBeDefined();
+  });
+
+  it("lets a guest confirm a passport mismatch and enter manual review", async () => {
+    sessionStorage.setItem("vc_guest_token_mismatch-order", "guest-session");
+    const traveler = {
+      title: "MR",
+      firstName: "Samir",
+      surname: "Majhi",
+      dateOfBirth: "1983-07-30",
+      passportNumber: "PA031964",
+      passportExpiryDate: "2032-05-03",
+      nationality: "NP",
+    };
+    const mismatchOrder = {
+      id: "mismatch-order",
+      orderNumber: "VC-MISMATCH",
+      status: "DRAFT",
+      purchaseType: "INITIAL_PURCHASE",
+      plan,
+      totalAmountNpr: 100,
+      documentReviewStatus: "CORRECTION_REQUIRED",
+      passportVerification: {
+        status: "FAILED",
+        mismatchedFields: ["firstName", "surname"],
+      },
+      passportExtraction: {
+        status: "READY",
+        fields: { firstName: "Resham", surname: "Bishwokarma" },
+      },
+      traveler,
+      documents: [
+        { type: "PASSPORT", status: "PENDING", uploadVerified: true },
+        { type: "TICKET", status: "PENDING", uploadVerified: true },
+      ],
+    };
+    mocks.authFetch.mockImplementation(
+      async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/payments/providers"))
+          return ok({ providers: ["KHALTI"] });
+        if (
+          url.endsWith(
+            "/guest/orders/mismatch-order/confirm-passport-details",
+          ) &&
+          init?.method === "POST"
+        )
+          return ok({
+            ...mismatchOrder,
+            documentReviewStatus: "MANUAL_REVIEW",
+          });
+        return ok(mismatchOrder);
+      },
+    );
+
+    render(<Checkout planId="" orderId="mismatch-order" />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "I checked—my details are correct",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Your documents are awaiting approval",
+      }),
+    ).toBeDefined();
+    expect(
+      mocks.authFetch.mock.calls.some(([url]) =>
+        String(url).endsWith(
+          "/guest/orders/mismatch-order/confirm-passport-details",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("restores a guest review from its private URL after tab storage is lost", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/esim/checkout?order=guest-review#resume=private-token",
+    );
+    const reviewed = {
+      id: "guest-review",
+      orderNumber: "VC-GUEST",
+      status: "DRAFT",
+      purchaseType: "INITIAL_PURCHASE",
+      plan,
+      totalAmountNpr: 100,
+      documentReviewStatus: "MANUAL_REVIEW",
+      traveler: { firstName: "Samir", surname: "Majhi" },
+      documents: [],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/guest/orders/guest-review/recover")
+          ? ok({
+              order: reviewed,
+              token: "new-session",
+              recoveryExpiresAt: "2027-01-01",
+            })
+          : ok(plan),
+      ),
+    );
+    mocks.authFetch.mockImplementation(async (url: string) =>
+      url.endsWith("/payments/providers")
+        ? ok({ providers: ["KHALTI"] })
+        : ok(reviewed),
+    );
+
+    render(<Checkout planId="" orderId="guest-review" />);
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Your documents are awaiting approval",
+      }),
+    ).toBeDefined();
+    expect(sessionStorage.getItem("vc_guest_token_guest-review")).toBe(
+      "new-session",
+    );
+    expect(window.location.hash).toBe("#resume=private-token");
+    expect(
+      mocks.authFetch.mock.calls.some(([url]) =>
+        String(url).endsWith("/guest/orders/guest-review"),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows mismatch confirmation failures beside the comparison, not in a bottom-sheet dialog", async () => {
+    sessionStorage.setItem("vc_guest_token_mismatch-order", "guest-session");
+    const mismatchOrder = {
+      id: "mismatch-order",
+      orderNumber: "VC-MISMATCH",
+      status: "DRAFT",
+      purchaseType: "INITIAL_PURCHASE",
+      plan,
+      totalAmountNpr: 100,
+      documentReviewStatus: "CORRECTION_REQUIRED",
+      passportVerification: {
+        status: "FAILED",
+        mismatchedFields: ["firstName"],
+      },
+      passportExtraction: { status: "READY", fields: { firstName: "Resham" } },
+      traveler: { firstName: "Samir" },
+      documents: [],
+    };
+    mocks.authFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers"))
+        return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/confirm-passport-details"))
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ error: { code: "CONFLICT" } }),
+        };
+      return ok(mismatchOrder);
+    });
+
+    render(<Checkout planId="" orderId="mismatch-order" />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "I checked—my details are correct",
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "className",
+      "passport-mismatch-error",
+    );
+    expect(screen.getByText(/Save them and compare again/i)).toBeDefined();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("moves from the dedicated review screen to payment after approval arrives", async () => {

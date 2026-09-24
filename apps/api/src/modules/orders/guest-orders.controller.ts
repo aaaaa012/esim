@@ -218,6 +218,15 @@ export class GuestOrdersController {
     return this.orders.verifyPassport(id, ownerId);
   }
 
+  @Post(":id/confirm-passport-details")
+  async confirmPassportDetails(
+    @Param("id") id: string,
+    @Headers("x-guest-order-token") token: string,
+  ) {
+    const ownerId = await this.assert(id, token);
+    return this.orders.confirmPassportDetails(id, ownerId);
+  }
+
   @Post(":id/payment") async payment(
     @Param("id") id: string,
     @Body() body: { provider: unknown },
@@ -424,7 +433,10 @@ export class GuestOrdersController {
         {
           ...(logRedactionEnabled()
             ? { mobile: "[REDACTED]", lookupToken: "[REDACTED]" }
-            : { mobile: mobile ?? body.mobile ?? "", lookupToken: body.lookupToken ?? "" }),
+            : {
+                mobile: mobile ?? body.mobile ?? "",
+                lookupToken: body.lookupToken ?? "",
+              }),
           ...(body.planId ? { planId: body.planId } : {}),
         },
         error,
