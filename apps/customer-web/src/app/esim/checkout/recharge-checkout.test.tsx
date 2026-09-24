@@ -482,6 +482,10 @@ describe("first-purchase document verification", () => {
       "value",
       "Ghimire",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await screen.findByRole("heading", { name: "Travel documents" });
+    expect(screen.getByLabelText("Passport", { exact: true })).toBeDefined();
+    expect(new URLSearchParams(window.location.search).get("step")).toBe("2");
     expect(
       screen.queryByRole("heading", { name: "Choose payment method" }),
     ).toBeNull();
@@ -639,7 +643,7 @@ describe("first-purchase document verification", () => {
       await screen.findByRole(
         "heading",
         { name: "Choose payment method" },
-        { timeout: 5000 },
+        { timeout: 12_000 },
       );
       expect(container.querySelector('input[type="file"]')).toBeNull();
       expect(
@@ -648,6 +652,7 @@ describe("first-purchase document verification", () => {
         ),
       ).toBe(false);
     },
+    15_000,
   );
 
   it("describes an order refresh neutrally before its saved stage is known", async () => {

@@ -605,7 +605,6 @@ export default function CheckoutClient({
     setStep(normalized);
   };
   const advance = (next: number) => navigateStep(next, "push");
-  const goBack = () => navigateStep(step - 1, "replace");
   // Backward navigation replaces the current entry so browser Back cannot
   // immediately send the user forward in the checkout again.
   const jumpTo = (next: number) => navigateStep(next, "replace");
@@ -1187,9 +1186,20 @@ export default function CheckoutClient({
         return { ...current, ...updates };
       });
     }
-    if (step === 2 && order && canEnterTravelerAfterExtraction(order))
+    if (
+      step === 2 &&
+      !editingVerifiedDocuments &&
+      order &&
+      canEnterTravelerAfterExtraction(order)
+    )
       advance(3);
-  }, [order?.id, order?.passportExtraction, order?.documentReviewStatus, step]);
+  }, [
+    order?.id,
+    order?.passportExtraction,
+    order?.documentReviewStatus,
+    step,
+    editingVerifiedDocuments,
+  ]);
   useEffect(() => {
     if (
       order?.status === "DRAFT" &&
@@ -2570,7 +2580,14 @@ export default function CheckoutClient({
                 </datalist>
                 {order?.documentReviewStatus ===
                 "CORRECTION_REQUIRED" ? null : (
-                  <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
+                  <Nav
+                    back={() => {
+                      setEditingVerifiedDocuments(true);
+                      jumpTo(2);
+                    }}
+                    busy={busy}
+                    next={saveTraveler}
+                  />
                 )}
                 {guest && order && recovery ? (
                   <details className="draft-recovery-option">

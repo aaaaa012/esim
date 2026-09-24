@@ -348,6 +348,10 @@ describe("hosted checkout payment flow", () => {
     );
     await screen.findByRole("heading", { name: "Traveller information" });
     expect(window.location.search).toBe("?step=3");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await screen.findByRole("heading", { name: "Travel documents" });
+    expect(container.querySelector('input[type="file"]')).not.toBeNull();
+    expect(window.location.search).toBe("?step=2");
     expect(
       fetchMock.mock.calls.some(
         ([url]) => url.endsWith("/complete") || url.endsWith("/payment"),

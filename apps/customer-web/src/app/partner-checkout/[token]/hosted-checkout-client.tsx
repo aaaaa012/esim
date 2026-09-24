@@ -473,13 +473,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     }
     setStep(next);
   };
-  const stepBack = () => {
-    if (typeof window !== "undefined" && window.history.state?.step) {
-      window.history.back();
-    } else {
-      setStep((v) => Math.max(1, v - 1));
-    }
-  };
   // Jump back to an already-completed step: replace the current entry so the
   // back-stack stays intact (no forward clutter from navigating backwards).
   const stepJump = (next: number) => {
@@ -500,7 +493,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
   const nextStep = () => stepPush(Math.min(step + 1, 4));
-  const prevStep = () => stepBack();
 
   const saveTraveler = () =>
     run(async () => {
@@ -807,7 +799,12 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         return { ...current, ...updates };
       });
     }
-    if (step === 2 && session && canEnterTravelerAfterExtraction(session.order))
+    if (
+      step === 2 &&
+      !editingVerifiedDocuments &&
+      session &&
+      canEnterTravelerAfterExtraction(session.order)
+    )
       stepPush(3);
   }, [
     session?.order.id,
@@ -815,6 +812,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     session?.order.documentReviewStatus,
     verification?.status,
     step,
+    editingVerifiedDocuments,
   ]);
   const passportFailureCode = session?.order.passportExtraction?.failureCode;
   const technicalOcrNoticeShown = useRef<string | null>(null);
@@ -2072,7 +2070,10 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       <option value="JP">Japan</option>
                     </datalist>
                     <Nav
-                      back={() => prevStep()}
+                      back={() => {
+                        setEditingVerifiedDocuments(true);
+                        stepJump(2);
+                      }}
                       busy={busy}
                       next={saveTraveler}
                     />

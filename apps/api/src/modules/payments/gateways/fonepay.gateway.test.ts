@@ -508,6 +508,87 @@ describe("FonepayGateway", () => {
     );
   });
 
+  it("reauthenticates and replays exactly once when Fonepay invalidates a token early", async () => {
+    const status = {
+      prn: "VCREF",
+      merchantCode: "VC-TERMINAL",
+      paymentStatus: "pending",
+      requestedAmount: 2499,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        json({ accessToken: "Bearer stale-token", expiresIn: 3600 }),
+      )
+      .mockResolvedValueOnce(
+        json(
+          {
+            status: 401,
+            error: "Unauthorized",
+            message: "Full authentication is required",
+          },
+          401,
+        ),
+      )
+      .mockResolvedValueOnce(
+        json({ accessToken: "Bearer fresh-token", expiresIn: 3600 }),
+      )
+      .mockResolvedValueOnce(json(status));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).resolves.toMatchObject({ status: PaymentStatus.PENDING });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[1]?.[1]?.headers.Authorization)).toBe(
+      "Bearer stale-token",
+    );
+    expect(String(fetchMock.mock.calls[3]?.[1]?.headers.Authorization)).toBe(
+      "Bearer fresh-token",
+    );
+  });
+
+  it("stops after one replay when the refreshed Fonepay token is also rejected", async () => {
+    const unauthorized = () =>
+      json({ status: 401, error: "Unauthorized" }, 401);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token-1", expiresIn: 3600 }))
+      .mockResolvedValueOnce(unauthorized())
+      .mockResolvedValueOnce(json({ accessToken: "token-2", expiresIn: 3600 }))
+      .mockResolvedValueOnce(unauthorized());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).rejects.toMatchObject({ response: expect.anything() });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not replay the provider request when reauthentication fails", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ accessToken: "token-1", expiresIn: 3600 }))
+      .mockResolvedValueOnce(json({ error: "Unauthorized" }, 401))
+      .mockResolvedValueOnce(json({ error: "Invalid credentials" }, 401));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new FonepayGateway().verify("VCREF", {
+        orderId: "order-1",
+        amountNpr: 2499,
+      }),
+    ).rejects.toMatchObject({ response: expect.anything() });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("uses requestedAmount and rejects an unknown provider status", async () => {
     const fetchMock = vi
       .fn()

@@ -182,6 +182,28 @@ const recoverLine1 = (zone: string[]): string | undefined => {
   return fromText(zone.join(""));
 };
 
+/** Finds TD3 name lines independently of line 2. Separate OCR crops can
+ * recover the two MRZ lines in different passes. */
+export const extractMrzLine1Candidates = (ocrText: string): string[] => {
+  const lines = ocrText
+    .split(/\r?\n/)
+    .map((line) => line.toUpperCase().replace(/[^A-Z0-9<]/g, ""))
+    .filter(Boolean);
+  const candidates = new Set<string>();
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) continue;
+    const single = recoverLine1([line]);
+    if (single) candidates.add(single);
+    const next = lines[index + 1];
+    if (next) {
+      const joined = recoverLine1([line, next]);
+      if (joined) candidates.add(joined);
+    }
+  }
+  return [...candidates];
+};
+
 /** The TD3 line 2 is the one that carries the check digits we can validate.
  *  It is far more reliable than line 1, which OCR often mangles (the name
  *  zone's '<' filler gets read as stray letters). Returns the line 2 raw text

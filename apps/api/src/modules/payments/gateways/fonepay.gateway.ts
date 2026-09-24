@@ -353,9 +353,9 @@ export class FonepayGateway implements PaymentGateway {
     extra: Record<string, string> = {},
     correlationId?: string,
   ) {
-    const token = await this.auth(correlationId);
+    let token = await this.auth(correlationId);
     const payload = body ?? {};
-    const startedAt = Date.now();
+    let startedAt = Date.now();
     // Ops need the exact request shape (notably paymentMode) to reproduce an
     // issuer's rejection. Log the safe headers only: never the bearer token
     // and never the request signature.
@@ -363,12 +363,11 @@ export class FonepayGateway implements PaymentGateway {
       method === "POST" ? { "content-type": "application/json" } : {};
     for (const [key, value] of Object.entries(extra))
       if (key.toLowerCase() !== "signature") requestHeaders[key] = value;
-    let response: Response;
-    try {
-      response = await fetch(`${this.base}${path}`, {
+    const execute = (accessToken: string) =>
+      fetch(`${this.base}${path}`, {
         method,
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${accessToken}`,
           ...(method === "POST"
             ? {
                 "Content-Type": "application/json",
@@ -380,6 +379,9 @@ export class FonepayGateway implements PaymentGateway {
         ...(method === "POST" ? { body: JSON.stringify(payload) } : {}),
         signal: AbortSignal.timeout(resiliencePolicy.fonepayTimeoutMs()),
       });
+    let response: Response;
+    try {
+      response = await execute(token);
     } catch (error) {
       await this.record({
         operation: `fonepay-${path.split("/").filter(Boolean).at(-1) ?? "request"}`,
@@ -395,7 +397,7 @@ export class FonepayGateway implements PaymentGateway {
       });
       return this.fail(`Fonepay ${path} network request failed`);
     }
-    const data = await response.json().catch(() => ({}));
+    let data = await response.json().catch(() => ({}));
     await this.record({
       operation: `fonepay-${path.split("/").filter(Boolean).at(-1) ?? "request"}`,
       method,
@@ -413,6 +415,49 @@ export class FonepayGateway implements PaymentGateway {
       requestBody: this.redact(payload),
       responseBody: this.redact(data),
     });
+    if (response.status === 401) {
+      // The provider may revoke a token before its advertised expiresIn. Only
+      // clear the token used by this request so a concurrent successful refresh
+      // is not discarded, then authenticate and replay exactly once.
+      if (this.token?.value === token) delete this.token;
+      token = await this.auth(correlationId);
+      startedAt = Date.now();
+      try {
+        response = await execute(token);
+      } catch (error) {
+        await this.record({
+          operation: `fonepay-${path.split("/").filter(Boolean).at(-1) ?? "request"}-auth-retry`,
+          method,
+          endpoint: path,
+          status: 0,
+          durationMs: Date.now() - startedAt,
+          ...(correlationId ? { correlationId } : {}),
+          errorCode: "NETWORK_ERROR",
+          errorMessage: error instanceof Error ? error.message : String(error),
+          requestHeaders,
+          requestBody: this.redact(payload),
+        });
+        return this.fail(`Fonepay ${path} authentication retry failed`);
+      }
+      data = await response.json().catch(() => ({}));
+      await this.record({
+        operation: `fonepay-${path.split("/").filter(Boolean).at(-1) ?? "request"}-auth-retry`,
+        method,
+        endpoint: path,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        ...(correlationId ? { correlationId } : {}),
+        ...(!response.ok
+          ? {
+              errorCode: `HTTP_${response.status}`,
+              errorMessage: `Fonepay authentication retry returned HTTP ${response.status}`,
+            }
+          : {}),
+        requestHeaders,
+        requestBody: this.redact(payload),
+        responseBody: this.redact(data),
+      });
+    }
     if (!response.ok) {
       try {
         return this.fail(`Fonepay ${path} failed (${response.status})`);

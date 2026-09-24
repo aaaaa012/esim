@@ -14,6 +14,7 @@ import {
 import {
   confusableNormalize,
   editDistance,
+  extractMrzLine1Candidates,
   mrzDateToIso,
   parseMrz,
   type MrzField,
@@ -676,10 +677,20 @@ export const bestMrzCandidate = (
   ...texts: Array<string | undefined>
 ): ParsedMrz | null => {
   let best: ParsedMrz | null = null;
+  const parsedCandidates: ParsedMrz[] = [];
+  const nameLines = new Set<string>();
   for (const text of texts) {
     if (!text?.trim()) continue;
     const parsed = parseMrz(text);
+    if (parsed) parsedCandidates.push(parsed);
+    for (const line of extractMrzLine1Candidates(text)) nameLines.add(line);
     if (mrzCandidateScore(parsed) > mrzCandidateScore(best)) best = parsed;
+  }
+  for (const parsed of parsedCandidates) {
+    for (const line1 of nameLines) {
+      const combined = parseMrz(`${line1}\n${parsed.line2}`);
+      if (mrzCandidateScore(combined) > mrzCandidateScore(best)) best = combined;
+    }
   }
   return best;
 };
@@ -1140,6 +1151,7 @@ export class PassportVerificationService implements OnModuleDestroy {
         Number(process.env.PASSPORT_OCR_RECOVERY_TIMEOUT_MS ?? 45_000),
       );
     let best = { text: "", score: -1 };
+    const reads: string[] = [];
     await worker.setParameters({
       tessedit_char_whitelist: PassportVerificationService.MRZ_ALPHABET,
       preserve_interword_spaces: "1",
@@ -1203,15 +1215,16 @@ export class PassportVerificationService implements OnModuleDestroy {
               if (timeout) clearTimeout(timeout);
             });
             const candidateText = result.data.text ?? "";
+            if (candidateText.trim()) reads.push(candidateText);
             const parsed = parseMrz(candidateText);
             const score = mrzCandidateScore(parsed);
             if (score > best.score) best = { text: candidateText, score };
             if (parsed?.valid && parsed.surname && parsed.givenNames)
-              return best;
+              return { ...best, text: reads.join("\n") };
           }
         }
       }
-      return best;
+      return { ...best, text: reads.join("\n") || best.text };
     } finally {
       await worker
         .setParameters({

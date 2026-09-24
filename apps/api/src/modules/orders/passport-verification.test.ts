@@ -549,6 +549,21 @@ describe("strict MRZ recovery decisions", () => {
     expect(selected?.passportNumber.value).toBe("E00007730");
   });
 
+  it("combines a name line and checksum-valid data line recovered by separate OCR passes", () => {
+    const [line1, line2] = US_MRZ.split("\n");
+    const selected = bestMrzCandidate(
+      `PASSPORT\n${line1}`,
+      `NOISY CROP\n${line2}`,
+    );
+
+    expect(selected).toMatchObject({
+      valid: true,
+      surname: "TRAVELER",
+      givenNames: "HAPPY",
+    });
+    expect(selected?.passportNumber.value).toBe("E00007730");
+  });
+
   it("requires replacement before traveller entry when the MRZ passport is expired", async () => {
     const storage = {
       isConfigured: () => true,
@@ -691,6 +706,83 @@ describe("multi-page passport extraction", () => {
         surname: "TRAVELER",
         passportNumber: "E00007730",
       },
+    });
+  });
+
+  it("does not let an early partial MRZ hide a complete later biodata page", async () => {
+    const [, line2] = US_MRZ.split("\n");
+    const storage = {
+      isConfigured: () => true,
+      downloadDocumentImages: vi.fn().mockResolvedValue([
+        { bytes: Buffer.from("partial-page"), contentType: "image/jpeg" },
+        { bytes: Buffer.from("complete-page"), contentType: "image/jpeg" },
+      ]),
+    };
+    const service = new PassportVerificationService(storage as never);
+    const recognize = vi
+      .spyOn(service as never, "recognize" as never)
+      .mockResolvedValueOnce({ text: line2, confidence: 96 } as never)
+      .mockResolvedValueOnce({
+        text: US_MRZ,
+        bandText: US_MRZ,
+        confidence: 88,
+      } as never);
+
+    const result = await service.extract({
+      id: "order-partial-before-complete",
+      purchaseType: "INITIAL_PURCHASE",
+      documents: [
+        {
+          id: "passport-multi",
+          type: "PASSPORT",
+          fileName: "mixed.pdf",
+          privateAssetId: "mixed-asset",
+          status: "PENDING",
+          uploadVerified: true,
+        },
+      ],
+    } as never);
+
+    expect(recognize).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "READY",
+      fields: { firstName: "HAPPY", surname: "TRAVELER" },
+    });
+  });
+
+  it("returns OCR_UNAVAILABLE only after every rendered page fails", async () => {
+    const storage = {
+      isConfigured: () => true,
+      downloadDocumentImages: vi.fn().mockResolvedValue([
+        { bytes: Buffer.from("page-1"), contentType: "image/jpeg" },
+        { bytes: Buffer.from("page-2"), contentType: "image/jpeg" },
+      ]),
+    };
+    const service = new PassportVerificationService(storage as never);
+    const recognize = vi
+      .spyOn(service as never, "recognize" as never)
+      .mockRejectedValueOnce(new Error("page 1 timeout"))
+      .mockRejectedValueOnce(new Error("page 2 corrupt"));
+
+    const result = await service.extract({
+      id: "order-all-pages-fail",
+      purchaseType: "INITIAL_PURCHASE",
+      documents: [
+        {
+          id: "passport-failed",
+          type: "PASSPORT",
+          fileName: "failed.pdf",
+          privateAssetId: "failed-asset",
+          status: "PENDING",
+          uploadVerified: true,
+        },
+      ],
+    } as never);
+
+    expect(recognize).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "MANUAL_ENTRY_REQUIRED",
+      failureCode: "OCR_UNAVAILABLE",
     });
   });
 });
