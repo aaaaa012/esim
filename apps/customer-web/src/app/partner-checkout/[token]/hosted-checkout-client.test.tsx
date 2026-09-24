@@ -36,6 +36,7 @@ const session = (verification = "VERIFIED", status = "DRAFT") => ({
     },
     travelerComplete: true,
     documentReviewStatus: verification,
+    replacementReasons: {} as Partial<Record<"PASSPORT" | "TICKET", string>>,
     requiredDocuments: ["PASSPORT", "TICKET"],
     documents: [
       {
@@ -226,7 +227,9 @@ describe("hosted checkout payment flow", () => {
       fireEvent.click(
         screen.getByRole("button", { name: /Fonepay Mobile banking/ }),
       );
-      expect(screen.getByRole("button", { name: /Khalti wallet/ })).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: /Khalti wallet/ }),
+      ).toBeTruthy();
       const pay = screen.getByRole("button", {
         name: "Continue to Fonepay",
       }) as HTMLButtonElement;
@@ -724,6 +727,7 @@ it.each([false, true])(
     mocks.signedIn = signedIn;
     const current = session("REUPLOAD_REQUIRED");
     current.order.documents[0]!.status = "REUPLOAD_REQUIRED";
+    current.order.replacementReasons.PASSPORT = "The photo page is cropped.";
     const submitted: string[] = [];
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/payments/providers"))
@@ -746,18 +750,14 @@ it.each([false, true])(
     render(<HostedCheckoutClient token="private-token" />);
     await screen.findByRole("heading", { name: "Travel documents" });
     expect(
-      await screen.findByRole("alertdialog", {
-        name: "Document check needs attention",
-      }),
+      await screen.findByText("Passport needs a new upload"),
     ).toBeDefined();
-    expect(
-      screen.queryByText("One or more documents need replacement"),
-    ).toBeNull();
+    expect(screen.getByText("The photo page is cropped.")).toBeDefined();
     expect(
       screen.getByRole("button", { name: "Check traveller details" }),
     ).toBeDefined();
     expect(screen.getByText("ticket.png")).toBeDefined();
-    expect(screen.getByRole("button", { name: "Change" })).toBeDefined();
+    expect(screen.getByText("Kept on file")).toBeDefined();
     expect(screen.queryByLabelText("Travel ticket")).toBeNull();
     fireEvent.change(screen.getByLabelText("Passport", { exact: true }), {
       target: {
@@ -766,13 +766,52 @@ it.each([false, true])(
         ],
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Check new passport" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Submit replacement for review" }),
+    );
     await screen.findByText("We’re checking your passport");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(submitted).toEqual(["PASSPORT"]);
     expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
   },
 );
+
+it("reopens a paid guest order for the requested replacement without another payment", async () => {
+  const current = session("REUPLOAD_REQUIRED", "AWAITING_CUSTOMER");
+  current.order.documents[1]!.status = "REUPLOAD_REQUIRED";
+  current.order.replacementReasons.TICKET = "The itinerary date is unreadable.";
+  const submitted: string[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/payments/providers"))
+      return ok({ providers: ["KHALTI"] });
+    if (url.endsWith("/documents")) {
+      submitted.push(JSON.parse(String(init?.body)).type);
+      return ok({ id: "ticket", upload: { mode: "local-simulator" } });
+    }
+    if (url.endsWith("/confirm")) {
+      current.order.status = "REVIEW_PENDING";
+      current.order.documentReviewStatus = "OCR_PENDING";
+      current.order.documents[1]!.status = "PENDING";
+      return ok({});
+    }
+    return ok(current);
+  });
+  render(<HostedCheckoutClient token="private-token" />);
+  await screen.findByRole("heading", { name: "Travel documents" });
+  expect(screen.getByText("The itinerary date is unreadable.")).toBeDefined();
+  expect(screen.queryByLabelText("Passport", { exact: true })).toBeNull();
+  fireEvent.change(screen.getByLabelText("Travel ticket"), {
+    target: {
+      files: [new File(["ticket"], "new-ticket.png", { type: "image/png" })],
+    },
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Submit replacement for review" }),
+  );
+  await screen.findByText("Replacement received — review in progress");
+  expect(submitted).toEqual(["TICKET"]);
+  expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+});
 
 it.each([false, true])(
   "opens traveller details directly from document recovery (signed in: %s)",

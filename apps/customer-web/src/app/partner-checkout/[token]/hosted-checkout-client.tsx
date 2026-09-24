@@ -110,6 +110,9 @@ type Session = {
       uploadVerified?: boolean;
       passportVerificationStatus?: string | null;
     }[];
+    replacementReasons?: Partial<
+      Record<"PASSPORT" | "TICKET" | "VISA", string>
+    >;
     requiredDocuments: string[];
     paymentRetry?: {
       canRetry: boolean;
@@ -280,6 +283,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     status: string;
     orderNumber: string;
   } | null>(null);
+  const [recoveringPaidOrder, setRecoveringPaidOrder] = useState(false);
   const [payment, setPayment] = useState<Payment | null>(null);
   const [provider, setProvider] = useState<PaymentProvider>(
     PaymentProvider.KHALTI,
@@ -322,6 +326,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           setTraveler({ ...initial, ...value.order.traveler });
         if (value.order.status !== "DRAFT") {
           setOrderNumber(value.order.orderNumber);
+          if (
+            value.order.status === "AWAITING_CUSTOMER" &&
+            value.order.documentReviewStatus === "REUPLOAD_REQUIRED"
+          ) {
+            setRecoveringPaidOrder(true);
+            setVerification({ status: "REUPLOAD_REQUIRED" });
+            stepJump(2);
+            return;
+          }
           if (value.order.status === "PAYMENT_PENDING") {
             setSubmitted(true);
             stepJump(4);
@@ -675,6 +688,20 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const saveDocuments = () =>
     run(async () => {
       setDocumentError("");
+      const requestedReplacements = displayDocuments.filter(
+        (document) => document.status === "REUPLOAD_REQUIRED",
+      );
+      if (
+        effectiveVerificationStatus === "REUPLOAD_REQUIRED" &&
+        requestedReplacements.some(
+          (document) => !files[document.type as "PASSPORT" | "TICKET" | "VISA"],
+        )
+      ) {
+        setDocumentError(
+          "Choose a new file for every document marked for replacement.",
+        );
+        return;
+      }
       if (files.PASSPORT) {
         // Replacement uploads start a new verification generation. Do not
         // carry a dialog or transition decision from the previous passport.
@@ -746,6 +773,22 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           }));
         }
         setEditingVerifiedDocuments(false);
+        if (recoveringPaidOrder) {
+          const refreshed = await api<Session>(`/partner-checkout/${token}`);
+          setSession(refreshed);
+          if (refreshed.order.status !== "AWAITING_CUSTOMER") {
+            setOutcome({
+              status: refreshed.order.status,
+              orderNumber: refreshed.order.orderNumber,
+            });
+          } else {
+            setVerification({
+              status:
+                refreshed.order.documentReviewStatus ?? "REUPLOAD_REQUIRED",
+            });
+          }
+          return;
+        }
         // The confirmed documents are durable; verification is the next
         // idempotent command and must not depend on an additional GET.
         await runVerification();
@@ -872,25 +915,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         setDocumentAttentionMessage(
           "We couldn't automatically match some details with your uploaded passport. Please check the highlighted fields.",
         );
-      } else {
-        const expiredPassport = passportFailureCode === "PASSPORT_EXPIRED";
-        const rejected = displayDocuments
-          .filter((document) => document.status === "REUPLOAD_REQUIRED")
-          .map((document) =>
-            document.type === "PASSPORT"
-              ? "passport"
-              : document.type === "TICKET"
-                ? "travel ticket"
-                : "document",
-          );
-        setDocumentAttentionMessage(
-          expiredPassport
-            ? "This passport has expired. Upload a valid passport before continuing."
-            : rejected.length
-              ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
-              : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
-        );
-      }
+      } else setDocumentAttentionMessage("");
     }
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
@@ -1236,7 +1261,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   );
   if (
     loadFailed ||
-    (session && session.order.status !== "DRAFT" && !submitted && !outcome)
+    (session &&
+      session.order.status !== "DRAFT" &&
+      !submitted &&
+      !outcome &&
+      !recoveringPaidOrder)
   )
     return (
       <main className="checkout-page">
@@ -1450,7 +1479,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                           value
                         )}
                       </i>
-                      {!submitted && step > value ? (
+                      {!submitted && !recoveringPaidOrder && step > value ? (
                         <button
                           type="button"
                           disabled={busy}
@@ -1543,7 +1572,18 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       : "error-panel"
                   }
                 >
-                  {PAID_STATUSES.has(outcome.status) ? (
+                  {outcome.status === "REVIEW_PENDING" ? (
+                    <>
+                      <CheckCircle2 size={42} />
+                      <b>Replacement received — review in progress</b>
+                      <span>{outcome.orderNumber}</span>
+                      <p>
+                        Your replacement documents are saved. Payment is already
+                        complete; our team will review the new files before your
+                        eSIM can be activated.
+                      </p>
+                    </>
+                  ) : PAID_STATUSES.has(outcome.status) ? (
                     <>
                       <CheckCircle2 size={42} />
                       <b>Payment confirmed</b>
@@ -2188,6 +2228,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                 }
                                 disabled={busy}
                                 passportFailureCode={passportFailureCode}
+                                replacementReasons={
+                                  session?.order.replacementReasons
+                                }
                               />
                             ) : (
                               <fieldset
@@ -2269,7 +2312,17 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                   "MANUAL_REVIEW",
                                 ].includes(verification?.status ?? "")) ||
                               (!Object.values(files).some(Boolean) &&
-                                verification?.status === "REUPLOAD_REQUIRED")
+                                verification?.status === "REUPLOAD_REQUIRED") ||
+                              (effectiveVerificationStatus ===
+                                "REUPLOAD_REQUIRED" &&
+                                displayDocuments.some(
+                                  (document) =>
+                                    document.status === "REUPLOAD_REQUIRED" &&
+                                    !files[
+                                      document.type as
+                                        "PASSPORT" | "TICKET" | "VISA"
+                                    ],
+                                ))
                             }
                             onClick={() => void saveDocuments()}
                           >
@@ -2288,11 +2341,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                                     ? "Verification in progress"
                                     : verification?.status ===
                                         "REUPLOAD_REQUIRED"
-                                      ? files.PASSPORT
-                                        ? "Check new passport"
-                                        : Object.values(files).some(Boolean)
-                                          ? "Save document changes"
-                                          : "Choose a passport or change details"
+                                      ? "Submit replacement for review"
                                       : "Save documents"}
                           </button>
                         </div>
@@ -2312,7 +2361,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                 <span className="summary-label">Order summary</span>
                 <b>{plan.name}</b>
                 <small>
-                  {countryDisplayName(plan.countryCode)} · {formatPlanDataText(plan.dataAllowance)}
+                  {countryDisplayName(plan.countryCode)} ·{" "}
+                  {formatPlanDataText(plan.dataAllowance)}
                 </small>
               </span>
             </div>

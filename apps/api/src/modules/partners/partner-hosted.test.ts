@@ -57,6 +57,7 @@ function order(documents: Array<Record<string, unknown>>) {
     plan: { country: { isoCode: "AE" } },
     traveler: { id: "traveler-1" },
     documents,
+    events: [],
   };
 }
 
@@ -389,6 +390,30 @@ describe("partner hosted checkout", () => {
     expect(orderUpdate).not.toHaveBeenCalled();
   });
 
+  it("does not accept an old rejected ticket as a completed hosted upload", async () => {
+    const verifyPassport = vi.fn();
+    const instance = service(
+      {
+        partnerHostedCheckoutSession: { findUnique: vi.fn().mockResolvedValue(session) },
+        order: {
+          findUnique: vi.fn().mockResolvedValue({
+            ...order([
+              { id: "passport-1", type: "PASSPORT", status: "PENDING", uploadVerified: true },
+              { id: "ticket-1", type: "TICKET", status: "REUPLOAD_REQUIRED", uploadVerified: true },
+            ]),
+            documentReviewStatus: "REUPLOAD_REQUIRED",
+          }),
+        },
+      },
+      undefined,
+      { verifyPassport },
+    );
+    await expect(instance.verifyHostedPassport("abcdefghijklmnopqrstuvwxyz012345")).rejects.toMatchObject({
+      response: { code: "DOCUMENT_UPLOADS_INCOMPLETE" },
+    });
+    expect(verifyPassport).not.toHaveBeenCalled();
+  });
+
   it("invalidates a previous hosted verification when evidence is replaced", async () => {
     const orderUpdate = vi.fn();
     const documentUpsert = vi.fn().mockResolvedValue({
@@ -552,6 +577,37 @@ describe("partner hosted checkout", () => {
         }),
       }),
     );
+  });
+
+  it("shows the current rejected document's ops comment without reviewer identity", async () => {
+    const instance = service({
+      partnerHostedCheckoutSession: {
+        findUnique: vi.fn().mockResolvedValue(session),
+      },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...order([
+            { id: "passport-1", type: "PASSPORT", status: "APPROVED", fileName: "passport.jpg", uploadVerified: true },
+            { id: "ticket-1", type: "TICKET", status: "REUPLOAD_REQUIRED", fileName: "ticket.jpg", uploadVerified: true },
+          ]),
+          orderType: "INITIAL_PURCHASE",
+          documentReviewStatus: "REUPLOAD_REQUIRED",
+          partner: { name: "Test partner", slug: "test", brand: {} },
+          plan: {
+            id: "plan-1",
+            name: "India 500MB",
+            dataAllowance: "500 MB",
+            validityDays: 1,
+            country: { name: "India", isoCode: "IN" },
+          },
+          events: [{ reason: "TICKET: The departure date is cropped (requested by reviewer-123)" }],
+        }),
+      },
+    });
+
+    await expect(instance.hostedCheckout("abcdefghijklmnopqrstuvwxyz012345")).resolves.toMatchObject({
+      order: { replacementReasons: { TICKET: "The departure date is cropped" } },
+    });
   });
 
   it("enriches the same partner customer and keeps the hosted order attached", async () => {

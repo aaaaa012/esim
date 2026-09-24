@@ -16,6 +16,7 @@ import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Order = OrderSummary & {
+  documentReviewStatus?: string;
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   purchaseContext?: "TOPUP" | "NEW_DESTINATION" | "FIRST_PURCHASE";
   rechargeFor?: "OWN" | "OTHER";
@@ -36,6 +37,10 @@ const action = [
   "PROVISIONING_FAILED",
   "ACTIVATION_ATTENTION",
 ];
+const needsAction = (order: Order) =>
+  action.includes(order.status) || order.documentReviewStatus === "REUPLOAD_REQUIRED";
+const isProcessing = (order: Order) =>
+  processing.includes(order.status) && !needsAction(order);
 
 function countryFlag(countryCode: string) {
   const code = countryCode.trim().toUpperCase();
@@ -96,7 +101,7 @@ export default function OrderList() {
     if (
       loading ||
       refreshing ||
-      !orders.some((order) => processing.includes(order.status))
+      !orders.some(isProcessing)
     )
       return;
     const timer = setTimeout(() => setAttempt((value) => value + 1), 10_000);
@@ -105,10 +110,10 @@ export default function OrderList() {
   const counts = useMemo(
     () => ({
       complete: orders.filter((order) => order.status === "COMPLETED").length,
-      processing: orders.filter((order) => processing.includes(order.status))
+      processing: orders.filter(isProcessing)
         .length,
       ready: orders.filter((order) => ready.includes(order.status)).length,
-      action: orders.filter((order) => action.includes(order.status)).length,
+      action: orders.filter(needsAction).length,
     }),
     [orders],
   );
@@ -116,9 +121,9 @@ export default function OrderList() {
     (order) =>
       filter === "ALL" ||
       (filter === "COMPLETE" && order.status === "COMPLETED") ||
-      (filter === "PROCESSING" && processing.includes(order.status)) ||
+      (filter === "PROCESSING" && isProcessing(order)) ||
       (filter === "READY" && ready.includes(order.status)) ||
-      (filter === "ACTION" && action.includes(order.status)),
+      (filter === "ACTION" && needsAction(order)),
   );
   return (
     <main className="account-page orders-page">
@@ -286,11 +291,13 @@ export default function OrderList() {
                   </p>
                 </div>
                 <div className="esim-state">
-                  <span className={`status-chip ${order.status.toLowerCase()}`}>
+                  <span className={`status-chip ${order.documentReviewStatus === "REUPLOAD_REQUIRED" ? "awaiting_customer" : order.status.toLowerCase()}`}>
                     {order.purchaseType === "TOPUP" &&
                     order.status === "QR_READY"
                       ? "Package added"
-                      : orderStatusLabel(order.status)}
+                      : order.documentReviewStatus === "REUPLOAD_REQUIRED"
+                        ? "Documents need replacement"
+                        : orderStatusLabel(order.status)}
                   </span>
                   <small>
                     <Clock3 size={13} />

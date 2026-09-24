@@ -376,7 +376,7 @@ describe("first-purchase document verification", () => {
     ).toBe(true);
   });
 
-  it("explains an expired passport in a dialog and marks it for replacement", async () => {
+  it("explains an expired passport inline and marks it for replacement", async () => {
     mocks.authFetch.mockImplementation(async (url: string) => {
       if (url.endsWith("/payments/providers"))
         return ok({ providers: ["KHALTI"] });
@@ -418,23 +418,17 @@ describe("first-purchase document verification", () => {
 
     render(<Checkout planId="plan" orderId="expired-passport" />);
 
-    expect(
-      await screen.findByRole("alertdialog", { name: "Passport expired" }),
-    ).toBeDefined();
+    expect(await screen.findByText("Passport needs a new upload")).toBeDefined();
     expect(
       screen.getAllByText(
         "This passport has expired. Upload a valid passport before continuing.",
       ).length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText("Upload passport again")).toBeDefined();
+    expect(screen.getByText("Replace passport")).toBeDefined();
     expect(
       screen.queryByRole("heading", { name: "Traveller information" }),
     ).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(
-      screen.queryByRole("heading", { name: "Traveller information" }),
-    ).toBeNull();
     expect(
       screen.getByRole("heading", { name: "Travel documents" }),
     ).toBeDefined();
@@ -565,6 +559,7 @@ describe("first-purchase document verification", () => {
           totalAmountNpr: 100,
           traveler: { firstName: "Traveller" },
           documentReviewStatus: "REUPLOAD_REQUIRED",
+          timeline: [{ reason: "PASSPORT: The photo page is cropped (requested by staff-1)" }],
           passportVerification: { status: "FAILED" },
           documents: [
             {
@@ -584,21 +579,14 @@ describe("first-purchase document verification", () => {
       });
       render(<Checkout planId="plan" orderId="recovery" />);
       await screen.findByRole("heading", { name: "Travel documents" });
-      expect(
-        await screen.findByRole("alertdialog", {
-          name: "Document check needs attention",
-        }),
-      ).toBeDefined();
-      expect(
-        screen.queryByText("One or more documents need replacement"),
-      ).toBeNull();
+      expect(await screen.findByText("Passport needs a new upload")).toBeDefined();
+      expect(screen.getByText("The photo page is cropped")).toBeDefined();
       expect(
         screen.getByRole("button", { name: "Check traveller details" }),
       ).toBeDefined();
       expect(screen.getByText("ticket.png")).toBeDefined();
       expect(screen.queryByLabelText("Travel ticket")).toBeNull();
-      fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]!);
-      expect(screen.getByLabelText("Travel ticket")).toBeDefined();
+      expect(screen.getByText("Kept on file")).toBeDefined();
       expect(screen.getByLabelText("Passport", { exact: true })).toBeDefined();
       fireEvent.click(
         screen.getByRole("button", { name: "Check traveller details" }),

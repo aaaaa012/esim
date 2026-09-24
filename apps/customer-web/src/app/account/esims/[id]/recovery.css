@@ -51,8 +51,28 @@
 .replacement-control {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+}
+.replacement-review-reason {
+  display: grid;
+  gap: 4px;
+  flex: 0 0 100%;
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--warning);
+  border-radius: 0 8px 8px 0;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.replacement-review-reason b {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .replacement-control input {

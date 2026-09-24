@@ -56,7 +56,7 @@ import { createDocumentUploader } from "./document-upload";
 import ManualReviewTracking from "./manual-review-tracking";
 import { useDocumentRefresh } from "./use-document-refresh";
 import { DocumentFileField as FileField } from "./document-file-field";
-import { DocumentRecoveryFields } from "./document-recovery";
+import { DocumentRecoveryFields, replacementReasonsFromTimeline } from "./document-recovery";
 import {
   CompatibilityConfirmation,
   PurchaseConsent,
@@ -1086,25 +1086,7 @@ export default function CheckoutClient({
         setDocumentAttentionMessage(
           "We couldn't automatically match some details with your uploaded passport. Please check the highlighted fields.",
         );
-      } else {
-        const expiredPassport = passportFailureCode === "PASSPORT_EXPIRED";
-        const rejected = displayDocuments
-          .filter((document) => document.status === "REUPLOAD_REQUIRED")
-          .map((document) =>
-            document.type === "PASSPORT"
-              ? "passport"
-              : document.type === "TICKET"
-                ? "travel ticket"
-                : "document",
-          );
-        setDocumentAttentionMessage(
-          expiredPassport
-            ? "This passport has expired. Upload a valid passport before continuing."
-            : rejected.length
-              ? `We could not confirm your ${rejected.join(" and ")}. Replace the marked file before continuing.`
-              : "We could not confirm one of the uploaded documents. Replace the marked file before continuing.",
-        );
-      }
+      } else setDocumentAttentionMessage("");
     }
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
     if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
@@ -1579,6 +1561,18 @@ export default function CheckoutClient({
   const saveDocuments = () =>
     run(async () => {
       setDocumentError("");
+      const requestedReplacements = displayDocuments.filter(
+        (document) => document.status === "REUPLOAD_REQUIRED",
+      );
+      if (
+        effectiveDocumentReviewStatus === "REUPLOAD_REQUIRED" &&
+        requestedReplacements.some(
+          (document) => !files[document.type.toLowerCase() as "passport" | "ticket" | "visa"],
+        )
+      ) {
+        setDocumentError("Choose a new file for every document marked for replacement.");
+        return;
+      }
       const replacedPassport = Boolean(files.passport);
       if (replacedPassport) {
         // A verdict belongs to one uploaded passport. Retire its message before
@@ -2723,13 +2717,7 @@ export default function CheckoutClient({
                             }
                             disabled={busy}
                             passportFailureCode={passportFailureCode}
-                            replacementReason={order?.timeline
-                              ?.slice()
-                              .reverse()
-                              .find((event) =>
-                                event.reason?.startsWith("PASSPORT:"),
-                              )
-                              ?.reason?.replace(/^PASSPORT:\s*/, "")}
+                            replacementReasons={replacementReasonsFromTimeline(order?.timeline)}
                           />
                         ) : (
                           <fieldset
@@ -2835,6 +2823,11 @@ export default function CheckoutClient({
                             !manualNeedsTraveler) ||
                           (!Object.values(files).some(Boolean) &&
                             order?.documentReviewStatus === "REUPLOAD_REQUIRED")
+                          || (effectiveDocumentReviewStatus === "REUPLOAD_REQUIRED" &&
+                            displayDocuments.some((document) =>
+                              document.status === "REUPLOAD_REQUIRED" &&
+                              !files[document.type.toLowerCase() as "passport" | "ticket" | "visa"],
+                            ))
                         }
                         onClick={() => {
                           if (
@@ -2862,12 +2855,8 @@ export default function CheckoutClient({
                                     )
                                   ? "Verification in progress"
                                   : order?.documentReviewStatus ===
-                                      "REUPLOAD_REQUIRED"
-                                    ? files.passport
-                                      ? "Check new passport"
-                                      : Object.values(files).some(Boolean)
-                                        ? "Save document changes"
-                                        : "Choose a passport or change details"
+                                  "REUPLOAD_REQUIRED"
+                                    ? "Submit replacement for review"
                                     : "Save documents"}
                       </button>
                     </div>

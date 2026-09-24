@@ -60,6 +60,12 @@ it("includes provisioning failures in Needs action and offers an exit from empty
   fireEvent.click(screen.getByRole("button", { name: "Show all orders" }));
   expect(screen.getByRole("heading", { name: displayedPlanName })).toBeDefined();
 });
+it("surfaces a document replacement in Needs action even when the order status is still review pending", async () => {
+  mocks.fetch.mockResolvedValue(ok([{ ...order, status: "REVIEW_PENDING", documentReviewStatus: "REUPLOAD_REQUIRED" }]));
+  render(<OrderList />);
+  fireEvent.click(await screen.findByRole("button", { name: "Needs action" }));
+  expect(screen.getByText("Documents need replacement")).toBeDefined();
+});
 it("keeps a failed order-detail load recoverable through repeated retries", async () => {
   mocks.fetch
     .mockRejectedValueOnce(new Error("offline"))
@@ -164,6 +170,7 @@ it("confirms a replacement upload without clearing another selected document", a
     status: "AWAITING_CUSTOMER",
     documentReviewStatus: "REUPLOAD_REQUIRED",
     documents,
+    timeline: [{ from: "REVIEW_PENDING", to: "AWAITING_CUSTOMER", at: "2026-09-02", reason: "TICKET: Show the whole ticket (requested by staff-1)" }],
   };
   mocks.fetch.mockImplementation(async (url: string) => {
     if (url.endsWith("/documents"))
@@ -173,6 +180,9 @@ it("confirms a replacement upload without clearing another selected document", a
   });
   const { container } = render(<Details id="order" />);
   await screen.findByRole("heading", { name: displayedPlanName });
+  expect(screen.getByRole("link", { name: "Upload requested files" })).toBeDefined();
+  expect(screen.getByText("Show the whole ticket")).toBeDefined();
+  expect(screen.queryByText(/staff-1/)).toBeNull();
   const inputs = container.querySelectorAll('input[type="file"]');
   for (const input of inputs)
     fireEvent.change(input, {
@@ -188,7 +198,7 @@ it("confirms a replacement upload without clearing another selected document", a
     screen.getAllByRole("button", { name: "Upload replacement" })[0]!,
   );
   await screen.findByText(
-    "Replacement securely saved. Verification updates will appear here.",
+    /Replacement securely saved. If another document is marked/,
   );
   expect(
     (

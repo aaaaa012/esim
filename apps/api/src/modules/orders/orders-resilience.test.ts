@@ -1651,6 +1651,63 @@ it("restarts validation after confirming only a replacement ticket with a verifi
   expect(restarted.status).toBe(OrderStatus.REVIEW_PENDING);
 });
 
+it("waits for every rejected document before restarting review", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "both-replacements",
+        ownerId: "customer-1",
+        status: OrderStatus.AWAITING_CUSTOMER,
+        traveler: customerTraveler(),
+        documentReviewPolicy: "AUTO_OCR",
+        documentReviewStatus: "NOT_STARTED",
+        documents: [
+          {
+            id: "new-passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "new-passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: false,
+          },
+          {
+            id: "old-ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "old-ticket-asset",
+            status: DocumentStatus.REUPLOAD_REQUIRED,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+    { verifyDocument: vi.fn().mockResolvedValue({}) },
+  );
+  await instance.refreshFromPersistence();
+  await instance.confirmDocument("both-replacements", "new-passport", "customer-1");
+  const waiting = instance.get("both-replacements", "customer-1");
+  expect(waiting.documentReviewStatus).toBe("REUPLOAD_REQUIRED");
+  expect(waiting.status).toBe(OrderStatus.AWAITING_CUSTOMER);
+  expect(add).not.toHaveBeenCalled();
+  const ticket = waiting.documents.find((document) => document.type === DocumentType.TICKET)!;
+  ticket.privateAssetId = "new-ticket-asset";
+  ticket.status = DocumentStatus.PENDING;
+  ticket.uploadVerified = false;
+  await instance.confirmDocument("both-replacements", "old-ticket", "customer-1");
+  const restarted = instance.get("both-replacements", "customer-1");
+  expect(restarted.documentReviewStatus).toBe("OCR_PENDING");
+  expect(restarted.status).toBe(OrderStatus.REVIEW_PENDING);
+  expect(add).toHaveBeenCalledTimes(1);
+});
+
 it("invalidates an in-flight OCR generation when traveller identity changes", async () => {
   const instance = ordersService(
     [readyOrder({

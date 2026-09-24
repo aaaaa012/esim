@@ -1091,7 +1091,16 @@ export class OrdersService implements OnModuleInit {
         "MANUAL_REVIEW",
         "CORRECTION_REQUIRED",
       ].includes(order.documentReviewStatus ?? "");
-    if (restartingReplacement) {
+    const outstandingReplacement = order.documents.some(
+      (item) =>
+        [DocumentType.PASSPORT, DocumentType.TICKET].includes(item.type) &&
+        item.status === DocumentStatus.REUPLOAD_REQUIRED,
+    );
+    if (outstandingReplacement) {
+      // Do not check a partial resubmission. The remaining rejected file must
+      // be replaced before OCR or manual review can produce a new verdict.
+      order.documentReviewStatus = "REUPLOAD_REQUIRED";
+    } else if (restartingReplacement) {
       order.documentReviewStartedAt ??= new Date().toISOString();
       if (order.documentReviewPolicy === "NO_REVIEW") {
         order.documentReviewStatus = "SKIPPED";

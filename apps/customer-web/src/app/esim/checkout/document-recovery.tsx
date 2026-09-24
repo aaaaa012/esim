@@ -1,6 +1,5 @@
 "use client";
-import { useState } from "react";
-import { CheckCircle2, ChevronDown, FileText } from "lucide-react";
+import { AlertCircle, CheckCircle2, FileText } from "lucide-react";
 import { DocumentFileField } from "./document-file-field";
 import { savedDocumentName, type SavedDocument } from "./document-progress";
 
@@ -12,6 +11,25 @@ const labels: Record<DocumentType, string> = {
   VISA: "Visa (optional)",
 };
 
+export function replacementReasonsFromTimeline(
+  timeline: { reason?: string | null }[] | undefined,
+): Partial<Record<DocumentType, string>> {
+  const reasons: Partial<Record<DocumentType, string>> = {};
+  for (const event of [...(timeline ?? [])].reverse()) {
+    const reason = event.reason?.trim() ?? "";
+    const specific = /^(PASSPORT|TICKET):\s*(.+)$/i.exec(reason);
+    if (specific) {
+      const type = specific[1]!.toUpperCase() as DocumentType;
+      reasons[type] ??= specific[2]!.replace(/\s+\(requested by [^)]+\)$/, "").trim();
+    } else if (reason.startsWith("Documents requested again:")) {
+      const comment = reason.replace(/^Documents requested again:\s*/, "").trim();
+      reasons.PASSPORT ??= comment;
+      reasons.TICKET ??= comment;
+    }
+  }
+  return reasons;
+}
+
 export function DocumentRecoveryFields({
   documents,
   types,
@@ -20,7 +38,7 @@ export function DocumentRecoveryFields({
   disabled,
   capture = true,
   passportFailureCode,
-  replacementReason,
+  replacementReasons,
 }: {
   documents?: SavedDocument[] | undefined;
   types: string[];
@@ -29,62 +47,65 @@ export function DocumentRecoveryFields({
   disabled?: boolean;
   capture?: boolean;
   passportFailureCode?: string | undefined;
-  replacementReason?: string | undefined;
+  replacementReasons?: Partial<Record<DocumentType, string>> | undefined;
 }) {
-  const [expanded, setExpanded] = useState<DocumentType[]>(["PASSPORT"]);
+  const requested = types.filter((type) =>
+    documents?.some(
+      (document) =>
+        document.type === type && document.status === "REUPLOAD_REQUIRED",
+    ),
+  );
   return (
     <fieldset className="document-recovery-fields" disabled={disabled}>
-      <legend className="sr-only">Documents to review</legend>
+      <legend className="sr-only">Requested document replacements</legend>
+      {requested.length > 0 && (
+        <div className="document-recovery-notice" role="alert">
+          <AlertCircle size={22} aria-hidden="true" />
+          <span>
+            <b>
+              {requested.length === 1
+                ? `${labels[requested[0] as DocumentType]} needs a new upload`
+                : "Your documents need new uploads"}
+            </b>
+            <small>
+              {requested.some((type) => replacementReasons?.[type as DocumentType])
+                ? `Our review team could not approve the marked ${requested.length === 1 ? "file" : "files"}. Read the ${requested.length === 1 ? "reason" : "reasons"} below. `
+                : `The marked ${requested.length === 1 ? "file needs a replacement" : "files need replacements"}. `}
+              Upload only {requested.length === 1 ? "that document" : "those documents"}. Your other files remain saved.
+            </small>
+          </span>
+        </div>
+      )}
       {types.map((rawType) => {
         if (!["PASSPORT", "TICKET", "VISA"].includes(rawType)) return null;
         const type = rawType as DocumentType;
         const document = documents?.find((item) => item.type === type);
         const needsReplacement = document?.status === "REUPLOAD_REQUIRED";
-        const isExpanded =
-          type === "PASSPORT" || needsReplacement || expanded.includes(type);
         const optional = type === "VISA";
-        if (isExpanded)
+        if (needsReplacement)
           return (
             <div
-              className={`document-recovery-editor${needsReplacement ? " needs-attention" : ""}`}
+              className="document-recovery-editor needs-attention"
               key={type}
             >
               <div className="document-recovery-editor-heading">
                 <span>
-                  <b>
-                    {type === "PASSPORT" && needsReplacement
-                      ? "Upload passport again"
-                      : labels[type]}
-                  </b>
+                  <b>Replace {labels[type].toLowerCase()}</b>
                   <small>
-                    {type === "PASSPORT" && needsReplacement
-                      ? replacementReason
-                        ? replacementReason
-                        : passportFailureCode === "PASSPORT_EXPIRED"
-                          ? "This passport has expired. Upload a valid passport before continuing."
-                          : passportFailureCode ===
-                              "PASSPORT_BIODATA_NOT_DETECTED"
-                            ? "Upload the passport information page, including the photo and machine-readable lines."
-                            : "Use a clear, complete photo of the information page."
-                      : optional
-                        ? "Optional document"
-                        : "Replace this document if it is incorrect or unclear."}
+                    {type === "PASSPORT" && passportFailureCode === "PASSPORT_EXPIRED"
+                      ? "This passport has expired. Upload a valid passport before continuing."
+                      : type === "PASSPORT" && passportFailureCode === "PASSPORT_BIODATA_NOT_DETECTED"
+                        ? "Upload the passport information page, including the photo and machine-readable lines."
+                        : `Upload a clear, complete replacement ${labels[type].toLowerCase()}.`}
                   </small>
                 </span>
-                {type !== "PASSPORT" && !needsReplacement && (
-                  <button
-                    type="button"
-                    className="document-inline-action"
-                    onClick={() =>
-                      setExpanded((current) =>
-                        current.filter((item) => item !== type),
-                      )
-                    }
-                  >
-                    Done
-                  </button>
-                )}
               </div>
+              {replacementReasons?.[type] && (
+                <p className="document-recovery-reason">
+                  <b>Reason from our review team</b>
+                  {replacementReasons[type]}
+                </p>
+              )}
               <DocumentFileField
                 label={labels[type]}
                 file={files[type]}
@@ -95,6 +116,7 @@ export function DocumentRecoveryFields({
               />
             </div>
           );
+        if (!document?.uploadVerified && optional) return null;
         return (
           <div className="document-recovery-saved" key={type}>
             <span className={document?.uploadVerified ? "saved" : ""}>
@@ -110,14 +132,7 @@ export function DocumentRecoveryFields({
                 {document?.fileName || (optional ? "Not added" : "Not saved")}
               </small>
             </span>
-            <button
-              type="button"
-              className="document-inline-action"
-              aria-expanded="false"
-              onClick={() => setExpanded((current) => [...current, type])}
-            >
-              Change <ChevronDown size={15} aria-hidden="true" />
-            </button>
+            <span className="document-recovery-kept">Kept on file</span>
           </div>
         );
       })}

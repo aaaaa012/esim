@@ -21,6 +21,7 @@ import {
 import "./recovery.css";
 import { createDocumentUploader } from "../../../esim/checkout/document-upload";
 import { useDocumentRefresh } from "../../../esim/checkout/use-document-refresh";
+import { replacementReasonsFromTimeline } from "../../../esim/checkout/document-recovery";
 import {
   apiErrorMessage,
   documentStatusLabel,
@@ -175,7 +176,7 @@ export default function EsimDetails({ id }: { id: string }) {
         return next;
       });
       setNotice(
-        "Replacement securely saved. Verification updates will appear here.",
+        "Replacement securely saved. If another document is marked, upload it too. Review restarts when all requested files are received.",
       );
       await load();
     } catch (cause) {
@@ -349,6 +350,10 @@ export default function EsimDetails({ id }: { id: string }) {
   const needsReupload = order.documents.some(
     (document) => document.status === "REUPLOAD_REQUIRED",
   );
+  const replacementReasons = replacementReasonsFromTimeline(order.timeline);
+  const requestedDocuments = order.documents.filter(
+    (document) => document.status === "REUPLOAD_REQUIRED",
+  );
   const documentReviewPending = [
     "OCR_PENDING",
     "MANUAL_REVIEW",
@@ -424,7 +429,7 @@ export default function EsimDetails({ id }: { id: string }) {
               {busy === "payment-status" ? "Checking status" : "Check status"}
             </button>
           </section>
-        ) : resumable ? (
+        ) : resumable && !needsReupload ? (
           <section className="customer-action-banner">
             <AlertCircle />
             <span>
@@ -441,17 +446,15 @@ export default function EsimDetails({ id }: { id: string }) {
           </section>
         ) : null}
         {needsReupload && (
-          <section className="customer-action-banner warning">
+          <section className="customer-action-banner warning" role="alert">
             <Upload />
             <span>
-              <b>Replacement document required</b>
+              <b>{requestedDocuments.length === 1 ? `${documentTypeLabel(requestedDocuments[0]!.type)} needs a new upload` : "Documents need new uploads"}</b>
               <small>
-                {[...order.timeline]
-                  .reverse()
-                  .find((event) => event.to === "AWAITING_CUSTOMER")?.reason ??
-                  "Upload the requested document to submit the order again."}
+                Our review team requested {requestedDocuments.length === 1 ? "a replacement" : "replacements"}. See the reason beside each marked document below. Your other files remain saved; review resumes after the requested uploads are complete.
               </small>
             </span>
+            <a className="button" href="#replacement-documents">Upload requested files</a>
           </section>
         )}
         {documentReviewPending && !needsReupload && (
@@ -492,14 +495,14 @@ export default function EsimDetails({ id }: { id: string }) {
                       <b>{orderStatusLabel(event.to)}</b>
                       <small>
                         {new Date(event.at).toLocaleString()}
-                        {event.reason ? ` · ${event.reason}` : ""}
+                        {event.reason ? ` · ${event.reason.replace(/\s+\(requested by [^)]+\)$/, "")}` : ""}
                       </small>
                     </span>
                   </div>
                 ))}
               </div>
             </section>
-            <section className="detail-card">
+            <section className="detail-card" id="replacement-documents">
               <h2>Documents</h2>
               {order.documents.map((document) => (
                 <div
@@ -512,6 +515,9 @@ export default function EsimDetails({ id }: { id: string }) {
                   <b>{documentStatusLabel(document.status)}</b>
                   {document.status === "REUPLOAD_REQUIRED" && (
                     <div className="replacement-control">
+                      {replacementReasons[document.type as "PASSPORT" | "TICKET"] && (
+                        <p className="replacement-review-reason"><b>Reason from our review team</b>{replacementReasons[document.type as "PASSPORT" | "TICKET"]}</p>
+                      )}
                       <input
                         type="file"
                         disabled={Boolean(busy)}

@@ -2795,6 +2795,7 @@ export class PartnerService {
         plan: { include: { country: true } },
         traveler: true,
         passportExtraction: true,
+        events: { select: { reason: true }, orderBy: { createdAt: "asc" } },
         documents: {
           select: {
             id: true,
@@ -2862,6 +2863,10 @@ export class PartnerService {
               plan: { include: { country: true } },
               traveler: true,
               passportExtraction: true,
+              events: {
+                select: { reason: true },
+                orderBy: { createdAt: "asc" },
+              },
               documents: {
                 select: {
                   id: true,
@@ -2884,6 +2889,24 @@ export class PartnerService {
     const topUpMsisdnMasked = topUpMsisdn
       ? `••••${topUpMsisdn.replace(/\D/g, "").slice(-4)}`
       : undefined;
+    const replacementReasons: Partial<Record<"PASSPORT" | "TICKET", string>> =
+      {};
+    for (const event of [...order.events].reverse()) {
+      const reason = event.reason?.trim() ?? "";
+      const specific = /^(PASSPORT|TICKET):\s*(.+)$/i.exec(reason);
+      if (specific) {
+        const type = specific[1]!.toUpperCase() as "PASSPORT" | "TICKET";
+        replacementReasons[type] ??= specific[2]!
+          .replace(/\s+\(requested by [^)]+\)$/, "")
+          .trim();
+      } else if (reason.startsWith("Documents requested again:")) {
+        const comment = reason
+          .replace(/^Documents requested again:\s*/, "")
+          .trim();
+        replacementReasons.PASSPORT ??= comment;
+        replacementReasons.TICKET ??= comment;
+      }
+    }
     return {
       sessionId: session.id,
       expiresAt: session.expiresAt,
@@ -2918,6 +2941,15 @@ export class PartnerService {
         ),
         documents: order.documents,
         documentReviewStatus: order.documentReviewStatus,
+        replacementReasons: Object.fromEntries(
+          Object.entries(replacementReasons).filter(([type]) =>
+            order.documents.some(
+              (document) =>
+                document.type === type &&
+                document.status === DocumentStatus.REUPLOAD_REQUIRED,
+            ),
+          ),
+        ),
         requiredDocuments,
         paymentRetry: declarePaymentRetry({
           status: order.status,
@@ -3103,10 +3135,24 @@ export class PartnerService {
     token: string,
     input: { type: DocumentType; fileName: string; contentType: string },
   ) {
-    const order = await this.sessionOrder(token, [
-      OrderStatus.DRAFT,
-      OrderStatus.AWAITING_CUSTOMER,
-    ]);
+    const order = await this.sessionOrder(
+      token,
+      [OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER],
+      true,
+    );
+    if (
+      order.status === OrderStatus.AWAITING_CUSTOMER &&
+      !order.documents.some(
+        (document) =>
+          document.type === input.type &&
+          document.status === DocumentStatus.REUPLOAD_REQUIRED,
+      )
+    )
+      throw new ApiException({
+        code: "DOCUMENT_REPLACEMENT_NOT_REQUESTED",
+        message: "Only documents requested for replacement can be uploaded",
+        status: 409,
+      });
     const signed = await this.storage.createDocumentUpload(
       order.id,
       input.type as unknown as SharedDocumentType,
@@ -3166,10 +3212,11 @@ export class PartnerService {
   }
 
   async confirmHostedDocument(token: string, documentId: string) {
-    const order = await this.sessionOrder(token, [
-      OrderStatus.DRAFT,
-      OrderStatus.AWAITING_CUSTOMER,
-    ]);
+    const order = await this.sessionOrder(
+      token,
+      [OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER],
+      true,
+    );
     const document = await this.prisma.travelerDocument.findFirst({
       where: { id: documentId, orderId: order.id },
     });
@@ -3192,10 +3239,60 @@ export class PartnerService {
         !order.documents.some(
           (item) =>
             item.type === type &&
-            (item.id === document.id || item.uploadVerified),
+            (item.id === document.id ||
+              (item.uploadVerified &&
+                item.status !== DocumentStatus.REUPLOAD_REQUIRED)),
         ),
     );
-    if (remainingRequired.length === 0) await this.verifyHostedPassport(token);
+    if (remainingRequired.length === 0) {
+      if (
+        order.status === OrderStatus.AWAITING_CUSTOMER &&
+        document.type !== DocumentType.PASSPORT
+      ) {
+        // A replacement ticket must be checked against the existing passport;
+        // its earlier terminal passport verdict cannot short-circuit OCR.
+        await this.prisma.travelerDocument.updateMany({
+          where: { orderId: order.id, type: DocumentType.PASSPORT },
+          data: {
+            passportVerificationStatus: null,
+            passportVerificationMethod: null,
+            passportMatchedFields: Prisma.DbNull,
+            passportConfidence: null,
+            passportVerifiedAt: null,
+          },
+        });
+      }
+      const verification = await this.verifyHostedPassport(token);
+      if (
+        order.status === OrderStatus.AWAITING_CUSTOMER &&
+        verification.status !== "REUPLOAD_REQUIRED"
+      ) {
+        const moved = await this.prisma.order.updateMany({
+          where: { id: order.id, status: OrderStatus.AWAITING_CUSTOMER },
+          data: {
+            status: OrderStatus.REVIEW_PENDING,
+            version: { increment: 1 },
+          },
+        });
+        if (moved.count === 1)
+          await this.prisma.orderEvent.create({
+            data: {
+              orderId: order.id,
+              fromStatus: OrderStatus.AWAITING_CUSTOMER,
+              toStatus: OrderStatus.REVIEW_PENDING,
+              reason: "Customer supplied requested document replacements",
+            },
+          });
+      }
+    } else if (
+      order.documents.some(
+        (item) => item.status === DocumentStatus.REUPLOAD_REQUIRED,
+      )
+    )
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: { documentReviewStatus: "REUPLOAD_REQUIRED" },
+      });
     return {
       id: document.id,
       type: document.type,
@@ -3212,10 +3309,11 @@ export class PartnerService {
    * triggers a full order re-save.
    */
   async verifyHostedPassport(token: string) {
-    const order = await this.sessionOrder(token, [
-      OrderStatus.DRAFT,
-      OrderStatus.AWAITING_CUSTOMER,
-    ]);
+    const order = await this.sessionOrder(
+      token,
+      [OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER],
+      true,
+    );
     if (
       ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
         order.documentReviewStatus,
@@ -3234,7 +3332,10 @@ export class PartnerService {
     ).filter(
       (type) =>
         !order.documents.some(
-          (document) => document.type === type && document.uploadVerified,
+          (document) =>
+            document.type === type &&
+            document.uploadVerified &&
+            document.status !== DocumentStatus.REUPLOAD_REQUIRED,
         ),
     );
     if (missingRequiredDocuments.length)
@@ -4300,8 +4401,15 @@ export class PartnerService {
     return session;
   }
 
-  private async sessionOrder(token: string, statuses?: OrderStatus[]) {
-    const session = await this.hostedCheckoutSession(token);
+  private async sessionOrder(
+    token: string,
+    statuses?: OrderStatus[],
+    allowConsumedReplacement = false,
+  ) {
+    const session = await this.hostedCheckoutSession(
+      token,
+      allowConsumedReplacement,
+    );
     const order = await this.prisma.order.findUnique({
       where: { id: session.orderId },
       include: {
@@ -4313,6 +4421,16 @@ export class PartnerService {
       },
     });
     if (!order)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
+    if (
+      session.consumedAt &&
+      (!allowConsumedReplacement ||
+        order.status !== OrderStatus.AWAITING_CUSTOMER)
+    )
       throw new ApiException({
         code: "HOSTED_CHECKOUT_NOT_FOUND",
         message: "Hosted checkout not found",
