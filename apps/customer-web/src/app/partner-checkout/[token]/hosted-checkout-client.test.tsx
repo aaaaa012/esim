@@ -269,7 +269,11 @@ describe("hosted checkout payment flow", () => {
           : ok(session(status)),
       );
       render(<HostedCheckoutClient token="private-token" />);
-      await screen.findByRole("heading", { name: "Traveller information" });
+      await screen.findByRole("heading", {
+        name: status === "MANUAL_REVIEW"
+          ? "Your documents are awaiting approval"
+          : "Traveller information",
+      });
       expect(
         screen.queryByRole("button", { name: "Continue to Khalti" }),
       ).toBeNull();
@@ -280,6 +284,109 @@ describe("hosted checkout payment flow", () => {
       ).toBe(false);
     },
   );
+
+  it("shows only hosted passport differences and confirms unchanged details for manual review", async () => {
+    const current = {
+      ...session("CORRECTION_REQUIRED"),
+      order: {
+        ...session("CORRECTION_REQUIRED").order,
+        traveler: {
+          title: "MR", firstName: "Samir", middleName: "", surname: "Majhi",
+          dateOfBirth: "1983-07-30", nationality: "NP", city: "Kathmandu",
+          countryOfResidence: "NP", employerOrBusinessName: "", email: "samir@example.com",
+          mobile: "+9779800000000", passportNumber: "PA031964", passportExpiryDate: "2032-05-03",
+        },
+        passportExtraction: { status: "READY", fields: { firstName: "Resham", surname: "Bishwokarma" } },
+        mismatchedFields: ["firstName", "surname"],
+      },
+    };
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers")) return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/confirm-passport-details"))
+        return ok({ status: "MANUAL_REVIEW", mismatchedFields: ["firstName", "surname"] });
+      return ok(current);
+    });
+
+    render(<HostedCheckoutClient token="private-token" />);
+
+    expect(await screen.findByRole("heading", { name: "Traveller information" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "Check the details that differ" })).toBeDefined();
+    expect(screen.getByText("Resham")).toBeDefined();
+    expect(screen.getByText("Bishwokarma")).toBeDefined();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "I checked—my details are correct" }));
+
+    expect(await screen.findByRole("heading", { name: "Your documents are awaiting approval" })).toBeDefined();
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/confirm-passport-details"))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/payment"))).toBe(false);
+  });
+
+  it("keeps a linked account checkout in the passport review journey after refresh", async () => {
+    mocks.signedIn = true;
+    sessionStorage.setItem("hosted-checkout-access-mode:v1:private-token", "account");
+    const current = {
+      ...session("CORRECTION_REQUIRED"),
+      order: {
+        ...session("CORRECTION_REQUIRED").order,
+        traveler: {
+          title: "MR", firstName: "Samir", middleName: "", surname: "Majhi",
+          dateOfBirth: "1983-07-30", nationality: "NP", city: "Kathmandu",
+          countryOfResidence: "NP", employerOrBusinessName: "", email: "samir@example.com",
+          mobile: "+9779800000000", passportNumber: "PA031964", passportExpiryDate: "2032-05-03",
+        },
+        passportExtraction: { status: "READY", fields: { firstName: "Resham" } },
+        mismatchedFields: ["firstName"],
+      },
+    };
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers")) return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/confirm-passport-details"))
+        return ok({ status: "MANUAL_REVIEW", mismatchedFields: ["firstName"] });
+      return ok(current);
+    });
+
+    render(<HostedCheckoutClient token="private-token" />);
+    expect(await screen.findByRole("region", { name: "Check the details that differ" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "I checked—my details are correct" }));
+    expect(await screen.findByRole("heading", { name: "Your documents are awaiting approval" })).toBeDefined();
+    expect(screen.getByRole("link", { name: "View order in My Orders" }).getAttribute("href"))
+      .toBe("/account/orders/order");
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/payment"))).toBe(false);
+  });
+
+  it("saves a corrected hosted passport field and compares again before payment", async () => {
+    const current = {
+      ...session("CORRECTION_REQUIRED"),
+      order: {
+        ...session("CORRECTION_REQUIRED").order,
+        traveler: {
+          title: "MR", firstName: "Samir", middleName: "", surname: "Bishwokarma",
+          dateOfBirth: "1983-07-30", nationality: "NP", city: "Kathmandu",
+          countryOfResidence: "NP", employerOrBusinessName: "", email: "samir@example.com",
+          mobile: "+9779800000000", passportNumber: "PA031964", passportExpiryDate: "2032-05-03",
+        },
+        passportExtraction: { status: "READY", fields: { firstName: "Resham" } },
+        mismatchedFields: ["firstName"],
+      },
+    };
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/payments/providers")) return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/traveler") && init?.method === "POST")
+        return ok({ ...current, order: { ...current.order, traveler: { ...current.order.traveler, firstName: "Resham" }, documentReviewStatus: "NOT_STARTED" } });
+      if (url.endsWith("/verify-passport")) return ok({ status: "VERIFIED", matchedFields: ["firstName"] });
+      return ok(current);
+    });
+
+    render(<HostedCheckoutClient token="private-token" />);
+    const correction = await screen.findByRole("textbox", { name: "Correct First name" });
+    fireEvent.change(correction, { target: { value: "Resham" } });
+    expect((screen.getByRole("button", { name: "I checked—my details are correct" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save corrected details" }));
+
+    expect(await screen.findByRole("heading", { name: "Pay NPR 2" })).toBeDefined();
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/traveler"))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/verify-passport"))).toBe(true);
+  });
 
   it.each([false, true])(
     "continues from compatibility to documents (signed in: %s)",

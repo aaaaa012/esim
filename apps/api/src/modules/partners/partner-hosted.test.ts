@@ -360,6 +360,62 @@ describe("partner hosted checkout", () => {
     expect(orderUpdate).not.toHaveBeenCalled();
   });
 
+  it("routes a hosted guest's unchanged passport mismatch to manual review", async () => {
+    const confirmPassportDetails = vi.fn().mockResolvedValue({
+      documentReviewStatus: "MANUAL_REVIEW",
+      passportVerification: { status: "FAILED", mismatchedFields: ["firstName"] },
+    });
+    const instance = service(
+      {
+        partnerHostedCheckoutSession: { findUnique: vi.fn().mockResolvedValue(session) },
+        order: {
+          findUnique: vi.fn().mockResolvedValue({
+            ...order([]),
+            documentReviewStatus: "CORRECTION_REQUIRED",
+          }),
+        },
+      },
+      undefined,
+      { confirmPassportDetails },
+    );
+
+    await expect(
+      instance.confirmHostedPassportDetails("abcdefghijklmnopqrstuvwxyz012345"),
+    ).resolves.toMatchObject({
+      status: "MANUAL_REVIEW",
+      mismatchedFields: ["firstName"],
+    });
+    expect(confirmPassportDetails).toHaveBeenCalledWith("order-1", null);
+  });
+
+  it("returns the order review state rather than the raw OCR verdict", async () => {
+    const verifyPassport = vi.fn().mockResolvedValue({
+      documentReviewStatus: "CORRECTION_REQUIRED",
+      passportVerification: { status: "FAILED", mismatchedFields: ["firstName"] },
+    });
+    const instance = service(
+      {
+        partnerHostedCheckoutSession: { findUnique: vi.fn().mockResolvedValue(session) },
+        order: {
+          findUnique: vi.fn().mockResolvedValue({
+            ...order([
+              { id: "passport-1", type: "PASSPORT", status: "PENDING", uploadVerified: true },
+              { id: "ticket-1", type: "TICKET", status: "PENDING", uploadVerified: true },
+            ]),
+            documentReviewStatus: "NOT_STARTED",
+          }),
+        },
+      },
+      undefined,
+      { verifyPassport },
+    );
+
+    await expect(instance.verifyHostedPassport("abcdefghijklmnopqrstuvwxyz012345")).resolves.toMatchObject({
+      status: "CORRECTION_REQUIRED",
+      mismatchedFields: ["firstName"],
+    });
+  });
+
   it("does not start hosted OCR until every required upload is confirmed", async () => {
     const orderUpdate = vi.fn();
     const instance = service({
@@ -607,6 +663,42 @@ describe("partner hosted checkout", () => {
 
     await expect(instance.hostedCheckout("abcdefghijklmnopqrstuvwxyz012345")).resolves.toMatchObject({
       order: { replacementReasons: { TICKET: "The departure date is cropped" } },
+    });
+  });
+
+  it("restores only persisted mismatched passport fields in hosted checkout", async () => {
+    const instance = service({
+      partnerHostedCheckoutSession: { findUnique: vi.fn().mockResolvedValue(session) },
+      order: {
+        findUnique: vi.fn().mockResolvedValue({
+          ...order([
+            { id: "passport-1", type: "PASSPORT", status: "PENDING", fileName: "passport.jpg", uploadVerified: true },
+            { id: "ticket-1", type: "TICKET", status: "PENDING", fileName: "ticket.jpg", uploadVerified: true },
+          ]),
+          orderType: "INITIAL_PURCHASE",
+          documentReviewStatus: "CORRECTION_REQUIRED",
+          traveler: null,
+          passportExtraction: {
+            status: "READY",
+            payloadEncrypted: JSON.stringify({ firstName: "Resham", surname: "Bishwokarma" }),
+            fieldsRequiringInput: [],
+            failureCode: null,
+            lastMismatchFields: ["firstName", "surname"],
+          },
+          plan: {
+            id: "plan-1", name: "India 500MB", dataAllowance: "500 MB", validityDays: 1,
+            country: { name: "India", isoCode: "IN" },
+          },
+        }),
+      },
+    });
+
+    await expect(instance.hostedCheckout("abcdefghijklmnopqrstuvwxyz012345")).resolves.toMatchObject({
+      order: {
+        documentReviewStatus: "CORRECTION_REQUIRED",
+        mismatchedFields: ["firstName", "surname"],
+        passportExtraction: { fields: { firstName: "Resham", surname: "Bishwokarma" } },
+      },
     });
   });
 

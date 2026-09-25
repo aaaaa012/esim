@@ -116,6 +116,11 @@ export class PartnerCheckoutController {
     return this.partners.verifyHostedPassport(token);
   }
 
+  @Post(":token/confirm-passport-details")
+  confirmPassportDetails(@Param("token") token: string) {
+    return this.partners.confirmHostedPassportDetails(token);
+  }
+
   @Post(":token/payment")
   payment(@Param("token") token: string, @Body() body: unknown) {
     const { provider } = hostedPaymentSchema.parse(body);

@@ -38,6 +38,7 @@ import {
 import { createDocumentUploader } from "../../esim/checkout/document-upload";
 import PaymentJourneyConfirmation from "../../esim/checkout/post-payment-confirmation";
 import { useDocumentRefresh } from "../../esim/checkout/use-document-refresh";
+import ManualReviewTracking from "../../esim/checkout/manual-review-tracking";
 import { DocumentFileField as FileField } from "../../esim/checkout/document-file-field";
 import { DocumentRecoveryFields } from "../../esim/checkout/document-recovery";
 import {
@@ -97,12 +98,14 @@ type Session = {
           | "dateOfBirth"
           | "passportNumber"
           | "passportExpiryDate"
+          | "nationality"
         >
       >;
       fieldsRequiringInput?: string[];
       failureCode?: string;
     } | null;
     documentReviewStatus?: string;
+    mismatchedFields?: Verification["mismatchedFields"];
     documents: {
       id: string;
       type: string;
@@ -139,6 +142,15 @@ type Verification = {
   method?: string;
   detail?: string;
   passportExtraction?: Session["order"]["passportExtraction"];
+};
+const mismatchLabels: Record<NonNullable<Verification["mismatchedFields"]>[number], string> = {
+  firstName: "First name",
+  middleName: "Middle name",
+  surname: "Surname",
+  dateOfBirth: "Date of birth",
+  nationality: "Nationality",
+  passportNumber: "Passport number",
+  passportExpiryDate: "Passport expiry",
 };
 
 type Payment = {
@@ -244,6 +256,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [editingVerifiedDocuments, setEditingVerifiedDocuments] =
     useState(false);
   const [verification, setVerification] = useState<Verification | null>(null);
+  const [mismatchError, setMismatchError] = useState("");
   const verificationRequestInFlight = useRef(false);
   const previousVerificationStatus = useRef<string | undefined>(undefined);
   const [successMessage, setSuccessMessage] = useState("");
@@ -252,6 +265,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [legalConsent, setLegalConsent] = useState(false);
   const [resumeAfterConsent, setResumeAfterConsent] = useState(2);
   const consentKey = `hosted-checkout-consent:v1:${token}`;
+  const accessModeKey = `hosted-checkout-access-mode:v1:${token}`;
   const clearSavedConsent = () => {
     try {
       window.sessionStorage.removeItem(consentKey);
@@ -262,7 +276,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const [showAccountChoice, setShowAccountChoice] = useState(false);
   const [checkoutAccessMode, setCheckoutAccessMode] = useState<
     "account" | "guest" | null
-  >(null);
+  >(() => {
+    try {
+      const saved = window.sessionStorage.getItem(accessModeKey);
+      return saved === "account" || saved === "guest" ? saved : null;
+    } catch {
+      return null;
+    }
+  });
   const [pendingSignIn, setPendingSignIn] = useState(false);
   const [copiedCheckoutLink, setCopiedCheckoutLink] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -363,6 +384,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         if (value.order.documentReviewStatus) {
           setVerification({
             status: value.order.documentReviewStatus,
+            ...(value.order.mismatchedFields ? { mismatchedFields: value.order.mismatchedFields } : {}),
           });
         } else if (passport?.passportVerificationStatus) {
           setVerification({
@@ -372,7 +394,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         }
         awaitingVerificationAdvance.current =
           value.order.travelerComplete &&
-          ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+          ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
             value.order.documentReviewStatus ?? "",
           );
         const resumeStep =
@@ -418,10 +440,16 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
   const update = (key: keyof Traveler, value: string) => {
     setTraveler((v) => ({ ...v, [key]: value }));
     setFieldErrors((current) => ({ ...current, [key]: undefined }));
+    setMismatchError("");
   };
 
   const advanceAfterAccountChoice = (mode: "account" | "guest") => {
     setCheckoutAccessMode(mode);
+    try {
+      window.sessionStorage.setItem(accessModeKey, mode);
+    } catch {
+      /* Checkout continues when browser storage is unavailable. */
+    }
     setShowAccountChoice(false);
     stepPush(session?.order.orderType === "TOPUP" ? 4 : resumeAfterConsent);
   };
@@ -586,6 +614,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       { method: "POST", body: "{}" },
     );
     setVerification(result);
+    setMismatchError("");
     if (result.status === "CORRECTION_REQUIRED") {
       const mismatched = new Set(result.mismatchedFields ?? []);
       setFieldErrors({
@@ -646,6 +675,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
             order: {
               ...s.order,
               documentReviewStatus: result.status,
+              mismatchedFields: result.mismatchedFields,
               ...(result.passportExtraction !== undefined
                 ? { passportExtraction: result.passportExtraction }
                 : {}),
@@ -685,6 +715,33 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         setVerifying(false);
       }
     });
+
+  const confirmPassportDetails = async () => {
+    if (!session) return;
+    setBusy(true);
+    setMismatchError("");
+    try {
+      const result = await api<Verification>(
+        `/partner-checkout/${token}/confirm-passport-details`,
+        { method: "POST", body: "{}" },
+      );
+      setVerification(result);
+      setSession((current) => current && {
+        ...current,
+        order: { ...current.order, documentReviewStatus: result.status },
+      });
+      setFieldErrors({});
+      awaitingVerificationAdvance.current = true;
+    } catch (cause) {
+      setMismatchError(
+        (cause as { status?: number }).status === 409
+          ? "Your details changed since the last check. Save them and compare again before requesting review."
+          : "We couldn't send your details for review. Please try again; your saved details are still here.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const saveDocuments = () =>
     run(async () => {
@@ -801,7 +858,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
     });
 
   useDocumentRefresh(
-    [2, 3].includes(step) &&
+    ([2, 3].includes(step) || verification?.status === "MANUAL_REVIEW") &&
       !busy &&
       !verifying &&
       ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
@@ -813,6 +870,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       setSession(refreshed);
       setVerification({
         status: refreshed.order.documentReviewStatus ?? "NOT_STARTED",
+        ...(refreshed.order.mismatchedFields ? { mismatchedFields: refreshed.order.mismatchedFields } : {}),
       });
       setDocumentError("");
     },
@@ -913,9 +971,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       ["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(current)
     ) {
       if (current === "CORRECTION_REQUIRED") {
-        setDocumentAttentionMessage(
-          "We couldn't automatically match some details with your uploaded passport. Please check the highlighted fields.",
-        );
+        setDocumentAttentionMessage("");
       } else setDocumentAttentionMessage("");
     }
     if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
@@ -1320,6 +1376,34 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       </main>
     );
 
+  if (
+    session?.order.orderType !== "TOPUP" &&
+    session?.order.travelerComplete &&
+    effectiveVerificationStatus === "MANUAL_REVIEW" &&
+    session.order.status === "DRAFT"
+  )
+    return (
+      <main className="checkout-page manual-review-page">
+        <div className="checkout-shell">
+          <div className="manual-review-page-top">
+            <span>Checkout via {session.partner?.name ?? "Visa Compass partner"}</span>
+            <span>Order #{session.order.orderNumber}</span>
+          </div>
+          <ManualReviewTracking
+            traveler={session.order.traveler ?? traveler}
+            orderNumber={session.order.orderNumber}
+            failureCode={session.order.passportExtraction?.failureCode}
+          />
+          {checkoutAccessMode === "account" && isSignedIn === true ? (
+            <a className="button secondary" href={`/account/orders/${session.order.id}`}>
+              View order in My Orders
+            </a>
+          ) : null}
+          {documentError ? <p className="manual-review-refresh-error" role="status">{documentError}</p> : null}
+        </div>
+      </main>
+    );
+
   const plan = session!.order.plan;
   const isTopUp = session!.order.orderType === "TOPUP";
   const showPaymentChoice = step === 4 && !isTopUp && !payment && !outcome;
@@ -1606,8 +1690,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       orderNumber={outcome.orderNumber}
                       amountNpr={session?.order.amountNpr ?? 0}
                       status={outcome.status}
-                      trackingHref={checkoutAccessMode === "account" && session ? session.order.orderType === "TOPUP" ? "/account/esims" : `/account/orders/${session.order.id}` : `/partner-checkout/${token}`}
-                      trackingLabel={session?.order.orderType === "TOPUP" ? checkoutAccessMode === "account" ? "View my eSIM" : "Track this recharge" : checkoutAccessMode === "account" ? "View order" : "Track this order"}
+                      trackingHref={checkoutAccessMode === "account" && isSignedIn === true && session ? session.order.orderType === "TOPUP" ? "/account/esims" : `/account/orders/${session.order.id}` : `/partner-checkout/${token}`}
+                      trackingLabel={session?.order.orderType === "TOPUP" ? checkoutAccessMode === "account" && isSignedIn === true ? "View my eSIM" : "Track this recharge" : checkoutAccessMode === "account" && isSignedIn === true ? "View order" : "Track this order"}
                       deliveryNote="Your installation QR is ready and is being sent to the email entered at checkout. Your partner can also help if you need it."
                       pendingDeliveryNote="We’ll email the installation QR to the address entered at checkout as soon as your eSIM is ready."
                     />
@@ -1969,7 +2053,46 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       every detail, complete the remaining fields, and use
                       two-letter country codes.
                     </p>
-                    <div className="form-grid">
+                    {effectiveVerificationStatus === "CORRECTION_REQUIRED" && (
+                      <div className="passport-mismatch" role="region" aria-labelledby="hosted-passport-mismatch-title">
+                        <div className="passport-check warning" role="status">
+                          <AlertTriangle size={20} aria-hidden="true" />
+                          <span>
+                            <b id="hosted-passport-mismatch-title">Check the details that differ</b>
+                            <small>Compare what we read from your passport with what you entered.</small>
+                          </span>
+                        </div>
+                        <div className="passport-comparison" role="list" aria-label="Passport differences">
+                          {(verification?.mismatchedFields ?? session!.order.mismatchedFields ?? []).map((field) => (
+                            <div className="passport-comparison-row" role="listitem" key={field}>
+                              <b>{mismatchLabels[field]}</b>
+                              <span><small>We read</small><strong>{session!.order.passportExtraction?.fields?.[field] || "Not clear"}</strong></span>
+                              <span>
+                                <small>You entered</small>
+                                <input
+                                  aria-label={`Correct ${mismatchLabels[field]}`}
+                                  value={traveler[field]}
+                                  onChange={(event) => update(field, event.target.value)}
+                                />
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="passport-mismatch-actions">
+                          <button type="button" className="button" disabled={busy} onClick={() => void saveTraveler()}>Save corrected details</button>
+                          <button
+                            type="button"
+                            className="button secondary"
+                            disabled={busy || (verification?.mismatchedFields ?? session!.order.mismatchedFields ?? []).some((field) => traveler[field] !== session!.order.traveler?.[field])}
+                            onClick={() => void confirmPassportDetails()}
+                          >
+                            I checked—my details are correct
+                          </button>
+                        </div>
+                        {mismatchError ? <p className="passport-mismatch-error" role="alert">{mismatchError}</p> : null}
+                      </div>
+                    )}
+                    <div className="form-grid" hidden={effectiveVerificationStatus === "CORRECTION_REQUIRED"}>
                       <Field label="Title">
                         <select
                           value={traveler.title}
@@ -2126,14 +2249,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       <option value="AE">United Arab Emirates</option>
                       <option value="JP">Japan</option>
                     </datalist>
-                    <Nav
+                    {effectiveVerificationStatus !== "CORRECTION_REQUIRED" && <Nav
                       back={() => {
                         setEditingVerifiedDocuments(true);
                         stepJump(2);
                       }}
                       busy={busy}
                       next={saveTraveler}
-                    />
+                    />}
                     {(Boolean(documentMessage) ||
                       [
                         "OCR_PENDING",

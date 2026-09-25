@@ -2939,6 +2939,24 @@ export class PartnerService {
         passportExtraction: this.extractionPayload(
           "passportExtraction" in order ? order.passportExtraction : null,
         ),
+        ...(order.documentReviewStatus === "CORRECTION_REQUIRED" &&
+        Array.isArray(order.passportExtraction?.lastMismatchFields)
+          ? {
+              mismatchedFields: order.passportExtraction.lastMismatchFields.filter(
+                (field): field is string =>
+                  typeof field === "string" &&
+                  [
+                    "firstName",
+                    "middleName",
+                    "surname",
+                    "dateOfBirth",
+                    "nationality",
+                    "passportNumber",
+                    "passportExpiryDate",
+                  ].includes(field),
+              ),
+            }
+          : {}),
         documents: order.documents,
         documentReviewStatus: order.documentReviewStatus,
         replacementReasons: Object.fromEntries(
@@ -3346,9 +3364,22 @@ export class PartnerService {
       });
     const updated = await this.applicationOrders.verifyPassport(order.id, null);
     return {
+      ...(updated.passportVerification ?? {}),
       status: updated.documentReviewStatus ?? "NOT_STARTED",
       passportExtraction: updated.passportExtraction ?? null,
+    };
+  }
+
+  async confirmHostedPassportDetails(token: string) {
+    const order = await this.sessionOrder(token, [OrderStatus.DRAFT], true);
+    const updated = await this.applicationOrders.confirmPassportDetails(
+      order.id,
+      null,
+    );
+    return {
       ...(updated.passportVerification ?? {}),
+      status: updated.documentReviewStatus ?? "NOT_STARTED",
+      passportExtraction: updated.passportExtraction ?? null,
     };
   }
 
