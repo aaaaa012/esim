@@ -542,6 +542,52 @@
 .date-picker-footer button {
   padding: 7px 10px;
 }
+.date-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: flex-end;
+  padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+  background: rgba(3, 10, 20, 0.58);
+}
+.date-picker-mobile-panel {
+  width: 100%;
+  max-height: min(78dvh, 500px);
+  overflow-y: auto;
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.2);
+}
+.date-picker-mobile-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px 0;
+  background: var(--surface);
+  color: var(--text);
+}
+.date-picker-mobile-heading button {
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 700;
+}
+.date-picker-mobile-panel .date-picker-popover {
+  position: static;
+  width: 100%;
+  max-width: none;
+  padding-top: 8px;
+  border: 0;
+  box-shadow: none;
+}
 
 /* ---------- Step tabs ---------- */
 
@@ -2382,15 +2428,6 @@
   .date-picker,
   .date-picker-trigger {
     min-width: 0;
-  }
-  .date-picker-popover {
-    position: fixed;
-    inset: max(12px, env(safe-area-inset-top)) 12px auto;
-    width: auto;
-    max-width: none;
-    max-height: min(72dvh, 460px);
-    overflow-y: auto;
-    border-radius: 18px;
   }
   .date-picker-nav > div {
     grid-template-columns: minmax(0, 1fr) minmax(72px, 86px);
