@@ -150,7 +150,9 @@ export class GuestOrdersController {
     return ownerId ? this.orders.view(id, ownerId) : this.orders.guestView(id);
   }
 
-  @Patch(":id/traveler") async traveler(
+  @Patch(":id/traveler")
+  @UseGuards(GuestLookupRateLimitGuard)
+  async traveler(
     @Param("id") id: string,
     @Body() body: Record<string, unknown>,
     @Headers("x-guest-order-token") token: string,
@@ -302,20 +304,22 @@ export class GuestOrdersController {
     const startedAt = Date.now();
     try {
       const normalizedMobile = normalizeMsisdn(body.mobile ?? "");
+      const iccid = (body.mobile ?? "").trim().replace(/[\s()./-]/g, "");
       if (
         !/^[+0-9][0-9\s()./-]*$/.test((body.mobile ?? "").trim()) ||
-        !/^[0-9]{6,15}$/.test(normalizedMobile)
+        (!/^[0-9]{6,15}$/.test(normalizedMobile) &&
+          !/^\d{16,22}$/.test(iccid))
       )
         throw new BadRequestException(
-          "Enter a valid eSIM mobile number (MSISDN) with 6 to 15 digits",
+          "Enter a valid order contact, eSIM mobile number, or ICCID",
         );
-      const subscriber = await this.orders.resolveSubscriber(body.mobile);
+      const subscriber = await this.orders.resolveSubscriberForRechargeLookup(body.mobile);
       if (subscriber) {
         if (!subscriber.inventory)
           return {
             verificationRequested: true,
             message:
-              "If this eSIM is eligible, a recharge link will be sent to its original purchase email.",
+              "If an eSIM is eligible, a recharge link will be sent to its original purchase email.",
           };
         const target = await this.recharges.target(subscriber.inventory.id);
         const lookupToken = this.access.createLookupToken(
@@ -351,7 +355,7 @@ export class GuestOrdersController {
       return {
         verificationRequested: true,
         message:
-          "If this MSISDN belongs to an eligible Visa Compass eSIM, a secure recharge link has been sent to the original purchase email.",
+        "If this number matches an eligible Visa Compass eSIM, a secure recharge link has been sent to the original purchase email.",
       };
     } catch (error) {
       await this.recordTopUpEvent(

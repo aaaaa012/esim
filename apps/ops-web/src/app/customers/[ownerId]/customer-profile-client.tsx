@@ -104,6 +104,7 @@ type Profile = {
       customerCode: string;
       email: string;
       phone?: string | null;
+      orderContact?: string | null;
       source: string;
       status: string;
       createdAt: string;
@@ -394,6 +395,17 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
               <p className="text-sm text-muted-foreground">
                 {profile.identity?.customer.email ?? profile.email}
               </p>
+              <p className="mt-1 text-sm">
+                <span className="text-muted-foreground">Order contact: </span>
+                {profile.identity?.customer.orderContact ?? "Not provided"}
+              </p>
+              {profile.identity?.customer.phone &&
+              profile.identity.customer.phone !== profile.identity.customer.orderContact ? (
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Account phone: </span>
+                  {profile.identity.customer.phone}
+                </p>
+              ) : null}
               {profile.identity?.loginAccount ? (
                 <Button asChild variant="outline" size="sm" className="mt-2">
                   <Link href={`/users/${profile.identity.loginAccount.id}`}>

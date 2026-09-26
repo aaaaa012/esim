@@ -13,9 +13,9 @@ import { QueueService } from "../jobs/queue.service.js";
 type Bucket = { tokens: number; lastRefill: number };
 
 /**
- * Aggressive rate limiter for the login-free top-up lookup endpoint.
+ * Aggressive rate limiter for login-free number lookups and traveller saves.
  *
- * The endpoint is an oracle for whether an MSISDN has an existing subscriber,
+ * These endpoints can reveal whether a number is already linked to an eSIM,
  * so it is throttled per (IP, normalized number) to slow number enumeration
  * while still tolerating legitimate retries. Keys are derived from a SHA-256
  * hash of the normalized number rather than the raw number to avoid holding

@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { normalizeNepaliContact } from "../../common/nepali-contact.util.js";
 import { withPostgresTransactionRetry } from "../../infrastructure/postgres-transaction-retry.js";
 import type { DemoOrder } from "./orders.service.js";
 import {
@@ -197,6 +198,7 @@ export class OrdersPersistenceService {
         totalAmountNpr: Number(row.totalAmount),
         pricingSnapshot: row.pricingSnapshot as object,
         compatibilityAcceptedAt: row.compatibilityAcceptedAt.toISOString(),
+        contactRuleVersion: row.contactRuleVersion,
         ...(traveler ? { traveler } : {}),
         ...(passportExtraction ? { passportExtraction } : {}),
         documents: row.documents.map((doc) => ({
@@ -1113,6 +1115,7 @@ export class OrdersPersistenceService {
       employerOrBusinessName: traveler.employerOrBusinessName ?? null,
       email: traveler.email,
       mobile: traveler.mobile,
+      contactNumberNormalized: normalizeNepaliContact(traveler.mobile),
       passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber),
       passportNumberHash: this.crypto.blindIndex(traveler.passportNumber),
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),

@@ -18,22 +18,28 @@ describe("customer recharge journey", () => {
     window.history.replaceState({}, "", "/");
   });
 
-  it("uses a uniform public response and sends no subscriber data before email verification", async () => {
+  it.each(["+9779800000000", "8944000000009876"])(
+    "uses a uniform public response for %s and reveals nothing before email verification",
+    async (identifier) => {
     const request = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({ verificationRequested: true }),
     );
     render(<TopupLookup />);
-    fireEvent.change(screen.getByLabelText("eSIM mobile number"), {
-      target: { value: "+9779800000000" },
+    fireEvent.change(screen.getByLabelText("Order contact, eSIM number, or ICCID"), {
+      target: { value: identifier },
     });
     fireEvent.click(screen.getByRole("button", { name: "Find recharge plans" }));
     expect(await screen.findByText(/check the original purchase email if the number matched/i)).toBeTruthy();
     expect(screen.queryByText(/eligible for recharge/i)).toBeNull();
     expect(request).toHaveBeenCalledWith(
       expect.stringContaining("/guest/orders/topup-lookup"),
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ mobile: identifier }),
+      }),
     );
-  });
+    },
+  );
 
   it("verifies the signed email link before revealing and selecting a recharge plan", async () => {
     window.history.replaceState({}, "", "/recharge#topup=signed-token");

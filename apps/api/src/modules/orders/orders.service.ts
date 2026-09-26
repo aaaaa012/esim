@@ -8,6 +8,7 @@ import {
   OnModuleInit,
 } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import {
   DocumentStatus,
   DocumentType,
@@ -45,6 +46,7 @@ import { QrPdfService } from "../notification/qr-pdf.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { MetricsService } from "../../observability/metrics.service.js";
 import { normalizeMsisdn, msisdnVariants } from "../../common/msisdn.util.js";
+import { normalizeNepaliContact } from "../../common/nepali-contact.util.js";
 import {
   canonicalIdentity,
   passportComparisonDiagnostics,
@@ -87,6 +89,7 @@ export type DemoOrder = {
   checkoutRequestHash?: string | undefined;
   orderNumber: string;
   status: OrderStatus;
+  contactRuleVersion?: number;
   version: number;
   plan: CatalogPlan;
   totalAmountNpr: number;
@@ -376,6 +379,9 @@ export class OrdersService implements OnModuleInit {
       orderBy: { createdAt: "desc" },
     });
     const latestTraveler = orders.find((order) => order.traveler)?.traveler;
+    const latestFirstPurchaseTraveler = orders.find(
+      (order) => order.orderType === "INITIAL_PURCHASE" && order.traveler,
+    )?.traveler;
     const profileUpdates = await this.prisma.auditLog.findMany({
       where: {
         entity: "Customer",
@@ -400,6 +406,7 @@ export class OrdersService implements OnModuleInit {
           customerCode: customer.customerCode,
           email: displayEmail,
           phone: customer.phone,
+          orderContact: latestFirstPurchaseTraveler?.mobile ?? null,
           source: customer.source,
           status: customer.status,
           createdAt: customer.createdAt.toISOString(),
@@ -597,6 +604,7 @@ export class OrdersService implements OnModuleInit {
         : {}),
       orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`,
       status: OrderStatus.DRAFT,
+      contactRuleVersion: 1,
       version: 0,
       plan,
       totalAmountNpr: plan.sellingPriceNpr,
@@ -891,6 +899,21 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id, ownerId ?? undefined);
     if (order.status !== OrderStatus.DRAFT)
       throw new BadRequestException("Submitted order is immutable");
+    const submittedChangeKind = travelerChangeKind(order.traveler, traveler);
+    if (
+      submittedChangeKind !== "unchanged" &&
+      order.purchaseType !== "TOPUP" &&
+      order.contactRuleVersion !== 0
+    ) {
+      const contact = normalizeNepaliContact(traveler.mobile);
+      if (!contact)
+        throw new ApiException({
+          code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
+          message: "Enter a Nepal mobile number, for example +977 98XXXXXXXX",
+        });
+      await this.assertNewEsimContactAvailable(order, contact);
+      traveler = { ...traveler, mobile: `+${contact}` };
+    }
     const changeKind = travelerChangeKind(order.traveler, traveler);
     const previousFingerprint = order.traveler
       ? this.travelerIdentityFingerprint(order.traveler)
@@ -948,6 +971,107 @@ export class OrdersService implements OnModuleInit {
         data: { confirmedAt: new Date() },
       });
     return this.redact(order);
+  }
+
+  private async assertNewEsimContactAvailable(
+    order: DemoOrder,
+    contact: string,
+  ) {
+    const reservedStatuses = new Set<OrderStatus>([
+      OrderStatus.PAYMENT_PENDING,
+      OrderStatus.PAYMENT_CONFIRMED,
+      OrderStatus.PAYMENT_REVIEW_REQUIRED,
+      OrderStatus.REVIEW_PENDING,
+      OrderStatus.APPROVED,
+      OrderStatus.PROVISIONING,
+      OrderStatus.QR_READY,
+      OrderStatus.COMPLETED,
+      OrderStatus.ACTIVATION_ATTENTION,
+      OrderStatus.PROVISIONING_FAILED,
+    ]);
+    const activeInventory = new Set(["RESERVED", "ASSIGNED", "ACTIVATED"]);
+    const conflicts = (candidate: {
+      id: string;
+      status: OrderStatus;
+      mobile?: string | null | undefined;
+      ownerId?: string | null | undefined;
+      inventoryStatus?: string | null | undefined;
+    }) => {
+      if (candidate.id === order.id) return false;
+      const active = candidate.inventoryStatus
+        ? activeInventory.has(candidate.inventoryStatus)
+        : reservedStatuses.has(candidate.status);
+      if (!active) return false;
+      return (
+        normalizeNepaliContact(candidate.mobile ?? "") === contact ||
+        (Boolean(order.ownerId) && candidate.ownerId === order.ownerId)
+      );
+    };
+    const localConflict = [...this.orders.values()].some((candidate) =>
+      conflicts({
+        id: candidate.id,
+        status: candidate.status,
+        mobile: candidate.traveler?.mobile,
+        ownerId: candidate.ownerId,
+        inventoryStatus: candidate.assignment?.inventoryId
+          ? "ASSIGNED"
+          : null,
+      }),
+    );
+    if (localConflict)
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+        message: "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+        status: 409,
+      });
+    if (!this.prisma.enabled) return;
+    const candidates = await this.prisma.order.findMany({
+      where: {
+        id: { not: order.id },
+        orderType: "INITIAL_PURCHASE",
+        AND: [
+          {
+            OR: [
+              { status: { in: [...reservedStatuses] } },
+              { customerEsim: { isNot: null } },
+            ],
+          },
+          {
+            OR: [
+              { traveler: { is: { contactNumberNormalized: contact } } },
+              ...(order.ownerId
+                ? [{ customer: { is: { user: { is: { clerkId: order.ownerId } } } } }]
+                : []),
+            ],
+          },
+        ],
+      },
+      select: {
+        id: true,
+        status: true,
+        traveler: { select: { mobile: true } },
+        customer: { select: { user: { select: { clerkId: true } } } },
+        customerEsim: {
+          select: { inventory: { select: { status: true } } },
+        },
+      },
+    });
+    if (
+      candidates.some((candidate) =>
+        conflicts({
+          id: candidate.id,
+          status: candidate.status as OrderStatus,
+          mobile: candidate.traveler?.mobile,
+          ownerId: candidate.customer.user?.clerkId,
+          inventoryStatus: candidate.customerEsim?.inventory.status,
+        }),
+      )
+    )
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+        message: "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+        status: 409,
+      });
   }
   async addDocument(
     id: string,
@@ -1657,6 +1781,15 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException(
         "Traveler, passport, and ticket are required",
       );
+    if (order.contactRuleVersion !== 0) {
+      const contact = normalizeNepaliContact(order.traveler.mobile);
+      if (!contact)
+        throw new ApiException({
+          code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
+          message: "Enter a valid Nepal contact number before payment",
+        });
+      await this.assertNewEsimContactAvailable(order, contact);
+    }
     await Promise.all(
       required.map((document) =>
         this.storage.verifyDocument(document.privateAssetId),
@@ -1682,6 +1815,113 @@ export class OrdersService implements OnModuleInit {
             ? "Passport verification must complete before payment"
             : "Passport verification is required before payment",
       });
+    if (
+      this.prisma.enabled &&
+      order.contactRuleVersion !== 0
+    )
+      await this.claimNewEsimContact(order);
+  }
+
+  private async claimNewEsimContact(order: DemoOrder) {
+    if (!this.prisma.enabled || order.purchaseType === "TOPUP") return;
+    const contact = normalizeNepaliContact(order.traveler?.mobile ?? "");
+    if (!contact)
+      throw new ApiException({
+        code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
+        message: "Enter a valid Nepal contact number",
+      });
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          const persisted = await tx.order.findUniqueOrThrow({
+            where: { id: order.id },
+            select: {
+              customerId: true,
+              customer: { select: { user: { select: { clerkId: true } } } },
+            },
+          });
+          const accountCustomerId =
+            persisted.customer.user?.clerkId &&
+            !persisted.customer.user.clerkId.startsWith("guest-")
+              ? persisted.customerId
+              : null;
+          const existing = await tx.esimContactClaim.findUnique({
+            where: { contactNumber: contact },
+          });
+          const accountClaim = accountCustomerId
+            ? await tx.esimContactClaim.findUnique({
+                where: { customerId: accountCustomerId },
+              })
+            : null;
+          const checkedClaims = new Set<string>();
+          for (const claimed of [existing, accountClaim]) {
+            if (!claimed || claimed.orderId === order.id) continue;
+            if (checkedClaims.has(claimed.contactNumber)) continue;
+            checkedClaims.add(claimed.contactNumber);
+            const previous = await tx.order.findUnique({
+              where: { id: claimed.orderId },
+              select: {
+                status: true,
+                customerEsim: {
+                  select: { inventory: { select: { status: true } } },
+                },
+              },
+            });
+            const inventoryStatus = previous?.customerEsim?.inventory.status;
+            const terminal = previous
+              ? ([
+                  OrderStatus.CANCELLED,
+                  OrderStatus.REFUNDED,
+                  OrderStatus.PAYMENT_FAILED,
+                ] as string[]).includes(previous.status)
+              : false;
+            const released =
+              !previous ||
+              (!["RESERVED", "ASSIGNED", "ACTIVATED"].includes(
+                inventoryStatus ?? "",
+              ) &&
+                (terminal ||
+                  ["EXPIRED", "TERMINATED"].includes(inventoryStatus ?? "")));
+            if (!released)
+              throw new ApiException({
+                code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+                message: "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+                status: 409,
+              });
+            await tx.esimContactClaim.delete({
+              where: { contactNumber: claimed.contactNumber },
+            });
+          }
+          if (existing?.orderId === order.id) {
+            if (accountCustomerId && existing.customerId !== accountCustomerId)
+              await tx.esimContactClaim.update({
+                where: { contactNumber: contact },
+                data: { customerId: accountCustomerId },
+              });
+            return;
+          }
+          await tx.esimContactClaim.create({
+            data: {
+              contactNumber: contact,
+              orderId: order.id,
+              customerId: accountCustomerId,
+            },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        ["P2002", "P2034"].includes(error.code)
+      )
+        throw new ApiException({
+          code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+          message: "This contact number or account is already linked to an active eSIM. Recharge it instead of buying another.",
+          status: 409,
+        });
+      throw error;
+    }
   }
   async confirmPayment(id: string, reference: string, transactionId?: string) {
     if (this.prisma.enabled)
@@ -2195,6 +2435,76 @@ export class OrdersService implements OnModuleInit {
     return this.priorCompletedOrderFor(mobile, allowReadyToInstall);
   }
 
+  /** Public discovery accepts purchase contact or ICCID; fulfillment still uses the eSIM MSISDN. */
+  async resolveSubscriberForRechargeLookup(input: string) {
+    const byEsimNumber = await this.resolveSubscriber(input);
+    if (byEsimNumber) return byEsimNumber;
+    const contact = normalizeNepaliContact(input);
+    const iccid = input.trim().replace(/[\s()./-]/g, "");
+    const validIccid = /^\d{16,22}$/.test(iccid);
+    if (!contact && !validIccid) return null;
+    if (!this.prisma.enabled) return null;
+    const claim = contact
+      ? await this.prisma.esimContactClaim.findUnique({
+          where: { contactNumber: contact },
+          select: { orderId: true },
+        })
+      : null;
+    const candidates = await this.prisma.order.findMany({
+      where: {
+        ...(claim ? { id: claim.orderId } : {}),
+        orderType: "INITIAL_PURCHASE",
+        status: OrderStatus.COMPLETED,
+        OR: [
+          ...(contact
+            ? [{ traveler: { is: { contactNumberNormalized: contact } } }]
+            : []),
+          ...(validIccid
+            ? [{ customerEsim: { is: { inventory: { is: { iccid } } } } }]
+            : []),
+        ],
+        customerEsim: {
+          is: { inventory: { is: { status: { in: ["ASSIGNED", "ACTIVATED"] } } } },
+        },
+      },
+      include: {
+        plan: { include: { country: true } },
+        traveler: true,
+        customerEsim: { include: { inventory: true } },
+      },
+    });
+    const matches = candidates.filter(
+      (candidate) =>
+        (contact &&
+          normalizeNepaliContact(candidate.traveler?.mobile ?? "") ===
+            contact) ||
+        (validIccid && candidate.customerEsim?.inventory.iccid === iccid),
+    );
+    // Legacy duplicate contacts must never silently select the wrong eSIM.
+    if (matches.length !== 1) return null;
+    const original = matches[0]!;
+    if (!original.traveler || !original.customerEsim) return null;
+    return {
+      orderId: original.id,
+      customerId: original.customerId,
+      planCountryCode: original.plan.country.isoCode,
+      traveler: {
+        firstName: original.traveler.firstName,
+        surname: original.traveler.surname,
+        email: original.traveler.email,
+        mobile: original.traveler.mobile,
+        city: original.traveler.city,
+        countryOfResidence: original.traveler.countryOfResidence,
+      },
+      inventory: {
+        id: original.customerEsim.inventory.id,
+        eid: original.customerEsim.inventory.eid,
+        iccid: original.customerEsim.inventory.iccid,
+        msisdn: original.customerEsim.inventory.msisdn,
+      },
+    };
+  }
+
   /**
    * Validates a recharge against the provider before money is collected.
    * The supplied identifier must match the eSIM MSISDN. Transatel receives the
@@ -2645,6 +2955,11 @@ export class OrdersService implements OnModuleInit {
       );
       return;
     }
+    if (
+      order.purchaseType !== "TOPUP" &&
+      order.contactRuleVersion !== 0
+    )
+      await this.claimNewEsimContact(order);
     const target = await this.provisioningTarget(order);
     const reuseExisting = Boolean(target);
     let profile: { id: string; eid: string; iccid: string } | undefined;

@@ -50,7 +50,7 @@ export default function RechargeClient() {
           <h1>Recharge the right eSIM.</h1>
           <p>
             Choose an eSIM linked to your account, or securely find an existing
-            Visa Compass eSIM using the mobile number from its delivery email.
+            Visa Compass eSIM using your order contact number, eSIM mobile number, or ICCID.
           </p>
         </div>
       </section>

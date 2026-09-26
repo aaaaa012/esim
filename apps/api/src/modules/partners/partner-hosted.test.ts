@@ -62,6 +62,30 @@ function order(documents: Array<Record<string, unknown>>) {
 }
 
 describe("partner hosted checkout", () => {
+  it("prevents a new hosted traveller from reusing another active eSIM contact", async () => {
+    const instance = service({
+      order: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            status: "COMPLETED",
+            traveler: { mobile: "+977 9800000000" },
+            customerEsim: { inventory: { status: "ACTIVATED" } },
+          },
+        ]),
+      },
+    });
+    const validate = instance as unknown as {
+      validateNewPartnerContact(
+        orderId: string,
+        traveler: { mobile: string },
+      ): Promise<unknown>;
+    };
+    await expect(
+      validate.validateNewPartnerContact("new-order", {
+        mobile: "9779800000000",
+      }),
+    ).rejects.toThrow(/already has an active eSIM/i);
+  });
   it("resumes the existing active document session for the same external order", async () => {
     const existing = {
       id: "verification-1",

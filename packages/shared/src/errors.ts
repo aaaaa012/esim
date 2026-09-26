@@ -42,6 +42,8 @@ export const ApiErrorCode = {
   TRAVELER_REVIEW_LOCKED: "TRAVELER_REVIEW_LOCKED",
   COMPATIBILITY_REQUIRED: "COMPATIBILITY_REQUIRED",
   TRAVELER_REQUIRED: "TRAVELER_REQUIRED",
+  NEPAL_CONTACT_REQUIRED: "NEPAL_CONTACT_REQUIRED",
+  ESIM_CONTACT_ALREADY_LINKED: "ESIM_CONTACT_ALREADY_LINKED",
   DOCUMENTS_REQUIRED: "DOCUMENTS_REQUIRED",
   DOCUMENT_NOT_FOUND: "DOCUMENT_NOT_FOUND",
   DOCUMENT_STORAGE_UNAVAILABLE: "DOCUMENT_STORAGE_UNAVAILABLE",
@@ -113,6 +115,10 @@ export const apiErrorMessage = (
       return "Please confirm your device is eSIM-compatible to continue.";
     case ApiErrorCode.TRAVELER_REQUIRED:
       return "Traveller details are required before payment.";
+    case ApiErrorCode.NEPAL_CONTACT_REQUIRED:
+      return "Enter a Nepal mobile contact number, such as +977 98XXXXXXXX.";
+    case ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED:
+      return "This contact number or account already has an active eSIM. Recharge it instead of buying another.";
     case ApiErrorCode.DOCUMENTS_REQUIRED:
       return "Passport and travel ticket are required before payment.";
     case ApiErrorCode.DOCUMENT_REQUIRED:

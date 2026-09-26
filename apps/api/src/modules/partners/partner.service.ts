@@ -23,6 +23,7 @@ import {
 } from "@prisma/client";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
+  ApiErrorCode,
   declarePaymentRetry,
   documentTypeLabel,
   DocumentType as SharedDocumentType,
@@ -32,6 +33,7 @@ import {
   type TravelerInput,
 } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { normalizeNepaliContact } from "../../common/nepali-contact.util.js";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import { ApiException } from "../../common/api-error.js";
@@ -2475,6 +2477,12 @@ export class PartnerService {
     const order = await this.mutableOrder(partnerId, orderId, [
       OrderStatus.DRAFT,
     ]);
+    if (
+      order.orderType === "INITIAL_PURCHASE" &&
+      order.contactRuleVersion === 1
+    ) {
+      traveler = await this.validateNewPartnerContact(order.id, traveler);
+    }
     const data = {
       title: traveler.title,
       firstName: traveler.firstName,
@@ -2487,6 +2495,7 @@ export class PartnerService {
       employerOrBusinessName: traveler.employerOrBusinessName ?? null,
       email: traveler.email,
       mobile: traveler.mobile,
+      contactNumberNormalized: normalizeNepaliContact(traveler.mobile),
       passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber),
       passportNumberHash: this.crypto.blindIndex(traveler.passportNumber),
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),
@@ -3089,6 +3098,12 @@ export class PartnerService {
         status: 409,
       });
     if (changeKind === "unchanged") return this.hostedCheckout(token);
+    if (
+      order.orderType === "INITIAL_PURCHASE" &&
+      order.contactRuleVersion === 1
+    ) {
+      traveler = await this.validateNewPartnerContact(order.id, traveler);
+    }
     const reverifyApprovedIdentity =
       changeKind === "identity" && order.documentReviewStatus === "VERIFIED";
     const retryExistingPassport =
@@ -3166,6 +3181,71 @@ export class PartnerService {
       }
     });
     return this.hostedCheckout(token);
+  }
+
+  private async validateNewPartnerContact(
+    orderId: string,
+    traveler: TravelerInput,
+  ): Promise<TravelerInput> {
+    const contact = normalizeNepaliContact(traveler.mobile);
+    if (!contact)
+      throw new ApiException({
+        code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
+        message: "Enter a Nepal mobile number, for example +977 98XXXXXXXX",
+      });
+    const candidates = await this.prisma.order.findMany({
+      where: {
+        id: { not: orderId },
+        orderType: "INITIAL_PURCHASE",
+        traveler: { is: { contactNumberNormalized: contact } },
+        OR: [
+          {
+            status: {
+              in: [
+                "PAYMENT_PENDING",
+                "PAYMENT_CONFIRMED",
+                "PAYMENT_REVIEW_REQUIRED",
+                "REVIEW_PENDING",
+                "APPROVED",
+                "PROVISIONING",
+                "QR_READY",
+                "COMPLETED",
+                "ACTIVATION_ATTENTION",
+                "PROVISIONING_FAILED",
+              ],
+            },
+          },
+          { customerEsim: { isNot: null } },
+        ],
+      },
+      select: {
+        status: true,
+        traveler: { select: { mobile: true } },
+        customerEsim: {
+          select: { inventory: { select: { status: true } } },
+        },
+      },
+    });
+    if (
+      candidates.some((candidate) => {
+        const inventory = candidate.customerEsim?.inventory.status;
+        const active = inventory
+          ? ["RESERVED", "ASSIGNED", "ACTIVATED"].includes(inventory)
+          : !["CANCELLED", "REFUNDED", "PAYMENT_FAILED"].includes(
+              candidate.status,
+            );
+        return (
+          active &&
+          normalizeNepaliContact(candidate.traveler?.mobile ?? "") === contact
+        );
+      })
+    )
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+        message: "This contact number already has an active eSIM. Recharge it instead of buying another.",
+        status: 409,
+      });
+    return { ...traveler, mobile: `+${contact}` };
   }
 
   async addHostedDocument(
@@ -4770,6 +4850,7 @@ export class PartnerService {
       employerOrBusinessName: traveler.employerOrBusinessName ?? null,
       email: traveler.email,
       mobile: traveler.mobile,
+      contactNumberNormalized: normalizeNepaliContact(traveler.mobile),
       passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber),
       passportNumberHash: this.crypto.blindIndex(traveler.passportNumber),
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),

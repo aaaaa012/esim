@@ -58,13 +58,13 @@ describe("hybrid recharge route", () => {
     render(<RechargeClient />);
     expect(await screen.findByRole("heading", { name: "No rechargeable eSIM is linked yet" })).toBeTruthy();
     expect(screen.getByRole("link", { name: /Buy a new eSIM/i }).getAttribute("href")).toBe("/destinations");
-    expect(screen.getByLabelText("eSIM mobile number")).toBeTruthy();
+    expect(screen.getByLabelText("Order contact, eSIM number, or ICCID")).toBeTruthy();
   });
 
   it("keeps guests on secure email verification without loading owned targets", async () => {
     mocks.isSignedIn = false;
     render(<RechargeClient />);
-    await waitFor(() => expect(screen.getByLabelText("eSIM mobile number")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Order contact, eSIM number, or ICCID")).toBeTruthy());
     expect(mocks.authFetch).not.toHaveBeenCalled();
     expect(screen.queryByText("Your account")).toBeNull();
   });

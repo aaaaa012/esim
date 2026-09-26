@@ -1733,6 +1733,176 @@ it("does not persist an unchanged verified traveller and preserves verification 
   expect(save).toHaveBeenCalledTimes(1);
 });
 
+it("rejects a new first purchase when its Nepal contact belongs to another active eSIM", async () => {
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "existing-esim",
+        ownerId: "other-customer",
+        traveler: customerTraveler(),
+        assignment: { inventoryId: "inventory-1", iccid: "iccid-1" },
+      }),
+      readyOrder({
+        id: "new-order",
+        ownerId: "new-customer",
+        status: OrderStatus.DRAFT,
+        createdAt: new Date().toISOString(),
+      }),
+    ],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  await expect(
+    instance.setTraveler("new-order", "new-customer", {
+      ...customerTraveler(),
+      mobile: "+977 9800000000",
+    }),
+  ).rejects.toThrow(/already has an active eSIM/i);
+});
+
+it("rejects a second eSIM for the same signed-in customer even with a different contact", async () => {
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "owned-esim",
+        ownerId: "same-customer",
+        traveler: customerTraveler(),
+        assignment: { inventoryId: "inventory-1", iccid: "iccid-1" },
+      }),
+      readyOrder({
+        id: "second-order",
+        ownerId: "same-customer",
+        status: OrderStatus.DRAFT,
+        createdAt: new Date().toISOString(),
+      }),
+    ],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  await expect(
+    instance.setTraveler("second-order", "same-customer", {
+      ...customerTraveler(),
+      mobile: "+9779800000001",
+    }),
+  ).rejects.toThrow(/account already has an active eSIM/i);
+});
+
+it("atomically claims a new contact and signed-in account before payment", async () => {
+  const createClaim = vi.fn().mockResolvedValue({});
+  const transaction = vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
+    callback({
+      order: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          customerId: "customer-1",
+          customer: { user: { clerkId: "user-1" } },
+        }),
+      },
+      esimContactClaim: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: createClaim,
+      },
+    }),
+  );
+  const instance = ordersService(
+    [],
+    {},
+    undefined,
+    { enabled: true, $transaction: transaction },
+  );
+  const claim = instance as unknown as {
+    claimNewEsimContact(order: DemoOrder): Promise<void>;
+  };
+  await claim.claimNewEsimContact(
+    readyOrder({
+      id: "new-order",
+      ownerId: "user-1",
+      traveler: customerTraveler(),
+      createdAt: new Date().toISOString(),
+    }),
+  );
+  expect(createClaim).toHaveBeenCalledWith({
+    data: {
+      contactNumber: "9779800000000",
+      customerId: "customer-1",
+      orderId: "new-order",
+    },
+  });
+});
+
+it("grandfathers a legacy order when its unchanged contact is not a Nepal number", async () => {
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "legacy-order",
+        ownerId: "legacy-customer",
+        status: OrderStatus.DRAFT,
+        contactRuleVersion: 0,
+        traveler: { ...customerTraveler(), mobile: "+33123456789" },
+        documentReviewStatus: "VERIFIED",
+      }),
+    ],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  const unchanged = await instance.setTraveler("legacy-order", "legacy-customer", {
+    ...customerTraveler(),
+    mobile: "+33123456789",
+  });
+  expect(unchanged.documentReviewStatus).toBe("VERIFIED");
+});
+
+it("finds a third-person recharge by contact or ICCID but returns the eSIM MSISDN", async () => {
+  const findMany = vi.fn().mockResolvedValue([
+    {
+      id: "original-order",
+      customerId: "customer-1",
+      plan: { country: { isoCode: "FR" } },
+      traveler: {
+        firstName: "Jane",
+        surname: "Doe",
+        email: "original@example.com",
+        mobile: "+9779800000000",
+        city: "Kathmandu",
+        countryOfResidence: "NP",
+      },
+      customerEsim: {
+        inventory: {
+          id: "inventory-1",
+          eid: "eid-1",
+          iccid: "8944000000009876",
+          msisdn: "+33612345678",
+        },
+      },
+    },
+  ]);
+  const instance = ordersService([], {}, undefined, {
+    enabled: true,
+    esimContactClaim: {
+      findUnique: vi.fn().mockResolvedValue({ orderId: "original-order" }),
+    },
+    order: { findMany },
+  });
+  vi.spyOn(instance, "resolveSubscriber").mockResolvedValue(null);
+  const result = await instance.resolveSubscriberForRechargeLookup(
+    "9800000000",
+  );
+  expect(result?.inventory?.msisdn).toBe("+33612345678");
+  const byIccid = await instance.resolveSubscriberForRechargeLookup(
+    "8944000000009876",
+  );
+  expect(byIccid?.inventory?.msisdn).toBe("+33612345678");
+  expect(findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        id: "original-order",
+        OR: expect.arrayContaining([
+          { traveler: { is: { contactNumberNormalized: "9779800000000" } } },
+        ]),
+      }),
+    }),
+  );
+});
+
 it("invalidates an in-flight OCR generation when traveller identity changes", async () => {
   const instance = ordersService(
     [readyOrder({

@@ -123,9 +123,9 @@ export default function TopupLookup() {
     if (
       !/^[+0-9][0-9\s()./-]*$/.test(entered) ||
       digits.length < 6 ||
-      digits.length > 15
+      digits.length > 22
     ) {
-      setError("Enter a valid eSIM mobile number with 6 to 15 digits.");
+      setError("Enter the order contact, eSIM mobile number, or ICCID.");
       return;
     }
     setOpen(true);
@@ -277,9 +277,10 @@ export default function TopupLookup() {
               <p className="recharge-kicker">For returning travellers</p>
               <h2 id="recharge-title">Add data to your existing eSIM</h2>
               <p className="recharge-description">
-                Keep the eSIM already installed on your phone. Enter its mobile
-                number from the delivery email. We will email a secure link
-                before showing any eSIM or plan details.
+                Keep the eSIM already installed on your phone. Use the Nepal
+                contact number from checkout, or the eSIM mobile number or ICCID
+                from its delivery email. We will email a secure link before showing any
+                eSIM or plan details.
               </p>
               <form
                 className="recharge-form"
@@ -288,7 +289,7 @@ export default function TopupLookup() {
                   void lookup();
                 }}
               >
-                <label htmlFor="recharge-mobile">eSIM mobile number</label>
+                <label htmlFor="recharge-mobile">Order contact, eSIM number, or ICCID</label>
                 <div className="recharge-control">
                   <span className="recharge-input-icon" aria-hidden="true">
                     <Smartphone size={18} />
@@ -297,7 +298,7 @@ export default function TopupLookup() {
                     id="recharge-mobile"
                     value={mobile}
                     onChange={(event) => setMobile(event.target.value)}
-                    placeholder="e.g. +33 6 12 34 56 78"
+                    placeholder="e.g. +977 98XXXXXXXX"
                     inputMode="tel"
                     autoComplete="tel"
                     aria-describedby="recharge-help"
@@ -306,8 +307,8 @@ export default function TopupLookup() {
                       error && !open ? "recharge-error" : undefined
                     }
                     minLength={6}
-                    maxLength={24}
-                    pattern="[+]?[0-9 ()./-]{6,24}"
+                    maxLength={28}
+                    pattern="[+]?[0-9 ()./-]{6,28}"
                   />
                 </div>
                 <button
@@ -324,7 +325,7 @@ export default function TopupLookup() {
                 </button>
               </form>
               <p className="recharge-help" id="recharge-help">
-                Usually 12–15 digits. Spaces and a leading + are accepted.
+                Enter whichever detail you have. Spaces and a leading + are accepted.
               </p>
               {error && !open ? (
                 <div
@@ -537,14 +538,14 @@ export default function TopupLookup() {
                     Check the original purchase email if the number matched
                   </strong>
                   <p>
-                    We send a secure link only when the mobile number belongs to
-                    an eligible Visa Compass eSIM. The private, single-use link
+                    We send a secure link only when the number matches an
+                    eligible Visa Compass eSIM. The private, single-use link
                     expires in 15 minutes.
                   </p>
                 </div>
                 <p className="recharge-help">
                   If you do not see it, check spam or confirm that you entered
-                  the mobile number from your original delivery email.
+                  the contact number from checkout or the eSIM number or ICCID from its delivery email.
                 </p>
               </div>
             ) : null}

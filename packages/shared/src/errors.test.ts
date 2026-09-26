@@ -32,4 +32,9 @@ describe("publicApiErrorMessage", () => {
   it("explains why traveller details are locked during review", () => {
     expect(publicApiErrorMessage({ code: "TRAVELER_REVIEW_LOCKED" })).toMatch(/review/i);
   });
+
+  it("explains a contact-to-eSIM conflict with a recharge next step", () => {
+    expect(publicApiErrorMessage({ code: "ESIM_CONTACT_ALREADY_LINKED" })).toMatch(/recharge/i);
+    expect(publicApiErrorMessage({ code: "NEPAL_CONTACT_REQUIRED" })).toMatch(/Nepal mobile/i);
+  });
 });

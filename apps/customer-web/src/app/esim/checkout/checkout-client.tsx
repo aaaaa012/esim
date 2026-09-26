@@ -83,6 +83,8 @@ const SIMULATOR = process.env.NEXT_PUBLIC_PAYMENT_MODE === "simulator";
 type Envelope<T> = { data: T; error?: { code?: string; message: string }; meta?: { correlationId?: string } };
 type Order = {
   id: string;
+  createdAt: string;
+  contactRuleVersion?: number;
   orderNumber: string;
   status: string;
   totalAmountNpr: number;
@@ -1487,6 +1489,10 @@ export default function CheckoutClient({
   const saveTraveler = () =>
     run(async () => {
       if (!order) return;
+      const changeKind = travelerChangeKind(order.traveler, traveler);
+      const newContactRuleApplies =
+        order.contactRuleVersion !== 0 &&
+        changeKind !== "unchanged";
       const required: [keyof Traveler, string][] = [
         ["firstName", "First name"],
         ["surname", "Surname"],
@@ -1497,15 +1503,21 @@ export default function CheckoutClient({
         ["nationality", "Nationality"],
         ["countryOfResidence", "Country of residence"],
         ["email", "Email"],
-        ["mobile", "Mobile / WhatsApp"],
+        ["mobile", "Nepal contact number"],
       ];
       const nextErrors: Partial<Record<keyof Traveler, string>> = {};
       for (const [key, label] of required)
         if (!traveler[key].trim()) nextErrors[key] = `${label} is required`;
       if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email))
         nextErrors.email = "Enter a valid email address";
-      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile))
-        nextErrors.mobile = "Enter a valid mobile number";
+      if (traveler.mobile && newContactRuleApplies) {
+        const compact = traveler.mobile.replace(/[\s()-]/g, "");
+        const local = /^9\d{9}$/.test(compact)
+          ? compact
+          : compact.replace(/^(?:\+977|00977|977)/, "");
+        if (!/^9\d{9}$/.test(local))
+          nextErrors.mobile = "Enter a Nepal mobile number, such as +977 98XXXXXXXX";
+      }
       if (traveler.passportNumber && traveler.passportNumber.length < 5)
         nextErrors.passportNumber =
           "Passport number must be at least 5 characters";
@@ -1537,7 +1549,6 @@ export default function CheckoutClient({
           .map(([key, value]) => [key, value.trim()])
           .filter(([, value]) => value !== ""),
       );
-      const changeKind = travelerChangeKind(order.traveler, traveler);
       if (changeKind === "unchanged" && passportGatePassed(order)) {
         advance(4);
         return;
@@ -1546,13 +1557,27 @@ export default function CheckoutClient({
         awaitingVerificationAdvance.current = true;
         return;
       }
-      const updated = await api<Order>(
-        `/customer/orders/${order.id}/traveler`,
-        {
-          method: "PATCH",
-          body: JSON.stringify(body),
-        },
-      );
+      let updated: Order;
+      try {
+        updated = await api<Order>(
+          `/customer/orders/${order.id}/traveler`,
+          {
+            method: "PATCH",
+            body: JSON.stringify(body),
+          },
+        );
+      } catch (cause) {
+        if (
+          (cause as { code?: string }).code === "ESIM_CONTACT_ALREADY_LINKED" &&
+          cause instanceof Error &&
+          cause.message
+        ) {
+          setFieldErrors((current) => ({ ...current, mobile: cause.message }));
+          document.querySelector<HTMLElement>('[name="mobile"]')?.focus();
+          return;
+        }
+        throw cause;
+      }
       setOrder(updated);
       if (changeKind === "contact" && passportGatePassed(updated)) {
         advance(4);
@@ -2621,11 +2646,12 @@ export default function CheckoutClient({
                       onChange={(e) => update("email", e.target.value)}
                     />
                   </Field>
-                  <Field label="Mobile / WhatsApp" error={fieldErrors.mobile}>
+                  <Field label="Nepal contact number" error={fieldErrors.mobile}>
                     <input
                       name="mobile"
                       inputMode="tel"
                       autoComplete="tel"
+                      placeholder="+977 98XXXXXXXX"
                       value={traveler.mobile}
                       onChange={(e) => update("mobile", e.target.value)}
                     />
