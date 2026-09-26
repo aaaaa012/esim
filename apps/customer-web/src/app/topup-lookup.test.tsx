@@ -18,7 +18,7 @@ describe("customer recharge journey", () => {
     window.history.replaceState({}, "", "/");
   });
 
-  it.each(["+9779800000000", "8944000000009876"])(
+  it.each(["9800000000", "8944000000009876"])(
     "uses a uniform public response for %s and reveals nothing before email verification",
     async (identifier) => {
     const request = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(

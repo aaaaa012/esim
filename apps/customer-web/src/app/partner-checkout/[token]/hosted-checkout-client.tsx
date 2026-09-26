@@ -550,15 +550,19 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         ["nationality", "Nationality"],
         ["countryOfResidence", "Country of residence"],
         ["email", "Email"],
-        ["mobile", "Mobile / WhatsApp"],
+        ["mobile", "Nepali mobile number"],
       ];
       const nextErrors: Partial<Record<keyof Traveler, string>> = {};
       for (const [key, label] of required)
         if (!traveler[key].trim()) nextErrors[key] = `${label} is required`;
       if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email))
         nextErrors.email = "Enter a valid email address";
-      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile))
-        nextErrors.mobile = "Enter a valid mobile number";
+      if (
+        traveler.mobile &&
+        traveler.mobile !== session?.order.traveler?.mobile &&
+        !/^\d{10}$/.test(traveler.mobile)
+      )
+        nextErrors.mobile = "Enter exactly 10 digits";
       if (traveler.passportNumber && traveler.passportNumber.length < 5)
         nextErrors.passportNumber =
           "Passport number must be at least 5 characters";
@@ -2239,12 +2243,14 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         />
                       </Field>
                       <Field
-                        label="Mobile / WhatsApp"
+                        label="Nepali mobile number"
                         error={fieldErrors.mobile}
                       >
                         <input
                           name="mobile"
-                          inputMode="tel"
+                          inputMode="numeric"
+                          autoComplete="tel"
+                          placeholder="10-digit mobile number"
                           value={traveler.mobile}
                           onChange={(e) => update("mobile", e.target.value)}
                         />

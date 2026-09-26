@@ -1726,7 +1726,7 @@ it("does not persist an unchanged verified traveller and preserves verification 
   expect(save).not.toHaveBeenCalled();
 
   const contact = await instance.setTraveler("verified-edit", "customer-1", {
-    ...customerTraveler(), mobile: "9779800000001",
+    ...customerTraveler(), mobile: "9800000001",
   });
   expect(contact.documentReviewStatus).toBe("VERIFIED");
   expect(contact.passportVerification?.status).toBe("VERIFIED");
@@ -1755,9 +1755,42 @@ it("rejects a new first purchase when its Nepal contact belongs to another activ
   await expect(
     instance.setTraveler("new-order", "new-customer", {
       ...customerTraveler(),
-      mobile: "+977 9800000000",
+      mobile: "9800000000",
     }),
   ).rejects.toThrow(/already has an active eSIM/i);
+});
+
+it("accepts a 10-digit mobile without requiring a 98 prefix", async () => {
+  const instance = ordersService(
+    [readyOrder({
+      id: "ten-digit-order",
+      ownerId: "ten-digit-customer",
+      status: OrderStatus.DRAFT,
+      createdAt: new Date().toISOString(),
+    })],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  const updated = await instance.setTraveler("ten-digit-order", "ten-digit-customer", {
+    ...customerTraveler(), mobile: "1234567890",
+  });
+  expect(updated.traveler?.mobile).toBe("1234567890");
+});
+
+it("rejects a country prefix in the new traveller mobile field", async () => {
+  const instance = ordersService(
+    [readyOrder({
+      id: "prefixed-order",
+      ownerId: "prefixed-customer",
+      status: OrderStatus.DRAFT,
+      createdAt: new Date().toISOString(),
+    })],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  await expect(instance.setTraveler("prefixed-order", "prefixed-customer", {
+    ...customerTraveler(), mobile: "+9779800000000",
+  })).rejects.toThrow(/exactly 10 digits/i);
 });
 
 it("rejects a second eSIM for the same signed-in customer even with a different contact", async () => {
@@ -1782,7 +1815,7 @@ it("rejects a second eSIM for the same signed-in customer even with a different 
   await expect(
     instance.setTraveler("second-order", "same-customer", {
       ...customerTraveler(),
-      mobile: "+9779800000001",
+      mobile: "9800000001",
     }),
   ).rejects.toThrow(/account already has an active eSIM/i);
 });

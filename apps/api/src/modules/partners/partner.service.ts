@@ -2477,9 +2477,14 @@ export class PartnerService {
     const order = await this.mutableOrder(partnerId, orderId, [
       OrderStatus.DRAFT,
     ]);
+    const previousTraveler = await this.prisma.traveler.findUnique({
+      where: { orderId },
+      select: { mobile: true },
+    });
     if (
       order.orderType === "INITIAL_PURCHASE" &&
-      order.contactRuleVersion === 1
+      order.contactRuleVersion === 1 &&
+      (!previousTraveler || traveler.mobile !== previousTraveler.mobile)
     ) {
       traveler = await this.validateNewPartnerContact(order.id, traveler);
     }
@@ -3100,7 +3105,8 @@ export class PartnerService {
     if (changeKind === "unchanged") return this.hostedCheckout(token);
     if (
       order.orderType === "INITIAL_PURCHASE" &&
-      order.contactRuleVersion === 1
+      order.contactRuleVersion === 1 &&
+      (!previous || traveler.mobile !== previous.mobile)
     ) {
       traveler = await this.validateNewPartnerContact(order.id, traveler);
     }
@@ -3187,11 +3193,13 @@ export class PartnerService {
     orderId: string,
     traveler: TravelerInput,
   ): Promise<TravelerInput> {
-    const contact = normalizeNepaliContact(traveler.mobile);
+    const contact = /^\d{10}$/.test(traveler.mobile)
+      ? normalizeNepaliContact(traveler.mobile)
+      : null;
     if (!contact)
       throw new ApiException({
         code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
-        message: "Enter a Nepal mobile number, for example +977 98XXXXXXXX",
+        message: "Enter exactly 10 digits for the Nepali mobile number",
       });
     const candidates = await this.prisma.order.findMany({
       where: {
@@ -3245,7 +3253,7 @@ export class PartnerService {
         message: "This contact number already has an active eSIM. Recharge it instead of buying another.",
         status: 409,
       });
-    return { ...traveler, mobile: `+${contact}` };
+    return traveler;
   }
 
   async addHostedDocument(

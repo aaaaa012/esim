@@ -116,7 +116,7 @@ export const apiErrorMessage = (
     case ApiErrorCode.TRAVELER_REQUIRED:
       return "Traveller details are required before payment.";
     case ApiErrorCode.NEPAL_CONTACT_REQUIRED:
-      return "Enter a Nepal mobile contact number, such as +977 98XXXXXXXX.";
+      return "Enter exactly 10 digits for the Nepali mobile number.";
     case ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED:
       return "This contact number or account already has an active eSIM. Recharge it instead of buying another.";
     case ApiErrorCode.DOCUMENTS_REQUIRED:

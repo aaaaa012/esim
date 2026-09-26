@@ -903,16 +903,18 @@ export class OrdersService implements OnModuleInit {
     if (
       submittedChangeKind !== "unchanged" &&
       order.purchaseType !== "TOPUP" &&
-      order.contactRuleVersion !== 0
+      order.contactRuleVersion !== 0 &&
+      (!order.traveler || traveler.mobile !== order.traveler.mobile)
     ) {
-      const contact = normalizeNepaliContact(traveler.mobile);
+      const contact = /^\d{10}$/.test(traveler.mobile)
+        ? normalizeNepaliContact(traveler.mobile)
+        : null;
       if (!contact)
         throw new ApiException({
           code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
-          message: "Enter a Nepal mobile number, for example +977 98XXXXXXXX",
+          message: "Enter exactly 10 digits for the Nepali mobile number",
         });
       await this.assertNewEsimContactAvailable(order, contact);
-      traveler = { ...traveler, mobile: `+${contact}` };
     }
     const changeKind = travelerChangeKind(order.traveler, traveler);
     const previousFingerprint = order.traveler

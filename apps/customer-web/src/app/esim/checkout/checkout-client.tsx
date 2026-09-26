@@ -1492,7 +1492,7 @@ export default function CheckoutClient({
       const changeKind = travelerChangeKind(order.traveler, traveler);
       const newContactRuleApplies =
         order.contactRuleVersion !== 0 &&
-        changeKind !== "unchanged";
+        (!order.traveler || traveler.mobile !== order.traveler.mobile);
       const required: [keyof Traveler, string][] = [
         ["firstName", "First name"],
         ["surname", "Surname"],
@@ -1503,7 +1503,7 @@ export default function CheckoutClient({
         ["nationality", "Nationality"],
         ["countryOfResidence", "Country of residence"],
         ["email", "Email"],
-        ["mobile", "Nepal contact number"],
+        ["mobile", "Nepali mobile number"],
       ];
       const nextErrors: Partial<Record<keyof Traveler, string>> = {};
       for (const [key, label] of required)
@@ -1511,12 +1511,8 @@ export default function CheckoutClient({
       if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email))
         nextErrors.email = "Enter a valid email address";
       if (traveler.mobile && newContactRuleApplies) {
-        const compact = traveler.mobile.replace(/[\s()-]/g, "");
-        const local = /^9\d{9}$/.test(compact)
-          ? compact
-          : compact.replace(/^(?:\+977|00977|977)/, "");
-        if (!/^9\d{9}$/.test(local))
-          nextErrors.mobile = "Enter a Nepal mobile number, such as +977 98XXXXXXXX";
+        if (!/^\d{10}$/.test(traveler.mobile))
+          nextErrors.mobile = "Enter exactly 10 digits";
       }
       if (traveler.passportNumber && traveler.passportNumber.length < 5)
         nextErrors.passportNumber =
@@ -2646,12 +2642,12 @@ export default function CheckoutClient({
                       onChange={(e) => update("email", e.target.value)}
                     />
                   </Field>
-                  <Field label="Nepal contact number" error={fieldErrors.mobile}>
+                  <Field label="Nepali mobile number" error={fieldErrors.mobile}>
                     <input
                       name="mobile"
-                      inputMode="tel"
+                      inputMode="numeric"
                       autoComplete="tel"
-                      placeholder="+977 98XXXXXXXX"
+                      placeholder="10-digit mobile number"
                       value={traveler.mobile}
                       onChange={(e) => update("mobile", e.target.value)}
                     />

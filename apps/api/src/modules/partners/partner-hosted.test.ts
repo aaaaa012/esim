@@ -62,6 +62,19 @@ function order(documents: Array<Record<string, unknown>>) {
 }
 
 describe("partner hosted checkout", () => {
+  it("accepts any 10-digit traveller mobile without a country prefix", async () => {
+    const instance = service({ order: { findMany: vi.fn().mockResolvedValue([]) } });
+    const validate = instance as unknown as {
+      validateNewPartnerContact(orderId: string, traveler: { mobile: string }): Promise<{ mobile: string }>;
+    };
+    await expect(
+      validate.validateNewPartnerContact("new-order", { mobile: "1234567890" }),
+    ).resolves.toEqual({ mobile: "1234567890" });
+    await expect(
+      validate.validateNewPartnerContact("new-order", { mobile: "+9779800000000" }),
+    ).rejects.toThrow(/exactly 10 digits/i);
+  });
+
   it("prevents a new hosted traveller from reusing another active eSIM contact", async () => {
     const instance = service({
       order: {
@@ -82,7 +95,7 @@ describe("partner hosted checkout", () => {
     };
     await expect(
       validate.validateNewPartnerContact("new-order", {
-        mobile: "9779800000000",
+        mobile: "9800000000",
       }),
     ).rejects.toThrow(/already has an active eSIM/i);
   });

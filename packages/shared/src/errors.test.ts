@@ -35,6 +35,6 @@ describe("publicApiErrorMessage", () => {
 
   it("explains a contact-to-eSIM conflict with a recharge next step", () => {
     expect(publicApiErrorMessage({ code: "ESIM_CONTACT_ALREADY_LINKED" })).toMatch(/recharge/i);
-    expect(publicApiErrorMessage({ code: "NEPAL_CONTACT_REQUIRED" })).toMatch(/Nepal mobile/i);
+    expect(publicApiErrorMessage({ code: "NEPAL_CONTACT_REQUIRED" })).toMatch(/10 digits/i);
   });
 });

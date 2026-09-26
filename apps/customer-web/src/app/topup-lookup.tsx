@@ -277,8 +277,8 @@ export default function TopupLookup() {
               <p className="recharge-kicker">For returning travellers</p>
               <h2 id="recharge-title">Add data to your existing eSIM</h2>
               <p className="recharge-description">
-                Keep the eSIM already installed on your phone. Use the Nepal
-                contact number from checkout, or the eSIM mobile number or ICCID
+                Keep the eSIM already installed on your phone. Use the 10-digit
+                Nepali mobile number from checkout, or the eSIM number or ICCID
                 from its delivery email. We will email a secure link before showing any
                 eSIM or plan details.
               </p>
@@ -298,7 +298,7 @@ export default function TopupLookup() {
                     id="recharge-mobile"
                     value={mobile}
                     onChange={(event) => setMobile(event.target.value)}
-                    placeholder="e.g. +977 98XXXXXXXX"
+                    placeholder="10-digit mobile number or ICCID"
                     inputMode="tel"
                     autoComplete="tel"
                     aria-describedby="recharge-help"

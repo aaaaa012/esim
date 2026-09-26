@@ -11,6 +11,10 @@ describe("normalizeNepaliContact", () => {
     expect(normalizeNepaliContact(input)).toBe("9779800000000");
   });
 
+  it("accepts any 10 digits without a prefix rule", () => {
+    expect(normalizeNepaliContact("1234567890")).toBe("9771234567890");
+  });
+
   it.each(["", "+33123456789", "980000000", "abc9800000000"])(
     "rejects %s",
     (input) => {
