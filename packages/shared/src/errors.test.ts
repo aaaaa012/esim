@@ -23,4 +23,13 @@ describe("publicApiErrorMessage", () => {
       "This action is not available for the eSIM's current network status.",
     );
   });
+
+  it("tells customers to reload after an order conflict", () => {
+    expect(publicApiErrorMessage({ code: "ORDER_CONFLICT" })).toMatch(/reload/i);
+    expect(publicApiErrorMessage({ code: "HTTP_409" })).toMatch(/reload/i);
+  });
+
+  it("explains why traveller details are locked during review", () => {
+    expect(publicApiErrorMessage({ code: "TRAVELER_REVIEW_LOCKED" })).toMatch(/review/i);
+  });
 });

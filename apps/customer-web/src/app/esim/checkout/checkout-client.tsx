@@ -6,6 +6,7 @@ import {
   passportAutomationUnavailable,
   passportFailurePresentation,
   passportRequiresReplacement,
+  travelerChangeKind,
 } from "@visa-compass/shared";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { SignInButton, useAuth } from "@clerk/nextjs";
@@ -79,7 +80,7 @@ import {
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const SIMULATOR = process.env.NEXT_PUBLIC_PAYMENT_MODE === "simulator";
-type Envelope<T> = { data: T; error?: { code?: string; message: string } };
+type Envelope<T> = { data: T; error?: { code?: string; message: string }; meta?: { correlationId?: string } };
 type Order = {
   id: string;
   orderNumber: string;
@@ -384,11 +385,12 @@ export default function CheckoutClient({
       if (mutation) releaseMutationKey(mutation.storageKey);
     }
     if (!response.ok) {
+      const fallback = "This request could not be completed. Please try again.";
+      const safeMessage = apiErrorMessage(payload.error?.code ?? "", fallback);
       const error = new Error(
-        apiErrorMessage(
-          payload.error?.code ?? "",
-          "This request could not be completed. Please try again.",
-        ),
+        safeMessage === fallback && payload.meta?.correlationId
+          ? `${safeMessage} Reference: ${payload.meta.correlationId}.`
+          : safeMessage,
       ) as Error & { code?: string; status?: number };
       if (payload.error?.code) error.code = payload.error.code;
       error.status = response.status;
@@ -1535,6 +1537,15 @@ export default function CheckoutClient({
           .map(([key, value]) => [key, value.trim()])
           .filter(([, value]) => value !== ""),
       );
+      const changeKind = travelerChangeKind(order.traveler, traveler);
+      if (changeKind === "unchanged" && passportGatePassed(order)) {
+        advance(4);
+        return;
+      }
+      if (changeKind === "unchanged" && ["OCR_PENDING", "OCR_BACKGROUND"].includes(order.documentReviewStatus ?? "")) {
+        awaitingVerificationAdvance.current = true;
+        return;
+      }
       const updated = await api<Order>(
         `/customer/orders/${order.id}/traveler`,
         {
@@ -1543,6 +1554,10 @@ export default function CheckoutClient({
         },
       );
       setOrder(updated);
+      if (changeKind === "contact" && passportGatePassed(updated)) {
+        advance(4);
+        return;
+      }
       awaitingVerificationAdvance.current = true;
       const verified = await verifyPassport();
       if (verified && passportGatePassed(verified)) {

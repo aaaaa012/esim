@@ -736,6 +736,7 @@ describe("partner hosted checkout", () => {
     });
     (instance as unknown as { crypto: Record<string, unknown> }).crypto = {
       encrypt: vi.fn((value: string) => `encrypted:${value}`),
+      decrypt: vi.fn((value: string) => value),
       blindIndex: vi.fn((value: string) => `hash:${value}`),
     };
     vi.spyOn(instance, "hostedCheckout").mockResolvedValue({
@@ -766,6 +767,87 @@ describe("partner hosted checkout", () => {
         phone: "+9779800000000",
       },
     });
+  });
+
+  it.each([
+    ["unchanged", {}, false, false],
+    ["contact", { mobile: "+9779800000001" }, true, false],
+    ["identity", { passportNumber: "PA1234568" }, true, true],
+  ] as const)("keeps a verified hosted passport safe for %s traveller submission", async (_kind, changes, writes, resets) => {
+    const traveler = {
+      title: "MR", firstName: "Samir", middleName: null, surname: "Majhi",
+      dateOfBirthEncrypted: "1995-01-01", nationality: "NP", city: "Kathmandu",
+      countryOfResidence: "NP", employerOrBusinessName: null, email: "customer@example.com",
+      mobile: "+9779800000000", passportNumberEncrypted: "PA1234567",
+      passportExpiryEncrypted: "2030-01-01", pointOfSaleCode: null,
+    };
+    const orderUpdate = vi.fn().mockResolvedValue({ id: "order-1" });
+    const passportUpdate = vi.fn().mockResolvedValue({ count: 1 });
+    const transaction = vi.fn((callback) => callback({
+      order: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: orderUpdate },
+      travelerDocument: { updateMany: passportUpdate },
+      traveler: { upsert: vi.fn().mockResolvedValue({ id: "traveler-1" }) },
+      passportExtraction: { updateMany: vi.fn() },
+      customer: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        update: vi.fn().mockResolvedValue({ id: "customer-1" }),
+      },
+    }));
+    const instance = service({
+      partnerHostedCheckoutSession: { findUnique: vi.fn().mockResolvedValue(session) },
+      order: { findUnique: vi.fn().mockResolvedValue({
+        ...order([{ id: "passport-1", type: "PASSPORT", status: "APPROVED", uploadVerified: true, passportVerificationStatus: "VERIFIED" }]),
+        traveler, documentReviewStatus: "VERIFIED", partnerCustomerId: null,
+      }) },
+      $transaction: transaction,
+    });
+    (instance as unknown as { crypto: Record<string, unknown> }).crypto = {
+      encrypt: vi.fn((value: string) => value),
+      decrypt: vi.fn((value: string) => value),
+      blindIndex: vi.fn((value: string) => value),
+    };
+    vi.spyOn(instance, "hostedCheckout").mockResolvedValue({ ok: true } as never);
+    await instance.setHostedTraveler("abcdefghijklmnopqrstuvwxyz012345", {
+      title: "MR", firstName: "Samir", surname: "Majhi", dateOfBirth: "1995-01-01",
+      nationality: "NP", city: "Kathmandu", countryOfResidence: "NP",
+      email: "customer@example.com", mobile: "+9779800000000",
+      passportNumber: "PA1234567", passportExpiryDate: "2030-01-01", ...changes,
+    });
+    expect(transaction).toHaveBeenCalledTimes(writes ? 1 : 0);
+    expect(orderUpdate).toHaveBeenCalledTimes(resets ? 1 : 0);
+    expect(passportUpdate).toHaveBeenCalledTimes(resets ? 1 : 0);
+  });
+
+  it.each([
+    ["MANUAL_REVIEW", "DRAFT", "TRAVELER_REVIEW_LOCKED"],
+    ["VERIFIED", "PAYMENT_PENDING", "PARTNER_ORDER_INVALID_STATE"],
+  ] as const)("locks hosted identity edits in %s review with %s order", async (review, status, code) => {
+    const transaction = vi.fn();
+    const instance = service({
+      partnerHostedCheckoutSession: { findUnique: vi.fn().mockResolvedValue(session) },
+      order: { findUnique: vi.fn().mockResolvedValue({
+        ...order([]), status, documentReviewStatus: review,
+        traveler: {
+          title: "MR", firstName: "Samir", middleName: null, surname: "Majhi",
+          dateOfBirthEncrypted: "1995-01-01", nationality: "NP", city: "Kathmandu",
+          countryOfResidence: "NP", employerOrBusinessName: null,
+          email: "customer@example.com", mobile: "+9779800000000",
+          passportNumberEncrypted: "PA1234567", passportExpiryEncrypted: "2030-01-01",
+          pointOfSaleCode: null,
+        },
+      }) },
+      $transaction: transaction,
+    });
+    (instance as unknown as { crypto: Record<string, unknown> }).crypto = {
+      decrypt: vi.fn((value: string) => value),
+    };
+    await expect(instance.setHostedTraveler("abcdefghijklmnopqrstuvwxyz012345", {
+      title: "MR", firstName: "Different", surname: "Majhi", dateOfBirth: "1995-01-01",
+      nationality: "NP", city: "Kathmandu", countryOfResidence: "NP",
+      email: "customer@example.com", mobile: "+9779800000000",
+      passportNumber: "PA1234567", passportExpiryDate: "2030-01-01",
+    })).rejects.toMatchObject({ code });
+    expect(transaction).not.toHaveBeenCalled();
   });
 
   it("retries the existing passport after corrected hosted traveller details", async () => {
@@ -808,6 +890,7 @@ describe("partner hosted checkout", () => {
     });
     (instance as unknown as { crypto: Record<string, unknown> }).crypto = {
       encrypt: vi.fn((value: string) => `encrypted:${value}`),
+      decrypt: vi.fn((value: string) => value),
       blindIndex: vi.fn((value: string) => `hash:${value}`),
     };
     vi.spyOn(instance, "hostedCheckout").mockResolvedValue({

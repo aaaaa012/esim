@@ -1708,6 +1708,31 @@ it("waits for every rejected document before restarting review", async () => {
   expect(add).toHaveBeenCalledTimes(1);
 });
 
+it("does not persist an unchanged verified traveller and preserves verification for contact edits", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  const instance = ordersService(
+    [readyOrder({
+      id: "verified-edit", ownerId: "customer-1", status: OrderStatus.DRAFT,
+      traveler: customerTraveler(), documentReviewStatus: "VERIFIED",
+      passportVerification: {
+        status: "VERIFIED", matchedFields: [], checkedAt: new Date().toISOString(), method: "tesseract-ocr",
+      },
+    })], {}, undefined, { enabled: false }, undefined, undefined, { save },
+  );
+  await instance.refreshFromPersistence();
+
+  const unchanged = await instance.setTraveler("verified-edit", "customer-1", customerTraveler());
+  expect(unchanged.documentReviewStatus).toBe("VERIFIED");
+  expect(save).not.toHaveBeenCalled();
+
+  const contact = await instance.setTraveler("verified-edit", "customer-1", {
+    ...customerTraveler(), mobile: "9779800000001",
+  });
+  expect(contact.documentReviewStatus).toBe("VERIFIED");
+  expect(contact.passportVerification?.status).toBe("VERIFIED");
+  expect(save).toHaveBeenCalledTimes(1);
+});
+
 it("invalidates an in-flight OCR generation when traveller identity changes", async () => {
   const instance = ordersService(
     [readyOrder({

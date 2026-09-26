@@ -26,6 +26,7 @@ apps/api/.postgres-transfer-checkpoint.json
 .opencode/
 apps/api/eng.traineddata
 apps/customer-web/.next-dev/
+apps/customer-web/.next-e2e-signed-in/
 apps/ops-web/.next-dev/
 
 # local diagnostic scripts

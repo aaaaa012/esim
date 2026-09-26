@@ -83,8 +83,9 @@ for (const route of publicRoutes) {
 
 test("destination selection stays on the catalogue route", async ({ page }) => {
   await page.goto("/destinations");
-  await page.getByRole("button", { name: /India/i }).first().click();
-  await page.getByPlaceholder(/Search countries/i).fill("Australia");
+  const destination = page.getByRole("combobox", { name: "Choose your destination" });
+  await expect(destination).toBeEnabled();
+  await destination.fill("Australia");
   await page.getByRole("option", { name: /Australia/i }).click();
   await expect(page).toHaveURL(/\/destinations\?country=AU$/);
   await expect(page.getByText("Australia Essential 3 GB")).toBeVisible();
@@ -98,20 +99,25 @@ test("destination selection stays on the catalogue route", async ({ page }) => {
 test("mobile Explore opens home while desktop Destinations opens the catalogue", async ({
   page,
 }) => {
-  await page.goto("/compatibility");
+  await page.goto("/compatibility", { waitUntil: "domcontentloaded" });
   const mobileNavigation = page.getByRole("navigation", {
     name: "Primary mobile navigation",
   });
   const mobileExplore = mobileNavigation.getByRole("link", { name: "Explore" });
   if (await mobileExplore.isVisible()) {
-    await mobileExplore.click();
+    // Next's development-tools launcher overlaps this corner in managed E2E.
+    // Keyboard activation still exercises the real link without that overlay.
+    await mobileExplore.focus();
+    await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/$/);
     await expect(page.locator("#explore")).toBeVisible();
   } else {
-    await page
+    const destinationsLink = page
       .locator("header")
-      .getByRole("link", { name: "Destinations", exact: true })
-      .click();
+      .getByRole("link", { name: "Destinations", exact: true });
+    await expect(destinationsLink).toHaveAttribute("href", "/destinations");
+    await destinationsLink.focus();
+    await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/destinations$/);
     await expect(
       page.getByRole("heading", { name: /Choose where you need data/i }),
@@ -127,7 +133,7 @@ test("homepage prioritizes destination discovery on mobile", async ({
     page.getByRole("heading", { name: /Your data lands before you do/i }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Search destination/i }),
+    page.getByRole("combobox", { name: /Where are you headed/i }),
   ).toBeVisible();
   await expect(
     page.getByRole("link", { name: /Explore eSIM plans/i }),

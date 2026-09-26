@@ -17,6 +17,7 @@ import {
   PaymentStatus,
   declarePaymentRetry,
   passportRequiresManualReview,
+  travelerChangeKind,
   provisioningFailure,
   type PaymentRetryDeclaration,
   type ProvisioningFailure,
@@ -890,6 +891,7 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id, ownerId ?? undefined);
     if (order.status !== OrderStatus.DRAFT)
       throw new BadRequestException("Submitted order is immutable");
+    const changeKind = travelerChangeKind(order.traveler, traveler);
     const previousFingerprint = order.traveler
       ? this.travelerIdentityFingerprint(order.traveler)
       : null;
@@ -905,6 +907,7 @@ export class OrdersService implements OnModuleInit {
       throw new ConflictException(
         "Manually approved traveller identity cannot be changed",
       );
+    if (changeKind === "unchanged") return this.redact(order);
     const replacingPassport =
       order.documentReviewStatus === "REUPLOAD_REQUIRED";
     const correctingMismatch =

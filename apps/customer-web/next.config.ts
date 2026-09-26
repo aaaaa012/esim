@@ -27,7 +27,9 @@ const config: NextConfig = {
   transpilePackages: ["@visa-compass/shared"],
   // Keep an active dev server isolated from `next build`. Sharing `.next`
   // lets a production build replace the React client manifest underneath dev.
-  distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
+  distDir: process.env.NEXT_DIST_DIR ?? (process.env.NODE_ENV === "development" ? ".next-dev" : ".next"),
+  // The Next dev-tools launcher covers the mobile bottom navigation in E2E.
+  ...(process.env.NEXT_PUBLIC_E2E_TEST_MODE === "true" ? { devIndicators: false } : {}),
   // Prevent Next from tracing the parent directory when another unrelated
   // lockfile exists on the developer machine or build host.
   outputFileTracingRoot: workspaceRoot,

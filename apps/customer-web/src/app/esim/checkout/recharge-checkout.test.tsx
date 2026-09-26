@@ -1166,4 +1166,32 @@ describe("first-purchase document verification", () => {
     ).toBe(true);
     expect(new URLSearchParams(window.location.search).get("step")).toBe("1");
   });
+
+  it.each([false, true])("returns an unchanged verified traveller to payment without another request (signed in: %s)", async (signedIn) => {
+    mocks.signedIn = signedIn;
+    const saved = {
+      id: "verified-order", orderNumber: "VC-VERIFIED", status: "DRAFT",
+      purchaseType: "INITIAL_PURCHASE", plan, totalAmountNpr: 100,
+      documentReviewStatus: "VERIFIED",
+      passportVerification: { status: "VERIFIED", matchedFields: [] },
+      traveler: {
+        title: "MR", firstName: "Resham", middleName: "", surname: "Kumar",
+        dateOfBirth: "1983-07-30", nationality: "NP", city: "Kathmandu",
+        countryOfResidence: "NP", employerOrBusinessName: "", email: "r@example.com",
+        mobile: "+9779800000000", passportNumber: "PA031964",
+        passportExpiryDate: "2032-05-03", pointOfSaleCode: "",
+      },
+      documents: ["PASSPORT", "TICKET"].map((type) => ({ type, status: "APPROVED", uploadVerified: true, fileName: `${type}.png` })),
+    };
+    const request = vi.fn(async (url: string) =>
+      url.endsWith("/payments/providers") ? ok({ providers: ["KHALTI"] }) : ok(saved));
+    mocks.authFetch.mockImplementation(request);
+    render(<Checkout planId="" orderId="verified-order" />);
+    await screen.findByRole("button", { name: "Back to documents" });
+    fireEvent.click(screen.getByRole("button", { name: "Back to documents" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review traveller details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save and continue" }));
+    expect(await screen.findByRole("button", { name: "Back to documents" })).toBeDefined();
+    expect(request.mock.calls.some(([url]) => url.endsWith("/traveler") || url.endsWith("/verify-passport"))).toBe(false);
+  });
 });

@@ -97,6 +97,30 @@ const acceptConsents = () =>
     .forEach((checkbox) => fireEvent.click(checkbox));
 
 describe("hosted checkout payment flow", () => {
+  it.each([false, true])("returns an unchanged verified traveller to payment without another request (signed in: %s)", async (signedIn) => {
+    mocks.signedIn = signedIn;
+    const current = {
+      ...session(),
+      order: {
+        ...session().order,
+        traveler: {
+          title: "MR", firstName: "Resham", middleName: "", surname: "Kumar",
+          dateOfBirth: "1983-07-30", nationality: "NP", city: "Kathmandu",
+          countryOfResidence: "NP", employerOrBusinessName: "", email: "r@example.com",
+          mobile: "+9779800000000", passportNumber: "PA031964",
+          passportExpiryDate: "2032-05-03",
+        },
+      },
+    };
+    fetchMock.mockImplementation(async (url: string) =>
+      url.endsWith("/payments/providers") ? ok({ providers: ["KHALTI"] }) : ok(current));
+    render(<HostedCheckoutClient token="private-token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Back to documents" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review traveller details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save and continue" }));
+    expect(await screen.findByRole("button", { name: "Back to documents" })).toBeDefined();
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/traveler") || url.endsWith("/verify-passport"))).toBe(false);
+  });
   it.each([false, true])(
     "collects first-purchase consent at the beginning once, including after refresh (signed in: %s)",
     async (signedIn) => {
@@ -619,6 +643,33 @@ describe("hosted checkout payment flow", () => {
 });
 
 describe("hosted document progress", () => {
+  it("opens the full traveller form while passport extraction is pending", async () => {
+    const fresh = session("NOT_STARTED");
+    fresh.order.travelerComplete = false;
+    fresh.order.documents = [];
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/payments/providers")) return ok({ providers: ["KHALTI"] });
+      if (url.endsWith("/documents")) return ok({ id: "document", upload: { mode: "local-simulator" } });
+      if (url.endsWith("/confirm")) return ok({});
+      if (url.endsWith("/verify-passport")) return ok({ status: "OCR_PENDING" });
+      return ok(fresh);
+    });
+    render(<HostedCheckoutClient token="private-token" />);
+    await screen.findByRole("heading", { name: "Travel documents" });
+    for (const label of ["Passport", "Travel ticket"])
+      fireEvent.change(screen.getByLabelText(label, { exact: true }), {
+        target: { files: [new File(["document"], `${label}.png`, { type: "image/png" })] },
+      });
+    fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
+
+    expect(await screen.findByRole("heading", { name: "Traveller information" })).toBeDefined();
+    expect(screen.getByRole("textbox", { name: "First name" })).toBeDefined();
+    expect(screen.getByRole("textbox", { name: "Surname" })).toBeDefined();
+    expect(screen.getByText("We’re checking your passport")).toBeDefined();
+    expect(screen.queryByText("Documents awaiting review")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Pay NPR 2" })).toBeNull();
+  });
+
   it("keeps visible feedback while saving traveller details", async () => {
     const fresh = session("NOT_STARTED");
     fresh.order.travelerComplete = false;
@@ -808,7 +859,7 @@ it("retries a failed ticket without uploading the confirmed passport again", asy
     screen.getByRole("list", { name: "Saved documents" }).textContent,
   ).toContain("Passport.png");
   fireEvent.click(screen.getByRole("button", { name: "Save documents" }));
-  await screen.findAllByRole("button", { name: "Review traveller details" });
+  await screen.findByRole("heading", { name: "Traveller information" });
   expect(authorized).toEqual(["PASSPORT", "TICKET", "TICKET"]);
 });
 

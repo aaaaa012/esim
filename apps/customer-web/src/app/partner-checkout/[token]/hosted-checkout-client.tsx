@@ -27,6 +27,7 @@ import {
   passportAutomationUnavailable,
   passportFailurePresentation,
   passportRequiresReplacement,
+  travelerChangeKind,
 } from "@visa-compass/shared";
 import {
   DocumentProgress,
@@ -62,7 +63,7 @@ import "../../esim/checkout/checkout.css";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const SIMULATOR = process.env.NEXT_PUBLIC_PAYMENT_MODE === "simulator";
-type Envelope<T> = { data: T; error?: { code?: string; message: string } };
+type Envelope<T> = { data: T; error?: { code?: string; message: string }; meta?: { correlationId?: string } };
 
 type Brand = { logoUrl?: string; colors?: { primary?: string } } | null;
 type Session = {
@@ -229,11 +230,12 @@ const api = async <T,>(path: string, init?: RequestInit) => {
     // Preserve the machine-readable code so callers can distinguish a
     // settled-verdict error (PAYMENT_EXPIRED / PAYMENT_NOT_CONFIRMED) from a
     // transient transport or provider failure.
+    const fallback = "This checkout request could not be completed.";
+    const safeMessage = apiErrorMessage(payload.error?.code ?? "UNEXPECTED", fallback);
     const error = new Error(
-      apiErrorMessage(
-        payload.error?.code ?? "UNEXPECTED",
-        "This checkout request could not be completed.",
-      ),
+      safeMessage === fallback && payload.meta?.correlationId
+        ? `${safeMessage} Reference: ${payload.meta.correlationId}.`
+        : safeMessage,
     ) as Error & { code?: string; status?: number };
     if (payload.error?.code) error.code = payload.error.code;
     error.status = response.status;
@@ -588,6 +590,15 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           .map(([key, value]) => [key, value.trim()])
           .filter(([, value]) => value !== ""),
       );
+      const changeKind = travelerChangeKind(session?.order.traveler, traveler);
+      if (changeKind === "unchanged" && gatePassed) {
+        stepPush(4);
+        return;
+      }
+      if (changeKind === "unchanged" && ["OCR_PENDING", "OCR_BACKGROUND"].includes(effectiveVerificationStatus ?? "")) {
+        awaitingVerificationAdvance.current = true;
+        return;
+      }
       const refreshed = await api<Session>(
         `/partner-checkout/${token}/traveler`,
         {
@@ -599,15 +610,19 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       setVerification({
         status: refreshed.order.documentReviewStatus ?? "NOT_STARTED",
       });
+      if (changeKind === "contact" && ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(refreshed.order.documentReviewStatus ?? "")) {
+        stepPush(4);
+        return;
+      }
       awaitingVerificationAdvance.current = true;
-      const verified = await runVerification();
-      if (verified) {
+      const verificationResult = await runVerification();
+      if (verificationResult && ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(verificationResult.status)) {
         awaitingVerificationAdvance.current = false;
         stepPush(4);
       }
     });
 
-  const runVerificationUnlocked = async (): Promise<boolean> => {
+  const runVerificationUnlocked = async (): Promise<Verification> => {
     setDocumentMessage("Checking your passport…");
     const result = await api<Verification>(
       `/partner-checkout/${token}/verify-passport`,
@@ -665,9 +680,6 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
       setFieldErrors({});
       setDocumentAttentionMessage("");
     }
-    const ok = ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
-      result.status,
-    );
     setSession((s) =>
       s
         ? {
@@ -688,11 +700,11 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
           }
         : s,
     );
-    return ok;
+    return result;
   };
 
-  const runVerification = async (): Promise<boolean> => {
-    if (verificationRequestInFlight.current) return false;
+  const runVerification = async (): Promise<Verification | null> => {
+    if (verificationRequestInFlight.current) return null;
     verificationRequestInFlight.current = true;
     try {
       return await runVerificationUnlocked();
@@ -849,7 +861,9 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
         }
         // The confirmed documents are durable; verification is the next
         // idempotent command and must not depend on an additional GET.
-        await runVerification();
+        const result = await runVerification();
+        if (result && !["REUPLOAD_REQUIRED", "FAILED"].includes(result.status))
+          stepPush(3);
       } catch (cause) {
         setDocumentError(documentFailureMessage(cause));
       } finally {
@@ -2049,10 +2063,13 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                     </span>
                     <h1>Traveller information</h1>
                     <p>
-                      We used your passport to prefill what we could. Check
-                      every detail, complete the remaining fields, and use
-                      two-letter country codes.
+                      Check every detail and complete the remaining fields.
+                      We’ll add any details we can read from your passport while
+                      you fill this in. Use two-letter country codes.
                     </p>
+                    {["OCR_PENDING", "OCR_BACKGROUND"].includes(effectiveVerificationStatus ?? "") && (
+                      <DocumentProgress status={effectiveVerificationStatus} />
+                    )}
                     {effectiveVerificationStatus === "CORRECTION_REQUIRED" && (
                       <div className="passport-mismatch" role="region" aria-labelledby="hosted-passport-mismatch-title">
                         <div className="passport-check warning" role="status">
@@ -2258,11 +2275,7 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                       next={saveTraveler}
                     />}
                     {(Boolean(documentMessage) ||
-                      [
-                        "OCR_PENDING",
-                        "OCR_BACKGROUND",
-                        "MANUAL_REVIEW",
-                      ].includes(verification?.status ?? "")) && (
+                      verification?.status === "MANUAL_REVIEW") && (
                       <PassportCheck
                         status={
                           documentMessage &&
@@ -2308,6 +2321,8 @@ export default function HostedCheckoutClient({ token }: { token: string }) {
                         }
                         busy={busy || verifying}
                         message={documentMessage}
+                        needsTravelerDetails={effectiveVerificationStatus === "MANUAL_REVIEW" && !session?.order.travelerComplete}
+                        failureCode={passportFailureCode}
                       />
                     )}
                     {gatePassed && !editingVerifiedDocuments ? (

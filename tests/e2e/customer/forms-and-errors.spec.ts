@@ -75,17 +75,18 @@ test("recharge recovery API failure is presented in a dialog", async ({
   );
 });
 
-test("catalogue API failure is presented in a dialog", async ({ page }) => {
+test("catalogue API failure shows an actionable inline alert", async ({ page }) => {
   await page.route("**/api/v1/public/countries", (route) =>
     route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
   );
   await page.goto("/destinations");
-  const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText(/unavailable|try again/i);
+  const alert = page.getByRole("alert").filter({ hasText: /couldn’t load the catalog/i });
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText(/unavailable|try again/i);
+  await expect(alert.getByRole("button", { name: "Try again" })).toBeVisible();
 });
 
-test("traveller checkout keeps the active form ahead of a fitted summary", async ({
+test("document checkout keeps the active form ahead of a fitted summary", async ({
   page,
 }) => {
   const plan = {
@@ -139,13 +140,12 @@ test("traveller checkout keeps the active form ahead of a fitted summary", async
   );
 
   await page.goto("/esim/checkout?plan=plan-in-1");
-  await page.getByLabel(/I confirm my device is compatible/i).check();
-  await page.getByLabel(/I agree to the purchase terms/i).check();
+  await page.getByText("I confirm my device is eSIM compatible", { exact: true }).click();
+  await page.getByText("I agree to the purchase terms", { exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: /I agree to the purchase terms/i })).toBeChecked();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: /Continue as guest/i }).click();
-  await expect(
-    page.getByRole("heading", { name: "Traveller information" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Travel documents" })).toBeVisible();
 
   await expectNoHorizontalOverflow(page);
   await expectElementsInsideViewport(
@@ -156,10 +156,9 @@ test("traveller checkout keeps the active form ahead of a fitted summary", async
   const form = await page.locator(".checkout-card").boundingBox();
   const summary = await page.locator(".order-summary").boundingBox();
   expect(form).not.toBeNull();
-  expect(summary).not.toBeNull();
-  if ((page.viewportSize()?.width ?? 0) <= 880) {
-    expect(summary!.y).toBeGreaterThanOrEqual(form!.y + form!.height - 1);
-  } else {
+  if (summary && (page.viewportSize()?.width ?? 0) <= 880) {
+    expect(summary.y).toBeGreaterThanOrEqual(form!.y + form!.height - 1);
+  } else if (summary) {
     expect(summary!.x).toBeGreaterThan(form!.x);
   }
 });

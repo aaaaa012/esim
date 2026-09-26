@@ -2,12 +2,28 @@ import { defineConfig, devices } from "@playwright/test";
 
 const customerBaseUrl =
   process.env.E2E_CUSTOMER_BASE_URL ?? "http://127.0.0.1:3100";
+const signedInCustomerBaseUrl =
+  process.env.E2E_SIGNED_IN_CUSTOMER_BASE_URL ?? "http://127.0.0.1:3102";
 const opsBaseUrl = process.env.E2E_OPS_BASE_URL ?? "http://127.0.0.1:3101";
 const useManagedServers = !process.env.E2E_CUSTOMER_BASE_URL;
 const publicClerkKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const serverClerkKey = process.env.CLERK_SECRET_KEY;
 const localE2eSecret = "local-e2e-auth-secret-at-least-32-characters";
 const localE2eToken = `${localE2eSecret}:SUPER_ADMIN`;
+const requestedProjects = process.argv.flatMap((argument, index, argumentsList) =>
+  argument === "--project"
+    ? [argumentsList[index + 1] ?? ""]
+    : argument.startsWith("--project=")
+      ? [argument.slice("--project=".length)]
+      : [],
+);
+const startGuestCustomer = !requestedProjects.length || requestedProjects.some(
+  (project) => project.startsWith("customer-") && !project.startsWith("customer-signed-in-"),
+);
+const startSignedInCustomer = !requestedProjects.length || requestedProjects.some(
+  (project) => project.startsWith("customer-signed-in-"),
+);
+const startOps = !requestedProjects.length || requestedProjects.some((project) => project.startsWith("ops-"));
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -76,6 +92,16 @@ export default defineConfig({
         browserName: "chromium",
         baseURL: customerBaseUrl,
       },
+    },
+    {
+      name: "customer-signed-in-desktop",
+      testMatch: /customer\/signed-in-hosted-resume\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"], baseURL: signedInCustomerBaseUrl },
+    },
+    {
+      name: "customer-signed-in-mobile",
+      testMatch: /customer\/signed-in-hosted-resume\.spec\.ts/,
+      use: { ...devices["iPhone 13"], browserName: "chromium", baseURL: signedInCustomerBaseUrl },
     },
     {
       name: "customer-small-mobile",
@@ -152,7 +178,8 @@ export default defineConfig({
   webServer: useManagedServers
     ? [
         {
-          command: "pnpm --filter @visa-compass/api exec nest start",
+          command: "./node_modules/.bin/nest start",
+          cwd: "./apps/api",
           // The managed E2E API intentionally runs without PostgreSQL/Redis.
           // Wait for the process liveness endpoint; deployed-environment suites
           // still exercise /health/ready against their real dependencies.
@@ -179,9 +206,9 @@ export default defineConfig({
             API_PUBLIC_URL: "http://127.0.0.1:4000",
           },
         },
-        {
-          command:
-            "pnpm --filter @visa-compass/customer-web exec next dev -p 3100",
+        ...(startGuestCustomer ? [{
+          command: "./node_modules/.bin/next dev -p 3100",
+          cwd: "./apps/customer-web",
           url: customerBaseUrl,
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,
@@ -195,9 +222,28 @@ export default defineConfig({
             NEXT_PUBLIC_E2E_SIGNED_IN: "false",
             NEXT_PUBLIC_E2E_AUTH_TOKEN: localE2eToken,
           },
-        },
-        {
-          command: "pnpm --filter @visa-compass/ops-web exec next dev -p 3101",
+        }] : []),
+        ...(startSignedInCustomer ? [{
+          command: "./node_modules/.bin/next dev -p 3102",
+          cwd: "./apps/customer-web",
+          url: signedInCustomerBaseUrl,
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+          env: {
+            NEXT_DIST_DIR: ".next-e2e-signed-in",
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
+              publicClerkKey ?? "pk_test_Y2xlcmsuZXhhbXBsZS5jb20k",
+            CLERK_SECRET_KEY: serverClerkKey ?? "local-e2e-clerk-disabled",
+            NEXT_PUBLIC_API_URL: "http://127.0.0.1:4000/api/v1",
+            NEXT_PUBLIC_PAYMENT_MODE: "simulator",
+            NEXT_PUBLIC_E2E_TEST_MODE: "true",
+            NEXT_PUBLIC_E2E_SIGNED_IN: "true",
+            NEXT_PUBLIC_E2E_AUTH_TOKEN: localE2eToken,
+          },
+        }] : []),
+        ...(startOps ? [{
+          command: "./node_modules/.bin/next dev -p 3101",
+          cwd: "./apps/ops-web",
           url: opsBaseUrl,
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,
@@ -210,7 +256,7 @@ export default defineConfig({
             NEXT_PUBLIC_E2E_SIGNED_IN: "true",
             NEXT_PUBLIC_E2E_AUTH_TOKEN: localE2eToken,
           },
-        },
+        }] : []),
       ]
     : undefined,
 });

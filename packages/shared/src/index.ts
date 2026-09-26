@@ -9,3 +9,4 @@ export * from "./attention-actions.js";
 export * from "./payment-gating.js";
 export * from "./status-presentation.js";
 export * from "./passport-outcome.js";
+export * from "./traveler-change.js";

@@ -27,6 +27,7 @@ import {
   documentTypeLabel,
   DocumentType as SharedDocumentType,
   passportRequiresManualReview,
+  travelerChangeKind,
   RESTRICTED_PLAN_COUNTRY_CODES,
   type TravelerInput,
 } from "@visa-compass/shared";
@@ -3073,7 +3074,25 @@ export class PartnerService {
 
   async setHostedTraveler(token: string, traveler: TravelerInput) {
     const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    const previous = order.traveler ? this.decryptTraveler(order.traveler) : null;
+    const changeKind = travelerChangeKind(previous, traveler);
+    if (previous && order.documentReviewStatus === "MANUAL_REVIEW" && changeKind !== "unchanged")
+      throw new ApiException({
+        code: "TRAVELER_REVIEW_LOCKED",
+        message: "Traveller details cannot be changed during manual review",
+        status: 409,
+      });
+    if (changeKind === "identity" && order.documentReviewStatus === "MANUALLY_APPROVED")
+      throw new ApiException({
+        code: "TRAVELER_REVIEW_LOCKED",
+        message: "Approved passport identity cannot be changed",
+        status: 409,
+      });
+    if (changeKind === "unchanged") return this.hostedCheckout(token);
+    const reverifyApprovedIdentity =
+      changeKind === "identity" && order.documentReviewStatus === "VERIFIED";
     const retryExistingPassport =
+      reverifyApprovedIdentity ||
       order.documentReviewStatus === "REUPLOAD_REQUIRED" ||
       (order.documentReviewStatus === "MANUAL_REVIEW" &&
         ["PARTIAL", "FAILED"].includes(

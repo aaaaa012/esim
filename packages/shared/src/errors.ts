@@ -38,6 +38,8 @@ export const ApiErrorCode = {
   ORDER_INVALID_STATE: "ORDER_INVALID_STATE",
   ORDER_NOT_FOUND: "ORDER_NOT_FOUND",
   ORDER_IMMUTABLE: "ORDER_IMMUTABLE",
+  ORDER_CONFLICT: "ORDER_CONFLICT",
+  TRAVELER_REVIEW_LOCKED: "TRAVELER_REVIEW_LOCKED",
   COMPATIBILITY_REQUIRED: "COMPATIBILITY_REQUIRED",
   TRAVELER_REQUIRED: "TRAVELER_REQUIRED",
   DOCUMENTS_REQUIRED: "DOCUMENTS_REQUIRED",
@@ -102,6 +104,11 @@ export const apiErrorMessage = (
       return "We could not find this order. It may have expired.";
     case ApiErrorCode.ORDER_INVALID_STATE:
       return "This order cannot be changed in its current state.";
+    case ApiErrorCode.ORDER_CONFLICT:
+    case "HTTP_409":
+      return "This order changed while you were editing. Reload it and check the latest details before continuing.";
+    case ApiErrorCode.TRAVELER_REVIEW_LOCKED:
+      return "Your traveller details are locked during review. Contact support with your order number if something needs correcting.";
     case ApiErrorCode.COMPATIBILITY_REQUIRED:
       return "Please confirm your device is eSIM-compatible to continue.";
     case ApiErrorCode.TRAVELER_REQUIRED:
