@@ -6,6 +6,7 @@ export const QUEUES = {
   reconciliation: "reconciliation",
   partnerWebhooks: "partner-webhooks",
   documents: "documents",
+  documentsTextract: "documents-textract",
   identityCallbacks: "identity-callbacks",
   partnerHosted: "partner-hosted",
 } as const;

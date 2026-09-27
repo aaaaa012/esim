@@ -57,51 +57,51 @@ local guest-order continuity.
 
 ## API hardening
 
-| Variable                     | Default | Used by                                               |
-| ---------------------------- | ------- | ----------------------------------------------------- |
-| `RATE_LIMIT_PER_MINUTE`      | `300`   | General per-IP+route limit (`rate-limit.guard.ts:18`) |
-| `AUTH_RATE_LIMIT_PER_MINUTE` | `60`    | Auth/public route limit (`rate-limit.guard.ts:19,33`) |
-| `AUTH_ME_RATE_LIMIT_PER_MINUTE` | `120` | Verified-user limit for `GET /auth/me` |
-| `AUTH_ME_IP_RATE_LIMIT_PER_MINUTE` | `600` | Pre-authentication IP safety ceiling for `GET /auth/me` |
-| `PORTAL_AUTH_TIMEOUT_MS` | `5000` | Customer and operations middleware session-check timeout |
+| Variable                           | Default | Used by                                                  |
+| ---------------------------------- | ------- | -------------------------------------------------------- |
+| `RATE_LIMIT_PER_MINUTE`            | `300`   | General per-IP+route limit (`rate-limit.guard.ts:18`)    |
+| `AUTH_RATE_LIMIT_PER_MINUTE`       | `60`    | Auth/public route limit (`rate-limit.guard.ts:19,33`)    |
+| `AUTH_ME_RATE_LIMIT_PER_MINUTE`    | `120`   | Verified-user limit for `GET /auth/me`                   |
+| `AUTH_ME_IP_RATE_LIMIT_PER_MINUTE` | `600`   | Pre-authentication IP safety ceiling for `GET /auth/me`  |
+| `PORTAL_AUTH_TIMEOUT_MS`           | `5000`  | Customer and operations middleware session-check timeout |
 
 ## Payments
 
-| Variable                    | Default                                               | Used by                                                                                                                     |
-| --------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `PAYMENT_MODE`              | —                                                     | `sandbox` or `production` selects real gateways (`payments.service.ts:25`)                                                  |
-| `PAYMENT_SIMULATOR_SECRET`  | `local-development-only-change-me`                    | Simulator HMAC signing/verification (`simulator.gateway.ts:13`, `webhooks.controller.ts:72`)                                |
-| `KHALTI_BASE_URL`           | `https://dev.khalti.com/api/v2` (from `.env.example`) | Khalti API root (`khalti.gateway.ts:22-25`)                                                                                 |
-| `KHALTI_SECRET_KEY`         | —                                                     | Khalti auth; its presence reports gateway UP (`khalti.gateway.ts:27-30`, `orders.controller.ts:30`, `admin.service.ts:209`) |
-| `KHALTI_REQUEST_TIMEOUT_MS` | `15000`                                               | Khalti request timeout (`khalti.gateway.ts:31-34`)                                                                          |
-| `FONEPAY_ENABLED`           | `false`                                               | Exposes Checkout by Fonepay only when every required credential is present                                                   |
-| `FONEPAY_BASE_URL`          | `https://thirdparty-merchantapi.fonepay.com`          | Live Merchant API root supplied by Fonepay                                                                                    |
-| `FONEPAY_USERNAME`          | —                                                     | Server-side OAuth username                                                                                                    |
-| `FONEPAY_PASSWORD`          | —                                                     | Server-side OAuth password; never sent to either web frontend                                                                 |
-| `FONEPAY_TERMINAL_ID`       | —                                                     | Merchant terminal identifier, maximum 16 characters                                                                           |
-| `FONEPAY_PRIVATE_KEY_PATH`  | —                                                     | Preferred absolute path to the server-only PKCS8 PEM used to sign request JSON                                                |
-| `FONEPAY_PRIVATE_KEY_BASE64`| —                                                     | Alternative PKCS8 private key encoded as Base64 DER or PEM                                                                     |
-| `FONEPAY_API_BASE_PATH`     | `/api/merchant/third-party/v2`                       | API base path override (some Fonepay routes use `/api/merchant/merchantDetailsForThirdParty/v2`)                              |
-| `FONEPAY_LOGIN_PATH`        | `{basePath}/login`                                   | Optional override for a separate UAT OAuth login route                                                                          |
-| `FONEPAY_BANK_CACHE_TTL_SECONDS` | `3600`                                          | Issuer bank directory cache freshness window                                                                                    |
-| `FONEPAY_BANK_SYNC_INTERVAL_MINUTES` | `360`                                       | How often the scheduled job refreshes the issuer bank directory from Fonepay                                                   |
-| `FONEPAY_BANK_MAX_STALE_SECONDS` | `604800`                                       | Max age of a last-known-good bank directory before checkout blocks on refresh                                                   |
-| `FONEPAY_REQUEST_TIMEOUT_MS`| `15000`                                               | Fonepay request timeout                                                                                                       |
+| Variable                             | Default                                               | Used by                                                                                                                     |
+| ------------------------------------ | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `PAYMENT_MODE`                       | —                                                     | `sandbox` or `production` selects real gateways (`payments.service.ts:25`)                                                  |
+| `PAYMENT_SIMULATOR_SECRET`           | `local-development-only-change-me`                    | Simulator HMAC signing/verification (`simulator.gateway.ts:13`, `webhooks.controller.ts:72`)                                |
+| `KHALTI_BASE_URL`                    | `https://dev.khalti.com/api/v2` (from `.env.example`) | Khalti API root (`khalti.gateway.ts:22-25`)                                                                                 |
+| `KHALTI_SECRET_KEY`                  | —                                                     | Khalti auth; its presence reports gateway UP (`khalti.gateway.ts:27-30`, `orders.controller.ts:30`, `admin.service.ts:209`) |
+| `KHALTI_REQUEST_TIMEOUT_MS`          | `15000`                                               | Khalti request timeout (`khalti.gateway.ts:31-34`)                                                                          |
+| `FONEPAY_ENABLED`                    | `false`                                               | Exposes Checkout by Fonepay only when every required credential is present                                                  |
+| `FONEPAY_BASE_URL`                   | `https://thirdparty-merchantapi.fonepay.com`          | Live Merchant API root supplied by Fonepay                                                                                  |
+| `FONEPAY_USERNAME`                   | —                                                     | Server-side OAuth username                                                                                                  |
+| `FONEPAY_PASSWORD`                   | —                                                     | Server-side OAuth password; never sent to either web frontend                                                               |
+| `FONEPAY_TERMINAL_ID`                | —                                                     | Merchant terminal identifier, maximum 16 characters                                                                         |
+| `FONEPAY_PRIVATE_KEY_PATH`           | —                                                     | Preferred absolute path to the server-only PKCS8 PEM used to sign request JSON                                              |
+| `FONEPAY_PRIVATE_KEY_BASE64`         | —                                                     | Alternative PKCS8 private key encoded as Base64 DER or PEM                                                                  |
+| `FONEPAY_API_BASE_PATH`              | `/api/merchant/third-party/v2`                        | API base path override (some Fonepay routes use `/api/merchant/merchantDetailsForThirdParty/v2`)                            |
+| `FONEPAY_LOGIN_PATH`                 | `{basePath}/login`                                    | Optional override for a separate UAT OAuth login route                                                                      |
+| `FONEPAY_BANK_CACHE_TTL_SECONDS`     | `3600`                                                | Issuer bank directory cache freshness window                                                                                |
+| `FONEPAY_BANK_SYNC_INTERVAL_MINUTES` | `360`                                                 | How often the scheduled job refreshes the issuer bank directory from Fonepay                                                |
+| `FONEPAY_BANK_MAX_STALE_SECONDS`     | `604800`                                              | Max age of a last-known-good bank directory before checkout blocks on refresh                                               |
+| `FONEPAY_REQUEST_TIMEOUT_MS`         | `15000`                                               | Fonepay request timeout                                                                                                     |
 
 ## Connectivity (Transatel)
 
-| Variable                            | Default                                                                                | Used by                                                                                   |
-| ----------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `TRANSATEL_BASE_URL`                | —                                                                                      | API root; per-domain URLs derived (`transatel.provider.ts:145-149`)                       |
-| `TRANSATEL_CLIENT_ID`               | —                                                                                      | OAuth client credentials (`transatel.provider.ts:157-171`)                                |
-| `TRANSATEL_CLIENT_SECRET`           | —                                                                                      | OAuth client credentials (`transatel.provider.ts:157-171`)                                |
-| `TRANSATEL_MVNO_REF`                | —                                                                                      | OCS order MVNO reference (`transatel.provider.ts:288-289,306`)                            |
-| `TRANSATEL_COS`                     | `WW_COS_UBG_MKP_EUR`                                                                   | Catalog COS (`transatel.provider.ts:379,462`)                                             |
-| `TRANSATEL_FX_TO_NPR`               | —                                                                                      | Catalog currency→NPR conversion (`transatel.provider.ts:630`)                             |
-| `TRANSATEL_CATALOG_SYNC_ON_STARTUP` | —                                                                                      | `true` syncs catalog at startup (`connectivity.service.ts:23`)                            |
-| `TRANSATEL_WEBHOOK_TARGET_URL`      | —                                                                                      | Public callback URL that must be configured as a Developer Console datastream             |
-| `TRANSATEL_WEBHOOK_SECRET`          | —                                                                                      | Webhook signature verification (`webhooks.controller.ts:76`, `transatel.provider.ts:482`) |
-| `TRANSATEL_REQUEST_TIMEOUT_MS`      | `15000`                                                                                | Outbound request timeout (`transatel.provider.ts:151-154`)                                |
+| Variable                            | Default              | Used by                                                                                   |
+| ----------------------------------- | -------------------- | ----------------------------------------------------------------------------------------- |
+| `TRANSATEL_BASE_URL`                | —                    | API root; per-domain URLs derived (`transatel.provider.ts:145-149`)                       |
+| `TRANSATEL_CLIENT_ID`               | —                    | OAuth client credentials (`transatel.provider.ts:157-171`)                                |
+| `TRANSATEL_CLIENT_SECRET`           | —                    | OAuth client credentials (`transatel.provider.ts:157-171`)                                |
+| `TRANSATEL_MVNO_REF`                | —                    | OCS order MVNO reference (`transatel.provider.ts:288-289,306`)                            |
+| `TRANSATEL_COS`                     | `WW_COS_UBG_MKP_EUR` | Catalog COS (`transatel.provider.ts:379,462`)                                             |
+| `TRANSATEL_FX_TO_NPR`               | —                    | Catalog currency→NPR conversion (`transatel.provider.ts:630`)                             |
+| `TRANSATEL_CATALOG_SYNC_ON_STARTUP` | —                    | `true` syncs catalog at startup (`connectivity.service.ts:23`)                            |
+| `TRANSATEL_WEBHOOK_TARGET_URL`      | —                    | Public callback URL that must be configured as a Developer Console datastream             |
+| `TRANSATEL_WEBHOOK_SECRET`          | —                    | Webhook signature verification (`webhooks.controller.ts:76`, `transatel.provider.ts:482`) |
+| `TRANSATEL_REQUEST_TIMEOUT_MS`      | `15000`              | Outbound request timeout (`transatel.provider.ts:151-154`)                                |
 
 ## Private document storage
 
@@ -129,6 +129,15 @@ first use and cached unless `TESSERACT_LANG_PATH` points at pre-bundled data.
 | `TESSERACT_LANG_PATH`  | Folder containing pre-downloaded `.traineddata` (`passport-verification.service.ts:135`) |
 | `TESSERACT_CACHE_PATH` | Cache dir for downloaded language data (`passport-verification.service.ts:135`)          |
 
+Hybrid OCR overflow uses `PASSPORT_OCR_MODE=hybrid`, a concurrency-one local
+Tesseract queue, and a separate `documents-textract` queue. Textract reads the
+original finalized object from `AWS_S3_BUCKET` with
+`StartDocumentTextDetection`, then the worker retrieves all paginated results
+with `GetDocumentTextDetection`. Configure `AWS_TEXTRACT_REGION` (or rely on
+`AWS_REGION`), the local waiting/age thresholds, Textract concurrency and
+timeout, and `PASSPORT_OCR_FALLBACK_ENABLED`. Non-production defaults to local
+OCR; production defaults to hybrid when the mode is omitted.
+
 When Amazon S3 is not configured the check is skipped (`SKIPPED`) rather than
 blocking payment, matching the local-simulator flow.
 
@@ -136,10 +145,10 @@ blocking payment, matching the local-simulator flow.
 
 | Variable                                                                | Used by                                                                                                                     |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `NOTIFICATION_MODE`                                                     | `live` enables real delivery; `simulator` never calls Amazon SES or WhatsApp                                                    |
-| `EMAIL_PROVIDER`                                                        | Must be `ses` for live email delivery                                                                                         |
-| `AWS_SES_REGION`                                                        | SES region; falls back to `AWS_REGION`                                                                                        |
-| `AWS_SES_CONFIGURATION_SET`                                             | Optional SES configuration set for event publishing                                                                          |
+| `NOTIFICATION_MODE`                                                     | `live` enables real delivery; `simulator` never calls Amazon SES or WhatsApp                                                |
+| `EMAIL_PROVIDER`                                                        | Must be `ses` for live email delivery                                                                                       |
+| `AWS_SES_REGION`                                                        | SES region; falls back to `AWS_REGION`                                                                                      |
+| `AWS_SES_CONFIGURATION_SET`                                             | Optional SES configuration set for event publishing                                                                         |
 | `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`               | Verified-domain sender, display name, and optional reply-to address                                                         |
 | `OPS_ALERT_EMAIL`, `ADMIN_ALERT_EMAIL`                                  | Monitored distribution addresses for direct infrastructure and operational alerts                                           |
 | `WHATSAPP_API_URL`                                                      | WhatsApp Graph URL, default `https://graph.facebook.com/v21.0` (`whatsapp.channel.ts:7`)                                    |

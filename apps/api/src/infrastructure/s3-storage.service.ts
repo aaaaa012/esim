@@ -336,6 +336,15 @@ export class S3StorageService {
     return Boolean(process.env.AWS_REGION && process.env.AWS_S3_BUCKET);
   }
 
+  /** Provider-neutral asset ids are the exact private S3 object keys. */
+  documentLocation(assetId: string) {
+    if (!this.isConfigured())
+      throw new ServiceUnavailableException(
+        "Private document storage is not configured",
+      );
+    return { bucket: this.bucket(), key: assetId };
+  }
+
   private client() {
     const region = process.env.AWS_REGION;
     if (!region || !process.env.AWS_S3_BUCKET)

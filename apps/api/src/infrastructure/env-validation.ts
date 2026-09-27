@@ -72,6 +72,26 @@ const baseSchema = z.object({
     .max(2_592_000)
     .optional(),
   PASSPORT_OCR_MAX_PAGES: z.coerce.number().int().min(1).max(16).optional(),
+  PASSPORT_OCR_MODE: z.enum(["local", "hybrid", "textract"]).optional(),
+  PASSPORT_OCR_LOCAL_WAITING_LIMIT: z.coerce.number().int().min(1).optional(),
+  PASSPORT_OCR_LOCAL_MAX_AGE_MS: z.coerce.number().int().positive().optional(),
+  PASSPORT_OCR_HEARTBEAT_MAX_AGE_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  PASSPORT_OCR_TEXTRACT_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional(),
+  PASSPORT_OCR_TEXTRACT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(5_000)
+    .optional(),
+  PASSPORT_OCR_FALLBACK_ENABLED: z.enum(["true", "false"]).optional(),
   PARTNER_WEBHOOK_TIMEOUT_MS: z.coerce
     .number()
     .int()
@@ -145,6 +165,7 @@ const baseSchema = z.object({
   TRANSATEL_MVNO_REF: z.string().min(1).optional(),
   TRANSATEL_WEBHOOK_TARGET_URL: z.string().url().optional(),
   AWS_REGION: z.string().min(1).optional(),
+  AWS_TEXTRACT_REGION: z.string().min(1).optional(),
   AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
   AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   AWS_SESSION_TOKEN: z.string().min(1).optional(),
@@ -256,6 +277,15 @@ export function validateEnv(
     }
     const productionResult = productionSchema.safeParse(config);
     if (!productionResult.success) return failWith(productionResult);
+    const ocrMode = config.PASSPORT_OCR_MODE ?? "hybrid";
+    if (
+      (ocrMode === "hybrid" || ocrMode === "textract") &&
+      !config.AWS_TEXTRACT_REGION &&
+      !config.AWS_REGION
+    )
+      throw new Error(
+        "AWS_TEXTRACT_REGION or AWS_REGION is required for Textract OCR",
+      );
     decodeAes256Key(config.APP_ENCRYPTION_KEY_BASE64);
     assertFonepayConfiguration(config);
     return config;

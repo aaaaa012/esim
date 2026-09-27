@@ -41,7 +41,7 @@ import { ConnectivityService } from "../integration/connectivity.service.js";
 import { EsimUsageView, UsageService } from "../esims/usage.service.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
-import { QueueService } from "../../jobs/queue.service.js";
+import { enqueuePassportOcr, QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
 import {
   ocrJobOptions,
@@ -846,8 +846,8 @@ export class PartnerService {
         .update(passportAttempt?.privateAssetId ?? document.privateAssetId)
         .digest("hex")
         .slice(0, 16);
-      await this.queues.add(
-        QUEUES.documents,
+      await enqueuePassportOcr(
+        this.queues,
         "verify-partner-documents",
         { verificationId },
         `document-verification-${verificationId}-${attemptKey}`,
@@ -1024,8 +1024,8 @@ export class PartnerService {
           )
           .digest("hex")
           .slice(0, 16);
-        await this.queues.add(
-          QUEUES.documents,
+        await enqueuePassportOcr(
+          this.queues,
           "verify-partner-documents",
           { verificationId },
           `document-verification-${verificationId}-${attemptKey}`,
@@ -1161,8 +1161,8 @@ export class PartnerService {
       const extraction = await this.prisma.passportExtraction.findUnique({
         where: { partnerVerificationId: verificationId },
       });
-      await this.queues.add(
-        QUEUES.documents,
+      await enqueuePassportOcr(
+        this.queues,
         "verify-partner-documents",
         { verificationId },
         `document-verification-${verificationId}-revision-${revision.version}-${createHash(
@@ -2957,19 +2957,20 @@ export class PartnerService {
         ...(order.documentReviewStatus === "CORRECTION_REQUIRED" &&
         Array.isArray(order.passportExtraction?.lastMismatchFields)
           ? {
-              mismatchedFields: order.passportExtraction.lastMismatchFields.filter(
-                (field): field is string =>
-                  typeof field === "string" &&
-                  [
-                    "firstName",
-                    "middleName",
-                    "surname",
-                    "dateOfBirth",
-                    "nationality",
-                    "passportNumber",
-                    "passportExpiryDate",
-                  ].includes(field),
-              ),
+              mismatchedFields:
+                order.passportExtraction.lastMismatchFields.filter(
+                  (field): field is string =>
+                    typeof field === "string" &&
+                    [
+                      "firstName",
+                      "middleName",
+                      "surname",
+                      "dateOfBirth",
+                      "nationality",
+                      "passportNumber",
+                      "passportExpiryDate",
+                    ].includes(field),
+                ),
             }
           : {}),
         documents: order.documents,
@@ -3088,15 +3089,24 @@ export class PartnerService {
 
   async setHostedTraveler(token: string, traveler: TravelerInput) {
     const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
-    const previous = order.traveler ? this.decryptTraveler(order.traveler) : null;
+    const previous = order.traveler
+      ? this.decryptTraveler(order.traveler)
+      : null;
     const changeKind = travelerChangeKind(previous, traveler);
-    if (previous && order.documentReviewStatus === "MANUAL_REVIEW" && changeKind !== "unchanged")
+    if (
+      previous &&
+      order.documentReviewStatus === "MANUAL_REVIEW" &&
+      changeKind !== "unchanged"
+    )
       throw new ApiException({
         code: "TRAVELER_REVIEW_LOCKED",
         message: "Traveller details cannot be changed during manual review",
         status: 409,
       });
-    if (changeKind === "identity" && order.documentReviewStatus === "MANUALLY_APPROVED")
+    if (
+      changeKind === "identity" &&
+      order.documentReviewStatus === "MANUALLY_APPROVED"
+    )
       throw new ApiException({
         code: "TRAVELER_REVIEW_LOCKED",
         message: "Approved passport identity cannot be changed",
@@ -3250,7 +3260,8 @@ export class PartnerService {
     )
       throw new ApiException({
         code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
-        message: "This contact number already has an active eSIM. Recharge it instead of buying another.",
+        message:
+          "This contact number already has an active eSIM. Recharge it instead of buying another.",
         status: 409,
       });
     return traveler;
@@ -5127,8 +5138,8 @@ export class PartnerService {
     if (!document) return;
     const id = document.id;
     try {
-      await this.queues.add(
-        QUEUES.documents,
+      await enqueuePassportOcr(
+        this.queues,
         "verify-passport",
         { orderId, documentId: id, privateAssetId: document.privateAssetId },
         orderPassportOcrJobId(orderId, id, document.privateAssetId, attemptKey),

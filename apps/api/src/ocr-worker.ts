@@ -12,12 +12,20 @@ async function bootstrap() {
   const resilience = app.get(ProductionResilienceService);
   const beat = () =>
     void resilience
-      .heartbeat("ocr-worker", { concurrency: 1, queue: "documents" })
+      .heartbeat("ocr-worker", {
+        localConcurrency: 1,
+        textractConcurrency: Number(
+          process.env.PASSPORT_OCR_TEXTRACT_CONCURRENCY ?? 4,
+        ),
+        queues: ["documents", "documents-textract"],
+      })
       .catch(() => undefined);
   beat();
   const timer = setInterval(beat, 30_000);
   timer.unref();
-  new Logger("OcrWorker").log("Document OCR worker ready (concurrency 1)");
+  new Logger("OcrWorker").log(
+    "Document OCR worker ready (local concurrency 1; Textract overflow enabled by configuration)",
+  );
 }
 
 if (!process.env.NODE_ENV)

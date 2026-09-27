@@ -3,14 +3,75 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from "@nestjs/common";
 import { Queue, Worker, type Job } from "bullmq";
 import { Redis } from "ioredis";
 import { createHash, randomUUID } from "node:crypto";
 import { DEFAULT_JOB_OPTIONS, QUEUES } from "./queues.js";
 import { PrismaService } from "../infrastructure/prisma.service.js";
+import { MetricsService } from "../observability/metrics.service.js";
 
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
+
+export type PassportOcrProvider = "tesseract" | "textract";
+export type PassportOcrRoutingReason =
+  | "LOCAL_MODE"
+  | "TEXTRACT_MODE"
+  | "LOCAL_CAPACITY_AVAILABLE"
+  | "LOCAL_QUEUE_DEPTH"
+  | "LOCAL_QUEUE_AGE"
+  | "LOCAL_WORKER_UNHEALTHY"
+  | "QUEUE_STATS_UNAVAILABLE";
+
+export type PassportOcrJobPayload =
+  | { orderId: string; documentId: string; privateAssetId?: string }
+  | { verificationId: string };
+
+/** Compatibility boundary for services whose unit tests use the historical
+ * QueueService.add-only stub. Production always takes the routed method. */
+export function enqueuePassportOcr(
+  queues: QueueService,
+  jobName: string,
+  payload: PassportOcrJobPayload,
+  jobId: string,
+  options?: {
+    attempts?: number;
+    backoff?: { type: "fixed" | "exponential"; delay: number };
+    allowDuplicate?: boolean;
+  },
+) {
+  if (typeof queues.addPassportOcr === "function")
+    return queues.addPassportOcr(jobName, payload, jobId, options);
+  return queues.add(QUEUES.documents, jobName, payload, jobId, options);
+}
+
+export function decidePassportOcrRoute(input: {
+  mode: "local" | "hybrid" | "textract";
+  waiting: number;
+  oldestAgeMs: number;
+  workerHealthy: boolean;
+  waitingLimit: number;
+  maxAgeMs: number;
+}): {
+  provider: PassportOcrProvider;
+  routingReason: PassportOcrRoutingReason;
+} {
+  if (input.mode === "local")
+    return { provider: "tesseract", routingReason: "LOCAL_MODE" };
+  if (input.mode === "textract")
+    return { provider: "textract", routingReason: "TEXTRACT_MODE" };
+  if (!input.workerHealthy)
+    return { provider: "textract", routingReason: "LOCAL_WORKER_UNHEALTHY" };
+  if (input.waiting >= input.waitingLimit)
+    return { provider: "textract", routingReason: "LOCAL_QUEUE_DEPTH" };
+  if (input.oldestAgeMs >= input.maxAgeMs)
+    return { provider: "textract", routingReason: "LOCAL_QUEUE_AGE" };
+  return {
+    provider: "tesseract",
+    routingReason: "LOCAL_CAPACITY_AVAILABLE",
+  };
+}
 
 /** BullMQ reserves `:` in custom IDs and rejects IDs made only of digits. */
 export function bullJobId(jobId: string) {
@@ -28,7 +89,10 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   private readonly workers = new Map<QueueName, Worker>();
   readonly enabled = Boolean(process.env.REDIS_URL);
 
-  constructor(private readonly prisma?: PrismaService) {
+  constructor(
+    private readonly prisma?: PrismaService,
+    @Optional() private readonly metrics?: MetricsService,
+  ) {
     if (process.env.NODE_ENV === "production" && !this.enabled)
       throw new Error(
         "REDIS_URL is required in production for durable order processing",
@@ -84,9 +148,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     }
     const queue = this.getQueue(name);
     const effectiveJobId = bullJobId(
-      options?.allowDuplicate
-        ? `${jobId}#${randomUUID().slice(0, 8)}`
-        : jobId,
+      options?.allowDuplicate ? `${jobId}#${randomUUID().slice(0, 8)}` : jobId,
     );
     const { allowDuplicate: _allowDuplicate, ...jobOptions } = options ?? {};
     const job = await queue.add(jobName, payload, {
@@ -95,6 +157,93 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       jobId: effectiveJobId,
     });
     return { id: job.id, simulated: false };
+  }
+
+  /** Routes new passport work before enqueueing so cloud overflow can drain in
+   * parallel with the deliberately single-threaded local Tesseract worker. */
+  async addPassportOcr(
+    jobName: string,
+    payload: PassportOcrJobPayload,
+    jobId: string,
+    options?: {
+      attempts?: number;
+      backoff?: { type: "fixed" | "exponential"; delay: number };
+      allowDuplicate?: boolean;
+    },
+  ) {
+    const { provider, routingReason } = await this.passportOcrRoute();
+    this.metrics?.recordOcrRouting(provider, routingReason);
+    const queue =
+      provider === "textract" ? QUEUES.documentsTextract : QUEUES.documents;
+    return this.add(
+      queue,
+      jobName,
+      { ...payload, provider, routingReason },
+      `${jobId}-${provider}`,
+      options,
+    );
+  }
+
+  async passportOcrRoute(): Promise<{
+    provider: PassportOcrProvider;
+    routingReason: PassportOcrRoutingReason;
+  }> {
+    const configured = process.env.PASSPORT_OCR_MODE;
+    const mode =
+      configured ??
+      (process.env.NODE_ENV === "production" ? "hybrid" : "local");
+    if (mode === "local" || !this.enabled)
+      return { provider: "tesseract", routingReason: "LOCAL_MODE" };
+    if (mode === "textract")
+      return { provider: "textract", routingReason: "TEXTRACT_MODE" };
+
+    try {
+      const queue = this.getQueue(QUEUES.documents);
+      const [counts, oldest, heartbeat] = await Promise.all([
+        queue.getJobCounts("waiting"),
+        queue.getJobs(["waiting"], 0, 0, true),
+        this.prisma?.enabled
+          ? this.prisma.workerHeartbeat.findFirst({
+              where: { worker: "ocr-worker" },
+              orderBy: { lastSeenAt: "desc" },
+              select: { lastSeenAt: true, status: true },
+            })
+          : Promise.resolve(null),
+      ]);
+      const waiting = counts.waiting ?? 0;
+      const oldestAgeMs = oldest[0]?.timestamp
+        ? Math.max(0, Date.now() - oldest[0].timestamp)
+        : 0;
+      const waitingLimit = Number(
+        process.env.PASSPORT_OCR_LOCAL_WAITING_LIMIT ?? 2,
+      );
+      const maxAgeMs = Number(
+        process.env.PASSPORT_OCR_LOCAL_MAX_AGE_MS ?? 20_000,
+      );
+      const heartbeatMaxAgeMs = Number(
+        process.env.PASSPORT_OCR_HEARTBEAT_MAX_AGE_MS ?? 75_000,
+      );
+      const workerHealthy =
+        !this.prisma?.enabled ||
+        (heartbeat?.status === "RUNNING" &&
+          Date.now() - heartbeat.lastSeenAt.getTime() <= heartbeatMaxAgeMs);
+      return decidePassportOcrRoute({
+        mode: "hybrid",
+        waiting,
+        oldestAgeMs,
+        workerHealthy,
+        waitingLimit,
+        maxAgeMs,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Could not inspect local OCR capacity; routing to Textract: ${error instanceof Error ? error.message : "unknown"}`,
+      );
+      return {
+        provider: "textract",
+        routingReason: "QUEUE_STATS_UNAVAILABLE",
+      };
+    }
   }
 
   /**
@@ -276,9 +425,13 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     if (!this.enabled) return false;
     const job = await this.getQueue(name).getJob(bullJobId(jobId));
     if (!job) return false;
-    return ["waiting", "active", "delayed", "prioritized", "waiting-children"].includes(
-      await job.getState(),
-    );
+    return [
+      "waiting",
+      "active",
+      "delayed",
+      "prioritized",
+      "waiting-children",
+    ].includes(await job.getState());
   }
 
   private coordinationConnection() {

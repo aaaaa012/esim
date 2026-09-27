@@ -35,7 +35,7 @@ import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import { ApiException } from "../../common/api-error.js";
 import { OrdersPersistenceService } from "./orders-persistence.service.js";
 import { InventoryService } from "../inventory/inventory.service.js";
-import { QueueService } from "../../jobs/queue.service.js";
+import { enqueuePassportOcr, QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
 import {
   ocrJobOptions,
@@ -1015,15 +1015,14 @@ export class OrdersService implements OnModuleInit {
         status: candidate.status,
         mobile: candidate.traveler?.mobile,
         ownerId: candidate.ownerId,
-        inventoryStatus: candidate.assignment?.inventoryId
-          ? "ASSIGNED"
-          : null,
+        inventoryStatus: candidate.assignment?.inventoryId ? "ASSIGNED" : null,
       }),
     );
     if (localConflict)
       throw new ApiException({
         code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
-        message: "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+        message:
+          "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
         status: 409,
       });
     if (!this.prisma.enabled) return;
@@ -1042,7 +1041,13 @@ export class OrdersService implements OnModuleInit {
             OR: [
               { traveler: { is: { contactNumberNormalized: contact } } },
               ...(order.ownerId
-                ? [{ customer: { is: { user: { is: { clerkId: order.ownerId } } } } }]
+                ? [
+                    {
+                      customer: {
+                        is: { user: { is: { clerkId: order.ownerId } } },
+                      },
+                    },
+                  ]
                 : []),
             ],
           },
@@ -1071,7 +1076,8 @@ export class OrdersService implements OnModuleInit {
     )
       throw new ApiException({
         code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
-        message: "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+        message:
+          "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
         status: 409,
       });
   }
@@ -1274,8 +1280,8 @@ export class OrdersService implements OnModuleInit {
           document.type === DocumentType.TICKET
             ? `replacement:${document.id}:${document.privateAssetId}`
             : `replacement:${order.documentReviewStartedAt ?? document.privateAssetId}`;
-        await this.queues.add(
-          QUEUES.documents,
+        await enqueuePassportOcr(
+          this.queues,
           "verify-order-passport",
           {
             orderId: order.id,
@@ -1504,8 +1510,8 @@ export class OrdersService implements OnModuleInit {
       order.documentReviewStartedAt = now.toISOString();
       await this.persistence.save(order);
       try {
-        await this.queues.add(
-          QUEUES.documents,
+        await enqueuePassportOcr(
+          this.queues,
           "extract-order-passport",
           {
             orderId: order.id,
@@ -1679,8 +1685,8 @@ export class OrdersService implements OnModuleInit {
       }
       await this.persistence.save(order);
       try {
-        await this.queues.add(
-          QUEUES.documents,
+        await enqueuePassportOcr(
+          this.queues,
           "verify-order-passport",
           {
             orderId: order.id,
@@ -1817,10 +1823,7 @@ export class OrdersService implements OnModuleInit {
             ? "Passport verification must complete before payment"
             : "Passport verification is required before payment",
       });
-    if (
-      this.prisma.enabled &&
-      order.contactRuleVersion !== 0
-    )
+    if (this.prisma.enabled && order.contactRuleVersion !== 0)
       await this.claimNewEsimContact(order);
   }
 
@@ -1871,11 +1874,13 @@ export class OrdersService implements OnModuleInit {
             });
             const inventoryStatus = previous?.customerEsim?.inventory.status;
             const terminal = previous
-              ? ([
-                  OrderStatus.CANCELLED,
-                  OrderStatus.REFUNDED,
-                  OrderStatus.PAYMENT_FAILED,
-                ] as string[]).includes(previous.status)
+              ? (
+                  [
+                    OrderStatus.CANCELLED,
+                    OrderStatus.REFUNDED,
+                    OrderStatus.PAYMENT_FAILED,
+                  ] as string[]
+                ).includes(previous.status)
               : false;
             const released =
               !previous ||
@@ -1887,7 +1892,8 @@ export class OrdersService implements OnModuleInit {
             if (!released)
               throw new ApiException({
                 code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
-                message: "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+                message:
+                  "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
                 status: 409,
               });
             await tx.esimContactClaim.delete({
@@ -1919,7 +1925,8 @@ export class OrdersService implements OnModuleInit {
       )
         throw new ApiException({
           code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
-          message: "This contact number or account is already linked to an active eSIM. Recharge it instead of buying another.",
+          message:
+            "This contact number or account is already linked to an active eSIM. Recharge it instead of buying another.",
           status: 409,
         });
       throw error;
@@ -2466,7 +2473,9 @@ export class OrdersService implements OnModuleInit {
             : []),
         ],
         customerEsim: {
-          is: { inventory: { is: { status: { in: ["ASSIGNED", "ACTIVATED"] } } } },
+          is: {
+            inventory: { is: { status: { in: ["ASSIGNED", "ACTIVATED"] } } },
+          },
         },
       },
       include: {
@@ -2957,10 +2966,7 @@ export class OrdersService implements OnModuleInit {
       );
       return;
     }
-    if (
-      order.purchaseType !== "TOPUP" &&
-      order.contactRuleVersion !== 0
-    )
+    if (order.purchaseType !== "TOPUP" && order.contactRuleVersion !== 0)
       await this.claimNewEsimContact(order);
     const target = await this.provisioningTarget(order);
     const reuseExisting = Boolean(target);

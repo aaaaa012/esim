@@ -11,7 +11,7 @@ import { NotificationService } from "../modules/notification/notification.servic
 import { MetricsService } from "../observability/metrics.service.js";
 import { UsageService } from "../modules/esims/usage.service.js";
 import { S3StorageService } from "../infrastructure/s3-storage.service.js";
-import { QueueService } from "./queue.service.js";
+import { enqueuePassportOcr, QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
 import { OrdersService } from "../modules/orders/orders.service.js";
 import { PaymentsService } from "../modules/payments/payments.service.js";
@@ -385,8 +385,8 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
       const passport = order.documents[0];
       if (!passport) continue;
       try {
-        await this.queues.add(
-          QUEUES.documents,
+        await enqueuePassportOcr(
+          this.queues,
           "verify-order-passport",
           {
             orderId: order.id,
@@ -544,8 +544,8 @@ export class ReconciliationService implements OnModuleInit, OnModuleDestroy {
           .update(verification.documents[0]?.privateAssetId ?? verification.id)
           .digest("hex")
           .slice(0, 16);
-        await this.queues.add(
-          QUEUES.documents,
+        await enqueuePassportOcr(
+          this.queues,
           "verify-partner-documents",
           { verificationId: verification.id },
           `document-verification-${verification.id}-${attemptKey}`,

@@ -14,10 +14,18 @@ import {
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
 import { ProductionResilienceService } from "./production-resilience.service.js";
+import type {
+  PassportOcrProvider,
+  PassportOcrRoutingReason,
+} from "./queue.service.js";
 
-type PassportOcrJob =
+type PassportOcrJob = (
   | { orderId: string; documentId: string; privateAssetId?: string }
-  | { verificationId: string };
+  | { verificationId: string }
+) & {
+  provider?: PassportOcrProvider;
+  routingReason?: PassportOcrRoutingReason;
+};
 
 class ManualDocumentDecisionWon extends Error {}
 
@@ -47,6 +55,13 @@ export class PassportOcrProcessor implements OnModuleInit {
       QUEUES.documents,
       (job) => this.process(job as Job<PassportOcrJob>),
       { concurrency: 1 },
+    );
+    this.queues.registerWorker(
+      QUEUES.documentsTextract,
+      (job) => this.process(job as Job<PassportOcrJob>),
+      {
+        concurrency: Number(process.env.PASSPORT_OCR_TEXTRACT_CONCURRENCY ?? 4),
+      },
     );
   }
 
@@ -167,20 +182,23 @@ export class PassportOcrProcessor implements OnModuleInit {
 
     const traveler = this.decryptTraveler(order.traveler);
     if (!traveler) {
-      const extraction = await this.passportVerifier.extract({
-        id: order.id,
-        purchaseType: "INITIAL_PURCHASE",
-        documents: [
-          {
-            id: passport.id,
-            type: DocumentType.PASSPORT,
-            fileName: passport.fileName,
-            privateAssetId: passport.privateAssetId,
-            status: passport.status,
-            uploadVerified: true,
-          },
-        ],
-      } as never);
+      const extraction = await this.passportVerifier.extract(
+        {
+          id: order.id,
+          purchaseType: "INITIAL_PURCHASE",
+          documents: [
+            {
+              id: passport.id,
+              type: DocumentType.PASSPORT,
+              fileName: passport.fileName,
+              privateAssetId: passport.privateAssetId,
+              status: passport.status,
+              uploadVerified: true,
+            },
+          ],
+        } as never,
+        this.ocrContext(job, order.id),
+      );
       const passportInvalid = [
         "MRZ_NOT_READABLE",
         "PASSPORT_BIODATA_NOT_DETECTED",
@@ -306,22 +324,25 @@ export class PassportOcrProcessor implements OnModuleInit {
           traveler,
           order.passportExtraction?.confidence,
         )
-      : await this.passportVerifier.verify({
-          id: order.id,
-          purchaseType:
-            order.orderType === "TOPUP" ? "TOPUP" : "INITIAL_PURCHASE",
-          traveler,
-          documents: [
-            {
-              id: passport.id,
-              type: DocumentType.PASSPORT,
-              fileName: passport.fileName,
-              privateAssetId: passport.privateAssetId,
-              status: passport.status,
-              uploadVerified: true,
-            },
-          ],
-        } as never);
+      : await this.passportVerifier.verify(
+          {
+            id: order.id,
+            purchaseType:
+              order.orderType === "TOPUP" ? "TOPUP" : "INITIAL_PURCHASE",
+            traveler,
+            documents: [
+              {
+                id: passport.id,
+                type: DocumentType.PASSPORT,
+                fileName: passport.fileName,
+                privateAssetId: passport.privateAssetId,
+                status: passport.status,
+                uploadVerified: true,
+              },
+            ],
+          } as never,
+          this.ocrContext(job, order.id),
+        );
 
     const technicalFailure =
       result.method === "ocr-error" || result.status === "NOT_READY";
@@ -568,20 +589,23 @@ export class PassportOcrProcessor implements OnModuleInit {
         verification.mode === "EXTRACT_FIRST" &&
         !verification.travelerSnapshot
       ) {
-        const extraction = await this.passportVerifier.extract({
-          id: verification.id,
-          purchaseType: "INITIAL_PURCHASE",
-          documents: [
-            {
-              id: passport.id,
-              type: DocumentType.PASSPORT,
-              fileName: passport.fileName,
-              privateAssetId: passport.privateAssetId,
-              status: "PENDING",
-              uploadVerified: true,
-            },
-          ],
-        } as never);
+        const extraction = await this.passportVerifier.extract(
+          {
+            id: verification.id,
+            purchaseType: "INITIAL_PURCHASE",
+            documents: [
+              {
+                id: passport.id,
+                type: DocumentType.PASSPORT,
+                fileName: passport.fileName,
+                privateAssetId: passport.privateAssetId,
+                status: "PENDING",
+                uploadVerified: true,
+              },
+            ],
+          } as never,
+          this.ocrContext(job, verification.id),
+        );
         const nextStatus = [
           "MRZ_NOT_READABLE",
           "PASSPORT_BIODATA_NOT_DETECTED",
@@ -668,21 +692,24 @@ export class PassportOcrProcessor implements OnModuleInit {
             traveler,
             verification.passportExtraction?.confidence,
           )
-        : await this.passportVerifier.verify({
-            id: verification.id,
-            purchaseType: "INITIAL_PURCHASE",
-            traveler,
-            documents: [
-              {
-                id: passport.id,
-                type: DocumentType.PASSPORT,
-                fileName: passport.fileName,
-                privateAssetId: passport.privateAssetId,
-                status: "PENDING",
-                uploadVerified: true,
-              },
-            ],
-          } as never);
+        : await this.passportVerifier.verify(
+            {
+              id: verification.id,
+              purchaseType: "INITIAL_PURCHASE",
+              traveler,
+              documents: [
+                {
+                  id: passport.id,
+                  type: DocumentType.PASSPORT,
+                  fileName: passport.fileName,
+                  privateAssetId: passport.privateAssetId,
+                  status: "PENDING",
+                  uploadVerified: true,
+                },
+              ],
+            } as never,
+            this.ocrContext(job, verification.id),
+          );
       if (
         result.status === "NOT_READY" ||
         (result.status === "FAILED" && result.method === "ocr-error")
@@ -898,6 +925,16 @@ export class PassportOcrProcessor implements OnModuleInit {
       if (!exhausted) throw error;
       return { status: "MANUAL_REVIEW" };
     }
+  }
+
+  private ocrContext(job: Job<PassportOcrJob>, correlationId: string) {
+    return {
+      ...(job.data.provider ? { provider: job.data.provider } : {}),
+      ...(job.data.routingReason
+        ? { routingReason: job.data.routingReason }
+        : {}),
+      correlationId,
+    };
   }
 
   private async prismaSafeVerify(assetId: string) {

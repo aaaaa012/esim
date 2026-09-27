@@ -92,3 +92,34 @@ EMAIL_REPLY_TO=support@example.com
 Rollback requires restoring the prior application build and legacy provider
 credentials. New objects written after cutover must be copied back before a
 rollback that expects Cloudinary reads.
+
+## 5. Configure Textract OCR overflow
+
+The OCR worker can keep Tesseract as its normal path and route bursts to the
+asynchronous Textract text-detection API. The cloud path calls
+`StartDocumentTextDetection` with the finalized private S3 object key, then
+retrieves every result page with `GetDocumentTextDetection` and `NextToken`.
+The stable asset-key hash is used as `ClientRequestToken`, making repeated start
+requests idempotent for the seven-day Textract token window.
+
+Grant the workload role only the Textract operations used by this flow; its
+existing private-document `s3:GetObject` permission lets Textract read the
+specified object:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "textract:StartDocumentTextDetection",
+    "textract:GetDocumentTextDetection"
+  ],
+  "Resource": "*"
+}
+```
+
+Deploy initially with `PASSPORT_OCR_MODE=local`. After the IAM and non-sensitive
+fixture smoke tests pass, set `PASSPORT_OCR_MODE=hybrid`. New jobs overflow when
+the local queue has two waiting jobs, the oldest wait reaches 20 seconds, or the
+OCR heartbeat is stale. To roll back without redeploying, restore
+`PASSPORT_OCR_MODE=local`, allow the `documents-textract` queue to drain, and
+then remove the Textract permission.

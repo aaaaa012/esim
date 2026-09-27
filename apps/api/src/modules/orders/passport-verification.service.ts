@@ -2,8 +2,16 @@ import {
   Injectable,
   Logger,
   OnModuleDestroy,
+  Optional,
   ServiceUnavailableException,
 } from "@nestjs/common";
+import {
+  GetDocumentTextDetectionCommand,
+  StartDocumentTextDetectionCommand,
+  TextractClient,
+  type Block,
+} from "@aws-sdk/client-textract";
+import { createHash } from "node:crypto";
 import { createWorker, PSM, type Worker } from "tesseract.js";
 import sharp from "sharp";
 import { DocumentType, type TravelerInput } from "@visa-compass/shared";
@@ -22,6 +30,28 @@ import {
 } from "./mrz-parser.js";
 import type { DemoOrder } from "./orders.service.js";
 import { ISO3_TO_ISO2 } from "../integration/transatel.provider.js";
+import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { MetricsService } from "../../observability/metrics.service.js";
+import type {
+  PassportOcrProvider,
+  PassportOcrRoutingReason,
+} from "../../jobs/queue.service.js";
+
+export type PassportOcrContext = {
+  provider?: PassportOcrProvider;
+  routingReason?: PassportOcrRoutingReason;
+  correlationId?: string;
+};
+
+export type PassportOcrRecognition = {
+  text: string;
+  bandText?: string;
+  confidence?: number;
+  provider: PassportOcrProvider;
+  latencyMs?: number;
+  modelVersion?: string;
+  providerRequestId?: string;
+};
 
 export type PassportVerificationStatus =
   "VERIFIED" | "PARTIAL" | "FAILED" | "NOT_READY" | "SKIPPED";
@@ -40,6 +70,7 @@ export type PassportVerificationResult = {
   checkedAt: string;
   method:
     | "tesseract-ocr"
+    | "aws-textract"
     | "stored-extraction"
     | "simulator"
     | "pdf-unreadable"
@@ -689,7 +720,8 @@ export const bestMrzCandidate = (
   for (const parsed of parsedCandidates) {
     for (const line1 of nameLines) {
       const combined = parseMrz(`${line1}\n${parsed.line2}`);
-      if (mrzCandidateScore(combined) > mrzCandidateScore(best)) best = combined;
+      if (mrzCandidateScore(combined) > mrzCandidateScore(best))
+        best = combined;
     }
   }
   return best;
@@ -716,6 +748,7 @@ export class PassportVerificationService implements OnModuleDestroy {
   private worker: Worker | null = null;
   private workerPromise: Promise<Worker> | null = null;
   private recognizing = false;
+  private textractClient: TextractClient | null = null;
   private readonly language = process.env.TESSERACT_LANG ?? "eng";
   private readonly timeoutMs = Number(
     process.env.PASSPORT_OCR_TIMEOUT_MS ?? 30_000,
@@ -731,9 +764,16 @@ export class PassportVerificationService implements OnModuleDestroy {
   private static readonly RECOVERY_ROTATIONS = [0, 90, 180, 270] as const;
   private static readonly RECOVERY_BAND_RATIOS = [0.28, 0.42] as const;
 
-  constructor(private readonly storage: S3StorageService) {}
+  constructor(
+    private readonly storage: S3StorageService,
+    @Optional() private readonly prisma?: PrismaService,
+    @Optional() private readonly metrics?: MetricsService,
+  ) {}
 
-  async extract(order: DemoOrder): Promise<PassportExtractionResult> {
+  async extract(
+    order: DemoOrder,
+    context: PassportOcrContext = {},
+  ): Promise<PassportExtractionResult> {
     const checkedAt = new Date().toISOString();
     const required: PassportExtractionResult["fieldsRequiringInput"] = [
       "firstName",
@@ -768,6 +808,8 @@ export class PassportVerificationService implements OnModuleDestroy {
     try {
       const recognized = await this.recognizePassportDocument(
         passport.privateAssetId,
+        undefined,
+        { ...context, correlationId: context.correlationId ?? order.id },
       );
       const mrz = bestMrzCandidate(recognized.bandText, recognized.text);
       if (!mrz)
@@ -778,7 +820,10 @@ export class PassportVerificationService implements OnModuleDestroy {
           ...(recognized.confidence !== undefined
             ? { confidence: recognized.confidence }
             : {}),
-          method: "tesseract-ocr",
+          method:
+            recognized.provider === "textract"
+              ? "aws-textract"
+              : "tesseract-ocr",
           checkedAt,
           failureCode: looksLikePassport(recognized.text)
             ? "MRZ_REVIEW_REQUIRED"
@@ -828,7 +873,10 @@ export class PassportVerificationService implements OnModuleDestroy {
           ...(recognized.confidence !== undefined
             ? { confidence: recognized.confidence }
             : {}),
-          method: "tesseract-ocr",
+          method:
+            recognized.provider === "textract"
+              ? "aws-textract"
+              : "tesseract-ocr",
           checkedAt,
           failureCode: "PASSPORT_EXPIRED",
         };
@@ -839,7 +887,8 @@ export class PassportVerificationService implements OnModuleDestroy {
         ...(recognized.confidence !== undefined
           ? { confidence: recognized.confidence }
           : {}),
-        method: "tesseract-ocr",
+        method:
+          recognized.provider === "textract" ? "aws-textract" : "tesseract-ocr",
         checkedAt,
       };
     } catch (error) {
@@ -902,7 +951,10 @@ export class PassportVerificationService implements OnModuleDestroy {
     }
   }
 
-  async verify(order: DemoOrder): Promise<PassportVerificationResult> {
+  async verify(
+    order: DemoOrder,
+    context: PassportOcrContext = {},
+  ): Promise<PassportVerificationResult> {
     if (order.purchaseType === "TOPUP") {
       return {
         status: "SKIPPED",
@@ -982,6 +1034,7 @@ export class PassportVerificationService implements OnModuleDestroy {
       const result = await this.recognizePassportDocument(
         passport.privateAssetId,
         images,
+        { ...context, correlationId: context.correlationId ?? order.id },
       );
       confidence = result.confidence;
       const { matchedFields } = comparePassport(result.text, order.traveler);
@@ -993,7 +1046,8 @@ export class PassportVerificationService implements OnModuleDestroy {
         matchedFields,
         ...(confidence !== undefined ? { confidence } : {}),
         checkedAt: new Date().toISOString(),
-        method: "tesseract-ocr",
+        method:
+          result.provider === "textract" ? "aws-textract" : "tesseract-ocr",
       };
     } catch (error) {
       this.logger.error(
@@ -1017,6 +1071,7 @@ export class PassportVerificationService implements OnModuleDestroy {
         "Passport verification is busy; try again shortly",
       );
     this.recognizing = true;
+    const startedAt = Date.now();
     try {
       const worker = await this.workerFor();
       let timeout: NodeJS.Timeout | undefined;
@@ -1069,13 +1124,25 @@ export class PassportVerificationService implements OnModuleDestroy {
           this.workerPromise = null;
         }
       }
-      return {
+      const recognized = {
         text,
         ...(bandText.trim() ? { bandText } : {}),
         confidence:
           typeof data.confidence === "number" ? data.confidence : undefined,
+        provider: "tesseract" as const,
       };
+      this.metrics?.recordOcrProvider(
+        "tesseract",
+        Date.now() - startedAt,
+        true,
+      );
+      return recognized;
     } catch (error) {
+      this.metrics?.recordOcrProvider(
+        "tesseract",
+        Date.now() - startedAt,
+        false,
+      );
       // A timed-out worker may remain wedged; discard it before accepting a
       // subsequent request rather than serializing all later requests behind it.
       if (this.worker) await this.worker.terminate().catch(() => undefined);
@@ -1238,7 +1305,20 @@ export class PassportVerificationService implements OnModuleDestroy {
   private async recognizePassportDocument(
     assetId: string,
     loadedImages?: Array<{ bytes: Buffer; contentType: string }>,
+    context: PassportOcrContext = {},
   ) {
+    const fallbackEnabled =
+      (process.env.PASSPORT_OCR_FALLBACK_ENABLED ?? "true") === "true";
+    if ((context.provider ?? "tesseract") === "textract") {
+      try {
+        return await this.recognizeTextractDocument(assetId, context);
+      } catch (textractError) {
+        if (!fallbackEnabled || !(await this.localFallbackAvailable()))
+          throw textractError;
+        this.metrics?.recordOcrFallback("textract", "tesseract");
+      }
+    }
+
     const images = loadedImages ?? (await this.loadPassportImages(assetId));
     let best: Awaited<
       ReturnType<PassportVerificationService["recognize"]>
@@ -1278,10 +1358,222 @@ export class PassportVerificationService implements OnModuleDestroy {
       )
         return recognized;
     }
+    if (
+      fallbackEnabled &&
+      this.textractConfigured() &&
+      !bestMrzCandidate(best?.bandText, best?.text)?.valid
+    ) {
+      this.metrics?.recordOcrFallback("tesseract", "textract");
+      try {
+        const cloud = await this.recognizeTextractDocument(assetId, context);
+        if (
+          !best ||
+          mrzCandidateScore(bestMrzCandidate(cloud.text)) >=
+            mrzCandidateScore(bestMrzCandidate(best.bandText, best.text))
+        )
+          return cloud;
+      } catch {
+        // Preserve the strongest local read when cloud fallback is unavailable.
+      }
+    }
     if (best) return best;
     throw new Error(
       `OCR failed for all ${pages.length} rendered passport page(s): ${pageErrors.join("; ")}`,
     );
+  }
+
+  private textractConfigured() {
+    return Boolean(process.env.AWS_TEXTRACT_REGION ?? process.env.AWS_REGION);
+  }
+
+  private async localFallbackAvailable() {
+    if (this.recognizing) return false;
+    return true;
+  }
+
+  private async recognizeTextractDocument(
+    assetId: string,
+    context: PassportOcrContext,
+  ): Promise<PassportOcrRecognition> {
+    const region = process.env.AWS_TEXTRACT_REGION ?? process.env.AWS_REGION;
+    if (!region) throw new Error("AWS Textract region is not configured");
+    this.textractClient ??= new TextractClient({ region, maxAttempts: 3 });
+    const started = Date.now();
+    const controller = new AbortController();
+    const timeoutMs = Number(
+      process.env.PASSPORT_OCR_TEXTRACT_TIMEOUT_MS ?? 60_000,
+    );
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const location = this.storage.documentLocation(assetId);
+      const token = createHash("sha256")
+        .update(assetId)
+        .digest("hex")
+        .slice(0, 64);
+      const startedJob = await this.textractClient.send(
+        new StartDocumentTextDetectionCommand({
+          DocumentLocation: {
+            S3Object: { Bucket: location.bucket, Name: location.key },
+          },
+          ClientRequestToken: token,
+          JobTag: "passport-ocr",
+        }),
+        { abortSignal: controller.signal },
+      );
+      if (!startedJob.JobId) throw new Error("Textract returned no job id");
+
+      let status: string | undefined = "IN_PROGRESS";
+      let statusMessage: string | undefined;
+      let modelVersion: string | undefined;
+      let requestId = startedJob.$metadata.requestId;
+      let blocks: Block[] = [];
+      let pollDelayMs = 400;
+      while (status === "IN_PROGRESS") {
+        if (Date.now() - started >= timeoutMs)
+          throw new Error("Textract asynchronous job timed out");
+        await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+        const result = await this.textractClient.send(
+          new GetDocumentTextDetectionCommand({
+            JobId: startedJob.JobId,
+            MaxResults: 1_000,
+          }),
+          { abortSignal: controller.signal },
+        );
+        status = result.JobStatus;
+        statusMessage = result.StatusMessage;
+        modelVersion = result.DetectDocumentTextModelVersion;
+        requestId = result.$metadata.requestId ?? requestId;
+        if (status === "SUCCEEDED" || status === "PARTIAL_SUCCESS") {
+          blocks.push(...(result.Blocks ?? []));
+          let nextToken = result.NextToken;
+          while (nextToken) {
+            const page = await this.textractClient.send(
+              new GetDocumentTextDetectionCommand({
+                JobId: startedJob.JobId,
+                MaxResults: 1_000,
+                NextToken: nextToken,
+              }),
+              { abortSignal: controller.signal },
+            );
+            blocks.push(...(page.Blocks ?? []));
+            nextToken = page.NextToken;
+          }
+        }
+        pollDelayMs = Math.min(2_000, Math.round(pollDelayMs * 1.5));
+      }
+      if (status !== "SUCCEEDED" && status !== "PARTIAL_SUCCESS")
+        throw new Error(
+          `Textract job ${status ?? "UNKNOWN"}: ${statusMessage ?? "no status message"}`,
+        );
+      const lines = textractLines(blocks);
+      if (!lines.length) throw new Error("Textract returned no text lines");
+      const durationMs = Date.now() - started;
+      const text = lines.map((line) => line.Text).join("\n");
+      const mrzLines = lines.filter((line) => isMrzLikeLine(line.Text));
+      const confidenceSource = mrzLines.length ? mrzLines : lines;
+      const confidence =
+        confidenceSource.reduce(
+          (sum, line) => sum + (line.Confidence ?? 0),
+          0,
+        ) / confidenceSource.length;
+      await this.recordTextractCall({
+        status: 200,
+        durationMs,
+        ...(context.correlationId
+          ? { correlationId: context.correlationId }
+          : {}),
+        page: 0,
+        blockCount: blocks.length,
+        ...(modelVersion ? { modelVersion } : {}),
+        ...(context.routingReason
+          ? { routingReason: context.routingReason }
+          : {}),
+        ...(requestId ? { requestId } : {}),
+        jobId: startedJob.JobId,
+      });
+      this.metrics?.recordOcrProvider("textract", durationMs, true);
+      return {
+        text,
+        confidence,
+        provider: "textract",
+        latencyMs: durationMs,
+        ...(modelVersion ? { modelVersion } : {}),
+        providerRequestId: startedJob.JobId,
+      };
+    } catch (error) {
+      const durationMs = Date.now() - started;
+      const sdkError = error as {
+        name?: string;
+        $metadata?: { httpStatusCode?: number; requestId?: string };
+      };
+      await this.recordTextractCall({
+        status: sdkError.$metadata?.httpStatusCode ?? 503,
+        durationMs,
+        ...(context.correlationId
+          ? { correlationId: context.correlationId }
+          : {}),
+        page: 0,
+        blockCount: 0,
+        ...(context.routingReason
+          ? { routingReason: context.routingReason }
+          : {}),
+        ...(sdkError.$metadata?.requestId
+          ? { requestId: sdkError.$metadata.requestId }
+          : {}),
+        errorCode: sdkError.name ?? "TextractError",
+      });
+      this.metrics?.recordOcrProvider("textract", durationMs, false);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async recordTextractCall(input: {
+    status: number;
+    durationMs: number;
+    correlationId?: string;
+    page: number;
+    blockCount: number;
+    modelVersion?: string;
+    routingReason?: string;
+    requestId?: string;
+    jobId?: string;
+    errorCode?: string;
+  }) {
+    if (!this.prisma?.enabled) return;
+    await this.prisma.integrationLog
+      .create({
+        data: {
+          operation: "textract-start-get-document-text-detection",
+          method: "AWS_SDK",
+          endpoint:
+            "textract:StartDocumentTextDetection/GetDocumentTextDetection",
+          status: input.status,
+          durationMs: input.durationMs,
+          ...(input.correlationId
+            ? { correlationId: input.correlationId }
+            : {}),
+          ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+          requestBody: {
+            page: input.page,
+            ...(input.routingReason
+              ? { routingReason: input.routingReason }
+              : {}),
+          },
+          responseBody: {
+            blockCount: input.blockCount,
+            ...(input.modelVersion ? { modelVersion: input.modelVersion } : {}),
+            ...(input.requestId ? { requestId: input.requestId } : {}),
+            ...(input.jobId ? { jobId: input.jobId } : {}),
+          },
+        },
+      })
+      .catch((error) =>
+        this.logger.warn(
+          `Could not persist sanitized Textract telemetry: ${error instanceof Error ? error.message : "unknown"}`,
+        ),
+      );
   }
 
   private async loadPassportImages(assetId: string) {
@@ -1320,9 +1612,33 @@ export class PassportVerificationService implements OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    if (!this.worker) return;
-    await this.worker.terminate().catch(() => undefined);
+    if (this.worker) await this.worker.terminate().catch(() => undefined);
     this.worker = null;
     this.workerPromise = null;
+    this.textractClient?.destroy();
+    this.textractClient = null;
   }
+}
+
+const isMrzLikeLine = (text: string) =>
+  /^[A-Z0-9<]{40,}$/.test(text.replace(/\s+/g, "").toUpperCase());
+
+export function textractLines(blocks: Block[]) {
+  return blocks
+    .filter(
+      (block): block is Block & { Text: string } =>
+        block.BlockType === "LINE" && Boolean(block.Text?.trim()),
+    )
+    .sort((left, right) => {
+      const page = (left.Page ?? 1) - (right.Page ?? 1);
+      if (page) return page;
+      const top =
+        (left.Geometry?.BoundingBox?.Top ?? 0) -
+        (right.Geometry?.BoundingBox?.Top ?? 0);
+      if (Math.abs(top) > 0.005) return top;
+      return (
+        (left.Geometry?.BoundingBox?.Left ?? 0) -
+        (right.Geometry?.BoundingBox?.Left ?? 0)
+      );
+    });
 }

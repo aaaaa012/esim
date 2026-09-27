@@ -17,9 +17,138 @@ import {
   normalizeName,
   normalizeText,
   PassportVerificationService,
+  textractLines,
   verifyStoredExtraction,
   verdictFor,
 } from "./passport-verification.service.js";
+
+describe("textractLines", () => {
+  it("keeps only LINE blocks in geometric page order", () => {
+    const lines = textractLines([
+      { BlockType: "WORD", Text: "duplicate", Page: 1 },
+      {
+        BlockType: "LINE",
+        Text: "SECOND",
+        Page: 1,
+        Geometry: { BoundingBox: { Top: 0.8, Left: 0.1 } },
+      },
+      {
+        BlockType: "LINE",
+        Text: "FIRST",
+        Page: 1,
+        Geometry: { BoundingBox: { Top: 0.1, Left: 0.1 } },
+      },
+      { BlockType: "PAGE", Page: 1 },
+    ]);
+    expect(lines.map((line) => line.Text)).toEqual(["FIRST", "SECOND"]);
+  });
+
+  it("preserves the supplied Nepali passport MRZ without word duplication", () => {
+    const mrz = textractLines([
+      {
+        BlockType: "LINE",
+        Text: "P<NPLBISHWOKARMA<<RESHAM<KUMAR<<<<<<<<<<<<<<",
+        Confidence: 85.575,
+        Page: 1,
+      },
+      {
+        BlockType: "LINE",
+        Text: "PA03190640NPL8307303M320503539145<<<<<<<<<20",
+        Confidence: 98.817,
+        Page: 1,
+      },
+      { BlockType: "WORD", Text: "PA0319064", Page: 1 },
+    ]).map((line) => line.Text);
+    const parsed = parseMrz(mrz.join("\n"));
+    expect(mrz).toHaveLength(2);
+    expect(parsed).toMatchObject({
+      surname: "BISHWOKARMA",
+      givenNames: "RESHAM KUMAR",
+      nationality: "NPL",
+      valid: true,
+      passportNumber: { value: "PA0319064", valid: true },
+      dateOfBirth: { value: "830730", valid: true },
+      expiryDate: { value: "320503", valid: true },
+    });
+  });
+
+  it("starts an idempotent S3 job and retrieves every result page", async () => {
+    vi.stubEnv("AWS_TEXTRACT_REGION", "ap-south-1");
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        JobId: "textract-job-1",
+        $metadata: { requestId: "start-request" },
+      })
+      .mockResolvedValueOnce({
+        JobStatus: "SUCCEEDED",
+        NextToken: "next-page",
+        DetectDocumentTextModelVersion: "1.0",
+        Blocks: [
+          {
+            BlockType: "LINE",
+            Text: "P<NPLBISHWOKARMA<<RESHAM<KUMAR<<<<<<<<<<<<<<",
+            Confidence: 85.575,
+            Page: 1,
+          },
+        ],
+        $metadata: { requestId: "get-request-1" },
+      })
+      .mockResolvedValueOnce({
+        Blocks: [
+          {
+            BlockType: "LINE",
+            Text: "PA03190640NPL8307303M320503539145<<<<<<<<<20",
+            Confidence: 98.817,
+            Page: 1,
+          },
+        ],
+        $metadata: { requestId: "get-request-2" },
+      });
+    const service = new PassportVerificationService({
+      documentLocation: vi.fn().mockReturnValue({
+        bucket: "private-passports",
+        key: "visa-compass/private/passport.pdf",
+      }),
+    } as never);
+    (
+      service as unknown as { textractClient: { send: typeof send } }
+    ).textractClient = { send };
+
+    const result = await (
+      service as unknown as {
+        recognizeTextractDocument: (
+          assetId: string,
+          context: object,
+        ) => Promise<{ text: string; providerRequestId?: string }>;
+      }
+    ).recognizeTextractDocument("visa-compass/private/passport.pdf", {
+      routingReason: "LOCAL_QUEUE_DEPTH",
+      correlationId: "order-1",
+    });
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(send.mock.calls[0]![0].input).toMatchObject({
+      DocumentLocation: {
+        S3Object: {
+          Bucket: "private-passports",
+          Name: "visa-compass/private/passport.pdf",
+        },
+      },
+      ClientRequestToken: expect.stringMatching(/^[a-f0-9]{64}$/),
+      JobTag: "passport-ocr",
+    });
+    expect(send.mock.calls[2]![0].input).toMatchObject({
+      JobId: "textract-job-1",
+      NextToken: "next-page",
+    });
+    expect(result).toMatchObject({
+      providerRequestId: "textract-job-1",
+    });
+    expect(parseMrz(result.text)?.valid).toBe(true);
+    vi.unstubAllEnvs();
+  });
+});
 
 const US_MRZ = [
   "P<USATRAVELER<<HAPPY<<<<<<<<<<<<<<<<<<<<<<<<",
