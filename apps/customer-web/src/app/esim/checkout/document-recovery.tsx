@@ -1,5 +1,6 @@
 "use client";
 import { AlertCircle, CheckCircle2, FileText } from "lucide-react";
+import { passportFailurePresentation } from "@visa-compass/shared";
 import { DocumentFileField } from "./document-file-field";
 import { savedDocumentName, type SavedDocument } from "./document-progress";
 
@@ -55,6 +56,11 @@ export function DocumentRecoveryFields({
         document.type === type && document.status === "REUPLOAD_REQUIRED",
     ),
   );
+  const singleType = requested.length === 1 ? requested[0] as DocumentType : undefined;
+  const reviewReason = singleType ? replacementReasons?.[singleType] : undefined;
+  const passportReason = singleType === "PASSPORT" && passportFailureCode
+    ? passportFailurePresentation(passportFailureCode)
+    : undefined;
   return (
     <fieldset className="document-recovery-fields" disabled={disabled}>
       <legend className="sr-only">Requested document replacements</legend>
@@ -63,16 +69,20 @@ export function DocumentRecoveryFields({
           <AlertCircle size={22} aria-hidden="true" />
           <span>
             <b>
-              {requested.length === 1
-                ? `${labels[requested[0] as DocumentType]} needs a new upload`
+              {passportReason && !reviewReason
+                ? passportReason.title
+                : requested.length === 1
+                  ? `${labels[requested[0] as DocumentType]} needs a new upload`
                 : "Your documents need new uploads"}
             </b>
-            <small>
-              {requested.some((type) => replacementReasons?.[type as DocumentType])
-                ? `Our review team could not approve the marked ${requested.length === 1 ? "file" : "files"}. Read the ${requested.length === 1 ? "reason" : "reasons"} below. `
-                : `The marked ${requested.length === 1 ? "file needs a replacement" : "files need replacements"}. `}
-              Upload only {requested.length === 1 ? "that document" : "those documents"}. Your other files remain saved.
-            </small>
+            {reviewReason ? (
+              <small>Reason from our review team: <span>{reviewReason}</span></small>
+            ) : passportReason ? (
+              <small>{passportReason.message}</small>
+            ) : (
+              <small>{requested.length === 1 ? "This document needs a replacement." : "The marked files need replacements. Read the reasons below."}</small>
+            )}
+            <small>Upload only {requested.length === 1 ? "this document" : "the marked documents"}; your other files remain saved.</small>
           </span>
         </div>
       )}
@@ -92,15 +102,13 @@ export function DocumentRecoveryFields({
                 <span>
                   <b>Replace {labels[type].toLowerCase()}</b>
                   <small>
-                    {type === "PASSPORT" && passportFailureCode === "PASSPORT_EXPIRED"
-                      ? "This passport has expired. Upload a valid passport before continuing."
-                      : type === "PASSPORT" && passportFailureCode === "PASSPORT_BIODATA_NOT_DETECTED"
-                        ? "Upload the passport information page, including the photo and machine-readable lines."
-                        : `Upload a clear, complete replacement ${labels[type].toLowerCase()}.`}
+                    {type === "PASSPORT" && passportReason && !reviewReason
+                      ? "Choose a new passport photo or file below."
+                      : `Upload a clear, complete replacement ${labels[type].toLowerCase()}.`}
                   </small>
                 </span>
               </div>
-              {replacementReasons?.[type] && (
+              {replacementReasons?.[type] && requested.length > 1 && (
                 <p className="document-recovery-reason">
                   <b>Reason from our review team</b>
                   {replacementReasons[type]}

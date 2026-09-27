@@ -8,6 +8,20 @@ import {
 afterEach(cleanup);
 
 describe("document replacement guidance", () => {
+  it("shows a specific passport reason and a way to recover", () => {
+    render(
+      <DocumentRecoveryFields
+        documents={[{ type: "PASSPORT", status: "REUPLOAD_REQUIRED", fileName: "passport.png", uploadVerified: true }]}
+        types={["PASSPORT"]}
+        files={{}}
+        onChange={vi.fn()}
+        passportFailureCode="MRZ_NOT_READABLE"
+      />,
+    );
+    expect(screen.getByText("Passport details could not be read")).toBeDefined();
+    expect(screen.getByText(/two machine-readable lines fully visible/)).toBeDefined();
+    expect(screen.getByText("Replace passport")).toBeDefined();
+  });
   it("shows only the rejected ticket as editable with the ops comment", () => {
     render(
       <DocumentRecoveryFields

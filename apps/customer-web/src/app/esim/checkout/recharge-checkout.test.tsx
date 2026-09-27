@@ -490,7 +490,7 @@ describe("first-purchase document verification", () => {
     render(<Checkout planId="plan" orderId="expired-passport" />);
 
     expect(
-      await screen.findByText("Passport needs a new upload"),
+      await screen.findByText("Passport expired"),
     ).toBeDefined();
     expect(
       screen.getAllByText(
