@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { PauseCircle, RefreshCcw, Trash2 } from "lucide-react";
+import {
+  MoreHorizontal,
+  PauseCircle,
+  PlayCircle,
+  RefreshCcw,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { Button } from "@/components/ui/button";
@@ -14,36 +20,53 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-type Action = "suspend" | "terminate";
+export type LifecycleAction = "suspend" | "reactivate-request" | "terminate";
+export type LifecycleCompletion = {
+  action: LifecycleAction | "reconcile";
+  state?: string;
+};
 
 export function LifecycleActions({
-  orderId,
+  inventoryId,
   iccid,
   providerStatus,
   canTerminate,
   onCompleted,
 }: {
-  orderId: string;
+  inventoryId: string;
   iccid: string;
   providerStatus?: string | null | undefined;
   canTerminate: boolean;
-  onCompleted?: () => void;
+  onCompleted?: (completion: LifecycleCompletion) => void;
 }) {
   const authFetch = useAuthenticatedFetch();
-  const [action, setAction] = useState<Action | null>(null);
+  const [action, setAction] = useState<LifecycleAction | null>(null);
   const [reason, setReason] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const pending =
-    providerStatus === "SUSPENDED" ||
     providerStatus === "SUSPEND_PENDING" ||
+    providerStatus === "REACTIVATION_PENDING" ||
     providerStatus === "TERMINATION_PENDING" ||
     providerStatus === "TERMINATED";
   const suspendable =
     providerStatus === "ACTIVE" || providerStatus === "ACTIVATED";
-  const required = action === "terminate" ? iccid : "SUSPEND";
+  const required =
+    action === "terminate"
+      ? iccid
+      : action === "reactivate-request"
+        ? "REACTIVATE"
+        : "SUSPEND";
   const close = () => {
     if (!busy) {
       setAction(null);
@@ -57,7 +80,7 @@ export function LifecycleActions({
     setBusy(true);
     try {
       const response = await authFetch(
-        `${API}/operations/transatel/orders/${orderId}/${action}`,
+        `${API}/operations/transatel/inventory/${inventoryId}/${action}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -75,12 +98,14 @@ export function LifecycleActions({
       toast.success(
         action === "suspend"
           ? "Suspension sent to the network"
-          : "Termination sent to the network",
+          : action === "reactivate-request"
+            ? "Reactivation request sent for Super Admin approval"
+            : "Termination sent to the network",
       );
       setAction(null);
       setReason("");
       setConfirmation("");
-      onCompleted?.();
+      onCompleted?.({ action, state: value.data?.state });
     } catch (cause) {
       toast.error(
         cause instanceof Error ? cause.message : `Could not ${action} eSIM`,
@@ -93,31 +118,30 @@ export function LifecycleActions({
     setBusy(true);
     try {
       const response = await authFetch(
-        `${API}/operations/transatel/orders/${orderId}/reconcile`,
+        `${API}/operations/inventory/profiles/${inventoryId}/reconcile`,
         { method: "POST", headers: {} },
       );
       const value = await response.json();
       if (!response.ok)
         throw new Error(value.error?.message ?? "Live status check failed");
       const result = value.data as {
-        esimProfileStatus?: string | null;
+        profileStatus?: string | null;
+        subscriberStatus?: string | null;
         subscriptionStatus?: string | null;
         providerStatus?: string | null;
       };
-      const profileStatus =
-        result.esimProfileStatus ?? result.providerStatus ?? null;
+      const profileStatus = result.profileStatus ?? null;
       const statuses = [
-        profileStatus ? `eSIM: ${profileStatus}` : null,
-        result.subscriptionStatus
-          ? `Subscription: ${result.subscriptionStatus}`
-          : null,
+        profileStatus ? `Profile: ${profileStatus}` : null,
+        result.subscriberStatus ? `Network: ${result.subscriberStatus}` : null,
+        result.subscriptionStatus ? `Plan: ${result.subscriptionStatus}` : null,
       ].filter((status): status is string => Boolean(status));
       toast.success(
         statuses.length
-          ? statuses.join(" · ")
+          ? statuses.join(" / ")
           : "Provider status refreshed successfully",
       );
-      onCompleted?.();
+      onCompleted?.({ action: "reconcile" });
     } catch (cause) {
       toast.error(
         cause instanceof Error ? cause.message : "Live status check failed",
@@ -128,38 +152,77 @@ export function LifecycleActions({
   };
   return (
     <>
-      <div className="flex justify-end gap-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void reconcile()}
-          title="Get the latest eSIM status from the network provider"
-        >
-          <RefreshCcw className="size-3.5" /> Check status
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={pending || !suspendable}
-          onClick={() => setAction("suspend")}
-        >
-          <PauseCircle className="size-3.5" /> Suspend
-        </Button>
-        {canTerminate ? (
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
           <Button
             size="sm"
-            variant="destructive"
-            disabled={
-              providerStatus === "TERMINATED" ||
-              providerStatus === "TERMINATION_PENDING"
-            }
-            onClick={() => setAction("terminate")}
+            variant="outline"
+            className="h-8 whitespace-nowrap"
+            disabled={busy}
+            aria-label={`Actions for eSIM ${iccid}`}
           >
-            <Trash2 className="size-3.5" /> Terminate
+            <MoreHorizontal className="size-4" />
+            Actions
           </Button>
-        ) : null}
-      </div>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64">
+          <DropdownMenuLabel>eSIM network actions</DropdownMenuLabel>
+          <DropdownMenuItem onSelect={() => void reconcile()}>
+            <RefreshCcw className="size-4" />
+            <span>
+              Check network status
+              <small className="block text-xs text-muted-foreground">
+                Reads the latest status only
+              </small>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={pending || !suspendable}
+            onSelect={() => setAction("suspend")}
+          >
+            <PauseCircle className="size-4" />
+            <span>
+              Pause mobile data
+              <small className="block text-xs text-muted-foreground">
+                Stops connectivity for every plan
+              </small>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={pending || providerStatus !== "SUSPENDED"}
+            onSelect={() => setAction("reactivate-request")}
+          >
+            <PlayCircle className="size-4" />
+            <span>
+              Request reactivation
+              <small className="block text-xs text-muted-foreground">
+                Requires another Super Admin to approve
+              </small>
+            </span>
+          </DropdownMenuItem>
+          {canTerminate ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={
+                  providerStatus === "TERMINATED" ||
+                  providerStatus === "TERMINATION_PENDING"
+                }
+                onSelect={() => setAction("terminate")}
+              >
+                <Trash2 className="size-4" />
+                <span>
+                  Permanently end eSIM
+                  <small className="block text-xs text-muted-foreground">
+                    Cannot be undone
+                  </small>
+                </span>
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <Dialog
         open={action !== null}
         onOpenChange={(open) => {
@@ -171,12 +234,16 @@ export function LifecycleActions({
             <DialogTitle>
               {action === "terminate"
                 ? "Permanently terminate eSIM"
-                : "Suspend eSIM connectivity"}
+                : action === "reactivate-request"
+                  ? "Request eSIM reactivation"
+                  : "Suspend this eSIM's network service"}
             </DialogTitle>
             <DialogDescription>
               {action === "terminate"
-                ? "This permanently removes the eSIM from the network and cannot be undone. Any remaining data will be lost."
-                : "Temporarily pauses the customer's mobile data. They can be reconnected later. The network processes this automatically."}
+                ? "This permanently removes the complete eSIM from the network and cannot be undone. Every plan and any remaining data will be lost."
+                : action === "reactivate-request"
+                  ? "This records a request to restore network service. A different Super Admin must approve it before anything is sent to Transatel."
+                  : "This asks Transatel to stop network service for every plan on this eSIM. Plan validity and recurring provider charges continue, and no cancellation or refund is performed."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -195,7 +262,7 @@ export function LifecycleActions({
                 <>Type the eSIM number to confirm</>
               ) : (
                 <>
-                  Type <code>SUSPEND</code> to confirm
+                  Type <code>{required}</code> to confirm
                 </>
               )}
               <Input
@@ -220,7 +287,9 @@ export function LifecycleActions({
                 ? "Submitting…"
                 : action === "terminate"
                   ? "Terminate permanently"
-                  : "Suspend connectivity"}
+                  : action === "reactivate-request"
+                    ? "Request reactivation"
+                    : "Confirm data pause"}
             </Button>
           </DialogFooter>
         </DialogContent>

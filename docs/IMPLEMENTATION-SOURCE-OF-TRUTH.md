@@ -176,7 +176,7 @@ for top-ups.
 | Payment window expires (still `PAYMENT_PENDING` past the gateway expiry) | Ops (or the admin panel button) runs **"Expire stale payments"** → order becomes `PAYMENT_FAILED` ("Payment window expired") |
 | Customer abandons payment                                                | Order becomes `PAYMENT_FAILED` with the given reason                                                                         |
 | Customer cancels a draft / unpaid order                                  | Order becomes `CANCELLED` (also possible from ops portal)                                                                    |
-| Ops refunds a **paid** order                                             | Khalti refund is called; order moves `REFUND_PENDING → REFUNDED`; payment marked refunded                                    |
+| Ops refunds a **paid** order                                             | Dual control: Ops requests, Super Admin approves, staff refunds through the original provider, then Super Admin records exact amount/time/reference; only then payment and order become `REFUNDED` |
 | Payment is still being confirmed after redirect                          | The checkout page polls the order until it settles (up to ~90 seconds), then shows the result                                |
 
 Only orders in `DRAFT`, `PAYMENT_PENDING` or `PAYMENT_FAILED` can be cancelled. Refunds only

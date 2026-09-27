@@ -356,19 +356,19 @@ separation (customer portal 404s for staff and vice-versa) and MFA redirects.
 
 ### 5.4 Customer (AuthGuard + `@AccountTypes(CUSTOMER)`)
 
-| Method/Path                                                | Body/Query              | Description & response                                                                                                                                                                                                                                  |
-| ---------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /customer/orders`                                     | —                       | Redacted `Order[]` for the caller (customer view).                                                                                                                                                                                                      |
-| `GET /customer/orders/:id`                                 | —                       | Redacted order; 404 `NOT_FOUND` if not owned.                                                                                                                                                                                                           |
-| `POST /customer/orders`                                    | `createOrderSchema`     | Creates DRAFT order + records `E_SIM_COMPATIBILITY` consent (v1.0) with IP + User-Agent; returns redacted order.                                                                                                                                        |
-| `PATCH /customer/orders/:id/traveler`                      | `travelerSchema`        | Only in `DRAFT`; stores traveler; redacted order.                                                                                                                                                                                                       |
+| Method/Path                                                | Body/Query              | Description & response                                                                                                                                                                                                                                 |
+| ---------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /customer/orders`                                     | —                       | Redacted `Order[]` for the caller (customer view).                                                                                                                                                                                                     |
+| `GET /customer/orders/:id`                                 | —                       | Redacted order; 404 `NOT_FOUND` if not owned.                                                                                                                                                                                                          |
+| `POST /customer/orders`                                    | `createOrderSchema`     | Creates DRAFT order + records `E_SIM_COMPATIBILITY` consent (v1.0) with IP + User-Agent; returns redacted order.                                                                                                                                       |
+| `PATCH /customer/orders/:id/traveler`                      | `travelerSchema`        | Only in `DRAFT`; stores traveler; redacted order.                                                                                                                                                                                                      |
 | `POST /customer/orders/:id/documents`                      | `documentRequestSchema` | Only in `DRAFT`/`AWAITING_CUSTOMER`; creates/overwrites the document (one per type) and returns `{ id, type, fileName, status, upload }` where `upload` is a signed Amazon S3 upload authorization (10-minute expiry) or a `local-simulator` fallback. |
 | `POST /customer/orders/:id/documents/:documentId/confirm`  | `{}`                    | Verifies the uploaded file via Amazon S3 (format + ≤10 MB); if re-uploading from `AWAITING_CUSTOMER` with no other pending re-uploads, transitions order back to `REVIEW_PENDING`.                                                                     |
-| `POST /customer/orders/:orderId/payment`                   | `initiatePaymentSchema` | Validates traveler + passport + ticket present, re-verifies those documents, transitions to `PAYMENT_PENDING` (idempotent), stores the payment reference, returns the gateway initiation (reference, redirectUrl, expiresAt).                           |
-| `POST /customer/orders/:orderId/payment/verify`            | `{ reference }`         | Server-side payment lookup and confirmation (used by the checkout polling loop).                                                                                                                                                                        |
-| `POST /customer/orders/:orderId/payment/simulate-complete` | simulator body          | Dev only (disabled in production); applies a simulator scenario then confirms.                                                                                                                                                                          |
-| `GET /customer/orders/:id/notifications`                   | —                       | Notification list for one order.                                                                                                                                                                                                                        |
-| `GET /customer/notifications`                              | —                       | Notification list across the caller's orders.                                                                                                                                                                                                           |
+| `POST /customer/orders/:orderId/payment`                   | `initiatePaymentSchema` | Validates traveler + passport + ticket present, re-verifies those documents, transitions to `PAYMENT_PENDING` (idempotent), stores the payment reference, returns the gateway initiation (reference, redirectUrl, expiresAt).                          |
+| `POST /customer/orders/:orderId/payment/verify`            | `{ reference }`         | Server-side payment lookup and confirmation (used by the checkout polling loop).                                                                                                                                                                       |
+| `POST /customer/orders/:orderId/payment/simulate-complete` | simulator body          | Dev only (disabled in production); applies a simulator scenario then confirms.                                                                                                                                                                         |
+| `GET /customer/orders/:id/notifications`                   | —                       | Notification list for one order.                                                                                                                                                                                                                       |
+| `GET /customer/notifications`                              | —                       | Notification list across the caller's orders.                                                                                                                                                                                                          |
 
 ### 5.5 Operations (AuthGuard + `@AccountTypes(OPERATIONS, SUPER_ADMIN)`)
 
@@ -397,20 +397,19 @@ separation (customer portal 404s for staff and vice-versa) and MFA redirects.
 
 ### 5.6 Admin (AuthGuard + `@AccountTypes(SUPER_ADMIN)`)
 
-| Method/Path                                                                | Description                                                                            |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `GET /admin/plans`                                                         | All plans with cost/selling price, country, status.                                    |
-| `POST /admin/plans/import-csv`                                             | Bulk plan upsert (see §4.6).                                                           |
-| `PATCH /admin/plans/:id`                                                   | Update selling price/popular/status (price must be ≥ 0).                               |
+| Method/Path                                                                | Description                                                                           |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `GET /admin/plans`                                                         | All plans with cost/selling price, country, status.                                   |
+| `POST /admin/plans/import-csv`                                             | Bulk plan upsert (see §4.6).                                                          |
+| `PATCH /admin/plans/:id`                                                   | Update selling price/popular/status (price must be ≥ 0).                              |
 | `GET /admin/integrations`                                                  | Config status of Email/Khalti/Transatel/Amazon S3/WhatsApp with masked secret values. |
-| `POST /admin/integrations/:id/test`                                        | Health check per integration.                                                          |
-| `POST /admin/integrations/transatel/sync-catalog`                          | Pulls Transatel catalog → plans (see §6.6).                                            |
-| `POST /admin/integrations/transatel/ensure-webhook`                        | Registers/updates the Transatel webhook (see §6.7).                                    |
-| `POST /admin/integrations/transatel/eligibility`                           | Checks plan eligibility for an MSISDN.                                                 |
-| `GET /admin/users`                                                         | Users with effective capabilities, status, customer code.                              |
-| `PATCH /admin/users/:id/account-type`                                      | Staff role change (audited; cannot convert customers).                                 |
-| `PATCH /admin/users/:id/status`                                            | Enable/disable (audited; final admin protected).                                       |
-| `GET /admin/staff-invitations` / `POST` / `POST :id/resend` / `DELETE :id` | Invitation lifecycle (audited).                                                        |
+| `POST /admin/integrations/:id/test`                                        | Health check per integration.                                                         |
+| `POST /admin/integrations/transatel/sync-catalog`                          | Pulls Transatel catalog → plans (see §6.6).                                           |
+| `POST /admin/integrations/transatel/eligibility`                           | Checks plan eligibility for an MSISDN.                                                |
+| `GET /admin/users`                                                         | Users with effective capabilities, status, customer code.                             |
+| `PATCH /admin/users/:id/account-type`                                      | Staff role change (audited; cannot convert customers).                                |
+| `PATCH /admin/users/:id/status`                                            | Enable/disable (audited; final admin protected).                                      |
+| `GET /admin/staff-invitations` / `POST` / `POST :id/resend` / `DELETE :id` | Invitation lifecycle (audited).                                                       |
 
 ### 5.7 Partners (PartnerAuthGuard — `x-partner-api-key`, HMAC-compared against SHA-256 hashes in `PARTNER_API_KEYS_JSON`)
 
@@ -439,8 +438,11 @@ Documented in detail in `docs/PARTNER-API-v1.md`. Summary:
 | `POST /webhooks/payments/:provider`     | `x-visa-signature` (HMAC-SHA256, `PAYMENT_SIMULATOR_SECRET`) only in non-prod                                            | Body `{ eventId, ... }`; dedupes by `(provider, eventId)` (in-memory set + `WebhookEvent` unique key); persists; enqueues `payment-callback`. |
 | `POST /webhooks/connectivity/:provider` | `x-tsl-signature-256` (value `sha256=<hmac-sha256(secret, raw body)>`) or `x-visa-signature`; **required in production** | Body `{ eventId                                                                                                                               | header.eventId, ... }`; only `transatel`supported; dedupes; persists; enqueues`connectivity-callback`. |
 
-All webhooks return HTTP 202 `{ accepted: true }` (plus `queued`, `duplicate`,
-`simulated` flags).
+Payment and identity webhooks return HTTP 202 with an acknowledgement body. The
+Transatel connectivity webhook returns HTTP 204 with no response body, as
+required by the Transatel Data Stream contract; its event is still durably
+persisted and queued before acknowledgement. Duplicate, retry, and recovery
+state remains visible in Operations logs.
 
 ---
 
@@ -463,23 +465,27 @@ base64(clientId:clientSecret)`, body `grant_type=client_credentials`.
   _"Our connectivity service is temporarily unavailable. Please try again shortly."_
 - Every token call is logged to `IntegrationLog` (operation `token`).
 
-### 6.2 Provisioning (OCS preload)
+### 6.2 Provisioning and top-up (OCS product order)
 
 Request: `POST <root>/ocs/subscriptions/api/orders/products`
 
 ```json
 {
   "bind": {
-    "msisdn": "<iccid (default) or eid if TRANSATEL_SUBSCRIBER_IDENTIFIER=msisdn>"
+    "msisdn": "<subscriber MSISDN, 6-15 digits>"
   },
-  "source": "VisaCompass",
+  "source": "api",
   "orderType": "preload",
   "mvnoRef": "<TRANSATEL_MVNO_REF>",
   "product": { "productId": "<plan.providerPlanId>" },
-  "payment": { "provider": "<TRANSATEL_PAYMENT_PROVIDER>" }, // optional
+  "payment": { "provider": "customer" },
   "transactionReference": "<order.id>"
 }
 ```
+
+Initial purchases use `orderType: "preload"`. Top-ups use
+`orderType: "subscribe"` for the existing MSISDN. A successful top-up does not
+fetch or deliver another activation QR.
 
 Response `OrderProductResponse`:
 `{ id, orderReference, status:'done', bind:{msisdn}, source, mvnoRef, subscriptionId?, transactionReference? }`.
@@ -506,7 +512,7 @@ chars) so ops can diagnose without the raw stack reaching customers.
 
 ### 6.3 Usage
 
-`GET <root>/ocs/inventory/api/subscriptions/products?msisdn=<iccid>&withBalances=true`
+`GET <root>/ocs/inventory/api/subscriptions/products?msisdn=<msisdn>&withBalances=true`
 
 Response `{ currentLocale, productSubscriptions: [...] }` with
 `balances.data[]` of `{ resourceName, resourceLabel, resourceUnit: KB|SECOND|SMS, resourceValue, resourceStartValue, resourceStartDate, resourceEndDate }`.
@@ -560,15 +566,12 @@ skipped. Upsert `Country` + `Plan` (key `countryId_providerPlanId`) inside a
 transaction per product, setting `status: ACTIVE`, `sellingPrice = costPrice`.
 Returns `{ synced, skipped }`.
 
-### 6.7 Webhook registration
+### 6.7 Webhook datastream
 
-- Events (default): `OCS/PRODUCT/PRELOADED, OCS/PRODUCT/ACTIVATED,
-OCS/PRODUCT/EXPIRED, OCS/PRODUCT/TERMINATED` (`TRANSATEL_WEBHOOK_EVENTS`).
-- Lists `GET <root>/webhooks/api/webhooks`; updates by id via PUT or creates
-  via POST with `{ mvnoRef, status:'active', targetUrl, email, secret?,
-events }`.
-- Runs at startup when `TRANSATEL_WEBHOOK_TARGET_URL` is set
-  (`connectivity.service.ts:10`), and on demand via Admin.
+API registration is no longer supported. Configure the callback URL, shared
+secret and required product/subscriber lifecycle events in the Transatel
+Developer Console. The application makes no webhook-control-plane request at
+startup or from Admin.
 
 ### 6.8 Inbound webhook → order effects
 
@@ -618,14 +621,10 @@ purchase_order_name: orderNumber }` → `{ pidx, payment_url, expires_at }`.
 - Status map (compared case-insensitively — docs use both "Partially Refunded"
   and "Partially refunded"): `Completed→COMPLETED`, `Pending|Initiated→PENDING`,
   `Refunded|Partially Refunded→REFUNDED`, `Expired→FAILED`,
-  `User canceled→CANCELLED`, anything else `FAILED`.
-- **Refund** → Khalti Refund API
-  `POST {origin}/api/merchant-transaction/{transaction_id}/refund/` where
-  `{origin}/api` = `KHALTI_BASE_URL` minus `/v2` and `{transaction_id}` is the
-  lookup `transaction_id` (not the pidx). Wallet full refund sends an empty
-  body; a partial refund sends `{ amount }` (paisa). Success
-  `{ "detail": "Transaction refund successful." }` → internal
-  `refund-{transaction_id}`.
+  `User canceled→CANCELLED`, anything else remains `PENDING` for review.
+- **Refund** uses the dual-control manual-refund workflow. The current gateway
+  does not call Khalti's Refund API; staff record the externally completed
+  refund reference and exact amount after approval.
 - Missing `KHALTI_SECRET_KEY` → `ApiException` `PAYMENT_PROVIDER_ERROR` (503).
 - **Error handling**: every request uses a 15 s timeout
   (`KHALTI_REQUEST_TIMEOUT_MS`). Provider failures throw `ApiException`
@@ -639,7 +638,7 @@ purchase_order_name: orderNumber }` → `{ pidx, payment_url, expires_at }`.
 
 ### 7.2 eSewa (removed)
 
-eSewa support was removed. The platform now integrates Khalti as the sole
+eSewa support was removed. The platform now integrates Khalti and Checkout by Fonepay as
 payment gateway (see §7.1). There are no eSewa gateway adapters, env vars, or
 `PaymentProvider.ESEWA` in the codebase.
 
@@ -754,7 +753,7 @@ CANCELLED / COMPLETED / REFUNDED  → (terminal)
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Customer confirms compatibility + creates order | `POST /customer/orders` → `DRAFT`, consent `E_SIM_COMPATIBILITY` v1.0 recorded (IP + UA).                                                                                                                                                                                             |
 | Traveller saved                                 | `PATCH .../traveler` → stays `DRAFT`.                                                                                                                                                                                                                                                 |
-| Document uploaded + confirmed                   | signed Amazon S3 upload → `confirmDocument` verifies bytes/format → if resuming from `AWAITING_CUSTOMER` with no other pending re-uploads → `AWAITING_CUSTOMER → REVIEW_PENDING`.                                                                                                    |
+| Document uploaded + confirmed                   | signed Amazon S3 upload → `confirmDocument` verifies bytes/format → if resuming from `AWAITING_CUSTOMER` with no other pending re-uploads → `AWAITING_CUSTOMER → REVIEW_PENDING`.                                                                                                     |
 | Payment initiated                               | `beginPayment` validates traveler + passport + ticket, re-verifies documents → `PAYMENT_PENDING`, stores payment row.                                                                                                                                                                 |
 | Payment webhook / verify                        | `verifyCallback`/`verify` gate (§7.4) → `confirmPayment` → `PAYMENT_PENDING → PAYMENT_CONFIRMED`, then **auto-approve** (`PAYMENT_CONFIRMED → APPROVED → PROVISIONING` + enqueue `provision-order`). Customer UI polls the order and the webhook also lands via the `payments` queue. |
 | Ops approves a document                         | document → `APPROVED`, `OrderReview` + audit recorded. Used for the replacement-document path.                                                                                                                                                                                        |
@@ -794,7 +793,7 @@ Recipient resolves to `traveler.email` (EMAIL) or `traveler.mobile`
 | Template            | Subject                                           | Body text                                                                                                                                                                                                                  |
 | ------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ORDER_STATUS`      | `Visa Compass order update — {orderNumber}`       | `There is an update for order {orderNumber}. Sign in to view its secure timeline.`                                                                                                                                         |
-| `QR_READY`          | `Your Visa Compass eSIM is ready — {orderNumber}` | `Your eSIM is ready for order {orderNumber}. The activation QR is attached as an image. Keep it private and scan it from your device's eSIM settings.`                                                                      |
+| `QR_READY`          | `Your Visa Compass eSIM is ready — {orderNumber}` | `Your eSIM is ready for order {orderNumber}. The activation QR is attached as an image. Keep it private and scan it from your device's eSIM settings.`                                                                     |
 | `DOCUMENT_REUPLOAD` | `Action required for {orderNumber}`               | `A replacement travel document is required for {orderNumber}.` + optional ` Reason: {reason}` + ` Sign in to upload it securely.` — **dormant**: the trigger in `reviewDocument` is removed so no re-upload email is sent. |
 
 ### 10.2 Channels
@@ -813,11 +812,11 @@ Recipient resolves to `traveler.email` (EMAIL) or `traveler.mobile`
 
 ### 10.3 When notifications are sent
 
-| Event                                                                 | Template            | Channel                                                        |
-| --------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------- |
+| Event                                                                 | Template            | Channel                                                 |
+| --------------------------------------------------------------------- | ------------------- | ------------------------------------------------------- |
 | Provisioning completes with QR (or ACTIVATED webhook completes order) | `QR_READY`          | EMAIL (to traveler) with **unencrypted PNG attachment** |
-| Ops requests document re-upload                                       | `DOCUMENT_REUPLOAD` | — (dormant; not triggered)                                     |
-| Ops test endpoint / partner notify                                    | `ORDER_STATUS`      | EMAIL or WHATSAPP                                              |
+| Ops requests document re-upload                                       | `DOCUMENT_REUPLOAD` | — (dormant; not triggered)                              |
+| Ops test endpoint / partner notify                                    | `ORDER_STATUS`      | EMAIL or WHATSAPP                                       |
 
 The `QR_READY` email carries the activation QR as an unencrypted PNG generated
 by the notification worker. Authenticated customers can also view the QR or
@@ -887,9 +886,9 @@ in-process (`processLocally`, `reconcile()`).
 | ------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/`                       | Landing + plan browse + compatibility check                                                  | public; fetches `/public/plans`, `/public/coverage/:country`                                                                                                                                                               |
 | `/sign-in/[[...sign-in]]` | Clerk sign-in                                                                                |                                                                                                                                                                                                                            |
-| `/esim/checkout`          | 4-step checkout (Compatibility → Traveller → Documents → Payment)                            | fields per §4; x-idempotency-key on every mutation; payment verification poll (30 × 3 s) that follows the order into auto-approval/activation; document uploads offer a native camera capture button; simulator box in dev |
+| `/esim/checkout`          | 4-step checkout (Compatibility → Documents/OCR → Traveller confirmation → Payment)           | fields per §4; x-idempotency-key on every mutation; payment verification poll (30 × 3 s) that follows the order into auto-approval/activation; document uploads offer a native camera capture button; simulator box in dev |
 | `/account/esims`          | eSIM list with stats/filters (Ready / Processing / Needs action)                             | maps errors via `apiErrorMessage`                                                                                                                                                                                          |
-| `/account/esims/[id]`     | Order detail: status chip, timeline, documents (incl. replacement upload), emailed-QR notice | QR is delivered by email as an unencrypted PNG; authenticated owners can recover it or download an unencrypted PDF; resumable banner for DRAFT/PAYMENT_PENDING; re-upload banner for AWAITING_CUSTOMER                   |
+| `/account/esims/[id]`     | Order detail: status chip, timeline, documents (incl. replacement upload), emailed-QR notice | QR is delivered by email as an unencrypted PNG; authenticated owners can recover it or download an unencrypted PDF; resumable banner for DRAFT/PAYMENT_PENDING; re-upload banner for AWAITING_CUSTOMER                     |
 | `/account/notifications`  | Notification history                                                                         |                                                                                                                                                                                                                            |
 
 Middleware (`customer-web/src/middleware.ts`): protects `/account(.*)` and
@@ -920,20 +919,20 @@ redirects unverified-MFA Super Admins to `/security`.
 
 ## 14. Environment variables (`.env.example`)
 
-| Group         | Variables                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Runtime       | `NODE_ENV`, `PORT` (4000), `API_PUBLIC_URL`, `CUSTOMER_WEB_URL`, `OPS_WEB_URL`                                                                                                                                                                                                                                                                                                                                                             |
-| Crypto        | `APP_ENCRYPTION_KEY_BASE64` (32-byte base64), `PII_HASH_KEY`                                                                                                                                                                                                                                                                                                                                                                               |
-| Database      | `DATABASE_URL` (PostgreSQL), `PERSISTENCE_MODE` (`prisma` enables persistence)                                                                                                                                                                                                                                                                                                                                                            |
-| Clerk         | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `BOOTSTRAP_SUPER_ADMIN_EMAIL`, `ENFORCE_SUPER_ADMIN_MFA` (default true)                                                                                                                                                                                                                                                                                   |
-| Queues        | `REDIS_URL` (empty → simulation), `QUEUE_CONCURRENCY` (3), `RECONCILIATION_INTERVAL_MINUTES` (15)                                                                                                                                                                                                                                                                                                                                          |
-| Hardening     | `RATE_LIMIT_PER_MINUTE` (300), `AUTH_RATE_LIMIT_PER_MINUTE` (60)                                                                                                                                                                                                                                                                                                                                                                           |
-| Payments      | `PAYMENT_MODE` (simulator), `PAYMENT_SIMULATOR_SECRET`, `KHALTI_BASE_URL`, `KHALTI_SECRET_KEY`                                                                                                                                                                                                                                                                                                                                             |
-| Transatel     | `TRANSATEL_BASE_URL`, `TRANSATEL_CLIENT_ID`, `TRANSATEL_CLIENT_SECRET`, `TRANSATEL_MVNO_REF`, `TRANSATEL_COS`, `TRANSATEL_PAYMENT_PROVIDER` (none), `TRANSATEL_SUBSCRIBER_IDENTIFIER` (iccid), `TRANSATEL_FX_TO_NPR` (170), `TRANSATEL_CATALOG_SYNC_ON_STARTUP` (false), `TRANSATEL_WEBHOOK_TARGET_URL`, `TRANSATEL_WEBHOOK_CONTACT_EMAIL`, `TRANSATEL_WEBHOOK_SECRET`, `TRANSATEL_WEBHOOK_EVENTS`, `TRANSATEL_REQUEST_TIMEOUT_MS` (15000) |
-| Storage       | `AWS_REGION`, `AWS_S3_BUCKET`; optional `AWS_S3_ENDPOINT`, `AWS_S3_FORCE_PATH_STYLE` for local compatible storage                                                                                                                                                                                                                                                                                                                          |
-| Notifications | `NOTIFICATION_MODE` (simulator), `EMAIL_PROVIDER` (`ses`), `AWS_SES_REGION`, `AWS_SES_CONFIGURATION_SET`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`, `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`                                                                                                                                       |
-| Web apps      | `NEXT_PUBLIC_API_URL`                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Partners      | `PARTNER_API_KEYS_JSON` (array of `{ id, keyHash }`; keyHash = lowercase hex SHA-256)                                                                                                                                                                                                                                                                                                                                                      |
+| Group         | Variables                                                                                                                                                                                                                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime       | `NODE_ENV`, `PORT` (4000), `API_PUBLIC_URL`, `CUSTOMER_WEB_URL`, `OPS_WEB_URL`                                                                                                                                                                                                              |
+| Crypto        | `APP_ENCRYPTION_KEY_BASE64` (32-byte base64), `PII_HASH_KEY`                                                                                                                                                                                                                                |
+| Database      | `DATABASE_URL` (PostgreSQL), `PERSISTENCE_MODE` (`prisma` enables persistence)                                                                                                                                                                                                              |
+| Clerk         | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `BOOTSTRAP_SUPER_ADMIN_EMAIL`, `ENFORCE_SUPER_ADMIN_MFA` (default true)                                                                                                                                    |
+| Queues        | `REDIS_URL` (empty → simulation), `QUEUE_CONCURRENCY` (3), `RECONCILIATION_INTERVAL_MINUTES` (15)                                                                                                                                                                                           |
+| Hardening     | `RATE_LIMIT_PER_MINUTE` (300), `AUTH_RATE_LIMIT_PER_MINUTE` (60)                                                                                                                                                                                                                            |
+| Payments      | `PAYMENT_MODE` (simulator), `PAYMENT_SIMULATOR_SECRET`, `KHALTI_BASE_URL`, `KHALTI_SECRET_KEY`                                                                                                                                                                                              |
+| Transatel     | `TRANSATEL_BASE_URL`, `TRANSATEL_CLIENT_ID`, `TRANSATEL_CLIENT_SECRET`, `TRANSATEL_MVNO_REF`, `TRANSATEL_COS`, `TRANSATEL_FX_TO_NPR` (170), `TRANSATEL_CATALOG_SYNC_ON_STARTUP` (false), `TRANSATEL_WEBHOOK_TARGET_URL`, `TRANSATEL_WEBHOOK_SECRET`, `TRANSATEL_REQUEST_TIMEOUT_MS` (15000) |
+| Storage       | `AWS_REGION`, `AWS_S3_BUCKET`; optional `AWS_S3_ENDPOINT`, `AWS_S3_FORCE_PATH_STYLE` for local compatible storage                                                                                                                                                                           |
+| Notifications | `NOTIFICATION_MODE` (simulator), `EMAIL_PROVIDER` (`ses`), `AWS_SES_REGION`, `AWS_SES_CONFIGURATION_SET`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `EMAIL_REPLY_TO`, `WHATSAPP_API_URL`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`                                                |
+| Web apps      | `NEXT_PUBLIC_API_URL`                                                                                                                                                                                                                                                                       |
+| Partners      | `PARTNER_API_KEYS_JSON` (array of `{ id, keyHash }`; keyHash = lowercase hex SHA-256)                                                                                                                                                                                                       |
 
 ---
 

@@ -1,25 +1,28 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  ArrowRight,
   AlertTriangle,
+  CalendarDays,
   CheckCircle2,
-  ChevronDown,
   Globe2,
   MapPin,
+  Signal,
 } from "lucide-react";
-import CountryPicker, { flagEmoji } from "./country-picker";
-import ErrorModal from "../components/error-modal";
+import CountryPicker from "./country-picker";
+import { formatPlanDataText } from "../lib/format-data";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
-type Plan = {
+export type Plan = {
   id: string;
   countryCode: string;
   countryName: string;
   name: string;
   dataAllowance: string;
+  allowanceMb?: number | null;
   validityDays: number;
   sellingPriceNpr: number;
   coverage: string[];
@@ -33,11 +36,46 @@ type Envelope<T> = {
   meta: { correlationId: string; timestamp: string };
 };
 
+export function initialCatalogDestination(
+  countries: Country[],
+  requested?: string,
+) {
+  const normalized = requested?.trim().toUpperCase();
+  if (normalized && countries.some((country) => country.code === normalized))
+    return normalized;
+  return "";
+}
+
 function npr(amount: number) {
   return `NPR ${amount.toLocaleString("en-NP")}`;
 }
 
+export function rankCatalogPlans(plans: Plan[]) {
+  return [...plans].sort(
+    (a, b) =>
+      Number(b.popular) - Number(a.popular) ||
+      a.sellingPriceNpr - b.sellingPriceNpr,
+  );
+}
+
+export function catalogDestinationHref(
+  pathname: string,
+  currentSearch: string,
+  countryCode: string,
+) {
+  const params = new URLSearchParams(currentSearch);
+  params.set("country", countryCode);
+  params.delete("data");
+  params.delete("days");
+  const query = params.toString();
+  return `${pathname === "/destinations" ? pathname : "/destinations"}${
+    query ? `?${query}` : ""
+  }`;
+}
+
 export default function CatalogPlans() {
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const targetEsimId = searchParams.get("esim") ?? "";
   const targetCountry = searchParams.get("country") ?? "";
@@ -45,16 +83,22 @@ export default function CatalogPlans() {
   const [countries, setCountries] = useState<Country[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [coverage, setCoverage] = useState<Record<string, string>>({});
+  const [attempt, setAttempt] = useState(0);
+  const [countriesBusy, setCountriesBusy] = useState(true);
   const [plansBusy, setPlansBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showAllDestinations, setShowAllDestinations] = useState(false);
+  const [countriesError, setCountriesError] = useState<string | null>(null);
+  const [plansError, setPlansError] = useState<string | null>(null);
+  const error = countriesError || plansError;
+  const revealResultsFor = useRef<string | null>(null);
 
   useEffect(() => {
-    if (targetCountry) setSelected(targetCountry);
+    if (targetCountry) setSelected(targetCountry.toUpperCase());
   }, [targetCountry]);
 
   useEffect(() => {
     let cancelled = false;
+    setCountriesBusy(true);
+    setCountriesError(null);
     fetch(`${API}/public/countries`)
       .then((response) =>
         response.ok
@@ -63,26 +107,36 @@ export default function CatalogPlans() {
       )
       .then((countriesData: Envelope<Country[]>) => {
         if (cancelled) return;
-        setPlans([]);
         setCountries(countriesData.data);
-        setError(null);
+        setSelected((current) =>
+          current &&
+          countriesData.data.some((country) => country.code === current)
+            ? current
+            : initialCatalogDestination(countriesData.data, targetCountry),
+        );
+        setCountriesError(null);
       })
       .catch(() => {
         if (cancelled) return;
         setPlans(null);
-        setError(
+        setCountriesError(
           "Live catalog is unavailable right now. Please try again shortly.",
         );
+      })
+      .finally(() => {
+        if (!cancelled) setCountriesBusy(false);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
 
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
     setPlansBusy(true);
+    setPlans(null);
+    setPlansError(null);
     fetch(`${API}/public/plans?country=${encodeURIComponent(selected)}`)
       .then((response) =>
         response.ok
@@ -98,12 +152,12 @@ export default function CatalogPlans() {
               ? "Coverage available"
               : "Coverage is unavailable. Please contact Visa Compass for assistance.",
           }));
-          setError(null);
+          setPlansError(null);
         }
       })
       .catch(() => {
         if (!cancelled)
-          setError(
+          setPlansError(
             "Plans for this destination could not be loaded. Please try again.",
           );
       })
@@ -113,7 +167,24 @@ export default function CatalogPlans() {
     return () => {
       cancelled = true;
     };
-  }, [selected]);
+  }, [selected, attempt]);
+
+  useEffect(() => {
+    if (plansBusy || plans === null || revealResultsFor.current !== selected)
+      return;
+    revealResultsFor.current = null;
+    requestAnimationFrame(() => {
+      const target = document.getElementById("plan-results");
+      const prefersReducedMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target?.scrollIntoView({
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+        block: "start",
+      });
+      target?.focus({ preventScroll: true });
+    });
+  }, [plans, plansBusy, selected]);
 
   const grouped = new Map<string, Plan[]>();
   for (const plan of plans ?? [])
@@ -127,7 +198,8 @@ export default function CatalogPlans() {
         code,
         name: items[0]?.countryName ?? code,
       }));
-  const visible = selected ? (grouped.get(selected) ?? []) : [];
+  const destinationPlans = selected ? (grouped.get(selected) ?? []) : [];
+  const visible = rankCatalogPlans(destinationPlans);
   const coverageMessage = selected ? coverage[selected] : undefined;
   const popularCountries = new Set(
     countries
@@ -139,18 +211,31 @@ export default function CatalogPlans() {
       Number(popularCountries.has(b.code)) -
         Number(popularCountries.has(a.code)) || a.name.localeCompare(b.name),
   );
-  const popular = supported
-    .filter((country) => popularCountries.has(country.code))
-    .slice(0, 8);
-
   const selectDestination = (code: string) => {
+    if (pathname !== "/destinations") {
+      router.push(
+        catalogDestinationHref(pathname, searchParams.toString(), code),
+      );
+      return;
+    }
+    revealResultsFor.current = code;
+    if (code === selected && !plansBusy) {
+      const target = document.getElementById("plan-results");
+      target?.scrollIntoView?.({
+        behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+          .matches
+          ? "auto"
+          : "smooth",
+        block: "start",
+      });
+      target?.focus({ preventScroll: true });
+      revealResultsFor.current = null;
+    }
     setSelected(code);
-    setShowAllDestinations(false);
-    requestAnimationFrame(() => {
-      document
-        .getElementById("plan-picker")
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
+    router.replace(
+      catalogDestinationHref(pathname, searchParams.toString(), code),
+      { scroll: false },
+    );
   };
 
   return (
@@ -164,10 +249,8 @@ export default function CatalogPlans() {
             <span className="destination-eyebrow">
               <Globe2 size={14} /> Global coverage
             </span>
-            <h3 id="supported-destinations-title">Where are you travelling?</h3>
-            <p>
-              Search all supported countries or jump to a popular destination.
-            </p>
+            <h3 id="supported-destinations-title">Find your ideal plan</h3>
+            <p>Choose a destination to see its available plans.</p>
           </div>
           {plans ? (
             <span className="destination-count">
@@ -180,101 +263,49 @@ export default function CatalogPlans() {
             countries={countryList}
             value={selected}
             onChange={selectDestination}
-            disabled={!plans}
+            disabled={!countries.length}
           />
-          {plans ? (
+          {countries.length ? (
             <small className="picker-help">
               Type a country name to quickly find your plan.
             </small>
           ) : null}
         </div>
 
-        {!plans && !error ? (
+        {!countries.length && !error ? (
           <div
             className="destination-grid popular-grid loading"
-            aria-label="Loading popular destinations"
+            aria-label="Loading destinations"
           >
             <span />
             <span />
             <span />
           </div>
-        ) : popular.length ? (
-          <div className="popular-destinations">
-            <p className="destination-subtitle">Popular destinations</p>
-            <div className="destination-grid popular-grid">
-              {popular.map((country) => (
-                <button
-                  key={country.code}
-                  type="button"
-                  className={selected === country.code ? "selected" : ""}
-                  aria-pressed={selected === country.code}
-                  onClick={() => selectDestination(country.code)}
-                >
-                  <span className="destination-flag">
-                    {flagEmoji(country.code)}
-                  </span>
-                  <span className="destination-label">
-                    <b>{country.name}</b>
-                    <small>View plans</small>
-                  </span>
-                  <span className="destination-arrow" aria-hidden="true">
-                    →
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
         ) : null}
 
-        {plans && supported.length ? (
-          <div className="all-destinations">
-            <button
-              type="button"
-              className="all-destinations-toggle"
-              aria-expanded={showAllDestinations}
-              aria-controls="all-destinations-grid"
-              onClick={() => setShowAllDestinations((current) => !current)}
-            >
-              <span>
-                {showAllDestinations
-                  ? "Hide destination directory"
-                  : `Browse all ${supported.length} destinations`}
-              </span>
-              <ChevronDown
-                size={17}
-                className={showAllDestinations ? "is-open" : ""}
-              />
-            </button>
-            {showAllDestinations ? (
-              <div
-                className="destination-grid directory-grid"
-                id="all-destinations-grid"
-              >
-                {supported.map((country) => (
-                  <button
-                    key={country.code}
-                    type="button"
-                    className={selected === country.code ? "selected" : ""}
-                    aria-pressed={selected === country.code}
-                    onClick={() => selectDestination(country.code)}
-                  >
-                    <span className="destination-flag">
-                      {flagEmoji(country.code)}
-                    </span>
-                    <b>{country.name}</b>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : !error && plans ? (
+        {!countriesBusy && !error && !supported.length ? (
           <p className="catalog-empty">
             No supported destinations are currently available.
           </p>
         ) : null}
       </section>
-      {error ? <ErrorModal error={error} onClose={() => setError(null)} /> : null}
-      {coverageMessage ? (
+      {error ? (
+        <div className="catalog-recovery" role="alert">
+          <AlertTriangle size={20} />
+          <div>
+            <b>We couldn’t load the catalog</b>
+            <p>{error}</p>
+          </div>
+          <button
+            className="button secondary"
+            disabled={countriesBusy || plansBusy}
+            onClick={() => setAttempt((value) => value + 1)}
+          >
+            Try again
+          </button>
+        </div>
+      ) : null}
+      {coverageMessage && !plansBusy && !error ? (
         <div
           className={`coverage-note ${coverageMessage === "Coverage available" ? "ok" : "warn"}`}
         >
@@ -286,38 +317,101 @@ export default function CatalogPlans() {
           <span>{coverageMessage}</span>
         </div>
       ) : null}
-      {!selected ? (
+      {countriesBusy || plansBusy || (!error && selected && plans === null) ? (
+        <div
+          className="catalog-loading"
+          role="status"
+          aria-label="Loading available plans"
+        >
+          <span>Finding available plans…</span>
+          <div className="cards" aria-hidden="true">
+            {[0, 1, 2].map((index) => (
+              <div className="card catalog-placeholder" key={index}>
+                <div className="skel" />
+                <div className="skel" />
+                <div className="skel" />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : error ? null : !selected ? (
         <p className="catalog-empty">
           Select a destination above to see its available plans.
         </p>
-      ) : plansBusy ? (
-        <p className="catalog-empty">Loading plans for this destination…</p>
       ) : visible.length ? (
-        <div className="cards">
-          {visible.map((plan) => (
-            <article className="card" key={plan.id}>
-              {plan.popular ? <span className="badge">POPULAR</span> : null}
-              <span className="flag">{flagEmoji(plan.countryCode)}</span>
-              <h3>{plan.name}</h3>
-              <p className="plan-meta">
-                <MapPin size={13} style={{ verticalAlign: -2 }} />{" "}
-                {plan.countryName} · <strong>{plan.dataAllowance}</strong> ·{" "}
-                {plan.validityDays} days
-              </p>
-              <div className="price">
-                <b>{npr(plan.sellingPriceNpr)}</b>
+        <section className="plan-results-section">
+          <div className="plan-results-heading">
+            <span>Choose plan</span>
+            <h2>
+              Best plans for{" "}
+              {countryList.find((country) => country.code === selected)?.name ??
+                selected}
+            </h2>
+            <p>Compare live plan allowances, validity, and NPR prices.</p>
+          </div>
+          <div
+            className="cards"
+            id="plan-results"
+            tabIndex={-1}
+            aria-label={`Available plans for ${countryList.find((country) => country.code === selected)?.name ?? selected}`}
+          >
+            {visible.map((plan) => (
+              <article className="card catalog-plan-card" key={plan.id}>
+                <div className="catalog-plan-topline">
+                  <span className="catalog-plan-icon">
+                    <Signal aria-hidden="true" />
+                  </span>
+                  {plan.popular ? (
+                    <span className="badge">Most popular</span>
+                  ) : null}
+                </div>
+                <div className="catalog-plan-main">
+                  <div>
+                    <h3>{plan.name}</h3>
+                    <p>
+                      {formatPlanDataText(plan.dataAllowance)} ·{" "}
+                      {plan.validityDays}{" "}
+                      {plan.validityDays === 1 ? "day" : "days"}
+                    </p>
+                  </div>
+                </div>
+                <div className="catalog-plan-facts">
+                  <span>
+                    <MapPin aria-hidden="true" />
+                    <small>Destination</small>
+                    <b>{plan.countryName}</b>
+                  </span>
+                  <span>
+                    <Signal aria-hidden="true" />
+                    <small>Allowance</small>
+                    <b>{formatPlanDataText(plan.dataAllowance)}</b>
+                  </span>
+                  <span>
+                    <CalendarDays aria-hidden="true" />
+                    <small>Validity</small>
+                    <b>
+                      {plan.validityDays}{" "}
+                      {plan.validityDays === 1 ? "day" : "days"}
+                    </b>
+                  </span>
+                </div>
+                <div className="catalog-plan-price">
+                  <span>Price</span>
+                  <strong>{npr(plan.sellingPriceNpr)}</strong>
+                </div>
                 <Link
-                  className="button"
+                  className="button catalog-plan-select"
                   href={`/esim/checkout?plan=${plan.id}${targetEsimId ? `&esim=${encodeURIComponent(targetEsimId)}&country=${encodeURIComponent(targetCountry)}` : ""}`}
                 >
-                  {(targetEsimId && plan.countryCode === targetCountry)
+                  {targetEsimId && plan.countryCode === targetCountry
                     ? "Recharge"
-                    : "Choose"}
+                    : "Select plan"}{" "}
+                  <ArrowRight aria-hidden="true" />
                 </Link>
-              </div>
-            </article>
-          ))}
-        </div>
+              </article>
+            ))}
+          </div>
+        </section>
       ) : (
         <p className="catalog-empty">
           No plans available for this destination yet.

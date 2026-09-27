@@ -1,6 +1,11 @@
 const escape = (value: unknown) => {
   const text = value === null || value === undefined ? "" : String(value);
-  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  // Neutralize spreadsheet formula injection (= + - @ leading cells) by
+  // prefixing an apostrophe; the sanitizer handles both quoted and bare cells.
+  const sanitized = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /[",\n\r]/.test(sanitized)
+    ? `"${sanitized.replaceAll('"', '""')}"`
+    : sanitized;
 };
 
 export function downloadCsv(

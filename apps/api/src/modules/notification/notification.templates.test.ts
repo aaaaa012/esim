@@ -28,4 +28,22 @@ describe("notification templates", () => {
     expect(value.html).not.toContain("<script>");
     expect(value.html).toContain("&lt;script&gt;");
   });
+
+  it("guides an approved customer back to the existing checkout", () => {
+    const value = renderNotification("DOCUMENT_APPROVED", {
+      orderNumber: "VC-1",
+    });
+    expect(value.subject).toContain("Documents approved");
+    expect(value.text).toContain("Do not start a duplicate order");
+  });
+
+  it("creates a short-lived recharge verification message", () => {
+    const value = renderNotification("TOPUP_LOOKUP", {
+      orderNumber: "eSIM recharge",
+      recoveryUrl: "https://customer.example/?topup=signed-token#recharge",
+    });
+    expect(value.subject).toBe("Confirm your eSIM recharge");
+    expect(value.text).toContain("expires in 15 minutes");
+    expect(value.text).toContain("signed-token");
+  });
 });

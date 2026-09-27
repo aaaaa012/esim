@@ -1,0 +1,192 @@
+.payment-journey {
+  display: grid;
+  gap: 22px;
+}
+.payment-journey-receipt {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--success) 25%, var(--border));
+  border-radius: var(--radius);
+  background: var(--success-soft);
+}
+.payment-journey-receipt-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--success-strong);
+  color: white;
+}
+.payment-journey-receipt h3 {
+  margin: 1px 0 5px;
+  color: var(--success-strong);
+  font-size: clamp(22px, 3vw, 28px);
+}
+.payment-journey-receipt p {
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.payment-journey-receipt-details {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 4px;
+  padding-top: 17px;
+  border-top: 1px solid color-mix(in srgb, var(--success) 22%, var(--border));
+}
+.payment-journey-receipt-details span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.payment-journey-receipt-details span + span {
+  padding-left: 16px;
+  border-left: 1px solid color-mix(in srgb, var(--success) 22%, var(--border));
+}
+.payment-journey-receipt-details small {
+  color: var(--text-2);
+}
+.payment-journey-receipt-details strong {
+  color: var(--text);
+  font-size: clamp(16px, 3vw, 21px);
+  overflow-wrap: anywhere;
+}
+.payment-journey-timeline {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0 4px;
+  list-style: none;
+}
+.payment-journey-timeline li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 86px;
+}
+.payment-journey-timeline li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  top: 41px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--border-strong);
+}
+.payment-journey-timeline li.complete:not(:last-child)::after {
+  background: var(--success-strong);
+}
+.payment-journey-marker {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-3);
+}
+.payment-journey-timeline .complete .payment-journey-marker {
+  border-color: var(--success-strong);
+  background: var(--success-strong);
+  color: white;
+}
+.payment-journey-timeline .active .payment-journey-marker {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.payment-journey-timeline .active .payment-journey-marker svg {
+  animation: payment-journey-breathe 2.4s ease-in-out infinite;
+}
+.payment-journey-timeline b {
+  display: block;
+  padding-top: 2px;
+  color: var(--text);
+}
+.payment-journey-timeline p {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.payment-journey-timeline .upcoming b {
+  color: var(--text-2);
+}
+.payment-journey-next {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 18px;
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+}
+.payment-journey-next.is-ready {
+  background: var(--success-soft);
+}
+.payment-journey-next-icon {
+  display: grid;
+  place-items: center;
+  color: var(--primary);
+}
+.payment-journey-next.is-ready .payment-journey-next-icon {
+  color: var(--success-strong);
+}
+.payment-journey-next b {
+  color: var(--text);
+}
+.payment-journey-next p {
+  margin: 5px 0 0;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.payment-journey-actions {
+  display: grid;
+  gap: 10px;
+}
+.payment-journey-actions .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  width: 100%;
+}
+@keyframes payment-journey-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (max-width: 420px) {
+  .payment-journey {
+    gap: 18px;
+  }
+  .payment-journey-receipt {
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 12px;
+    padding: 16px;
+  }
+  .payment-journey-receipt-icon {
+    width: 44px;
+    height: 44px;
+  }
+  .payment-journey-receipt-details {
+    gap: 10px;
+  }
+  .payment-journey-receipt-details span + span {
+    padding-left: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .payment-journey-timeline .active .payment-journey-marker svg {
+    animation: none;
+  }
+}

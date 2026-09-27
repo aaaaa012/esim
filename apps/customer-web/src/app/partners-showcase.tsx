@@ -5,6 +5,18 @@ import { Handshake } from "lucide-react";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 type Partner = { id: string; name: string; logoUrl?: string | null };
 
+const isPartner = (value: unknown): value is Partner => {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string" &&
+    (candidate.logoUrl === undefined ||
+      candidate.logoUrl === null ||
+      typeof candidate.logoUrl === "string")
+  );
+};
+
 function PartnerCard({ p }: { p: Partner }) {
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [p.logoUrl]);
@@ -32,10 +44,30 @@ export default function PartnersShowcase() {
   const [partners, setPartners] = useState<Partner[]>([]);
 
   useEffect(() => {
-    fetch(`${API}/public/partner-showcase`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((v) => setPartners(v.data ?? []))
-      .catch(() => {});
+    const controller = new AbortController();
+    void fetch(`${API}/public/partner-showcase`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const value = (await response.json()) as { data?: unknown };
+        if (!response.ok)
+          throw new Error(
+            `Partner showcase request failed (${response.status})`,
+          );
+        if (!Array.isArray(value.data) || !value.data.every(isPartner))
+          throw new Error("Partner showcase returned an invalid response");
+        setPartners(value.data);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError")
+          return;
+        // This optional section degrades invisibly for customers, but the
+        // failure remains observable to browser monitoring and support tools.
+        // eslint-disable-next-line no-console
+        console.error("partner_showcase_load_failed", error);
+      });
+    return () => controller.abort();
   }, []);
 
   if (!partners.length) return null;

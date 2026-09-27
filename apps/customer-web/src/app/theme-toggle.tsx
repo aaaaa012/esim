@@ -10,17 +10,9 @@ export default function ThemeToggle() {
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
-    const preference = matchMedia("(prefers-color-scheme: dark)");
-    const enabled = stored === "dark" || (!stored && preference.matches);
+    const enabled = stored === "dark";
     setDark(enabled);
     document.documentElement.dataset.theme = enabled ? "dark" : "light";
-    const syncSystemTheme = (event: MediaQueryListEvent) => {
-      if (localStorage.getItem(STORAGE_KEY)) return;
-      setDark(event.matches);
-      document.documentElement.dataset.theme = event.matches ? "dark" : "light";
-    };
-    preference.addEventListener("change", syncSystemTheme);
-    return () => preference.removeEventListener("change", syncSystemTheme);
   }, []);
 
   const toggle = () => {

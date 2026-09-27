@@ -1,3 +1,4 @@
+import type { RechargeRecoveryOutbox } from "./recharge-ownership.js";
 import {
   BadRequestException,
   ConflictException,
@@ -6,7 +7,8 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import {
   DocumentStatus,
   DocumentType,
@@ -14,7 +16,11 @@ import {
   OrderStatus,
   PaymentProvider,
   PaymentStatus,
+  declarePaymentRetry,
+  passportRequiresManualReview,
+  travelerChangeKind,
   provisioningFailure,
+  type PaymentRetryDeclaration,
   type ProvisioningFailure,
   type TravelerInput,
 } from "@visa-compass/shared";
@@ -29,28 +35,61 @@ import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import { ApiException } from "../../common/api-error.js";
 import { OrdersPersistenceService } from "./orders-persistence.service.js";
 import { InventoryService } from "../inventory/inventory.service.js";
-import { QueueService } from "../../jobs/queue.service.js";
+import { enqueuePassportOcr, QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
-import { ocrJobOptions } from "../../jobs/ocr-recovery.config.js";
+import {
+  ocrJobOptions,
+  orderPassportOcrJobId,
+} from "../../jobs/ocr-recovery.config.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { QrPdfService } from "../notification/qr-pdf.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { MetricsService } from "../../observability/metrics.service.js";
 import { normalizeMsisdn, msisdnVariants } from "../../common/msisdn.util.js";
-import type { PassportVerificationResult } from "./passport-verification.service.js";
+import { normalizeNepaliContact } from "../../common/nepali-contact.util.js";
+import {
+  canonicalIdentity,
+  passportComparisonDiagnostics,
+  verifyStoredExtraction,
+  type PassportExtractedFields,
+  type PassportVerificationResult,
+} from "./passport-verification.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
+
+const DOCUMENT_REVIEW_MUTABLE_STATUSES = new Set<OrderStatus>([
+  OrderStatus.DRAFT,
+  OrderStatus.REVIEW_PENDING,
+  OrderStatus.AWAITING_CUSTOMER,
+]);
 
 type Timeline = {
   from: OrderStatus | null;
   to: OrderStatus;
   at: string;
   reason?: string;
+  actorId?: string;
 };
+export const PASSPORT_EXTRACTION_STATUSES = [
+  "PROCESSING",
+  "READY",
+  "PARTIAL",
+  "MANUAL_ENTRY_REQUIRED",
+  "SKIPPED",
+] as const;
+
 export type DemoOrder = {
   id: string;
   ownerId: string | null;
+  paymentRetry?: PaymentRetryDeclaration;
+  refundStatus?: string | undefined;
+  beneficiaryCustomerId?: string | undefined;
+  purchasedByUserId?: string | undefined;
+  targetInventoryId?: string | undefined;
+  checkoutAttemptKey?: string | undefined;
+  checkoutRequestHash?: string | undefined;
   orderNumber: string;
   status: OrderStatus;
+  contactRuleVersion?: number;
   version: number;
   plan: CatalogPlan;
   totalAmountNpr: number;
@@ -89,12 +128,27 @@ export type DemoOrder = {
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   topUpMobile?: string;
   passportVerification?: PassportVerificationResult;
+  passportExtraction?: {
+    status: (typeof PASSPORT_EXTRACTION_STATUSES)[number];
+    fields: PassportExtractedFields;
+    fieldsRequiringInput: string[];
+    failureCode?: string;
+    passportAssetId?: string;
+    confidence?: number;
+    correctionAttempts?: number;
+    lastMismatchFingerprint?: string;
+    lastMismatchFields?: NonNullable<
+      PassportVerificationResult["mismatchedFields"]
+    >;
+    confirmedMismatchFingerprint?: string;
+  };
   documentReviewPolicy?: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
   documentReviewStatus?:
     | "NOT_STARTED"
     | "OCR_PENDING"
     | "OCR_BACKGROUND"
     | "VERIFIED"
+    | "CORRECTION_REQUIRED"
     | "MANUAL_REVIEW"
     | "REUPLOAD_REQUIRED"
     | "MANUALLY_APPROVED"
@@ -188,8 +242,8 @@ export class OrdersService implements OnModuleInit {
       .filter((o) => !ownerId || o.ownerId === ownerId)
       .map((order) => (ownerId ? this.redact(order) : this.expand(order)));
   }
-  audit() {
-    return this.persistence.audit();
+  audit(input: { limit: number; offset: number; query?: string }) {
+    return this.persistence.audit(input);
   }
   get(id: string, ownerId?: string) {
     const order = this.orders.get(id);
@@ -205,6 +259,83 @@ export class OrdersService implements OnModuleInit {
     return ownerId
       ? this.redact(this.get(id, ownerId))
       : this.expand(this.get(id));
+  }
+  async operationsView(id: string) {
+    const order = this.expand(this.get(id));
+    if (!this.prisma.enabled) return order;
+    const identity = await this.prisma.order.findUnique({
+      where: { id },
+      select: {
+        channel: true,
+        partnerCustomer: {
+          select: {
+            id: true,
+            externalCustomerId: true,
+            partner: { select: { id: true, code: true, name: true } },
+          },
+        },
+        purchasedBy: { select: { id: true, email: true } },
+        targetInventoryId: true,
+        notifications: {
+          where: { template: "QR_READY" },
+          orderBy: { createdAt: "desc" },
+          take: 20,
+          select: { status: true, sentAt: true, createdAt: true },
+        },
+        customer: {
+          select: {
+            id: true,
+            customerCode: true,
+            email: true,
+            phone: true,
+            source: true,
+            status: true,
+            createdAt: true,
+            user: {
+              select: {
+                id: true,
+                email: true,
+                status: true,
+                accountType: true,
+                createdAt: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!identity) return order;
+    return {
+      ...order,
+      channel: identity.channel,
+      purchasedBy: identity.purchasedBy,
+      targetInventoryId: identity.targetInventoryId,
+      customer: {
+        id: identity.customer.id,
+        customerCode: identity.customer.customerCode,
+        email: identity.customer.email,
+        phone: identity.customer.phone,
+        source: identity.customer.source,
+        status: identity.customer.status,
+        createdAt: identity.customer.createdAt.toISOString(),
+      },
+      loginAccount: identity.customer.user
+        ? {
+            ...identity.customer.user,
+            createdAt: identity.customer.user.createdAt.toISOString(),
+          }
+        : null,
+      partnerCustomer: identity.partnerCustomer ?? null,
+      qrDelivery: {
+        lastSuccessfulAt:
+          identity.notifications
+            .find((item) => item.status === "SENT")
+            ?.sentAt?.toISOString() ?? null,
+        pending: identity.notifications.some((item) =>
+          ["QUEUED", "SENDING"].includes(item.status),
+        ),
+      },
+    };
   }
   async guestView(id: string) {
     await this.refreshOne(id, true);
@@ -228,7 +359,14 @@ export class OrdersService implements OnModuleInit {
     }
     const customer = await this.prisma.customer.findFirst({
       where: { OR: this.customerMatch(ownerId) },
-      include: { user: true },
+      include: {
+        user: true,
+        partnerIdentity: {
+          include: {
+            partner: { select: { id: true, code: true, name: true } },
+          },
+        },
+      },
     });
     if (!customer) throw new NotFoundException("Customer not found");
     const orders = await this.prisma.order.findMany({
@@ -241,6 +379,19 @@ export class OrdersService implements OnModuleInit {
       orderBy: { createdAt: "desc" },
     });
     const latestTraveler = orders.find((order) => order.traveler)?.traveler;
+    const latestFirstPurchaseTraveler = orders.find(
+      (order) => order.orderType === "INITIAL_PURCHASE" && order.traveler,
+    )?.traveler;
+    const profileUpdates = await this.prisma.auditLog.findMany({
+      where: {
+        entity: "Customer",
+        entityId: customer.id,
+        action: { in: ["EMAIL_CORRECTED"] },
+      },
+      include: { performedBy: { select: { email: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
     const displayEmail =
       customer.source === "PARTNER" &&
       customer.email.endsWith("@partner.visacompass.invalid") &&
@@ -249,13 +400,58 @@ export class OrdersService implements OnModuleInit {
         : customer.email;
     return {
       ownerId: customer.user?.clerkId ?? customer.id,
+      identity: {
+        customer: {
+          id: customer.id,
+          customerCode: customer.customerCode,
+          email: displayEmail,
+          phone: customer.phone,
+          orderContact: latestFirstPurchaseTraveler?.mobile ?? null,
+          source: customer.source,
+          status: customer.status,
+          createdAt: customer.createdAt.toISOString(),
+        },
+        loginAccount: customer.user
+          ? {
+              id: customer.user.id,
+              email: customer.user.email,
+              status: customer.user.status,
+              accountType: customer.user.accountType,
+              createdAt: customer.user.createdAt.toISOString(),
+            }
+          : null,
+        partnerCustomer: customer.partnerIdentity
+          ? {
+              id: customer.partnerIdentity.id,
+              externalCustomerId: customer.partnerIdentity.externalCustomerId,
+              partner: customer.partnerIdentity.partner,
+            }
+          : null,
+      },
       customerCode: customer.customerCode,
       email: displayEmail,
       name: latestTraveler?.firstName,
+      profileUpdates: profileUpdates.map((update) => ({
+        id: update.id,
+        action: update.action,
+        previousValue: update.previousValue,
+        newValue: update.newValue,
+        performedBy: update.performedBy?.email ?? "System",
+        createdAt: update.createdAt.toISOString(),
+      })),
       orders: orders.map((order) => ({
         id: order.id,
         orderNumber: order.orderNumber,
         status: order.status,
+        purchaseType: order.orderType,
+        channel: order.channel,
+        topUpMobile:
+          order.orderType === "TOPUP"
+            ? ((order.pricingSnapshot as { topUpMobile?: string } | null)
+                ?.topUpMobile ??
+              order.customerEsim?.inventory.msisdn ??
+              null)
+            : null,
         plan: {
           id: order.plan.id,
           name: order.plan.name,
@@ -277,6 +473,7 @@ export class OrdersService implements OnModuleInit {
         ...(order.customerEsim
           ? {
               esim: {
+                id: order.customerEsim.inventory.id,
                 iccid: order.customerEsim.inventory.iccid,
                 status: order.customerEsim.inventory.status,
                 providerStatus:
@@ -309,6 +506,10 @@ export class OrdersService implements OnModuleInit {
                     lastCheckedAt: latest.usageLastCheckedAt.toISOString(),
                   };
                 })(),
+                purchaseType: order.orderType,
+                providerSubscriptionId:
+                  order.customerEsim.subscriptions[0]?.providerSubscriptionId ??
+                  null,
               },
             }
           : {}),
@@ -325,13 +526,26 @@ export class OrdersService implements OnModuleInit {
       mobile?: string;
       email?: string;
       targetEsimId?: string;
+      recharge?: {
+        orderId?: string;
+        recovery?: RechargeRecoveryOutbox;
+        customerId: string;
+        inventoryId: string;
+        purchasedByUserId?: string | undefined;
+        checkoutAttemptKey?: string | undefined;
+        checkoutRequestHash?: string;
+      };
+      termsAccepted?: boolean;
+      privacyAccepted?: boolean;
     },
   ) {
     if (!compatibilityAccepted)
       throw new BadRequestException("Compatibility declaration is required");
+    if (!meta?.termsAccepted || !meta?.privacyAccepted)
+      throw new BadRequestException("Terms and privacy consent are required");
     const plan = await this.catalog.findActive(planId);
     if (!plan) throw new BadRequestException("Invalid or inactive plan");
-    const id = randomUUID();
+    const id = meta?.recharge?.orderId ?? randomUUID();
     const now = new Date().toISOString();
     const target =
       meta?.targetEsimId && ownerId
@@ -339,7 +553,9 @@ export class OrdersService implements OnModuleInit {
         : null;
     const mobileTarget =
       !target && meta?.mobile ? await this.targetForMobile(meta.mobile) : null;
-    const selectedTarget = target ?? mobileTarget;
+    const selectedTarget = meta?.recharge
+      ? { inventoryId: meta.recharge.inventoryId }
+      : (target ?? mobileTarget);
     const purchaseType = selectedTarget
       ? ("TOPUP" as const)
       : ("INITIAL_PURCHASE" as const);
@@ -362,11 +578,13 @@ export class OrdersService implements OnModuleInit {
       await this.assertInventoryAvailableForNewOrder();
     const topUpEmail =
       purchaseType === "TOPUP"
-        ? meta?.mobile
-          ? await this.priorOrderEmail(meta.mobile)
-          : ownerId
-            ? await this.customerEmail(ownerId)
-            : undefined
+        ? meta?.recharge
+          ? meta.email
+          : meta?.mobile
+            ? await this.priorOrderEmail(meta.mobile)
+            : ownerId
+              ? await this.customerEmail(ownerId)
+              : undefined
         : undefined;
     const reusableTraveler =
       target && purchaseType === "INITIAL_PURCHASE"
@@ -375,8 +593,18 @@ export class OrdersService implements OnModuleInit {
     const order: DemoOrder = {
       id,
       ownerId,
+      ...(meta?.recharge
+        ? {
+            beneficiaryCustomerId: meta.recharge.customerId,
+            targetInventoryId: meta.recharge.inventoryId,
+            purchasedByUserId: meta.recharge.purchasedByUserId,
+            checkoutAttemptKey: meta.recharge.checkoutAttemptKey,
+            checkoutRequestHash: meta.recharge.checkoutRequestHash,
+          }
+        : {}),
       orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`,
       status: OrderStatus.DRAFT,
+      contactRuleVersion: 1,
       version: 0,
       plan,
       totalAmountNpr: plan.sellingPriceNpr,
@@ -398,28 +626,147 @@ export class OrdersService implements OnModuleInit {
       ...(meta?.mobile ? { topUpMobile: meta.mobile } : {}),
     };
     this.orders.set(id, order);
-    await this.persistence.save(order);
-    if (meta?.ipAddress || meta?.userAgent) {
-      await this.persistence
-        .recordConsent(
+    try {
+      await this.persistence.save(order, meta?.recharge?.recovery);
+    } catch (error) {
+      this.orders.delete(id);
+      throw error;
+    }
+    const consentContext = [
+      ["E_SIM_COMPATIBILITY", "1.0"],
+      ["TERMS_OF_SERVICE", "1.0"],
+      ["PRIVACY_POLICY", "1.0"],
+    ] as const;
+    await Promise.all(
+      consentContext.map(([type, version]) =>
+        this.persistence.recordConsent(
           id,
           ownerId ?? "guest",
-          "E_SIM_COMPATIBILITY",
-          "1.0",
+          type,
+          version,
           meta.ipAddress ?? "unknown",
           meta.userAgent ?? "unknown",
-        )
-        .catch((error) =>
-          this.logger.warn(
-            `Consent recording failed for order ${id}: ${error instanceof Error ? error.message : "unknown"}`,
-          ),
-        );
-    }
+        ),
+      ),
+    ).catch((error) =>
+      this.logger.warn(
+        `Consent recording failed for order ${id}: ${error instanceof Error ? error.message : "unknown"}`,
+      ),
+    );
     return this.redact(order);
   }
 
   async assertInventoryAvailableForNewOrder() {
     await this.inventory.assertAvailableForNewOrder();
+  }
+
+  async claimGuestOrder(
+    orderId: string,
+    ownerId: string,
+    performedById?: string,
+  ) {
+    await this.refreshOne(orderId, this.prisma.enabled);
+    const memoryOrder = this.orders.get(orderId);
+    if (memoryOrder?.purchaseType === "TOPUP")
+      throw new BadRequestException(
+        "Recharge ownership cannot be claimed or transferred",
+      );
+    if (!memoryOrder) throw new NotFoundException("Order not found");
+    if (!this.prisma.enabled) {
+      if (memoryOrder.ownerId && memoryOrder.ownerId !== ownerId)
+        throw new ApiException({
+          code: "ORDER_ALREADY_CLAIMED",
+          message: "This guest order belongs to another account",
+          status: 409,
+        });
+      memoryOrder.ownerId = ownerId;
+      return this.redact(memoryOrder);
+    }
+    const target = await this.prisma.customer.findFirst({
+      where: { OR: this.customerMatch(ownerId) },
+      select: { id: true },
+    });
+    if (!target) throw new NotFoundException("Customer account not found");
+    const source = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        customerId: true,
+        customer: { select: { user: { select: { clerkId: true } } } },
+      },
+    });
+    if (!source) throw new NotFoundException("Order not found");
+    if (source.customerId !== target.id) {
+      if (!source.customer.user?.clerkId.startsWith("guest-"))
+        throw new ApiException({
+          code: "ORDER_ALREADY_CLAIMED",
+          message: "This guest order belongs to another account",
+          status: 409,
+        });
+      await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.order.updateMany({
+          where: { id: orderId, customerId: source.customerId },
+          data: { customerId: target.id },
+        });
+        if (claimed.count !== 1)
+          throw new ApiException({
+            code: "ORDER_ALREADY_CLAIMED",
+            message: "This guest order was claimed by another account",
+            status: 409,
+          });
+        await tx.customerEsim.updateMany({
+          where: { orderId, customerId: source.customerId },
+          data: { customerId: target.id },
+        });
+        const originalAssignment = await tx.customerEsim.findUnique({
+          where: { orderId },
+          select: { inventoryId: true },
+        });
+        if (originalAssignment) {
+          const recharges = await tx.order.findMany({
+            where: {
+              orderType: "TOPUP",
+              customerId: source.customerId,
+              OR: [
+                { targetInventoryId: originalAssignment.inventoryId },
+                {
+                  customerEsim: {
+                    is: { inventoryId: originalAssignment.inventoryId },
+                  },
+                },
+              ],
+            },
+            select: { id: true },
+          });
+          const ids = recharges.map((item) => item.id);
+          await tx.order.updateMany({
+            where: { id: { in: ids } },
+            data: { customerId: target.id, version: { increment: 1 } },
+          });
+          await tx.customerEsim.updateMany({
+            where: { orderId: { in: ids } },
+            data: { customerId: target.id },
+          });
+        }
+        await tx.customerConsent.updateMany({
+          where: { customerId: source.customerId },
+          data: { customerId: target.id },
+        });
+        await tx.auditLog.create({
+          data: {
+            module: "ORDERS",
+            entity: "Order",
+            entityId: orderId,
+            action: "GUEST_ORDER_CLAIMED",
+            ...(performedById ? { performedById } : {}),
+            previousValue: { ownership: "GUEST" },
+            newValue: { ownership: "CUSTOMER_ACCOUNT" },
+          },
+        });
+      });
+    }
+    memoryOrder.ownerId = ownerId;
+    await this.refreshOne(orderId, true);
+    return this.view(orderId, ownerId);
   }
   /**
    * Builds the Prisma `OR` filter for looking up a customer by either its
@@ -436,26 +783,7 @@ export class OrdersService implements OnModuleInit {
     ];
   }
   private async priorOrderEmail(mobile: string): Promise<string | undefined> {
-    const target = normalizeMsisdn(mobile);
-    const prior = [...this.orders.values()].find(
-      (order) =>
-        order.status === OrderStatus.COMPLETED &&
-        order.traveler &&
-        normalizeMsisdn(order.traveler.mobile) === target,
-    );
-    if (prior?.traveler?.email) return prior.traveler.email;
-    if (!this.prisma.enabled) return undefined;
-    const variants = [...msisdnVariants(mobile)];
-    const found = await this.prisma.order.findFirst({
-      where: {
-        status: "COMPLETED",
-        traveler: { is: { mobile: { in: variants } } },
-      },
-      select: { traveler: { select: { mobile: true, email: true } } },
-    });
-    if (found?.traveler && normalizeMsisdn(found.traveler.mobile) === target)
-      return found.traveler.email;
-    return undefined;
+    return (await this.resolveSubscriber(mobile))?.traveler.email;
   }
   private async customerEmail(ownerId: string): Promise<string | undefined> {
     if (!this.prisma.enabled)
@@ -513,18 +841,20 @@ export class OrdersService implements OnModuleInit {
         }
       : null;
   }
-  private topUpLookupWhere(mobile: string) {
+  private topUpLookupWhere(mobile: string, allowReadyToInstall = false) {
     const variants = [...msisdnVariants(mobile)];
     return {
-      status: "COMPLETED" as const,
-      OR: [
-        { traveler: { is: { mobile: { in: variants } } } },
-        {
-          customerEsim: {
-            is: { inventory: { is: { msisdn: { in: variants } } } },
+      status: allowReadyToInstall
+        ? { in: ["QR_READY" as const, "COMPLETED" as const] }
+        : ("COMPLETED" as const),
+      orderType: "INITIAL_PURCHASE" as const,
+      customerEsim: {
+        is: {
+          inventory: {
+            is: { msisdn: { in: variants } },
           },
         },
-      ],
+      },
     };
   }
   private matchesTopUpLookup(
@@ -555,10 +885,7 @@ export class OrdersService implements OnModuleInit {
   async usageFor(orderId: string) {
     const order = this.get(orderId);
     if (this.prisma.enabled) {
-      const inventory = await this.inventory.inventoryForOrder(orderId);
-      if (!inventory?.iccid)
-        throw new NotFoundException("eSIM is not yet provisioned");
-      return this.connectivity.getUsage(inventory.iccid);
+      return this.inventory.refreshUsage(orderId);
     }
     if (order.usage) return order.usage;
     throw new NotFoundException("Usage is available after provisioning");
@@ -572,9 +899,187 @@ export class OrdersService implements OnModuleInit {
     const order = this.get(id, ownerId ?? undefined);
     if (order.status !== OrderStatus.DRAFT)
       throw new BadRequestException("Submitted order is immutable");
+    const submittedChangeKind = travelerChangeKind(order.traveler, traveler);
+    if (
+      submittedChangeKind !== "unchanged" &&
+      order.purchaseType !== "TOPUP" &&
+      order.contactRuleVersion !== 0 &&
+      (!order.traveler || traveler.mobile !== order.traveler.mobile)
+    ) {
+      const contact = /^\d{10}$/.test(traveler.mobile)
+        ? normalizeNepaliContact(traveler.mobile)
+        : null;
+      if (!contact)
+        throw new ApiException({
+          code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
+          message: "Enter exactly 10 digits for the Nepali mobile number",
+        });
+      await this.assertNewEsimContactAvailable(order, contact);
+    }
+    const changeKind = travelerChangeKind(order.traveler, traveler);
+    const previousFingerprint = order.traveler
+      ? this.travelerIdentityFingerprint(order.traveler)
+      : null;
+    const submittedFingerprint = this.travelerIdentityFingerprint(traveler);
+    const identityChanged =
+      previousFingerprint !== null &&
+      previousFingerprint !== submittedFingerprint;
+    if (order.traveler && order.documentReviewStatus === "MANUAL_REVIEW")
+      throw new ConflictException(
+        "Traveller identity is under review and cannot be changed",
+      );
+    if (identityChanged && order.documentReviewStatus === "MANUALLY_APPROVED")
+      throw new ConflictException(
+        "Manually approved traveller identity cannot be changed",
+      );
+    if (changeKind === "unchanged") return this.redact(order);
+    const replacingPassport =
+      order.documentReviewStatus === "REUPLOAD_REQUIRED";
+    const correctingMismatch =
+      order.documentReviewStatus === "CORRECTION_REQUIRED" &&
+      ["PARTIAL", "FAILED"].includes(order.passportVerification?.status ?? "");
+    const reverifyApprovedIdentity =
+      identityChanged && order.documentReviewStatus === "VERIFIED";
+    const reverifyPendingIdentity =
+      identityChanged &&
+      ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+        order.documentReviewStatus ?? "",
+      );
+    const retryExistingPassport =
+      replacingPassport ||
+      correctingMismatch ||
+      reverifyApprovedIdentity ||
+      reverifyPendingIdentity;
     order.traveler = traveler;
+    if (retryExistingPassport) {
+      order.documentReviewStatus = "NOT_STARTED";
+      delete order.documentReviewStartedAt;
+      delete order.documentCheckoutReleaseAt;
+      delete order.passportVerification;
+      if (replacingPassport) delete order.passportExtraction;
+      const passport = order.documents.find(
+        (document) => document.type === DocumentType.PASSPORT,
+      );
+      if (passport) passport.status = DocumentStatus.PENDING;
+    }
     await this.persistence.save(order);
+    if (
+      this.prisma.enabled &&
+      order.passportExtraction &&
+      !retryExistingPassport
+    )
+      await this.prisma.passportExtraction.updateMany({
+        where: { orderId: order.id, confirmedAt: null },
+        data: { confirmedAt: new Date() },
+      });
     return this.redact(order);
+  }
+
+  private async assertNewEsimContactAvailable(
+    order: DemoOrder,
+    contact: string,
+  ) {
+    const reservedStatuses = new Set<OrderStatus>([
+      OrderStatus.PAYMENT_PENDING,
+      OrderStatus.PAYMENT_CONFIRMED,
+      OrderStatus.PAYMENT_REVIEW_REQUIRED,
+      OrderStatus.REVIEW_PENDING,
+      OrderStatus.APPROVED,
+      OrderStatus.PROVISIONING,
+      OrderStatus.QR_READY,
+      OrderStatus.COMPLETED,
+      OrderStatus.ACTIVATION_ATTENTION,
+      OrderStatus.PROVISIONING_FAILED,
+    ]);
+    const activeInventory = new Set(["RESERVED", "ASSIGNED", "ACTIVATED"]);
+    const conflicts = (candidate: {
+      id: string;
+      status: OrderStatus;
+      mobile?: string | null | undefined;
+      ownerId?: string | null | undefined;
+      inventoryStatus?: string | null | undefined;
+    }) => {
+      if (candidate.id === order.id) return false;
+      const active = candidate.inventoryStatus
+        ? activeInventory.has(candidate.inventoryStatus)
+        : reservedStatuses.has(candidate.status);
+      if (!active) return false;
+      return (
+        normalizeNepaliContact(candidate.mobile ?? "") === contact ||
+        (Boolean(order.ownerId) && candidate.ownerId === order.ownerId)
+      );
+    };
+    const localConflict = [...this.orders.values()].some((candidate) =>
+      conflicts({
+        id: candidate.id,
+        status: candidate.status,
+        mobile: candidate.traveler?.mobile,
+        ownerId: candidate.ownerId,
+        inventoryStatus: candidate.assignment?.inventoryId ? "ASSIGNED" : null,
+      }),
+    );
+    if (localConflict)
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+        message:
+          "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+        status: 409,
+      });
+    if (!this.prisma.enabled) return;
+    const candidates = await this.prisma.order.findMany({
+      where: {
+        id: { not: order.id },
+        orderType: "INITIAL_PURCHASE",
+        AND: [
+          {
+            OR: [
+              { status: { in: [...reservedStatuses] } },
+              { customerEsim: { isNot: null } },
+            ],
+          },
+          {
+            OR: [
+              { traveler: { is: { contactNumberNormalized: contact } } },
+              ...(order.ownerId
+                ? [
+                    {
+                      customer: {
+                        is: { user: { is: { clerkId: order.ownerId } } },
+                      },
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ],
+      },
+      select: {
+        id: true,
+        status: true,
+        traveler: { select: { mobile: true } },
+        customer: { select: { user: { select: { clerkId: true } } } },
+        customerEsim: {
+          select: { inventory: { select: { status: true } } },
+        },
+      },
+    });
+    if (
+      candidates.some((candidate) =>
+        conflicts({
+          id: candidate.id,
+          status: candidate.status as OrderStatus,
+          mobile: candidate.traveler?.mobile,
+          ownerId: candidate.customer.user?.clerkId,
+          inventoryStatus: candidate.customerEsim?.inventory.status,
+        }),
+      )
+    )
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+        message:
+          "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+        status: 409,
+      });
   }
   async addDocument(
     id: string,
@@ -584,6 +1089,9 @@ export class OrdersService implements OnModuleInit {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
     const replacement = order.documentReviewStatus === "REUPLOAD_REQUIRED";
+    const replacesExistingEvidence = order.documents.some(
+      (document) => document.type === input.type,
+    );
     if (
       ![OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER].includes(
         order.status,
@@ -596,8 +1104,11 @@ export class OrdersService implements OnModuleInit {
       input.type,
       input.contentType ?? "application/pdf",
     );
+    const existingDocument = order.documents.find(
+      (item) => item.type === input.type,
+    );
     const document = {
-      id: randomUUID(),
+      id: existingDocument?.id ?? randomUUID(),
       type: input.type,
       fileName: input.fileName,
       privateAssetId: signed.assetId,
@@ -606,7 +1117,23 @@ export class OrdersService implements OnModuleInit {
     order.documents = order.documents
       .filter((d) => d.type !== input.type)
       .concat(document);
-    if (replacement) order.documentReviewStatus = "NOT_STARTED";
+    // The aggregate review verdict belongs to passport verification. Optional
+    // visa uploads (and ticket replacements) must not invalidate a successful
+    // passport OCR result or make the outcome depend on upload order.
+    if (
+      input.type === DocumentType.PASSPORT &&
+      (replacement ||
+        replacesExistingEvidence ||
+        ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+          order.documentReviewStatus ?? "",
+        ))
+    ) {
+      order.documentReviewStatus = "NOT_STARTED";
+      delete order.documentReviewStartedAt;
+      delete order.documentCheckoutReleaseAt;
+      delete order.passportVerification;
+      delete order.passportExtraction;
+    }
     await this.persistence.save(order);
     return { ...document, upload: signed.upload };
   }
@@ -626,7 +1153,55 @@ export class OrdersService implements OnModuleInit {
         status: document.status,
         uploadVerified: true,
       };
-    await this.storage.verifyDocument(document.privateAssetId);
+    const finalized = await this.storage.finalizeDocument(
+      document.privateAssetId,
+    );
+    document.privateAssetId = finalized.finalizedAssetId;
+    if (this.prisma.enabled) {
+      const version = await this.prisma.$transaction(async (tx) => {
+        await tx.documentAssetVersion.updateMany({
+          where: { documentId: document.id, supersededAt: null },
+          data: { supersededAt: new Date() },
+        });
+        const created = await tx.documentAssetVersion.upsert({
+          where: {
+            documentId_sha256: {
+              documentId: document.id,
+              sha256: finalized.sha256,
+            },
+          },
+          update: { supersededAt: null },
+          create: {
+            documentId: document.id,
+            temporaryAssetId: finalized.temporaryAssetId,
+            finalizedAssetId: finalized.finalizedAssetId,
+            sha256: finalized.sha256,
+            byteSize: finalized.byteSize,
+            contentType: finalized.contentType,
+            storageVersionId: finalized.storageVersionId,
+          },
+        });
+        const activated = await tx.travelerDocument.updateMany({
+          where: {
+            id: document.id,
+            privateAssetId: finalized.temporaryAssetId,
+          },
+          data: {
+            privateAssetId: finalized.finalizedAssetId,
+            activeAssetVersionId: created.id,
+          },
+        });
+        if (activated.count !== 1)
+          throw new ConflictException(
+            "This document was replaced while its upload was being confirmed",
+          );
+        return created;
+      });
+      void version;
+      await this.storage
+        .deleteDocument(finalized.temporaryAssetId)
+        .catch(() => undefined);
+    }
     document.uploadVerified = true;
     const reviewResubmission = [
       OrderStatus.REVIEW_PENDING,
@@ -639,16 +1214,38 @@ export class OrdersService implements OnModuleInit {
       OrderStatus.COMPLETED,
     ].includes(order.status);
     let queueReplacementOcr = false;
-    if (reviewResubmission && order.documentReviewStatus === "NOT_STARTED") {
-      order.documentReviewStartedAt = new Date().toISOString();
+    // A replacement document must restart review. A confirmed ticket counts
+    // too (not just a passport), so a ticket-only replacement reliably starts
+    // a fresh validation run against the current confirmed passport.
+    const restartingReplacement =
+      reviewResubmission &&
+      [
+        "NOT_STARTED",
+        "OCR_PENDING",
+        "REUPLOAD_REQUIRED",
+        "MANUAL_REVIEW",
+        "CORRECTION_REQUIRED",
+      ].includes(order.documentReviewStatus ?? "");
+    const outstandingReplacement = order.documents.some(
+      (item) =>
+        [DocumentType.PASSPORT, DocumentType.TICKET].includes(item.type) &&
+        item.status === DocumentStatus.REUPLOAD_REQUIRED,
+    );
+    if (outstandingReplacement) {
+      // Do not check a partial resubmission. The remaining rejected file must
+      // be replaced before OCR or manual review can produce a new verdict.
+      order.documentReviewStatus = "REUPLOAD_REQUIRED";
+    } else if (restartingReplacement) {
+      order.documentReviewStartedAt ??= new Date().toISOString();
       if (order.documentReviewPolicy === "NO_REVIEW") {
         order.documentReviewStatus = "SKIPPED";
-      } else if (
-        order.documentReviewPolicy === "AUTO_OCR" &&
-        document.type === DocumentType.PASSPORT
-      ) {
+      } else if (order.documentReviewPolicy === "AUTO_OCR") {
         order.documentReviewStatus = "OCR_PENDING";
-        queueReplacementOcr = true;
+        const passportConfirmed = order.documents.some(
+          (item) => item.type === DocumentType.PASSPORT && item.uploadVerified,
+        );
+        queueReplacementOcr =
+          document.type === DocumentType.PASSPORT || passportConfirmed;
       } else {
         order.documentReviewStatus = "MANUAL_REVIEW";
       }
@@ -667,11 +1264,36 @@ export class OrdersService implements OnModuleInit {
     await this.persistence.save(order);
     if (queueReplacementOcr) {
       try {
-        await this.queues.add(
-          QUEUES.documents,
+        // A ticket confirms with a distinct job key referencing the current
+        // confirmed passport so the run is never deduplicated against an
+        // earlier passport job and validates the replacement ticket.
+        const ocrDocument =
+          document.type === DocumentType.PASSPORT
+            ? document
+            : order.documents.find(
+                (item) =>
+                  item.type === DocumentType.PASSPORT && item.uploadVerified,
+              );
+        if (!ocrDocument)
+          throw new Error("A confirmed passport is required for validation");
+        const attemptKey =
+          document.type === DocumentType.TICKET
+            ? `replacement:${document.id}:${document.privateAssetId}`
+            : `replacement:${order.documentReviewStartedAt ?? document.privateAssetId}`;
+        await enqueuePassportOcr(
+          this.queues,
           "verify-order-passport",
-          { orderId: order.id, documentId: document.id },
-          `order-passport-${order.id}-${document.id}`,
+          {
+            orderId: order.id,
+            documentId: ocrDocument.id,
+            privateAssetId: ocrDocument.privateAssetId,
+          },
+          orderPassportOcrJobId(
+            order.id,
+            ocrDocument.id,
+            ocrDocument.privateAssetId,
+            attemptKey,
+          ),
           ocrJobOptions(),
         );
       } catch (error) {
@@ -686,6 +1308,26 @@ export class OrdersService implements OnModuleInit {
       }
     }
     await this.ensureDocumentReviewAttention(order);
+    const allRequiredDocumentsConfirmed = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].every((type) =>
+      order.documents.some((item) => item.type === type && item.uploadVerified),
+    );
+    if (
+      allRequiredDocumentsConfirmed &&
+      order.documentReviewStatus === "NOT_STARTED"
+    ) {
+      // Confirmation is the durable upload boundary and must not fail because
+      // queue/configuration work needed to start OCR is temporarily unhealthy.
+      // The checkout also invokes the idempotent verification endpoint, while
+      // this best-effort handoff preserves automatic startup for other clients.
+      void this.verifyPassport(id, ownerId).catch((error) =>
+        this.logger.error(
+          `Passport verification handoff failed for ${id}: ${error instanceof Error ? error.message : "unknown"}`,
+        ),
+      );
+    }
     return {
       id: document.id,
       type: document.type,
@@ -715,7 +1357,58 @@ export class OrdersService implements OnModuleInit {
       fileName: document.fileName,
     };
   }
+  async confirmPassportDetails(id: string, ownerId: string | null) {
+    return this.runExclusive(`passport-verification:${id}`, async () => {
+      await this.refreshOne(id, true);
+      const order = this.get(id, ownerId ?? undefined);
+      if (order.documentReviewStatus === "MANUAL_REVIEW")
+        return this.redact(order);
+      if (order.status !== OrderStatus.DRAFT)
+        throw new BadRequestException("Submitted order is immutable");
+      if (order.documentReviewStatus !== "CORRECTION_REQUIRED")
+        throw new ConflictException(
+          "Passport details are not awaiting customer confirmation",
+        );
+      if (!order.traveler || !order.passportExtraction)
+        throw new ConflictException("Passport comparison is unavailable");
+      const fingerprint = this.travelerIdentityFingerprint(order.traveler);
+      if (order.passportExtraction.lastMismatchFingerprint !== fingerprint)
+        throw new ConflictException(
+          "Traveller details changed; save them before confirming",
+        );
+
+      order.passportExtraction.confirmedMismatchFingerprint = fingerprint;
+      order.documentReviewStatus = "MANUAL_REVIEW";
+      order.documentReviewStartedAt = new Date().toISOString();
+      delete order.documentCheckoutReleaseAt;
+      order.timeline.push({
+        from: order.status,
+        to: order.status,
+        at: new Date().toISOString(),
+        reason:
+          "Customer confirmed unchanged passport details for manual review",
+      });
+      await this.persistence.save(order);
+      await this.ensureDocumentReviewAttention(order);
+      return this.redact(order);
+    });
+  }
   async verifyPassport(id: string, ownerId: string | null) {
+    return this.runExclusive(`passport-verification:${id}`, async () => {
+      try {
+        return await this.verifyPassportUnlocked(id, ownerId);
+      } catch (error) {
+        if (!(error instanceof ConflictException)) throw error;
+        // Another API replica may have started the same idempotent check from
+        // the same order version. Return its durable result instead of turning
+        // a harmless race into a customer-visible 500.
+        await this.refreshOne(id, true);
+        return this.redact(this.get(id, ownerId ?? undefined));
+      }
+    });
+  }
+
+  private async verifyPassportUnlocked(id: string, ownerId: string | null) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
     if (order.purchaseType === "TOPUP")
@@ -726,10 +1419,8 @@ export class OrdersService implements OnModuleInit {
       (document) =>
         document.type === DocumentType.PASSPORT && document.uploadVerified,
     );
-    if (!passport || !order.traveler)
-      throw new BadRequestException(
-        "Confirmed passport and traveller details are required",
-      );
+    if (!passport)
+      throw new BadRequestException("A confirmed passport is required");
     const persistedPassportVerdict = order.passportVerification?.status;
     if (
       persistedPassportVerdict === "VERIFIED" ||
@@ -761,16 +1452,94 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException(
         `Confirm all required documents before verification: ${missingRequiredDocuments.join(", ")}`,
       );
-    const config = this.prisma.enabled
-      ? await this.prisma.platformConfiguration.upsert({
+    const storedExtraction = order.passportExtraction;
+    const extractionMatchesPassport =
+      storedExtraction?.passportAssetId === passport.privateAssetId;
+    if (!order.traveler && !extractionMatchesPassport) {
+      order.passportExtraction = {
+        status: "PROCESSING",
+        fields: {},
+        fieldsRequiringInput: [],
+      };
+    }
+    // The order owns the review policy that governed its checkout. Starting
+    // verification must not require an unrelated global-configuration write:
+    // an upsert here made every OCR request vulnerable to configuration-table
+    // contention or migration drift before OCR could even be queued.
+    let config: {
+      documentReviewPolicy: "AUTO_OCR" | "MANUAL_REVIEW" | "NO_REVIEW";
+      ocrCheckoutWaitMs: number;
+    } = {
+      documentReviewPolicy: order.documentReviewPolicy ?? "AUTO_OCR",
+      ocrCheckoutWaitMs: 8000,
+    };
+    if (this.prisma.enabled) {
+      try {
+        const current = await this.prisma.platformConfiguration.findUnique({
           where: { id: "platform" },
-          update: {},
-          create: { id: "platform" },
-        })
-      : { documentReviewPolicy: "AUTO_OCR" as const, ocrCheckoutWaitMs: 8000 };
+          select: {
+            documentReviewPolicy: true,
+            ocrCheckoutWaitMs: true,
+          },
+        });
+        if (current) config = current;
+      } catch (error) {
+        // The snapshotted order policy is authoritative and keeps customer
+        // verification available while configuration storage is recovered.
+        this.logger.warn(
+          `Document review configuration unavailable for ${id}; using the order policy: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
     const now = new Date();
     order.documentReviewPolicy = config.documentReviewPolicy;
     order.documentReviewStartedAt ??= now.toISOString();
+    if (!order.traveler) {
+      // A completed extraction for this exact passport already holds the
+      // fields used to prefill the traveller form. Reuse it instead of
+      // overwriting it with a bare PROCESSING placeholder, which the
+      // asset-hashed extraction job would never run again to restore.
+      if (
+        extractionMatchesPassport &&
+        ["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+          storedExtraction?.status ?? "",
+        )
+      )
+        return this.redact(order);
+      order.documentReviewStatus = "OCR_PENDING";
+      order.documentReviewStartedAt = now.toISOString();
+      await this.persistence.save(order);
+      try {
+        await enqueuePassportOcr(
+          this.queues,
+          "extract-order-passport",
+          {
+            orderId: order.id,
+            documentId: passport.id,
+            privateAssetId: passport.privateAssetId,
+          },
+          `passport-extraction-${order.id}-${passport.id}-${createHash("sha256").update(passport.privateAssetId).digest("hex").slice(0, 16)}`,
+          ocrJobOptions(),
+        );
+      } catch (error) {
+        order.passportExtraction = {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: {},
+          fieldsRequiringInput: [
+            "firstName",
+            "surname",
+            "dateOfBirth",
+            "passportNumber",
+            "passportExpiryDate",
+            "nationality",
+          ],
+          failureCode: "QUEUE_UNAVAILABLE",
+        };
+        order.documentReviewStatus = "NOT_STARTED";
+        await this.persistence.save(order);
+      }
+      return this.redact(order);
+    }
     if (config.documentReviewPolicy === "NO_REVIEW") {
       order.documentReviewStatus = "SKIPPED";
       order.passportVerification = {
@@ -782,6 +1551,7 @@ export class OrdersService implements OnModuleInit {
           "Document verification was skipped by the configured review policy",
       };
       await this.persistence.save(order);
+      await this.ensureDocumentReviewAttention(order);
       return this.redact(order);
     }
     if (config.documentReviewPolicy === "MANUAL_REVIEW") {
@@ -794,6 +1564,103 @@ export class OrdersService implements OnModuleInit {
         detail: "Documents require manual approval before payment can continue",
       };
       await this.persistence.save(order);
+      return this.redact(order);
+    }
+    const extraction = order.passportExtraction;
+    if (
+      extraction?.status === "MANUAL_ENTRY_REQUIRED" &&
+      order.traveler &&
+      passportRequiresManualReview(extraction.failureCode)
+    ) {
+      // There is no OCR evidence to compare against. Re-running the same failed
+      // extraction after the customer enters data creates a loop and can never
+      // establish identity. Preserve the document and route deterministically
+      // to human review; payment remains blocked until explicit approval.
+      order.documentReviewStatus = "MANUAL_REVIEW";
+      order.passportVerification = {
+        status: "NOT_READY",
+        matchedFields: [],
+        checkedAt: now.toISOString(),
+        method: "ocr-error",
+        detail:
+          "Automatic extraction was unavailable; customer-entered details require manual comparison with the saved passport",
+      };
+      passport.status = DocumentStatus.PENDING;
+      await this.persistence.save(order);
+      await this.ensureDocumentReviewAttention(order);
+      return this.redact(order);
+    }
+    if (
+      extraction &&
+      ["READY", "PARTIAL"].includes(extraction.status) &&
+      extraction.passportAssetId === passport.privateAssetId &&
+      Object.keys(extraction.fields).length > 0
+    ) {
+      const result = verifyStoredExtraction(
+        extraction.fields,
+        order.traveler,
+        extraction.confidence,
+      );
+      const verified = result.status === "VERIFIED";
+      const expired = result.failureCode === "PASSPORT_EXPIRED";
+      const hasIdentityConflict = Boolean(result.mismatchedFields?.length);
+      const incompleteEvidence = !verified && !expired && !hasIdentityConflict;
+      const extractionHasName = Boolean(
+        extraction.fields.firstName || extraction.fields.surname,
+      );
+      const fingerprint = this.travelerIdentityFingerprint(order.traveler);
+      const repeatedMismatch =
+        extraction.lastMismatchFingerprint === fingerprint;
+      const explicitlyConfirmed =
+        extraction.confirmedMismatchFingerprint === fingerprint;
+      if (verified) {
+        delete extraction.lastMismatchFingerprint;
+        delete extraction.lastMismatchFields;
+        delete extraction.confirmedMismatchFingerprint;
+      } else if (hasIdentityConflict && !repeatedMismatch) {
+        extraction.correctionAttempts =
+          (extraction.correctionAttempts ?? 0) + 1;
+        extraction.lastMismatchFingerprint = fingerprint;
+        if (result.mismatchedFields)
+          extraction.lastMismatchFields = result.mismatchedFields;
+        else delete extraction.lastMismatchFields;
+        delete extraction.confirmedMismatchFingerprint;
+      }
+      const correctionAttempts = extraction.correctionAttempts ?? 0;
+      order.passportVerification = result;
+      order.documentReviewStatus = verified
+        ? "VERIFIED"
+        : expired
+          ? "REUPLOAD_REQUIRED"
+          : incompleteEvidence ||
+              explicitlyConfirmed ||
+              !extractionHasName ||
+              correctionAttempts >= 3
+            ? "MANUAL_REVIEW"
+            : "CORRECTION_REQUIRED";
+      passport.status = verified
+        ? DocumentStatus.APPROVED
+        : expired
+          ? DocumentStatus.REUPLOAD_REQUIRED
+          : DocumentStatus.PENDING;
+      this.logger.debug(
+        JSON.stringify({
+          event: "passport_identity_comparison",
+          orderId: order.id,
+          outcome: order.documentReviewStatus,
+          mismatchedFields: result.mismatchedFields ?? [],
+          repeatedMismatch,
+          explicitlyConfirmed,
+          correctionAttempts,
+          comparisons: passportComparisonDiagnostics(
+            extraction.fields,
+            order.traveler,
+            result.matchedFields,
+          ),
+        }),
+      );
+      await this.persistence.save(order);
+      await this.ensureDocumentReviewAttention(order);
       return this.redact(order);
     }
     // A later customer recheck is a recovery signal. Legacy OCR_BACKGROUND
@@ -818,11 +1685,20 @@ export class OrdersService implements OnModuleInit {
       }
       await this.persistence.save(order);
       try {
-        await this.queues.add(
-          QUEUES.documents,
+        await enqueuePassportOcr(
+          this.queues,
           "verify-order-passport",
-          { orderId: order.id, documentId: passport.id },
-          `order-passport-${order.id}-${passport.id}`,
+          {
+            orderId: order.id,
+            documentId: passport.id,
+            privateAssetId: passport.privateAssetId,
+          },
+          orderPassportOcrJobId(
+            order.id,
+            passport.id,
+            passport.privateAssetId,
+            order.documentReviewStartedAt,
+          ),
           ocrJobOptions(),
         );
       } catch (error) {
@@ -855,6 +1731,14 @@ export class OrdersService implements OnModuleInit {
   ) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
+    // Defense-in-depth against double charges: a COMPLETED payment makes the
+    // QR/session single-use forever. Even if the order's own status drifted
+    // (e.g. a split-state during boot recovery), a new session must never
+    // overwrite an already-paid payment record.
+    if (order.payment?.status === PaymentStatus.COMPLETED)
+      throw new ConflictException(
+        "This order has already been paid and cannot collect another payment",
+      );
     if (
       order.payment?.status === PaymentStatus.PENDING &&
       order.payment.reference === initiation.reference
@@ -866,37 +1750,7 @@ export class OrdersService implements OnModuleInit {
       new Date(order.payment.expiresAt).getTime() > Date.now()
     )
       throw new ConflictException("Another payment session is already active");
-    if (order.purchaseType !== "TOPUP") {
-      const required = order.documents.filter((d) =>
-        [DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type),
-      );
-      if (!order.traveler || required.length !== 2)
-        throw new BadRequestException(
-          "Traveler, passport, and ticket are required",
-        );
-      await Promise.all(
-        required.map((document) =>
-          this.storage.verifyDocument(document.privateAssetId),
-        ),
-      );
-      required.forEach((document) => {
-        document.uploadVerified = true;
-      });
-      const review = order.documentReviewStatus;
-      if (review === "REUPLOAD_REQUIRED")
-        throw new ApiException({
-          code: "PASSPORT_VERIFICATION_REQUIRED",
-          message: "Upload a clearer passport before payment",
-        });
-      if (!["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(review ?? ""))
-        throw new ApiException({
-          code: "PASSPORT_VERIFICATION_REQUIRED",
-          message:
-            review === "OCR_PENDING" || review === "OCR_BACKGROUND"
-              ? "Passport verification must complete before payment"
-              : "Passport verification is required before payment",
-        });
-    }
+    await this.assertPaymentPrerequisitesForOrder(order);
     if (order.status !== OrderStatus.PAYMENT_PENDING)
       this.transition(order, OrderStatus.PAYMENT_PENDING);
     order.payment = {
@@ -914,6 +1768,169 @@ export class OrdersService implements OnModuleInit {
     };
     await this.persistence.save(order);
     return this.redact(order);
+  }
+
+  /**
+   * Validate every local prerequisite before a payment provider is contacted.
+   * beginPayment repeats the same check after provider initiation so a state
+   * change racing the remote request still cannot advance an ineligible order.
+   */
+  async assertPaymentPrerequisites(id: string, ownerId: string | null) {
+    const order = this.get(id, ownerId ?? undefined);
+    await this.assertPaymentPrerequisitesForOrder(order);
+  }
+
+  private async assertPaymentPrerequisitesForOrder(order: DemoOrder) {
+    if (order.purchaseType === "TOPUP") return;
+    const required = order.documents.filter((document) =>
+      [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type),
+    );
+    if (!order.traveler || required.length !== 2)
+      throw new BadRequestException(
+        "Traveler, passport, and ticket are required",
+      );
+    if (order.contactRuleVersion !== 0) {
+      const contact = normalizeNepaliContact(order.traveler.mobile);
+      if (!contact)
+        throw new ApiException({
+          code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
+          message: "Enter a valid Nepal contact number before payment",
+        });
+      await this.assertNewEsimContactAvailable(order, contact);
+    }
+    await Promise.all(
+      required.map((document) =>
+        this.storage.verifyDocument(document.privateAssetId),
+      ),
+    );
+    required.forEach((document) => {
+      document.uploadVerified = true;
+    });
+    const review = order.documentReviewStatus;
+    const requiredDocumentNeedsReplacement = required.some(
+      (document) => document.status === DocumentStatus.REUPLOAD_REQUIRED,
+    );
+    if (review === "REUPLOAD_REQUIRED" || requiredDocumentNeedsReplacement)
+      throw new ApiException({
+        code: "PASSPORT_VERIFICATION_REQUIRED",
+        message: "Replace the requested travel document before payment",
+      });
+    if (!["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(review ?? ""))
+      throw new ApiException({
+        code: "PASSPORT_VERIFICATION_REQUIRED",
+        message:
+          review === "OCR_PENDING" || review === "OCR_BACKGROUND"
+            ? "Passport verification must complete before payment"
+            : "Passport verification is required before payment",
+      });
+    if (this.prisma.enabled && order.contactRuleVersion !== 0)
+      await this.claimNewEsimContact(order);
+  }
+
+  private async claimNewEsimContact(order: DemoOrder) {
+    if (!this.prisma.enabled || order.purchaseType === "TOPUP") return;
+    const contact = normalizeNepaliContact(order.traveler?.mobile ?? "");
+    if (!contact)
+      throw new ApiException({
+        code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
+        message: "Enter a valid Nepal contact number",
+      });
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          const persisted = await tx.order.findUniqueOrThrow({
+            where: { id: order.id },
+            select: {
+              customerId: true,
+              customer: { select: { user: { select: { clerkId: true } } } },
+            },
+          });
+          const accountCustomerId =
+            persisted.customer.user?.clerkId &&
+            !persisted.customer.user.clerkId.startsWith("guest-")
+              ? persisted.customerId
+              : null;
+          const existing = await tx.esimContactClaim.findUnique({
+            where: { contactNumber: contact },
+          });
+          const accountClaim = accountCustomerId
+            ? await tx.esimContactClaim.findUnique({
+                where: { customerId: accountCustomerId },
+              })
+            : null;
+          const checkedClaims = new Set<string>();
+          for (const claimed of [existing, accountClaim]) {
+            if (!claimed || claimed.orderId === order.id) continue;
+            if (checkedClaims.has(claimed.contactNumber)) continue;
+            checkedClaims.add(claimed.contactNumber);
+            const previous = await tx.order.findUnique({
+              where: { id: claimed.orderId },
+              select: {
+                status: true,
+                customerEsim: {
+                  select: { inventory: { select: { status: true } } },
+                },
+              },
+            });
+            const inventoryStatus = previous?.customerEsim?.inventory.status;
+            const terminal = previous
+              ? (
+                  [
+                    OrderStatus.CANCELLED,
+                    OrderStatus.REFUNDED,
+                    OrderStatus.PAYMENT_FAILED,
+                  ] as string[]
+                ).includes(previous.status)
+              : false;
+            const released =
+              !previous ||
+              (!["RESERVED", "ASSIGNED", "ACTIVATED"].includes(
+                inventoryStatus ?? "",
+              ) &&
+                (terminal ||
+                  ["EXPIRED", "TERMINATED"].includes(inventoryStatus ?? "")));
+            if (!released)
+              throw new ApiException({
+                code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+                message:
+                  "This contact number or account already has an active eSIM. Recharge it instead of buying another.",
+                status: 409,
+              });
+            await tx.esimContactClaim.delete({
+              where: { contactNumber: claimed.contactNumber },
+            });
+          }
+          if (existing?.orderId === order.id) {
+            if (accountCustomerId && existing.customerId !== accountCustomerId)
+              await tx.esimContactClaim.update({
+                where: { contactNumber: contact },
+                data: { customerId: accountCustomerId },
+              });
+            return;
+          }
+          await tx.esimContactClaim.create({
+            data: {
+              contactNumber: contact,
+              orderId: order.id,
+              customerId: accountCustomerId,
+            },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        ["P2002", "P2034"].includes(error.code)
+      )
+        throw new ApiException({
+          code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+          message:
+            "This contact number or account is already linked to an active eSIM. Recharge it instead of buying another.",
+          status: 409,
+        });
+      throw error;
+    }
   }
   async confirmPayment(id: string, reference: string, transactionId?: string) {
     if (this.prisma.enabled)
@@ -1079,12 +2096,23 @@ export class OrdersService implements OnModuleInit {
       Promise.resolve()) as Promise<unknown>;
     const run = previous.catch(() => undefined).then(task);
     this.confirmLocks.set(key, run);
-    void run.finally(() => {
+    const release = () => {
       if (this.confirmLocks.get(key) === run) this.confirmLocks.delete(key);
-    });
+    };
+    // Do not use an ignored `run.finally(release)` here. The promise returned
+    // by finally rejects when `run` rejects and, if left unobserved, reaches
+    // the process-level unhandledRejection handler and terminates the API.
+    // Handling both branches keeps cleanup detached without creating a new
+    // rejected promise; callers still receive the original `run` result.
+    void run.then(release, release);
     return run;
   }
-  async cancel(id: string, ownerId: string | null, reason: string) {
+  async cancel(
+    id: string,
+    ownerId: string | null,
+    reason: string,
+    actorId?: string,
+  ) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
     if (
@@ -1099,7 +2127,7 @@ export class OrdersService implements OnModuleInit {
       );
     if (order.payment && order.payment.status === PaymentStatus.PENDING)
       order.payment.status = PaymentStatus.CANCELLED;
-    this.transition(order, OrderStatus.CANCELLED, reason);
+    this.transition(order, OrderStatus.CANCELLED, reason, actorId);
     await this.persistence.save(order);
     return this.redact(order);
   }
@@ -1142,13 +2170,13 @@ export class OrdersService implements OnModuleInit {
   async topUpLookup(mobile: string, options?: { includeIdentity?: boolean }) {
     const target = normalizeMsisdn(mobile);
     if (!target)
-      throw new BadRequestException("A valid mobile number is required");
+      throw new BadRequestException("A valid eSIM MSISDN is required");
     const includeIdentity = Boolean(options?.includeIdentity);
-    const fromOrders = [...this.orders.values()]
-      .filter(
-        (order) => order.status === OrderStatus.COMPLETED && order.traveler,
-      )
-      .find((order) => normalizeMsisdn(order.traveler!.mobile) === target);
+    const fromOrders = [...this.orders.values()].find(
+      (order) =>
+        order.status === OrderStatus.COMPLETED &&
+        normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
+    );
     if (fromOrders)
       return {
         found: true,
@@ -1168,7 +2196,6 @@ export class OrdersService implements OnModuleInit {
       if (
         dbOrder?.traveler &&
         this.matchesTopUpLookup(target, [
-          dbOrder.traveler.mobile,
           dbOrder.customerEsim?.inventory?.msisdn,
         ])
       ) {
@@ -1182,13 +2209,6 @@ export class OrdersService implements OnModuleInit {
     return { found: false, mobile };
   }
   private topUpSubscriber(order: DemoOrder, includeIdentity: boolean) {
-    const expiredAt =
-      order.createdAt && order.plan.validityDays
-        ? new Date(
-            new Date(order.createdAt).getTime() +
-              order.plan.validityDays * 86_400_000,
-          ).toISOString()
-        : undefined;
     const subscriber: Record<string, unknown> = {
       currentPlan: {
         id: order.plan.id,
@@ -1201,7 +2221,6 @@ export class OrdersService implements OnModuleInit {
       countryCode: order.plan.countryCode,
       countryName: order.plan.countryName,
       ...(order.usage ? { usage: order.usage } : {}),
-      ...(expiredAt ? { expiresAt: expiredAt } : {}),
       hasActiveEsim: Boolean(order.qrPayload),
       ...(includeIdentity && order.traveler
         ? {
@@ -1214,7 +2233,10 @@ export class OrdersService implements OnModuleInit {
           }
         : {}),
     };
-    return { subscriber, topUpAvailable: Boolean(order.qrPayload) };
+    return {
+      subscriber,
+      topUpAvailable: Boolean(order.qrPayload && order.assignment?.msisdn),
+    };
   }
   private dbTopUpSubscriber(
     dbOrder: {
@@ -1318,26 +2340,31 @@ export class OrdersService implements OnModuleInit {
     };
     return {
       subscriber,
-      topUpAvailable: Boolean(dbOrder.customerEsim?.inventory),
+      topUpAvailable: Boolean(dbOrder.customerEsim?.inventory?.msisdn),
     };
   }
   /**
-   * Resolves the most recent completed order for a subscriber number, with the
-   * plaintext fields needed to provision a top-up (identity, plan country and
-   * the physical eSIM to reuse). Returns null when no completed order matches.
+   * Resolves an eSIM's original purchase and provisioning identity. Recharge
+   * eligibility can also inspect paid, ready-to-install eSIMs; ordinary lookup
+   * keeps its existing completed-order requirement.
    */
-  private async priorCompletedOrderFor(mobile: string) {
+  private async priorCompletedOrderFor(
+    mobile: string,
+    allowReadyToInstall = false,
+  ) {
     const target = normalizeMsisdn(mobile);
     if (!target) return null;
     if (!this.prisma.enabled) {
       const prior = [...this.orders.values()].find(
         (order) =>
-          order.status === OrderStatus.COMPLETED &&
+          (order.status === OrderStatus.COMPLETED ||
+            (allowReadyToInstall && order.status === OrderStatus.QR_READY)) &&
           order.traveler &&
-          normalizeMsisdn(order.traveler.mobile) === target,
+          normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
       );
       if (!prior?.traveler) return null;
       return {
+        orderId: prior.id,
         customerId: undefined,
         planCountryCode: prior.plan.countryCode,
         traveler: {
@@ -1352,7 +2379,7 @@ export class OrdersService implements OnModuleInit {
       };
     }
     const prior = await this.prisma.order.findFirst({
-      where: this.topUpLookupWhere(mobile),
+      where: this.topUpLookupWhere(mobile, allowReadyToInstall),
       include: {
         plan: { include: { country: true } },
         customerEsim: { include: { inventory: true } },
@@ -1362,13 +2389,11 @@ export class OrdersService implements OnModuleInit {
     });
     if (
       !prior?.traveler ||
-      !this.matchesTopUpLookup(target, [
-        prior.traveler.mobile,
-        prior.customerEsim?.inventory?.msisdn,
-      ])
+      !this.matchesTopUpLookup(target, [prior.customerEsim?.inventory?.msisdn])
     )
       return null;
     return {
+      orderId: prior.id,
       customerId: prior.customerId,
       planCountryCode: prior.plan.country.isoCode,
       traveler: {
@@ -1389,18 +2414,20 @@ export class OrdersService implements OnModuleInit {
         : null,
     };
   }
-  async resolveSubscriber(mobile: string) {
+  async resolveSubscriber(mobile: string, allowReadyToInstall = false) {
     const target = normalizeMsisdn(mobile);
     if (!target) return null;
     if (!this.prisma.enabled) {
       const prior = [...this.orders.values()].find(
         (order) =>
-          order.status === OrderStatus.COMPLETED &&
+          (order.status === OrderStatus.COMPLETED ||
+            (allowReadyToInstall && order.status === OrderStatus.QR_READY)) &&
           order.traveler &&
-          normalizeMsisdn(order.traveler.mobile) === target,
+          normalizeMsisdn(order.assignment?.msisdn ?? "") === target,
       );
       if (!prior?.traveler) return null;
       return {
+        orderId: prior.id,
         customerId: undefined,
         planCountryCode: prior.plan.countryCode,
         traveler: {
@@ -1414,36 +2441,115 @@ export class OrdersService implements OnModuleInit {
         inventory: null,
       };
     }
-    return this.priorCompletedOrderFor(mobile);
+    return this.priorCompletedOrderFor(mobile, allowReadyToInstall);
+  }
+
+  /** Public discovery accepts purchase contact or ICCID; fulfillment still uses the eSIM MSISDN. */
+  async resolveSubscriberForRechargeLookup(input: string) {
+    const byEsimNumber = await this.resolveSubscriber(input);
+    if (byEsimNumber) return byEsimNumber;
+    const contact = normalizeNepaliContact(input);
+    const iccid = input.trim().replace(/[\s()./-]/g, "");
+    const validIccid = /^\d{16,22}$/.test(iccid);
+    if (!contact && !validIccid) return null;
+    if (!this.prisma.enabled) return null;
+    const claim = contact
+      ? await this.prisma.esimContactClaim.findUnique({
+          where: { contactNumber: contact },
+          select: { orderId: true },
+        })
+      : null;
+    const candidates = await this.prisma.order.findMany({
+      where: {
+        ...(claim ? { id: claim.orderId } : {}),
+        orderType: "INITIAL_PURCHASE",
+        status: OrderStatus.COMPLETED,
+        OR: [
+          ...(contact
+            ? [{ traveler: { is: { contactNumberNormalized: contact } } }]
+            : []),
+          ...(validIccid
+            ? [{ customerEsim: { is: { inventory: { is: { iccid } } } } }]
+            : []),
+        ],
+        customerEsim: {
+          is: {
+            inventory: { is: { status: { in: ["ASSIGNED", "ACTIVATED"] } } },
+          },
+        },
+      },
+      include: {
+        plan: { include: { country: true } },
+        traveler: true,
+        customerEsim: { include: { inventory: true } },
+      },
+    });
+    const matches = candidates.filter(
+      (candidate) =>
+        (contact &&
+          normalizeNepaliContact(candidate.traveler?.mobile ?? "") ===
+            contact) ||
+        (validIccid && candidate.customerEsim?.inventory.iccid === iccid),
+    );
+    // Legacy duplicate contacts must never silently select the wrong eSIM.
+    if (matches.length !== 1) return null;
+    const original = matches[0]!;
+    if (!original.traveler || !original.customerEsim) return null;
+    return {
+      orderId: original.id,
+      customerId: original.customerId,
+      planCountryCode: original.plan.country.isoCode,
+      traveler: {
+        firstName: original.traveler.firstName,
+        surname: original.traveler.surname,
+        email: original.traveler.email,
+        mobile: original.traveler.mobile,
+        city: original.traveler.city,
+        countryOfResidence: original.traveler.countryOfResidence,
+      },
+      inventory: {
+        id: original.customerEsim.inventory.id,
+        eid: original.customerEsim.inventory.eid,
+        iccid: original.customerEsim.inventory.iccid,
+        msisdn: original.customerEsim.inventory.msisdn,
+      },
+    };
   }
 
   /**
    * Validates a recharge against the provider before money is collected.
-   * The customer's entered number can match either their traveller record or
-   * the eSIM MSISDN, but Transatel must always receive the stored MSISDN.
+   * The supplied identifier must match the eSIM MSISDN. Transatel receives the
+   * same stored MSISDN after the local ownership and lifecycle checks pass.
    */
   async checkTopUpEligibility(mobile: string, planId: string) {
-    const target = await this.resolveSubscriber(mobile);
+    const target = await this.resolveSubscriber(mobile, true);
     const msisdn = target?.inventory?.msisdn;
     if (!target?.inventory || !msisdn)
       return {
         allowed: false,
         errorKey: "ESIM_NOT_AVAILABLE",
-        errorMessage:
-          "We could not find an active eSIM for this mobile number.",
+        errorMessage: "We could not find an active eSIM for this MSISDN.",
       };
     const provider = await this.connectivity.checkEligibility(planId, msisdn);
     return provider;
   }
-  async requestReupload(id: string, reason: string) {
+  async requestReupload(id: string, reason: string, actorId: string) {
     await this.refreshOne(id, true);
     const order = this.get(id);
+    this.assertDocumentReviewMutable(order);
     if (!reason.trim())
       throw new BadRequestException("Re-upload reason is required");
     order.documentReviewStatus = "REUPLOAD_REQUIRED";
     order.documents.forEach((d) => {
-      d.status = DocumentStatus.REUPLOAD_REQUIRED;
+      if ([DocumentType.PASSPORT, DocumentType.TICKET].includes(d.type))
+        d.status = DocumentStatus.REUPLOAD_REQUIRED;
     });
+    if (order.partner && order.status === OrderStatus.REVIEW_PENDING)
+      this.transition(
+        order,
+        OrderStatus.AWAITING_CUSTOMER,
+        "Operations requested required document replacements",
+      );
     order.timeline.push({
       from: order.status,
       to: order.status,
@@ -1451,6 +2557,49 @@ export class OrdersService implements OnModuleInit {
       reason: `Documents requested again: ${reason.trim()}`,
     });
     await this.persistence.save(order);
+    await this.persistence.recordBulkReupload(
+      order.id,
+      order.documents
+        .filter((item) =>
+          [DocumentType.PASSPORT, DocumentType.TICKET].includes(item.type),
+        )
+        .map((item) => item.id),
+      actorId,
+      reason.trim(),
+    );
+    if (order.partner) {
+      const verification =
+        await this.prisma.partnerDocumentVerification.findFirst({
+          where: { consumedOrderId: id, partnerId: order.partner.id },
+          select: { id: true },
+        });
+      if (verification)
+        await this.prisma.$transaction([
+          this.prisma.partnerDocumentVerification.update({
+            where: { id: verification.id },
+            data: {
+              status: "REUPLOAD_REQUIRED",
+              failureCode: "DOCUMENT_REUPLOAD_REQUIRED",
+            },
+          }),
+          this.prisma.partnerDocumentUploadIntent.updateMany({
+            where: {
+              verificationId: verification.id,
+              type: { in: [DocumentType.PASSPORT, DocumentType.TICKET] },
+            },
+            data: {
+              verificationStatus: "REUPLOAD_REQUIRED",
+              verificationCode: "DOCUMENT_REUPLOAD_REQUIRED",
+            },
+          }),
+        ]);
+    }
+    if (order.partner)
+      await this.emitPartnerDocumentEvent(
+        order,
+        "document.verification.reupload_required",
+        "DOCUMENT_REUPLOAD_REQUIRED",
+      );
     await this.safeNotify(order, "DOCUMENT_REUPLOAD", reason.trim());
     return order;
   }
@@ -1463,6 +2612,7 @@ export class OrdersService implements OnModuleInit {
   ) {
     await this.refreshOne(id, true);
     const order = this.get(id);
+    this.assertDocumentReviewMutable(order);
     const document = order.documents.find((item) => item.id === documentId);
     if (!document) throw new NotFoundException("Document not found");
     let recordDecision = true;
@@ -1470,6 +2620,33 @@ export class OrdersService implements OnModuleInit {
       const alreadyApproved = document.status === DocumentStatus.APPROVED;
       recordDecision = !alreadyApproved;
       document.status = DocumentStatus.APPROVED;
+
+      // Ticket evidence is validated when its upload is confirmed; OCR only
+      // establishes the passport identity verdict. Mirror the automatic OCR
+      // success path when Operations accepts that identity manually so a
+      // valid, pending ticket cannot silently leave the checkout blocked.
+      // Explicit re-upload/rejection decisions remain authoritative.
+      if (
+        document.type === DocumentType.PASSPORT &&
+        order.documentReviewStatus === "MANUAL_REVIEW"
+      ) {
+        const pendingVerifiedTicket = order.documents.find(
+          (item) =>
+            item.type === DocumentType.TICKET &&
+            item.uploadVerified === true &&
+            item.status === DocumentStatus.PENDING,
+        );
+        if (pendingVerifiedTicket) {
+          pendingVerifiedTicket.status = DocumentStatus.APPROVED;
+          order.timeline.push({
+            from: order.status,
+            to: order.status,
+            at: new Date().toISOString(),
+            reason:
+              "TICKET upload evidence accepted with final manual passport approval",
+          });
+        }
+      }
       const requiredTypes = [DocumentType.PASSPORT, DocumentType.TICKET];
       const allRequiredApproved = requiredTypes.every((type) =>
         order.documents.some(
@@ -1487,6 +2664,10 @@ export class OrdersService implements OnModuleInit {
         });
       else if (!allRequiredApproved) return this.redact(order);
     } else {
+      if (document.type === DocumentType.VISA)
+        throw new BadRequestException(
+          "Visa is optional and cannot block fulfillment or require replacement",
+        );
       if (document.status === DocumentStatus.APPROVED)
         throw new BadRequestException(
           "A final manual approval cannot be replaced by a re-upload request",
@@ -1495,6 +2676,12 @@ export class OrdersService implements OnModuleInit {
         throw new BadRequestException("Re-upload reason is required");
       document.status = DocumentStatus.REUPLOAD_REQUIRED;
       order.documentReviewStatus = "REUPLOAD_REQUIRED";
+      if (order.partner && order.status === OrderStatus.REVIEW_PENDING)
+        this.transition(
+          order,
+          OrderStatus.AWAITING_CUSTOMER,
+          "Operations requested a required document replacement",
+        );
       order.timeline.push({
         from: order.status,
         to: order.status,
@@ -1503,6 +2690,41 @@ export class OrdersService implements OnModuleInit {
       });
     }
     await this.persistence.save(order);
+    if (order.partner) {
+      const verification =
+        await this.prisma.partnerDocumentVerification.findFirst({
+          where: { consumedOrderId: order.id, partnerId: order.partner.id },
+          select: { id: true },
+        });
+      if (verification) {
+        if (decision === "REUPLOAD")
+          await this.prisma.$transaction([
+            this.prisma.partnerDocumentVerification.update({
+              where: { id: verification.id },
+              data: {
+                status: "REUPLOAD_REQUIRED",
+                failureCode: "DOCUMENT_REUPLOAD_REQUIRED",
+              },
+            }),
+            this.prisma.partnerDocumentUploadIntent.updateMany({
+              where: { verificationId: verification.id, type: document.type },
+              data: {
+                verificationStatus: "REUPLOAD_REQUIRED",
+                verificationCode: "DOCUMENT_REUPLOAD_REQUIRED",
+              },
+            }),
+          ]);
+        else if (order.documentReviewStatus === "MANUALLY_APPROVED")
+          await this.commitManualApprovalProjection(order, verification);
+      }
+    }
+    if (order.partner && decision === "REUPLOAD")
+      await this.emitPartnerDocumentEvent(
+        order,
+        "document.verification.reupload_required",
+        "DOCUMENT_REUPLOAD_REQUIRED",
+        document.type,
+      );
     if (recordDecision)
       await this.persistence.recordReview(
         order.id,
@@ -1519,6 +2741,8 @@ export class OrdersService implements OnModuleInit {
         "All required documents manually approved",
         actorId,
       );
+    if (order.documentReviewStatus === "MANUALLY_APPROVED")
+      await this.safeNotify(order, "DOCUMENT_APPROVED");
     else if (decision === "REUPLOAD")
       await this.resilience?.attention({
         dedupeKey: `document-review:${order.id}`,
@@ -1535,9 +2759,88 @@ export class OrdersService implements OnModuleInit {
       });
     return this.redact(order);
   }
+
+  async rejectPartnerDocuments(id: string, actorId: string, reason: string) {
+    await this.refreshOne(id, true);
+    const order = this.get(id);
+    if (!order.partner)
+      throw new BadRequestException(
+        "Terminal document rejection is available only for partner orders",
+      );
+    if (
+      ![OrderStatus.REVIEW_PENDING, OrderStatus.AWAITING_CUSTOMER].includes(
+        order.status,
+      )
+    )
+      throw new ConflictException(
+        "Only an uncharged pending partner order can be rejected",
+      );
+    if (!reason.trim())
+      throw new BadRequestException("Document rejection reason is required");
+    if (reason.trim().length > 1000)
+      throw new BadRequestException(
+        "Document rejection reason must be 1000 characters or fewer",
+      );
+    const from = order.status;
+    order.documents.forEach((document) => {
+      if ([DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type))
+        document.status = DocumentStatus.REJECTED;
+    });
+    order.operationalDisposition = "TERMINAL_REJECTION";
+    order.timeline.push({
+      from,
+      to: OrderStatus.CANCELLED,
+      at: new Date().toISOString(),
+      reason: `Documents terminally rejected: ${reason.trim()}`,
+    });
+    order.status = OrderStatus.CANCELLED;
+    await this.persistence.save(order);
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { consumedOrderId: id, partnerId: order.partner.id },
+        select: { id: true },
+      });
+    if (verification)
+      await this.prisma.$transaction([
+        this.prisma.partnerDocumentVerification.update({
+          where: { id: verification.id },
+          data: { status: "INVALID", failureCode: "DOCUMENTS_REJECTED" },
+        }),
+        this.prisma.partnerDocumentUploadIntent.updateMany({
+          where: {
+            verificationId: verification.id,
+            type: { in: [DocumentType.PASSPORT, DocumentType.TICKET] },
+          },
+          data: {
+            verificationStatus: "REJECTED",
+            verificationCode: "DOCUMENTS_REJECTED",
+          },
+        }),
+      ]);
+    await this.emitPartnerDocumentEvent(
+      order,
+      "document.verification.rejected",
+      "DOCUMENTS_REJECTED",
+    );
+    await this.safeResolveAttention(
+      `document-review:${id}`,
+      "Partner documents terminally rejected",
+      actorId,
+    );
+    return this.redact(order);
+  }
   async approve(id: string, actorId: string) {
     await this.refreshOne(id, true);
     const order = this.get(id);
+    if (
+      order.partner &&
+      order.externalOrderId &&
+      !order.payment &&
+      order.status === OrderStatus.REVIEW_PENDING
+    )
+      throw new ConflictException(
+        "Verified direct partner orders must be finalized by the partner before provisioning",
+      );
     const required = order.documents.filter((document) =>
       [DocumentType.PASSPORT, DocumentType.TICKET].includes(document.type),
     );
@@ -1642,12 +2945,29 @@ export class OrdersService implements OnModuleInit {
   ) {
     await this.refreshOne(id, true);
     const order = this.get(id);
+    if (
+      order.status === OrderStatus.PROVISIONING &&
+      order.qrPayload &&
+      order.providerSubscriptionId
+    ) {
+      this.logger.warn(
+        `Order ${id} already has provider activation details; recovering the local QR-ready state without another provisioning request`,
+      );
+      return this.recoverProvisioningQrReady(id, {
+        qrPayload: order.qrPayload,
+        providerSubscriptionId: order.providerSubscriptionId,
+        ...(order.assignment?.iccid ? { iccid: order.assignment.iccid } : {}),
+        reason: "Recovered persisted provider result during provisioning retry",
+      });
+    }
     if (order.status !== OrderStatus.PROVISIONING || order.qrPayload) {
       this.logger.debug(
         `Order ${id} is not eligible for provisioning; skipping`,
       );
       return;
     }
+    if (order.purchaseType !== "TOPUP" && order.contactRuleVersion !== 0)
+      await this.claimNewEsimContact(order);
     const target = await this.provisioningTarget(order);
     const reuseExisting = Boolean(target);
     let profile: { id: string; eid: string; iccid: string } | undefined;
@@ -1656,6 +2976,7 @@ export class OrdersService implements OnModuleInit {
           orderId: string;
           planId: string;
           eid: string;
+          purchaseType: "INITIAL_PURCHASE" | "TOPUP";
           traveler: {
             firstName: string;
             surname: string;
@@ -1693,6 +3014,7 @@ export class OrdersService implements OnModuleInit {
         orderId: order.id,
         planId: order.plan.id,
         eid: profile.eid,
+        purchaseType: order.purchaseType ?? "INITIAL_PURCHASE",
         traveler: identity,
       };
       const result = await this.connectivity.provision(request);
@@ -1706,8 +3028,9 @@ export class OrdersService implements OnModuleInit {
       delete order.provisioningFailure;
       delete order.operationalDisposition;
       order.providerSubscriptionId = result.providerSubscriptionId;
-      order.providerStatus = "PRELOADED";
-      if (result.status === "DELAYED" || !result.qrPayload) {
+      const isTopUp = order.purchaseType === "TOPUP";
+      order.providerStatus = isTopUp ? "SUBSCRIBED" : "PRELOADED";
+      if (result.status === "DELAYED" || (!isTopUp && !result.qrPayload)) {
         await this.persistence.save(order);
         await this.safeResolveAttention(
           `provisioning-failure:${order.id}`,
@@ -1718,15 +3041,11 @@ export class OrdersService implements OnModuleInit {
         );
         return this.redact(order);
       }
-      order.qrPayload = result.qrPayload;
-      order.qrDeliveredAt = new Date().toISOString();
-      const expiresAt = new Date(
-        Date.now() + order.plan.validityDays * 86_400_000,
-      ).toISOString();
+      if (result.qrPayload) order.qrPayload = result.qrPayload;
+      if (!reuseExisting) order.qrDeliveredAt = new Date().toISOString();
       const providerInfo = {
         provider: this.connectivity.descriptor().provider,
         providerSubscriptionId: result.providerSubscriptionId,
-        expiresAt,
       };
       if (reuseExisting)
         await this.inventory.assignTopup(
@@ -1740,7 +3059,7 @@ export class OrdersService implements OnModuleInit {
         await this.inventory.assign(
           order.id,
           await this.inventory.customerIdForOrder(order.id),
-          result.qrPayload,
+          result.qrPayload!,
           providerInfo,
         );
       const assigned = await this.inventory.inventoryForOrder(order.id);
@@ -1754,15 +3073,49 @@ export class OrdersService implements OnModuleInit {
         };
       this.transition(
         order,
-        OrderStatus.QR_READY,
-        `Provisioned on attempt ${attempt}; activation QR delivered`,
+        isTopUp ? OrderStatus.COMPLETED : OrderStatus.QR_READY,
+        isTopUp
+          ? `Top-up subscribed on attempt ${attempt}; package added to existing eSIM`
+          : `Provisioned on attempt ${attempt}; activation QR delivered`,
       );
-      await this.persistence.save(order);
+      try {
+        await this.persistence.save(order);
+      } catch (error) {
+        if (!this.isOptimisticOrderConflict(error)) throw error;
+        if (isTopUp) {
+          await this.refreshOne(order.id, true);
+          const fresh = this.get(order.id);
+          if (fresh.status === OrderStatus.PROVISIONING) {
+            fresh.providerSubscriptionId = result.providerSubscriptionId;
+            fresh.providerStatus = "SUBSCRIBED";
+            this.transition(
+              fresh,
+              OrderStatus.COMPLETED,
+              "Recovered subscribed top-up after concurrent order update",
+            );
+            await this.persistence.save(fresh);
+          }
+          if (assigned)
+            await this.queueTopUpUsageRefresh(assigned.id, order.id);
+          return this.redact(fresh);
+        }
+        this.logger.warn(
+          `Order ${order.id} changed after provider success; reloading and recovering its QR-ready state`,
+        );
+        return await this.recoverProvisioningQrReady(order.id, {
+          qrPayload: result.qrPayload!,
+          providerSubscriptionId: result.providerSubscriptionId,
+          iccid: profile.iccid,
+          reason: "Recovered provider result after concurrent order update",
+        });
+      }
       await this.safeResolveAttention(
         `provisioning-failure:${order.id}`,
         "Provider accepted the provisioning request",
       );
-      await this.safeNotify(order, "QR_READY");
+      if (isTopUp && assigned)
+        await this.queueTopUpUsageRefresh(assigned.id, order.id);
+      if (!reuseExisting) await this.safeNotify(order, "QR_READY");
       return this.redact(order);
     } catch (error) {
       const errorCode =
@@ -1778,6 +3131,16 @@ export class OrdersService implements OnModuleInit {
         await this.persistence.provisioningAttempt(order.id, attempt, request, {
           errorCode,
         });
+      if (
+        order.qrPayload &&
+        order.providerSubscriptionId &&
+        this.isOptimisticOrderConflict(error)
+      ) {
+        this.logger.warn(
+          `Order ${order.id} remains recoverable after a concurrent QR-ready update; retrying will finalize local state without resubmitting`,
+        );
+        throw error;
+      }
       const ambiguousOutcome =
         error instanceof ApiException &&
         String(error.internalDetail ?? "").includes(
@@ -1925,6 +3288,36 @@ export class OrdersService implements OnModuleInit {
       throw error;
     }
   }
+
+  private async queueTopUpUsageRefresh(inventoryId: string, orderId: string) {
+    try {
+      await this.queues.add(
+        QUEUES.reconciliation,
+        "reconcile-usage",
+        { id: inventoryId, kind: "esim-usage" },
+        `topup-usage-${orderId}`,
+        { attempts: 5, backoff: { type: "exponential", delay: 15_000 } },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Could not queue immediate usage refresh for top-up ${orderId}: ${error instanceof Error ? error.message : "unknown"}`,
+      );
+      await this.resilience?.attention({
+        dedupeKey: `topup-usage-refresh:${orderId}`,
+        category: "SUBSCRIPTION_ASSIGNMENT_CONFLICT",
+        entityType: "Order",
+        entityId: orderId,
+        orderId,
+        severity: "WARNING",
+        summary: "Immediate top-up balance refresh could not be queued",
+        detail:
+          "The regular usage reconciliation cycle will retry this package automatically.",
+        lastSuccessfulStep: "TOPUP_SUBSCRIBED",
+        failureCategory: "USAGE_REFRESH_QUEUE_UNAVAILABLE",
+        availableActions: ["RECHECK_ORDER_PROVIDER"],
+      });
+    }
+  }
   /**
    * Finishes the local side of a provisioning operation that already succeeded
    * at the provider. This path deliberately never calls provision(), making it
@@ -1939,69 +3332,91 @@ export class OrdersService implements OnModuleInit {
       reason?: string;
     },
   ) {
-    await this.refreshOne(id, true);
-    const order = this.get(id);
-    if ([OrderStatus.QR_READY, OrderStatus.COMPLETED].includes(order.status))
-      return this.redact(order);
-    if (order.status !== OrderStatus.PROVISIONING)
-      throw new BadRequestException(
-        `Order in ${order.status} cannot be recovered to QR ready`,
-      );
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      await this.refreshOne(id, true);
+      const order = this.get(id);
+      if ([OrderStatus.QR_READY, OrderStatus.COMPLETED].includes(order.status))
+        return this.redact(order);
+      if (order.status !== OrderStatus.PROVISIONING)
+        throw new BadRequestException(
+          `Order in ${order.status} cannot be recovered to QR ready`,
+        );
 
-    const target = await this.provisioningTarget(order);
-    const customerId = await this.inventory.customerIdForOrder(order.id);
-    const expiresAt = new Date(
-      Date.now() + order.plan.validityDays * 86_400_000,
-    ).toISOString();
-    const providerInfo = {
-      provider: this.connectivity.descriptor().provider,
-      providerSubscriptionId: input.providerSubscriptionId,
-      expiresAt,
-    };
-    if (target) {
-      await this.inventory.assignTopup(
-        order.id,
-        customerId,
-        input.iccid ?? target.inventory.iccid,
-        input.qrPayload,
-        providerInfo,
-      );
-    } else {
-      await this.inventory.assign(
-        order.id,
-        customerId,
-        input.qrPayload,
-        providerInfo,
-      );
-    }
-
-    order.qrPayload = input.qrPayload;
-    order.qrDeliveredAt = new Date().toISOString();
-    order.providerSubscriptionId = input.providerSubscriptionId;
-    order.providerStatus = "PRELOADED";
-    delete order.provisioningFailure;
-    delete order.operationalDisposition;
-    const assigned = await this.inventory.inventoryForOrder(order.id);
-    if (assigned)
-      order.assignment = {
-        inventoryId: assigned.id,
-        iccid: assigned.iccid,
-        ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}),
+      const target = await this.provisioningTarget(order);
+      const customerId = await this.inventory.customerIdForOrder(order.id);
+      const providerInfo = {
+        provider: this.connectivity.descriptor().provider,
         providerSubscriptionId: input.providerSubscriptionId,
-        verificationStatus: "PENDING",
       };
-    this.transition(
-      order,
-      OrderStatus.QR_READY,
-      input.reason ?? "Recovered provider QR after local persistence failure",
+      if (target) {
+        await this.inventory.assignTopup(
+          order.id,
+          customerId,
+          input.iccid ?? target.inventory.iccid,
+          input.qrPayload,
+          providerInfo,
+        );
+      } else {
+        await this.inventory.assign(
+          order.id,
+          customerId,
+          input.qrPayload,
+          providerInfo,
+        );
+      }
+
+      order.qrPayload = input.qrPayload;
+      if (!target) order.qrDeliveredAt = new Date().toISOString();
+      order.providerSubscriptionId = input.providerSubscriptionId;
+      order.providerStatus = "PRELOADED";
+      delete order.provisioningFailure;
+      delete order.operationalDisposition;
+      const assigned = await this.inventory.inventoryForOrder(order.id);
+      if (assigned)
+        order.assignment = {
+          inventoryId: assigned.id,
+          iccid: assigned.iccid,
+          ...(assigned.msisdn ? { msisdn: assigned.msisdn } : {}),
+          providerSubscriptionId: input.providerSubscriptionId,
+          verificationStatus: "PENDING",
+        };
+      this.transition(
+        order,
+        OrderStatus.QR_READY,
+        input.reason ??
+          (target
+            ? "Recovered provider result; package added to existing eSIM"
+            : "Recovered provider QR after local persistence failure"),
+      );
+      try {
+        await this.persistence.save(order);
+      } catch (error) {
+        if (this.isOptimisticOrderConflict(error) && attempt < maxAttempts) {
+          this.logger.warn(
+            `QR-ready recovery for ${order.id} raced with another update; retrying from fresh state (${attempt}/${maxAttempts})`,
+          );
+          continue;
+        }
+        throw error;
+      }
+      await this.safeResolveAttention(
+        `provisioning-failure:${order.id}`,
+        "Provider QR was recovered successfully",
+      );
+      if (!target) await this.safeNotify(order, "QR_READY");
+      return this.redact(order);
+    }
+    throw new ConflictException(
+      "Order recovery exhausted its concurrency retries",
     );
-    await this.persistence.save(order);
-    await this.safeResolveAttention(
-      `provisioning-failure:${order.id}`,
-      "Provider QR was recovered successfully",
+  }
+
+  private isOptimisticOrderConflict(error: unknown) {
+    return (
+      error instanceof ConflictException &&
+      error.message.includes("Order was changed by another request")
     );
-    await this.safeNotify(order, "QR_READY");
-    return this.redact(order);
   }
   async markProvisioningManualReview(id: string, reason: string) {
     const order = this.get(id);
@@ -2061,18 +3476,19 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
+    const subscriberEvent =
+      event.statusScope === "SUBSCRIBER" ||
+      event.eventType.startsWith("CONNECTIVITY-MANAGEMENT/SUBSCRIBER/");
     const currentProviderState = order.providerStatus?.toUpperCase();
     const incomingProviderState = event.status?.toUpperCase();
-    const currentIsTerminal = [
-      "TERMINATED",
-      "CANCELED",
-      "CANCELLED",
-      "EXPIRED",
-    ].includes(currentProviderState ?? "");
+    const currentIsTerminal = ["TERMINATED", "EXPIRED"].includes(
+      currentProviderState ?? "",
+    );
     const incomingWouldRegress =
       (currentProviderState === "ACTIVATED" &&
         incomingProviderState === "PRELOADED") ||
-      (currentIsTerminal &&
+      (subscriberEvent &&
+        currentIsTerminal &&
         Boolean(incomingProviderState) &&
         incomingProviderState !== currentProviderState);
     if (incomingWouldRegress) {
@@ -2112,7 +3528,12 @@ export class OrdersService implements OnModuleInit {
             : undefined;
       if (state)
         await this.prisma.provisioningOperation.updateMany({
-          where: { orderId: event.orderId },
+          where: {
+            orderId: event.orderId,
+            ...(event.status === "PRELOADED"
+              ? { state: { notIn: ["QR_READY", "ACTIVATED"] } }
+              : {}),
+          },
           data: {
             state,
             ...(event.subscriptionId
@@ -2127,6 +3548,8 @@ export class OrdersService implements OnModuleInit {
     }
     const lifecycle = {
       provider,
+      eventType: event.eventType,
+      ...(event.statusScope ? { statusScope: event.statusScope } : {}),
       ...(event.iccid ? { iccid: event.iccid } : {}),
       ...(event.msisdn ? { msisdn: event.msisdn } : {}),
       ...(event.status ? { status: event.status } : {}),
@@ -2176,34 +3599,44 @@ export class OrdersService implements OnModuleInit {
       };
     if (event.subscriptionId)
       order.providerSubscriptionId = event.subscriptionId;
-    if (event.status) order.providerStatus = event.status;
+    if (subscriberEvent && event.status) order.providerStatus = event.status;
+    const reactivated =
+      subscriberEvent && event.eventType.toUpperCase().endsWith("REACTIVATED");
+    const lifecycleLabel = reactivated ? "REACTIVATED" : event.status;
     if (
       this.prisma.enabled &&
-      (event.status === "SUSPENDED" || event.status === "TERMINATED")
+      subscriberEvent &&
+      (event.status === "SUSPENDED" ||
+        event.status === "TERMINATED" ||
+        reactivated)
     ) {
       const expected = await this.prisma.transatelLifecycleOperation.updateMany(
         {
           where: {
             orderId: order.id,
-            action: event.status === "SUSPENDED" ? "SUSPEND" : "TERMINATE",
-            state: "ACCEPTED",
+            action: reactivated
+              ? "REACTIVATE"
+              : event.status === "SUSPENDED"
+                ? "SUSPEND"
+                : "TERMINATE",
+            state: { in: ["ACCEPTED", "CONFIRMED"] },
           },
           data: { state: "CONFIRMED" },
         },
       );
       if (expected.count === 0) {
         await this.resilience?.attention({
-          dedupeKey: `unexpected-provider-lifecycle:${order.id}:${event.status}`,
+          dedupeKey: `unexpected-provider-lifecycle:${order.id}:${lifecycleLabel}`,
           category: "UNEXPECTED_PROVIDER_LIFECYCLE",
           entityType: "Order",
           entityId: order.id,
           orderId: order.id,
           severity: "CRITICAL",
-          summary: `Transatel unexpectedly reported ${event.status.toLowerCase()} for ${order.orderNumber}`,
+          summary: `Transatel unexpectedly reported ${lifecycleLabel?.toLowerCase() ?? "unknown"} for ${order.orderNumber}`,
           detail:
             "No matching approved lifecycle operation exists; service and refund impact require review",
           localState: order.status,
-          externalState: event.status,
+          ...(lifecycleLabel ? { externalState: lifecycleLabel } : {}),
           lastSuccessfulStep: "ESIM_FULFILLED",
           failureCategory: "UNEXPECTED_PROVIDER_STATE",
           availableActions: ["RECHECK_ORDER_PROVIDER"],
@@ -2254,6 +3687,10 @@ export class OrdersService implements OnModuleInit {
   async resendQr(id: string, ownerId?: string) {
     await this.refreshOne(id, true);
     const order = this.get(id, ownerId ?? undefined);
+    if (order.purchaseType === "TOPUP")
+      throw new BadRequestException(
+        "This top-up uses the eSIM already installed on the customer's phone; there is no new installation QR to resend",
+      );
     if (
       ![
         OrderStatus.QR_READY,
@@ -2276,6 +3713,18 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException(
         "Customer email is required to resend the installation QR",
       );
+    if (this.prisma.enabled) {
+      const recent = await this.prisma.notification.findFirst({
+        where: {
+          orderId: order.id,
+          template: "QR_READY",
+          status: { in: ["QUEUED", "SENDING"] },
+          createdAt: { gte: new Date(Date.now() - 60_000) },
+        },
+        select: { id: true },
+      });
+      if (recent) return ownerId ? this.redact(order) : this.expand(order);
+    }
     await this.notifications.enqueue({
       orderId: order.id,
       channel: "EMAIL",
@@ -2323,114 +3772,57 @@ export class OrdersService implements OnModuleInit {
       bytes,
     };
   }
-  /**
-   * Reconciliation sweep for QR_READY orders whose activation window has
-   * elapsed. Transatel eSIM-profile state and OCS-subscription state are
-   * deliberately checked separately: an enabled profile is not proof that the
-   * data subscription has started. Only an active OCS subscription completes
-   * the order.
-   */
+  /** QR_READY is successful fulfilment, not an activation deadline. */
   async reconcileStaleActivationOrders() {
     const now = Date.now();
     const recovered: string[] = [];
     const failed: string[] = [];
     const capabilities = this.connectivity.descriptor().capabilities;
     for (const order of this.orders.values()) {
-      if (
-        order.status !== OrderStatus.QR_READY ||
-        !order.qrDeliveredAt ||
-        !order.plan.validityDays
-      )
+      if (order.status !== OrderStatus.QR_READY || !capabilities.esimDetails)
         continue;
-      const expiry = new Date(
-        new Date(order.qrDeliveredAt).getTime() +
-          order.plan.validityDays * 86_400_000,
-      ).getTime();
-      if (now <= expiry) continue;
-      const attempt = await this.nextActivationRefetchAttempt(order);
-      if (attempt <= this.maxActivationRefetches && capabilities.esimDetails) {
-        try {
-          const details = await this.connectivity.getEsimDetails(
-            await this.providerRefFor(order),
+      const last = order.lastProvisioningRecoveryAt
+        ? new Date(order.lastProvisioningRecoveryAt).getTime()
+        : 0;
+      if (now - last < 24 * 60 * 60_000) continue;
+      await this.markProvisioningRecovery(order, now);
+      try {
+        const providerRef = await this.providerRefFor(order);
+        const details = await this.connectivity.getEsimDetails(providerRef);
+        const subscriptionActive =
+          this.connectivity.descriptor().provider === "TRANSATEL"
+            ? (
+                await this.connectivity.getUsage(providerRef)
+              ).subscriptions?.some(
+                (subscription) =>
+                  (!order.providerSubscriptionId ||
+                    subscription.providerSubscriptionId ===
+                      order.providerSubscriptionId) &&
+                  subscription.status.toUpperCase() === "ACTIVE",
+              ) === true
+            : ["ACTIVE", "ACTIVATED"].includes(details.status.toUpperCase());
+        if (subscriptionActive) {
+          await this.completeProviderActivation(order, {
+            qrPayload:
+              (details as { qrPayload?: string }).qrPayload ?? order.qrPayload!,
+            ...(order.providerSubscriptionId
+              ? { subscriptionId: order.providerSubscriptionId }
+              : {}),
+            label: "activation re-fetch",
+          });
+          recovered.push(order.id);
+        } else {
+          this.logger.debug(
+            `Order ${order.orderNumber} awaits customer installation; keeping QR_READY`,
           );
-          const qrPayload =
-            (details as { qrPayload?: string }).qrPayload ?? order.qrPayload;
-          const provider = this.connectivity.descriptor().provider;
-          const subscriptionActive =
-            provider === "TRANSATEL"
-              ? (
-                  await this.connectivity.getUsage(
-                    await this.providerRefFor(order),
-                  )
-                ).subscriptions?.some(
-                  (subscription) =>
-                    (!order.providerSubscriptionId ||
-                      subscription.providerSubscriptionId ===
-                        order.providerSubscriptionId) &&
-                    subscription.status.toUpperCase() === "ACTIVE",
-                ) === true
-              : ["ACTIVE", "ACTIVATED"].includes(details.status.toUpperCase());
-          if (qrPayload && subscriptionActive) {
-            await this.completeProviderActivation(order, {
-              qrPayload,
-              ...(order.providerSubscriptionId
-                ? { subscriptionId: order.providerSubscriptionId }
-                : {}),
-              label: "activation re-fetch",
-            });
-            await this.clearActivationRefetchAttempts(order);
-            recovered.push(order.id);
-            this.logger.log(
-              `Order ${order.orderNumber} (${order.id}) recovered after activation re-fetch attempt ${attempt}`,
-            );
-          } else {
-            this.logger.debug(
-              `Order ${order.orderNumber} (${order.id}) data subscription is not active at provider yet (re-fetch attempt ${attempt}/${this.maxActivationRefetches})`,
-            );
-          }
-          continue;
-        } catch (error) {
-          this.metrics?.recordFailure("reconciliation", "activation-refetch");
-          this.logger.warn(
-            `Activation re-fetch failed for order ${order.id} (attempt ${attempt}/${this.maxActivationRefetches}): ${error instanceof Error ? error.message : "unknown"}`,
-          );
-          continue;
         }
+      } catch (error) {
+        this.metrics?.recordFailure("reconciliation", "activation-refetch");
+        failed.push(order.id);
+        this.logger.warn(
+          `Activation observation failed for order ${order.id}; local state was preserved: ${error instanceof Error ? error.message : "unknown"}`,
+        );
       }
-      this.transition(
-        order,
-        OrderStatus.ACTIVATION_ATTENTION,
-        "Activation confirmation is delayed; QR remains valid while operations reconcile the provider",
-      );
-      order.operationalDisposition = "RECONCILE_PROVIDER";
-      await this.persistence.save(order);
-      await this.alertProvisioningFailure(order);
-      const operation = this.prisma.enabled
-        ? await this.prisma.provisioningOperation.findUnique({
-            where: { orderId: order.id },
-            select: { id: true },
-          })
-        : null;
-      await this.resilience?.attention({
-        dedupeKey: `activation-attention:${order.id}`,
-        category: "ACTIVATION_DELAYED",
-        entityType: "ProvisioningOperation",
-        entityId: operation?.id ?? order.id,
-        orderId: order.id,
-        summary: `Activation confirmation is delayed for ${order.orderNumber}`,
-        localState: OrderStatus.ACTIVATION_ATTENTION,
-        ...(order.providerStatus
-          ? { externalState: order.providerStatus }
-          : {}),
-        lastSuccessfulStep: "QR_DELIVERED",
-        failureCategory: "ACTIVATION_CONFIRMATION_TIMEOUT",
-        availableActions: operation ? ["RECONCILE_PROVISIONING"] : [],
-      });
-      failed.push(order.id);
-      await this.clearActivationRefetchAttempts(order);
-      this.logger.warn(
-        `Order ${order.orderNumber} (${order.id}) activation confirmation requires attention after ${attempt - 1} re-fetch attempt(s)`,
-      );
     }
     return { recovered, failed };
   }
@@ -2693,7 +4085,8 @@ export class OrdersService implements OnModuleInit {
       `activation-attention:${order.id}`,
       "Provider activation was confirmed",
     );
-    if (!wasReady) await this.safeNotify(order, "QR_READY");
+    if (!wasReady && order.purchaseType !== "TOPUP")
+      await this.safeNotify(order, "QR_READY");
   }
   private async activateOrder(
     order: DemoOrder,
@@ -2720,13 +4113,15 @@ export class OrdersService implements OnModuleInit {
     await this.inventory.assign(order.id, customerId, qrPayload, providerInfo);
   }
   private async provisioningTarget(order: DemoOrder) {
-    const targetEsimId = (order.pricingSnapshot as { targetEsimId?: string })
-      .targetEsimId;
+    const targetEsimId =
+      order.targetInventoryId ??
+      (order.pricingSnapshot as { targetEsimId?: string }).targetEsimId;
     if (!targetEsimId || !this.prisma.enabled) return null;
     const row = await this.prisma.esimInventory.findUnique({
       where: { id: targetEsimId },
       include: {
         customerEsims: {
+          where: { order: { orderType: "INITIAL_PURCHASE" } },
           take: 1,
           orderBy: { assignedAt: "desc" },
           include: { order: { include: { traveler: true } } },
@@ -2796,7 +4191,12 @@ export class OrdersService implements OnModuleInit {
     }
     throw failure;
   }
-  private transition(order: DemoOrder, to: OrderStatus, reason?: string) {
+  private transition(
+    order: DemoOrder,
+    to: OrderStatus,
+    reason?: string,
+    actorId?: string,
+  ) {
     assertTransition(order.status, to);
     const from = order.status;
     order.status = to;
@@ -2805,6 +4205,7 @@ export class OrdersService implements OnModuleInit {
       to,
       at: new Date().toISOString(),
       ...(reason ? { reason } : {}),
+      ...(actorId ? { actorId } : {}),
     });
   }
   private notifyEmailFor(order: DemoOrder) {
@@ -2838,7 +4239,7 @@ export class OrdersService implements OnModuleInit {
   }
   private async safeNotify(
     order: DemoOrder,
-    template: "QR_READY" | "DOCUMENT_REUPLOAD",
+    template: "QR_READY" | "DOCUMENT_REUPLOAD" | "DOCUMENT_APPROVED",
     reason?: string,
   ) {
     const recipient = this.notifyEmailFor(order);
@@ -2850,6 +4251,7 @@ export class OrdersService implements OnModuleInit {
         template,
         recipient,
         orderNumber: order.orderNumber,
+        dedupeKey: `order-notification:${order.id}:${template}`,
         ...(reason ? { reason } : {}),
       });
     } catch (error) {
@@ -2895,20 +4297,161 @@ export class OrdersService implements OnModuleInit {
     actorId: string | null = null,
   ) {
     try {
-      await this.resilience?.resolve(dedupeKey, actorId, resolution);
+      const internalActor = actorId
+        ? await this.prisma.user.findUnique({
+            where: { clerkId: actorId },
+            select: { id: true },
+          })
+        : null;
+      await this.resilience?.resolve(
+        dedupeKey,
+        internalActor?.id ?? null,
+        resolution,
+      );
     } catch (error) {
       this.logger.warn(
-        `Attention resolution ${dedupeKey} was deferred: ${error instanceof Error ? error.message : "unknown"}`,
+        `Attention resolution ${dedupeKey} failed with actor attribution; retrying without attribution: ${error instanceof Error ? error.message : "unknown"}`,
       );
+      try {
+        await this.resilience?.resolve(dedupeKey, null, resolution);
+      } catch (retryError) {
+        this.logger.error(
+          `Attention resolution ${dedupeKey} remains deferred after retry: ${retryError instanceof Error ? retryError.message : "unknown"}`,
+        );
+      }
     }
+  }
+  private async commitManualApprovalProjection(
+    order: DemoOrder,
+    verification: { id: string },
+  ) {
+    if (!order.partner) return;
+    const dedupeKey = `document-verification:${order.id}:manually-approved`;
+    const endpoints = await this.prisma.partnerWebhookEndpoint.findMany({
+      where: { partnerId: order.partner.id, active: true },
+    });
+    const eligible = endpoints.filter((endpoint) => {
+      const types = Array.isArray(endpoint.eventTypes)
+        ? endpoint.eventTypes.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : [];
+      return (
+        types.includes("*") || types.includes("document.verification.verified")
+      );
+    });
+    const data = {
+      partnerId: order.partner.id,
+      orderId: order.id,
+      type: "document.verification.verified",
+      resourceId: verification.id,
+      correlationId: randomUUID(),
+      dedupeKey,
+      payload: {
+        orderId: order.id,
+        externalOrderId: order.externalOrderId ?? null,
+        verificationId: verification.id,
+        status: "MANUALLY_APPROVED",
+        failureCode: null,
+      },
+      deliveries: {
+        create: eligible.map((endpoint) => ({ endpointId: endpoint.id })),
+      },
+    };
+    await this.prisma.$transaction([
+      this.prisma.partnerDocumentVerification.update({
+        where: { id: verification.id },
+        data: { status: "MANUALLY_APPROVED", failureCode: null },
+      }),
+      this.prisma.partnerEvent.upsert({
+        where: { dedupeKey },
+        update: {},
+        create: data,
+      }),
+    ]);
+  }
+  private async emitPartnerDocumentEvent(
+    order: DemoOrder,
+    type: string,
+    failureCode: string | null,
+    documentType?: DocumentType,
+    status?: "INVALID" | "REUPLOAD_REQUIRED" | "MANUALLY_APPROVED",
+    dedupeKey?: string,
+  ) {
+    if (!order.partner) return;
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { consumedOrderId: order.id, partnerId: order.partner.id },
+        select: { id: true },
+      });
+    if (!verification) return;
+    const endpoints = await this.prisma.partnerWebhookEndpoint.findMany({
+      where: { partnerId: order.partner.id, active: true },
+    });
+    const eligible = endpoints.filter((endpoint) => {
+      const types = Array.isArray(endpoint.eventTypes)
+        ? endpoint.eventTypes.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : [];
+      return types.includes("*") || types.includes(type);
+    });
+    const data = {
+      partnerId: order.partner.id,
+      orderId: order.id,
+      type,
+      resourceId: verification.id,
+      correlationId: randomUUID(),
+      ...(dedupeKey ? { dedupeKey } : {}),
+      payload: {
+        orderId: order.id,
+        externalOrderId: order.externalOrderId ?? null,
+        verificationId: verification.id,
+        status:
+          status ??
+          (failureCode === "DOCUMENTS_REJECTED"
+            ? "INVALID"
+            : "REUPLOAD_REQUIRED"),
+        failureCode,
+        ...(documentType ? { documentType } : {}),
+      },
+      deliveries: {
+        create: eligible.map((endpoint) => ({ endpointId: endpoint.id })),
+      },
+    };
+    if (dedupeKey)
+      await this.prisma.partnerEvent.upsert({
+        where: { dedupeKey },
+        update: {},
+        create: data,
+      });
+    else await this.prisma.partnerEvent.create({ data });
+  }
+  private assertDocumentReviewMutable(order: DemoOrder) {
+    if (!DOCUMENT_REVIEW_MUTABLE_STATUSES.has(order.status))
+      throw new ConflictException(
+        `Documents cannot be reviewed after the order entered ${order.status}`,
+      );
   }
   private expand(order: DemoOrder) {
     const { qrPayload: _qrPayload, ...safe } = order;
-    return safe;
+    return {
+      ...safe,
+      paymentRetry: declarePaymentRetry({
+        status: safe.status,
+        payment: safe.payment,
+        now: Date.now(),
+      }),
+    };
   }
   private redact(order: DemoOrder) {
     const {
       ownerId: _ownerId,
+      beneficiaryCustomerId: _beneficiaryCustomerId,
+      purchasedByUserId: _purchasedByUserId,
+      targetInventoryId: _targetInventoryId,
+      checkoutAttemptKey: _checkoutAttemptKey,
+      checkoutRequestHash: _checkoutRequestHash,
       providerSubscriptionId: _providerSubscriptionId,
       providerStatus: _providerStatus,
       qrPayload: _qrPayload,
@@ -2925,14 +4468,14 @@ export class OrdersService implements OnModuleInit {
           ...rest
         }) => rest)(safe.payment)
       : undefined;
-    const timeline = safe.timeline.map((event) => ({
+    const timeline = safe.timeline.map(({ actorId: _actorId, ...event }) => ({
       ...event,
       ...(event.reason
         ? {
             reason:
               event.reason
                 .replace(
-                  /\s+\(?(requested by|approved by|assigned by)\s+user_[A-Za-z0-9_]+\)?\.?$/i,
+                  /\s+\(?(requested by|approved by|assigned by|received .+ from)\s+user_[A-Za-z0-9_]+\.?\)?$/i,
                   "",
                 )
                 .trim() || undefined,
@@ -2951,6 +4494,14 @@ export class OrdersService implements OnModuleInit {
           providerLastSeenAt: rawAssignment.providerLastSeenAt,
         }
       : undefined;
+    const passportExtraction = safe.passportExtraction
+      ? (({
+          lastMismatchFingerprint: _lastMismatchFingerprint,
+          lastMismatchFields: _lastMismatchFields,
+          confirmedMismatchFingerprint: _confirmedMismatchFingerprint,
+          ...publicExtraction
+        }) => publicExtraction)(safe.passportExtraction)
+      : undefined;
     const purchaseContext =
       safe.purchaseType === "TOPUP"
         ? "TOPUP"
@@ -2962,9 +4513,21 @@ export class OrdersService implements OnModuleInit {
       purchaseContext,
       pricingSnapshot,
       documents,
+      ...(passportExtraction ? { passportExtraction } : {}),
       ...(payment ? { payment } : {}),
       ...(assignment ? { assignment } : {}),
+      paymentRetry: declarePaymentRetry({
+        status: safe.status,
+        payment: safe.payment,
+        now: Date.now(),
+      }),
       timeline,
     } as unknown as DemoOrder;
+  }
+
+  private travelerIdentityFingerprint(traveler: TravelerInput) {
+    return createHash("sha256")
+      .update(JSON.stringify(canonicalIdentity(traveler)))
+      .digest("hex");
   }
 }

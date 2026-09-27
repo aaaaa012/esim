@@ -2,6 +2,10 @@ export type NotificationTemplate =
   | "ORDER_STATUS"
   | "QR_READY"
   | "DOCUMENT_REUPLOAD"
+  | "DOCUMENT_APPROVED"
+  | "RECHARGE_RECOVERY"
+  | "GUEST_ORDER_RECOVERY"
+  | "TOPUP_LOOKUP"
   | "PLAN_EXHAUSTED"
   | "PLAN_EXPIRED"
   | "OPS_ALERT";
@@ -10,6 +14,7 @@ type TemplateData = {
   orderNumber: string;
   reason?: string;
   msisdn?: string;
+  recoveryUrl?: string;
 };
 
 type NotificationContent = {
@@ -28,8 +33,8 @@ const escapeHtml = (value: string) =>
 function webUrl(kind: "customer" | "ops", path: string) {
   const base =
     kind === "customer"
-      ? process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"
-      : process.env.OPS_WEB_URL ?? "http://localhost:3001";
+      ? (process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000")
+      : (process.env.OPS_WEB_URL ?? "http://localhost:3001");
   return `${base.replace(/\/$/, "")}${path}`;
 }
 
@@ -84,6 +89,51 @@ export function renderNotification(
   template: NotificationTemplate,
   data: TemplateData,
 ) {
+  if (template === "TOPUP_LOOKUP")
+    return branded({
+      subject: "Confirm your eSIM recharge",
+      paragraphs: [
+        "A request was made to view recharge plans for your Visa Compass eSIM.",
+        "Use the secure link below to continue. The link expires in 15 minutes and should not be shared.",
+        "If you did not make this request, you can ignore this email.",
+      ],
+      ...(data.recoveryUrl
+        ? {
+            cta: {
+              label: "View recharge plans",
+              href: data.recoveryUrl,
+            },
+          }
+        : {}),
+    });
+  if (template === "RECHARGE_RECOVERY")
+    return branded({
+      subject: `Track your recharge - ${data.orderNumber}`,
+      paragraphs: [
+        `Your recharge order ${data.orderNumber} has been created. Use this private link to resume payment or track payment and recharge progress.`,
+        "This is not a payment confirmation. The link works for 30 days and gives access only to this recharge transaction.",
+        "Keep this link private. Your existing eSIM does not need to be installed again.",
+      ],
+      ...(data.recoveryUrl
+        ? { cta: { label: "Track recharge", href: data.recoveryUrl } }
+        : {}),
+    });
+  if (template === "GUEST_ORDER_RECOVERY")
+    return branded({
+      subject: `Keep access to ${data.orderNumber}`,
+      paragraphs: [
+        `Use this private link to resume checkout or check verification progress for ${data.orderNumber}.`,
+        "The link expires in 30 days. Anyone with the link can access this guest order, so keep it private.",
+      ],
+      ...(data.recoveryUrl
+        ? {
+            cta: {
+              label: "Resume or check order",
+              href: data.recoveryUrl,
+            },
+          }
+        : {}),
+    });
   if (template === "OPS_ALERT")
     return branded({
       subject: `[Ops Alert] ${data.reason ?? "Action required"}`,
@@ -123,6 +173,14 @@ export function renderNotification(
         label: "Upload document",
         href: webUrl("customer", "/account/orders"),
       },
+    });
+  if (template === "DOCUMENT_APPROVED")
+    return branded({
+      subject: `Documents approved for ${data.orderNumber}`,
+      paragraphs: [
+        `Your travel documents for ${data.orderNumber} have been approved.`,
+        "Return to the checkout you previously opened to continue securely to payment. Do not start a duplicate order.",
+      ],
     });
   if (template === "PLAN_EXHAUSTED")
     return branded({

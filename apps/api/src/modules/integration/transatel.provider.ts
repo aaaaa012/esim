@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { ApiErrorCode, isRestrictedPlanCountry } from "@visa-compass/shared";
 import { ApiException } from "../../common/api-error.js";
+import { logRedactionEnabled } from "../../common/redact.js";
 import type {
   ConnectivityProvider,
   ProvisionRequest,
@@ -15,9 +16,18 @@ import type {
   ProviderWebhookEvent,
   UsageBreakdown,
   LifecycleResult,
+  SubscriberDetailsResult,
 } from "./connectivity-provider.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { resiliencePolicy } from "../../infrastructure/resilience-policy.js";
 import { classifyProviderHttpFailure } from "./provider-failure.js";
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
 
 /*
  * Raw Transatel OpenAPI DTOs. These types describe the external API contract and
@@ -68,17 +78,20 @@ interface ScpBalance {
   resourceLabel: string;
   resourceUnit: "KB" | "SECOND" | "SMS";
   resourceValue: number;
-  resourceStartValue: number;
+  resourceStartValue?: number;
   resourceStartDate: string;
   resourceEndDate: string;
 }
 
 type SubscriptionStatus =
   | "active"
+  | "canceled"
+  | "expired"
   | "pending"
   | "pendingForFirstUse"
   | "readyForUse"
   | "scheduled"
+  | "suspended"
   | "terminated";
 
 interface ProductSubscription {
@@ -86,6 +99,7 @@ interface ProductSubscription {
   status: SubscriptionStatus;
   productDefinition?: {
     productId: string;
+    tags?: string[];
     productCategory?: "Add-on" | "One-off" | "Recurring";
     allowances?: unknown;
     countryList?: string[];
@@ -119,6 +133,7 @@ interface ProductDetails {
   prices?: { subscriptionFee?: Price[][]; renewalFee?: Price[][] };
   productDefinition: {
     productId: string;
+    tags?: string[];
     productCategory?: "Add-on" | "One-off" | "Recurring";
     allowances?: unknown;
     countryList?: string[];
@@ -135,7 +150,6 @@ interface ProductDetails {
       productValidityPeriod?: string;
     };
     unlimited?: boolean;
-    tags?: string[];
     parentProductIds?: string[];
   };
 }
@@ -143,19 +157,6 @@ interface ProductDetails {
 interface ProductCatalogResponse {
   cos: string;
   products: ProductDetails[];
-}
-
-interface WebhookResponse {
-  id: string;
-  mvnoRef: string;
-  status: "active" | "inactive" | "suspended";
-  targetUrl: string;
-  email: string;
-  events: Array<string | { eventType: string }>;
-}
-
-interface WebhooksResponse {
-  webhooks: WebhookResponse[];
 }
 
 interface ApiError {
@@ -228,7 +229,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   private circuitOpen() {
     if (!this.circuitOpenedAt) return false;
-    const cooldown = Number(process.env.TRANSATEL_CIRCUIT_RESET_MS ?? 30_000);
+    const cooldown = resiliencePolicy.connectivityCircuitResetMs();
     if (Date.now() - this.circuitOpenedAt >= cooldown) {
       this.circuitOpenedAt = 0;
       this.consecutiveFailures = 0;
@@ -244,13 +245,8 @@ export class TransatelProvider implements ConnectivityProvider {
   }
   private providerFailed() {
     this.consecutiveFailures += 1;
-    const threshold = Number(
-      process.env.TRANSATEL_CIRCUIT_FAILURE_THRESHOLD ?? 5,
-    );
-    if (
-      this.consecutiveFailures >=
-      (Number.isFinite(threshold) && threshold > 0 ? threshold : 5)
-    )
+    const threshold = resiliencePolicy.connectivityCircuitFailures();
+    if (this.consecutiveFailures >= threshold)
       this.circuitOpenedAt = Date.now();
   }
 
@@ -284,8 +280,7 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 
   private timeoutMs(): number {
-    const parsed = Number(process.env.TRANSATEL_REQUEST_TIMEOUT_MS);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+    return resiliencePolicy.connectivityTimeoutMs();
   }
 
   private async getAccessToken(force = false): Promise<string> {
@@ -346,7 +341,7 @@ export class TransatelProvider implements ConnectivityProvider {
           errorCode: "CONNECTIVITY_UNAVAILABLE",
           errorMessage: detail.slice(0, 2000),
           requestBody: { grant_type: "client_credentials" },
-          responseBody,
+          responseBody: this.responseLogBody(response, responseBody),
         });
         throw new ApiException({
           code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
@@ -372,7 +367,7 @@ export class TransatelProvider implements ConnectivityProvider {
         status: 200,
         durationMs: Date.now() - startedAt,
         requestBody: { grant_type: "client_credentials" },
-        responseBody: this.redactLogBody(data),
+        responseBody: this.responseLogBody(response, this.redactLogBody(data)),
       });
       this.accessToken = data.access_token;
       this.tokenExpiry = Date.now() + data.expires_in * 1000;
@@ -382,6 +377,19 @@ export class TransatelProvider implements ConnectivityProvider {
       if (error instanceof ApiException) throw error;
       this.providerFailed();
       this.logger.error("Transatel token request error", error);
+      await this.record({
+        operation: "token",
+        method: "POST",
+        endpoint: "/authentication/api/token",
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        errorCode: "NETWORK_ERROR",
+        errorMessage:
+          error instanceof Error
+            ? error.message.slice(0, 2000)
+            : "unknown error",
+        requestBody: { grant_type: "client_credentials" },
+      });
       throw new ApiException({
         code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
         message:
@@ -400,6 +408,7 @@ export class TransatelProvider implements ConnectivityProvider {
       body?: string;
       retryOnAuth?: boolean;
       operation?: string;
+      correlationId?: string;
     } = { method: "GET" },
   ): Promise<Response> {
     if (this.circuitOpen())
@@ -410,7 +419,12 @@ export class TransatelProvider implements ConnectivityProvider {
         status: 503,
         details: "Transatel circuit breaker is open",
       });
-    const { retryOnAuth = true, operation = "unknown", ...request } = init;
+    const {
+      retryOnAuth = true,
+      operation = "unknown",
+      correlationId,
+      ...request
+    } = init;
     const startedAt = Date.now();
     const execute = async () => {
       const token = await this.getAccessToken();
@@ -428,12 +442,76 @@ export class TransatelProvider implements ConnectivityProvider {
       response = await execute();
     } catch (error) {
       this.providerFailed();
-      throw error;
+      await this.record({
+        operation,
+        method: request.method,
+        endpoint: this.safeEndpoint(url),
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        errorCode: "NETWORK_ERROR",
+        errorMessage:
+          error instanceof Error
+            ? error.message.slice(0, 2000)
+            : String(error).slice(0, 2000),
+        ...(correlationId ? { correlationId } : {}),
+        requestBody: this.requestLogPayload(url, request),
+      });
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message:
+          "Our connectivity service is temporarily unavailable. Please try again shortly.",
+        status: 503,
+        details:
+          error instanceof Error
+            ? `Transatel network request failed: ${error.message}`
+            : "Transatel network request failed",
+      });
     }
     if (response.status === 401 && retryOnAuth) {
+      const responseBody = await this.logBody(response);
+      await this.record({
+        operation: `${operation}-auth-retry`,
+        method: request.method,
+        endpoint: this.safeEndpoint(url),
+        status: 401,
+        durationMs: Date.now() - startedAt,
+        errorCode: "HTTP_401",
+        errorMessage: this.bodyText(responseBody).slice(0, 2000),
+        ...(correlationId ? { correlationId } : {}),
+        requestBody: this.requestLogPayload(url, request),
+        responseBody: this.responseLogBody(response, responseBody),
+      });
       this.accessToken = null;
       this.tokenExpiry = 0;
-      response = await execute();
+      try {
+        response = await execute();
+      } catch (error) {
+        this.providerFailed();
+        await this.record({
+          operation,
+          method: request.method,
+          endpoint: this.safeEndpoint(url),
+          status: 0,
+          durationMs: Date.now() - startedAt,
+          errorCode: "NETWORK_ERROR",
+          errorMessage:
+            error instanceof Error
+              ? error.message.slice(0, 2000)
+              : String(error).slice(0, 2000),
+          ...(correlationId ? { correlationId } : {}),
+          requestBody: this.requestLogPayload(url, request),
+        });
+        throw new ApiException({
+          code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+          message:
+            "Our connectivity service is temporarily unavailable. Please try again shortly.",
+          status: 503,
+          details:
+            error instanceof Error
+              ? `Transatel authentication retry failed: ${error.message}`
+              : "Transatel authentication retry failed",
+        });
+      }
     }
     const durationMs = Date.now() - startedAt;
     let path: string;
@@ -451,8 +529,12 @@ export class TransatelProvider implements ConnectivityProvider {
         endpoint: path,
         status: response.status,
         durationMs,
+        ...(correlationId ? { correlationId } : {}),
         requestBody: this.requestLogPayload(url, request),
-        responseBody: await this.logBody(response),
+        responseBody: this.responseLogBody(
+          response,
+          await this.logBody(response),
+        ),
       });
     } else {
       if (response.status === 429 || response.status >= 500)
@@ -465,10 +547,11 @@ export class TransatelProvider implements ConnectivityProvider {
         endpoint: path,
         status: response.status,
         durationMs,
+        ...(correlationId ? { correlationId } : {}),
         errorCode: `HTTP_${response.status}`,
         ...(errorMessage ? { errorMessage } : {}),
         requestBody: this.requestLogPayload(url, request),
-        responseBody,
+        responseBody: this.responseLogBody(response, responseBody),
       });
     }
     return response;
@@ -482,6 +565,7 @@ export class TransatelProvider implements ConnectivityProvider {
     durationMs: number;
     errorCode?: string;
     errorMessage?: string;
+    correlationId?: string;
     requestBody?: Prisma.InputJsonValue;
     responseBody?: Prisma.InputJsonValue;
   }) {
@@ -494,10 +578,17 @@ export class TransatelProvider implements ConnectivityProvider {
           endpoint: entry.endpoint,
           status: entry.status,
           durationMs: entry.durationMs,
+          ...(entry.correlationId
+            ? { correlationId: entry.correlationId }
+            : {}),
           ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
           ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
-          ...(entry.requestBody !== undefined ? { requestBody: entry.requestBody } : {}),
-          ...(entry.responseBody !== undefined ? { responseBody: entry.responseBody } : {}),
+          ...(entry.requestBody !== undefined
+            ? { requestBody: entry.requestBody }
+            : {}),
+          ...(entry.responseBody !== undefined
+            ? { responseBody: entry.responseBody }
+            : {}),
         },
       });
     } catch (error) {
@@ -545,23 +636,41 @@ export class TransatelProvider implements ConnectivityProvider {
     }
   }
 
+  private responseLogBody(
+    response: Response,
+    body: Prisma.InputJsonValue,
+  ): Prisma.InputJsonValue {
+    const providerRequestId = response.headers.get("x-tsl-request-id");
+    return providerRequestId ? { providerRequestId, body } : body;
+  }
+
   private bodyText(body: Prisma.InputJsonValue): string {
     return typeof body === "string" ? body : JSON.stringify(body);
   }
 
-  private redactLogBody(value: unknown): Prisma.InputJsonValue {
-    if (Array.isArray(value)) return value.map((item) => this.redactLogBody(item));
+  private redactLogBody(value: unknown, depth = 0): Prisma.InputJsonValue {
+    if (!logRedactionEnabled()) return value as Prisma.InputJsonValue;
+    if (depth >= 8) return "[TRUNCATED]";
+    if (Array.isArray(value))
+      return value
+        .slice(0, 100)
+        .map((item) => this.redactLogBody(item, depth + 1));
     if (value && typeof value === "object") {
       return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-          key,
-          /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|activation_?code|matching_?id|qr_?(code|payload)|data_?url)$/i.test(key)
-            ? "[REDACTED]"
-            : this.redactLogBody(item),
-        ]),
+        Object.entries(value as Record<string, unknown>)
+          .slice(0, 200)
+          .map(([key, item]) => [
+            key,
+            /(^|_)(access_?token|refresh_?token|authorization|secret|password|api_?key|activation_?code|matching_?id|qr_?(code|payload)|data_?url)$/i.test(
+              key,
+            )
+              ? "[REDACTED]"
+              : this.redactLogBody(item, depth + 1),
+          ]),
       );
     }
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "string") return value.slice(0, 20_000);
+    if (typeof value === "number" || typeof value === "boolean") return value;
     return "";
   }
 
@@ -579,10 +688,22 @@ export class TransatelProvider implements ConnectivityProvider {
     }
   }
 
-  private subscriberIdentifier(): "iccid" | "msisdn" {
-    return process.env.TRANSATEL_SUBSCRIBER_IDENTIFIER === "msisdn"
-      ? "msisdn"
-      : "iccid";
+  private async parseProviderJson<T>(
+    response: Response,
+    code: ApiErrorCode,
+    message: string,
+    contract: string,
+  ): Promise<T> {
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new ApiException({
+        code,
+        message,
+        status: 502,
+        details: `Transatel returned invalid JSON for ${contract}`,
+      });
+    }
   }
 
   /**
@@ -642,7 +763,9 @@ export class TransatelProvider implements ConnectivityProvider {
     });
     if (inventory?.iccid) {
       const msisdn = sanitizeMsisdn(inventory.msisdn);
-      return msisdn ? { iccid: inventory.iccid, msisdn } : { iccid: inventory.iccid };
+      return msisdn
+        ? { iccid: inventory.iccid, msisdn }
+        : { iccid: inventory.iccid };
     }
 
     const subscription = await this.prisma.subscription.findUnique({
@@ -682,6 +805,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   async provision(request: ProvisionRequest): Promise<ProvisionResult> {
     const mvnoRef = process.env.TRANSATEL_MVNO_REF;
+    const isTopUp = request.purchaseType === "TOPUP";
     if (!mvnoRef)
       throw new ApiException({
         code: ApiErrorCode.CONNECTIVITY_CONFIGURATION,
@@ -727,7 +851,15 @@ export class TransatelProvider implements ConnectivityProvider {
       profile.msisdn && /^\d{6,15}$/.test(profile.msisdn.replace(/\D/g, ""))
         ? profile.msisdn.replace(/\D/g, "")
         : undefined;
-    const bindMsisdn = validMsisdn ?? profile.iccid;
+    if (!validMsisdn)
+      throw new ApiException({
+        code: ApiErrorCode.PROVISIONING_FAILED,
+        message:
+          "We could not match this eSIM to its network number. Our support team is reviewing it.",
+        status: 409,
+        details: `Transatel OCS requires a 6-15 digit MSISDN; inventory ${profile.id} has no valid MSISDN`,
+      });
+    const bindMsisdn = validMsisdn;
     const existingOperation = this.prisma.enabled
       ? await this.prisma.provisioningOperation.findUnique({
           where: { orderId: request.orderId },
@@ -737,8 +869,8 @@ export class TransatelProvider implements ConnectivityProvider {
     const idempotencyKey =
       existingOperation?.idempotencyKey ??
       (generation > 0
-        ? `transatel:preload:${request.orderId}:profile-${generation}`
-        : `transatel:preload:${request.orderId}`);
+        ? `transatel:${isTopUp ? "subscribe" : "preload"}:${request.orderId}:profile-${generation}`
+        : `transatel:${isTopUp ? "subscribe" : "preload"}:${request.orderId}`);
     const operationPayload = {
       orderId: request.orderId,
       planId: request.planId,
@@ -772,6 +904,11 @@ export class TransatelProvider implements ConnectivityProvider {
       select: { providerSubscriptionId: true, providerStatus: true },
     });
     if (accepted?.providerSubscriptionId) {
+      if (isTopUp)
+        return {
+          providerSubscriptionId: accepted.providerSubscriptionId,
+          status: "COMPLETED",
+        };
       try {
         const details = await this.getEsimDetails(profile.iccid);
         if (details.qrPayload) {
@@ -861,7 +998,7 @@ export class TransatelProvider implements ConnectivityProvider {
     const payload = {
       bind: { msisdn: bindMsisdn },
       source: "api",
-      orderType: "preload",
+      orderType: isTopUp ? "subscribe" : "preload",
       mvnoRef,
       product: { productId: plan.providerPlanId },
       payment: { provider: "customer" },
@@ -869,7 +1006,7 @@ export class TransatelProvider implements ConnectivityProvider {
     };
 
     this.logger.log(
-      `Submitting OCS preload for ICCID ${profile.iccid}, product ${plan.providerPlanId}, order ${request.orderId}`,
+      `Submitting OCS ${isTopUp ? "subscribe" : "preload"} for ICCID ${profile.iccid}, product ${plan.providerPlanId}, order ${request.orderId}`,
     );
     let response: Response;
     try {
@@ -881,6 +1018,7 @@ export class TransatelProvider implements ConnectivityProvider {
         },
         body: JSON.stringify(payload),
         operation: "provision",
+        correlationId: request.orderId,
       });
     } catch (error) {
       if (this.prisma.enabled)
@@ -907,7 +1045,7 @@ export class TransatelProvider implements ConnectivityProvider {
         response.headers.get("retry-after"),
       );
       this.logger.error(
-        `OCS product preload failed. Status: ${response.status}, Error: ${detail}`,
+        `OCS product ${isTopUp ? "subscribe" : "preload"} failed. Status: ${response.status}, Error: ${detail}`,
       );
       if (this.prisma.enabled)
         await this.prisma.provisioningOperation.update({
@@ -927,6 +1065,15 @@ export class TransatelProvider implements ConnectivityProvider {
           where: { id: request.orderId },
           data: { providerStatus: "REJECTED", version: { increment: 1 } },
         });
+      if (/SUBSCRIBER_STATUS_NOT_ELIGIBLE/i.test(detail))
+        throw new ApiException({
+          code: ApiErrorCode.ELIGIBILITY_REJECTED,
+          message: isTopUp
+            ? "This eSIM cannot receive a top-up in its current network state. Our support team can check its status before you try again."
+            : "This eSIM cannot receive the selected plan right now. Please contact support or choose another plan.",
+          status: 409,
+          details: `PERMANENT_SUBSCRIBER_STATUS_NOT_ELIGIBLE: ${detail}`,
+        });
       throw new ApiException({
         code: ApiErrorCode.PROVISIONING_FAILED,
         message:
@@ -936,15 +1083,29 @@ export class TransatelProvider implements ConnectivityProvider {
       });
     }
 
-    const data = (await response.json()) as OrderProductResponse;
-    const providerSubscriptionId = data.subscriptionId ?? data.id;
-    if (!providerSubscriptionId)
+    const data = await this.parseProviderJson<OrderProductResponse>(
+      response,
+      ApiErrorCode.PROVISIONING_FAILED,
+      "We could not activate your eSIM right now. Our team is reviewing it and will contact you.",
+      "the OCS product order",
+    );
+    const providerSubscriptionId = data.subscriptionId;
+    if (
+      !providerSubscriptionId ||
+      !data.id ||
+      data.status?.toLowerCase() !== "done" ||
+      data.mvnoRef !== mvnoRef ||
+      data.bind?.msisdn?.replace(/\D/g, "") !== bindMsisdn ||
+      (data.transactionReference &&
+        data.transactionReference !== request.orderId)
+    )
       throw new ApiException({
         code: ApiErrorCode.PROVISIONING_FAILED,
         message:
           "We could not activate your eSIM right now. Our team is reviewing it and will contact you.",
         status: 502,
-        details: "OCS order response did not include a subscription id",
+        details:
+          "OCS order response was incomplete or did not match the submitted MVNO, MSISDN, or transaction reference",
       });
 
     // Provider acceptance is the commit point. Persist it before any secondary
@@ -956,18 +1117,22 @@ export class TransatelProvider implements ConnectivityProvider {
           where: { id: request.orderId },
           data: {
             providerSubscriptionId,
-            providerStatus: "PRELOADED",
+            providerStatus: isTopUp ? "SUBSCRIBED" : "PRELOADED",
             version: { increment: 1 },
           },
         }),
-        this.prisma.esimInventory.update({
-          where: { id: profile.id },
-          data: {
-            providerSubscriptionId,
-            providerStatus: "PRELOADED",
-            version: { increment: 1 },
-          },
-        }),
+        ...(!isTopUp
+          ? [
+              this.prisma.esimInventory.update({
+                where: { id: profile.id },
+                data: {
+                  providerSubscriptionId,
+                  providerStatus: "PRELOADED",
+                  version: { increment: 1 },
+                },
+              }),
+            ]
+          : []),
         this.prisma.provisioningOperation.update({
           where: { orderId: request.orderId },
           data: {
@@ -982,6 +1147,22 @@ export class TransatelProvider implements ConnectivityProvider {
           },
         }),
       ]);
+    }
+
+    // `subscribe` adds a package to an already-issued eSIM. The OCS 201/done
+    // response is the commit point; no new activation QR is created or needed.
+    if (isTopUp) {
+      if (this.prisma.enabled)
+        await this.prisma.provisioningOperation.update({
+          where: { orderId: request.orderId },
+          data: {
+            state: "ACTIVATED",
+            completedAt: new Date(),
+            nextReconcileAt: null,
+            version: { increment: 1 },
+          },
+        });
+      return { providerSubscriptionId, status: "COMPLETED" };
     }
 
     try {
@@ -1027,26 +1208,23 @@ export class TransatelProvider implements ConnectivityProvider {
   async getUsage(subscriptionId: string): Promise<UsageBreakdown> {
     const subscriber = await this.resolveSubscriber(subscriptionId);
     const msisdn = subscriber.msisdn?.replace(/\D/g, "") ?? "";
-    const iccid = subscriber.iccid?.replace(/\D/g, "") ?? "";
-    const identifier = /^\d{6,15}$/.test(msisdn) ? "msisdn" : "iccid";
-    const identifierValue = identifier === "msisdn" ? msisdn : iccid;
-    if (!identifierValue)
+    if (!/^\d{6,15}$/.test(msisdn))
       throw new ApiException({
         code: ApiErrorCode.USAGE_UNAVAILABLE,
         message:
           "Usage details are not available yet. Please check back shortly.",
         status: 404,
-        details: "No valid MSISDN or ICCID is stored for this eSIM",
+        details:
+          "Transatel OCS inventory requires a 6-15 digit MSISDN; none is stored for this eSIM",
       });
-    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?${identifier}=${encodeURIComponent(identifierValue)}&withBalances=true`;
-    this.logger.log(
-      `Fetching inventory usage for ${identifier.toUpperCase()}: ${identifierValue}`,
-    );
+    const url = `${this.baseUrl("ocs/inventory")}/api/subscriptions/products?msisdn=${encodeURIComponent(msisdn)}&withBalances=true`;
+    this.logger.log(`Fetching inventory usage for MSISDN: ${msisdn}`);
 
     const response = await this.authorizedFetch(url, {
       method: "GET",
       headers: { Accept: "application/json" },
       operation: "usage",
+      correlationId: subscriptionId,
     });
     if (!response.ok)
       throw new ApiException({
@@ -1057,9 +1235,39 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Failed to fetch usage balance from Transatel: ${await this.errorText(response)}`,
       });
 
-    const data = (await response.json()) as ProductSubscriptionsResponse;
+    const data = await this.parseProviderJson<ProductSubscriptionsResponse>(
+      response,
+      ApiErrorCode.USAGE_UNAVAILABLE,
+      "Usage details are not available yet. Please check back shortly.",
+      "the OCS product inventory",
+    );
+    if (!Array.isArray(data.productSubscriptions))
+      throw new ApiException({
+        code: ApiErrorCode.USAGE_UNAVAILABLE,
+        message:
+          "Usage details are not available yet. Please check back shortly.",
+        status: 502,
+        details: "Transatel returned an invalid product inventory response",
+      });
+    if (
+      data.productSubscriptions.some(
+        (item) =>
+          !item ||
+          typeof item.subscriptionId !== "string" ||
+          !item.subscriptionId.trim() ||
+          typeof item.status !== "string" ||
+          !item.status.trim(),
+      )
+    )
+      throw new ApiException({
+        code: ApiErrorCode.USAGE_UNAVAILABLE,
+        message:
+          "Usage details are not available yet. Please check back shortly.",
+        status: 502,
+        details: "Transatel returned an incomplete product subscription",
+      });
     const subscriptions = data.productSubscriptions.filter(
-      (item) => item.status !== "terminated",
+      (item) => !item.productDefinition?.tags?.includes("WALLED_GARDEN"),
     );
     if (!subscriptions.length)
       throw new ApiException({
@@ -1067,53 +1275,49 @@ export class TransatelProvider implements ConnectivityProvider {
         message:
           "Usage details are not available yet. Please check back shortly.",
         status: 404,
-        details: "No active subscription found for this subscriber",
+        details: "No product subscription found for this subscriber",
       });
 
-    const usage = subscriptions
-      .map((item) => ({ item, usage: this.usageFromBalances(item.balances) }))
-      .filter(
-        (
-          entry,
-        ): entry is {
-          item: ProductSubscription;
-          usage: { usedMb: number; totalMb: number };
-        } => Boolean(entry.usage),
+    const packages = subscriptions.map((item, index) => {
+      const balance = this.usageFromBalances(
+        item.balances,
+        item.productDefinition?.allowances,
       );
-    if (!usage.length)
+      const activatedAt = this.validProviderDate(item.activationDate);
+      const expiresAt = this.validProviderDate(item.expirationDate);
       return {
-        usedMb: 0,
-        totalMb: 0,
-        usageAvailable: false,
-        subscriptions: subscriptions.map((item, index) => ({
-          providerSubscriptionId: item.subscriptionId,
-          status: item.status,
-          usedMb: 0,
-          totalMb: 0,
-          priority: index + 1,
-        })),
-      };
-    const aggregate = usage.reduce(
-      (acc, entry) => ({
-        usedMb: acc.usedMb + entry.usage.usedMb,
-        totalMb: acc.totalMb + entry.usage.totalMb,
-      }),
-      { usedMb: 0, totalMb: 0 },
-    );
-    return {
-      ...aggregate,
-      usageAvailable: true,
-      subscriptions: usage.map(({ item, usage: balance }, index) => ({
         providerSubscriptionId: item.subscriptionId,
         status: item.status,
-        ...balance,
+        usedMb: balance?.usedMb ?? 0,
+        totalMb: balance?.totalMb ?? 0,
+        usageAvailable: Boolean(balance),
         priority: index + 1,
-      })),
+        ...(activatedAt ? { activatedAt } : {}),
+        // Before activation expirationDate is an activation deadline, not plan expiry.
+        ...(activatedAt && expiresAt ? { expiresAt } : {}),
+      };
+    });
+    const aggregate = packages
+      .filter((item) => item.usageAvailable && item.status === "active")
+      .reduce(
+        (total, item) => ({
+          usedMb: total.usedMb + item.usedMb,
+          totalMb: total.totalMb + item.totalMb,
+        }),
+        { usedMb: 0, totalMb: 0 },
+      );
+    return {
+      ...aggregate,
+      usageAvailable: packages.some(
+        (item) => item.usageAvailable && item.status === "active",
+      ),
+      subscriptions: packages,
     };
   }
 
   private usageFromBalances(
     balances?: ProductSubscription["balances"],
+    allowances?: unknown,
   ): { usedMb: number; totalMb: number } | null {
     const entries: ScpBalance[] = Array.isArray(balances?.data)
       ? balances!.data!
@@ -1122,14 +1326,23 @@ export class TransatelProvider implements ConnectivityProvider {
       (entry) => String(entry.resourceUnit).toUpperCase() === "KB",
     );
     if (!dataResources.length) return null;
-    const start = Math.max(
-      ...dataResources.map((entry) =>
-        Number(entry.resourceStartValue) > 0
-          ? Number(entry.resourceStartValue)
-          : 0,
-      ),
-      0,
-    );
+    const allowanceData =
+      allowances && typeof allowances === "object"
+        ? (allowances as { data?: unknown }).data
+        : undefined;
+    const allowanceResources = Array.isArray(allowanceData)
+      ? allowanceData.filter(
+          (entry): entry is { resourceName?: string; resourceValue: number } =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            String(
+              (entry as { resourceUnit?: unknown }).resourceUnit,
+            ).toUpperCase() === "KB" &&
+            Number.isFinite(
+              Number((entry as { resourceValue?: unknown }).resourceValue),
+            ),
+        )
+      : [];
     const remaining = Math.max(
       ...dataResources.map((entry) =>
         Number(entry.resourceValue) >= 0 ? Number(entry.resourceValue) : 0,
@@ -1139,6 +1352,23 @@ export class TransatelProvider implements ConnectivityProvider {
     const unlimited = dataResources.some(
       (entry) => Number(entry.resourceValue) === -1,
     );
+    const start = Math.max(
+      ...dataResources.map((entry) => {
+        const reportedStart = Number(entry.resourceStartValue);
+        if (Number.isFinite(reportedStart) && reportedStart > 0)
+          return reportedStart;
+        const configured = allowanceResources.find(
+          (allowance) => allowance.resourceName === entry.resourceName,
+        );
+        const configuredValue = Number(configured?.resourceValue);
+        if (Number.isFinite(configuredValue) && configuredValue > 0)
+          return configuredValue;
+        const current = Number(entry.resourceValue);
+        return Number.isFinite(current) && current > 0 ? current : 0;
+      }),
+      0,
+    );
+    if (start <= 0 && !unlimited) return null;
     const totalMb = Math.max(1, Math.round(start / 1024));
     const remainingMb = unlimited
       ? totalMb
@@ -1146,8 +1376,12 @@ export class TransatelProvider implements ConnectivityProvider {
     return { usedMb: Math.max(0, totalMb - remainingMb), totalMb };
   }
 
-  async getEsimDetails(subscriptionId: string): Promise<EsimDetailsResult> {
-    const subscriber = await this.resolveSubscriber(subscriptionId);
+  private validProviderDate(value?: string): string | undefined {
+    return value && Number.isFinite(Date.parse(value)) ? value : undefined;
+  }
+
+  async getEsimDetails(reference: string): Promise<EsimDetailsResult> {
+    const subscriber = await this.resolveSubscriber(reference);
     const iccid = subscriber.iccid ?? "";
     if (!iccid)
       throw new ApiException({
@@ -1163,6 +1397,7 @@ export class TransatelProvider implements ConnectivityProvider {
       method: "GET",
       headers: { Accept: "application/json" },
       operation: "esim-details",
+      correlationId: reference,
     });
     if (!response.ok) {
       const notFound = response.status === 404;
@@ -1178,9 +1413,26 @@ export class TransatelProvider implements ConnectivityProvider {
       });
     }
 
-    const data = (await response.json()) as ESimDetailsResponse;
+    const data = await this.parseProviderJson<ESimDetailsResponse>(
+      response,
+      ApiErrorCode.ESIM_LOOKUP_UNAVAILABLE,
+      "Transatel could not check this eSIM right now. Please retry shortly.",
+      "the eSIM profile lookup",
+    );
+    if (
+      !data ||
+      typeof data.status !== "string" ||
+      !data.status.trim() ||
+      (data.simSerial && data.simSerial !== iccid)
+    )
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_LOOKUP_UNAVAILABLE,
+        message: "Transatel returned an invalid eSIM status response.",
+        status: 502,
+        details: "The eSIM response was incomplete or referenced another ICCID",
+      });
     return {
-      subscriptionId: iccid,
+      iccid,
       status: data.status,
       ...(data.smdpAddress ? { smDpAddress: data.smdpAddress } : {}),
       ...(data.qrCode?.value || data.activationCode
@@ -1189,9 +1441,59 @@ export class TransatelProvider implements ConnectivityProvider {
     };
   }
 
+  async getSubscriberDetails(
+    reference: string,
+  ): Promise<SubscriberDetailsResult> {
+    const subscriber = await this.resolveSubscriber(reference);
+    const iccid = subscriber.iccid ?? "";
+    if (!iccid)
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_NOT_FOUND,
+        message: "This ICCID was not found in the Transatel inventory.",
+        status: 404,
+        details: "No ICCID found for the requested subscriber",
+      });
+    const url = `${this.baseUrl("connectivity-management/subscribers")}/api/subscribers/sim-serial/${encodeURIComponent(iccid)}`;
+    const response = await this.authorizedFetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      operation: "subscriber-details",
+      correlationId: reference,
+    });
+    if (!response.ok)
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: "Transatel could not check this subscriber right now.",
+        status: response.status === 404 ? 404 : 502,
+        details: await this.errorText(response),
+      });
+    const data = await this.parseProviderJson<{
+      simSerial?: string;
+      msisdn?: string;
+      status?: string;
+    }>(
+      response,
+      ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      "Transatel could not check this subscriber right now.",
+      "the connectivity subscriber lookup",
+    );
+    if (!data.status || (data.simSerial && data.simSerial !== iccid))
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: "Transatel returned an invalid subscriber status.",
+        status: 502,
+        details: data,
+      });
+    return {
+      iccid,
+      ...(data.msisdn ? { msisdn: data.msisdn } : {}),
+      status: data.status,
+    };
+  }
+
   private async lifecycle(
     reference: string,
-    action: "suspend" | "terminate",
+    action: "suspend" | "reactivate" | "terminate",
     transactionReference: string,
   ): Promise<LifecycleResult> {
     const subscriber = await this.resolveSubscriber(reference);
@@ -1212,10 +1514,10 @@ export class TransatelProvider implements ConnectivityProvider {
         "Idempotency-Key": transactionReference,
       },
       body: JSON.stringify({
-        mvnoRef: this.env("TRANSATEL_MVNO_REF"),
-        transactionReference,
+        externalReference: transactionReference,
       }),
       operation: `subscriber-${action}`,
+      correlationId: transactionReference,
     });
     if (!response.ok)
       throw new ApiException({
@@ -1225,18 +1527,48 @@ export class TransatelProvider implements ConnectivityProvider {
         details: await this.errorText(response),
       });
     const raw = await response.text();
-    const data = raw
-      ? (JSON.parse(raw) as { transactionId?: string; status?: string })
-      : {};
+    let data: {
+      transactionId?: string;
+      simSerial?: string;
+      transactionStatus?: string;
+      status?: string;
+    };
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: `Transatel returned an invalid ${action} response.`,
+        status: 502,
+        details: "Connectivity lifecycle response was not valid JSON",
+      });
+    }
+    const transactionStatus = data.transactionStatus ?? data.status;
+    if (
+      !data.transactionId ||
+      (data.simSerial && data.simSerial !== simSerial) ||
+      !transactionStatus ||
+      !["PENDING", "DONE", "SUCCESS"].includes(transactionStatus.toUpperCase())
+    )
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: `Transatel returned an invalid ${action} response.`,
+        status: 502,
+        details:
+          "Connectivity lifecycle response was incomplete, unsuccessful, or referenced another ICCID",
+      });
     return {
       accepted: true,
-      ...(data.transactionId ? { transactionId: data.transactionId } : {}),
-      status: data.status ?? "PENDING",
+      transactionId: data.transactionId,
+      status: transactionStatus.toUpperCase(),
     };
   }
 
   suspend(subscriptionId: string, transactionReference: string) {
     return this.lifecycle(subscriptionId, "suspend", transactionReference);
+  }
+  reactivate(subscriptionId: string, transactionReference: string) {
+    return this.lifecycle(subscriptionId, "reactivate", transactionReference);
   }
   terminate(subscriptionId: string, transactionReference: string) {
     return this.lifecycle(subscriptionId, "terminate", transactionReference);
@@ -1267,11 +1599,31 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel catalog fetch failed: ${await this.errorText(response)}`,
       });
 
-    const data = (await response.json()) as ProductCatalogResponse;
+    const data = await this.parseProviderJson<ProductCatalogResponse>(
+      response,
+      ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      "Catalog synchronization is unavailable right now.",
+      "the OCS catalog",
+    );
+    if (!Array.isArray(data.products))
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: "Catalog synchronization is unavailable right now.",
+        status: 502,
+        details: "Transatel returned an invalid OCS catalog response",
+      });
     let synced = 0;
     const skipped: string[] = [];
 
     for (const product of data.products) {
+      if (
+        !product ||
+        typeof product !== "object" ||
+        !product.productDefinition
+      ) {
+        skipped.push("invalid-product");
+        continue;
+      }
       const definition = product.productDefinition;
       const countries = (definition.countryList ?? [])
         .map((iso3) => this.iso3ToIso2(iso3))
@@ -1320,10 +1672,7 @@ export class TransatelProvider implements ConnectivityProvider {
                   allowanceMb !== null ? `${allowanceMb} MB` : "Unlimited",
                 validityDays,
                 costPrice: price,
-                sellingPrice: price,
                 coverage: definition.countryList ?? [],
-                popular: false,
-                status: "ACTIVE",
               },
               create: {
                 countryId: country.id,
@@ -1336,7 +1685,9 @@ export class TransatelProvider implements ConnectivityProvider {
                 sellingPrice: price,
                 coverage: definition.countryList ?? [],
                 popular: false,
-                status: "ACTIVE",
+                // Newly discovered provider products require commercial
+                // review before they become customer-visible.
+                status: "DRAFT",
               },
             });
           }
@@ -1379,11 +1730,31 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel catalog fetch failed: ${await this.errorText(response)}`,
       });
 
-    const data = (await response.json()) as ProductCatalogResponse;
+    const data = await this.parseProviderJson<ProductCatalogResponse>(
+      response,
+      ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      "Catalog export is unavailable right now.",
+      "the OCS catalog export",
+    );
+    if (!Array.isArray(data.products))
+      throw new ApiException({
+        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+        message: "Catalog export is unavailable right now.",
+        status: 502,
+        details: "Transatel returned an invalid OCS catalog response",
+      });
     const rows: CatalogExportRow[] = [];
     const skipped: string[] = [];
 
     for (const product of data.products) {
+      if (
+        !product ||
+        typeof product !== "object" ||
+        !product.productDefinition
+      ) {
+        skipped.push("invalid-product");
+        continue;
+      }
       const definition = product.productDefinition;
       const countries = (definition.countryList ?? [])
         .map((iso3) => this.iso3ToIso2(iso3))
@@ -1469,106 +1840,38 @@ export class TransatelProvider implements ConnectivityProvider {
         details: `Transatel eligibility check failed: ${detail}`,
       });
     }
-    const data = (await response.json()) as ProductCatalogResponse;
-    const details = Array.isArray(data.products) ? data.products[0] : undefined;
-    return {
-      allowed: Boolean(details?.canSubscribe?.allowed),
-      ...(details?.canSubscribe?.errorKey
-        ? { errorKey: details.canSubscribe.errorKey }
-        : {}),
-      ...(details?.canSubscribe?.errorMessage
-        ? { errorMessage: details.canSubscribe.errorMessage }
-        : {}),
-    };
-  }
-
-  async ensureWebhook(): Promise<{
-    registered: boolean;
-    id?: string;
-    targetUrl: string;
-    events: string[];
-  }> {
-    const targetUrl = process.env.TRANSATEL_WEBHOOK_TARGET_URL;
-    if (!targetUrl) return { registered: false, targetUrl: "", events: [] };
-    const mvnoRef = this.env("TRANSATEL_MVNO_REF");
-    const email =
-      process.env.TRANSATEL_WEBHOOK_CONTACT_EMAIL ??
-      "it-operations@visacompass.local";
-    const secret = process.env.TRANSATEL_WEBHOOK_SECRET ?? "";
-    const events = (
-      process.env.TRANSATEL_WEBHOOK_EVENTS ??
-      "OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/EXPIRED,OCS/PRODUCT/TERMINATED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED,CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED"
-    )
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-    const base = this.baseUrl("webhooks");
-    const listResponse = await this.authorizedFetch(`${base}/api/webhooks`, {
-      method: "GET",
-      operation: "webhook",
-    });
-    if (!listResponse.ok)
-      throw new ApiException({
-        code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
-        message: "Webhook registration is unavailable right now.",
-        status: 502,
-        details: `Failed to list Transatel webhooks: ${await this.errorText(listResponse)}`,
-      });
-    const listed = (await listResponse.json()) as WebhooksResponse;
-    const existing = (
-      Array.isArray(listed.webhooks) ? listed.webhooks : []
-    ).find((item) => item.targetUrl === targetUrl && item.mvnoRef === mvnoRef);
-
-    const definition = {
-      mvnoRef,
-      status: "active",
-      targetUrl,
-      email,
-      ...(secret ? { secret } : {}),
-      events,
-    };
-    let id: string | undefined;
-    if (existing) {
-      const updateResponse = await this.authorizedFetch(
-        `${base}/api/webhooks/${existing.id}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(definition),
-          operation: "webhook",
-        },
-      );
-      if (!updateResponse.ok)
-        throw new ApiException({
-          code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
-          message: "Webhook registration is unavailable right now.",
-          status: 502,
-          details: `Failed to update Transatel webhook: ${await this.errorText(updateResponse)}`,
-        });
-      id = existing.id;
-      this.logger.log(`Updated Transatel webhook ${id} for ${targetUrl}`);
-    } else {
-      const createResponse = await this.authorizedFetch(
-        `${base}/api/webhooks`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(definition),
-          operation: "webhook",
-        },
-      );
-      if (!createResponse.ok)
-        throw new ApiException({
-          code: ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
-          message: "Webhook registration is unavailable right now.",
-          status: 502,
-          details: `Failed to register Transatel webhook: ${await this.errorText(createResponse)}`,
-        });
-      id = ((await createResponse.json()) as WebhookResponse).id;
-      this.logger.log(`Registered Transatel webhook ${id} for ${targetUrl}`);
+    const data = await this.parseProviderJson<
+      ProductDetails | ProductCatalogResponse
+    >(
+      response,
+      ApiErrorCode.CONNECTIVITY_UNAVAILABLE,
+      "Our connectivity service is temporarily unavailable. Please try again shortly.",
+      "the OCS eligibility lookup",
+    );
+    // Transatel deployments have exposed the product-detail response both as
+    // the product itself and wrapped in a `products` collection. Accept both
+    // documented shapes so eligibility never becomes a false rejection merely
+    // because the tenant is on a different compatible API revision.
+    const details =
+      data && typeof data === "object" && "canSubscribe" in data
+        ? data
+        : Array.isArray(data.products)
+          ? data.products[0]
+          : undefined;
+    const allowed = Boolean(details?.canSubscribe?.allowed);
+    if (!allowed) {
+      const providerCode = details?.canSubscribe?.errorKey;
+      return {
+        allowed: false,
+        errorKey: providerCode ?? "ELIGIBILITY_REJECTED",
+        errorMessage: /SUBSCRIBER_STATUS_NOT_ELIGIBLE/i.test(providerCode ?? "")
+          ? "This eSIM cannot receive a top-up in its current network state. Please contact support before trying again."
+          : "This eSIM cannot receive the selected plan right now. Please contact support or choose another plan.",
+      };
     }
-    return { registered: true, id, targetUrl, events };
+    return {
+      allowed: true,
+    };
   }
 
   async handleWebhook(payload: unknown): Promise<ProviderWebhookResult> {
@@ -1578,6 +1881,22 @@ export class TransatelProvider implements ConnectivityProvider {
       return {
         handled: false,
         reason: "Webhook payload is missing header.eventType",
+      };
+    const eventStatus = this.mapEventType(eventType);
+    if (eventStatus === "OTHER")
+      return {
+        handled: false,
+        reason: `Webhook event ${eventType} is not supported by the lifecycle mapper`,
+      };
+    if (
+      envelope.productId
+        ?.toUpperCase()
+        .replace(/[^A-Z0-9]/g, "")
+        .includes("WALLEDGARDEN")
+    )
+      return {
+        handled: false,
+        reason: `Webhook event ${eventType} belongs to Transatel's infrastructure walled-garden product`,
       };
 
     const iccid = envelope.iccid;
@@ -1589,22 +1908,89 @@ export class TransatelProvider implements ConnectivityProvider {
 
     let orderId: string | undefined;
     if (this.prisma.enabled) {
+      const subscriberEvent = eventType.startsWith(
+        "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/",
+      );
+      const lifecycleAction = eventType.toUpperCase().endsWith("REACTIVATED")
+        ? "REACTIVATE"
+        : eventStatus === "SUSPENDED"
+          ? "SUSPEND"
+          : eventStatus === "TERMINATED"
+            ? "TERMINATE"
+            : null;
+      if (subscriberEvent && lifecycleAction) {
+        const pendingLifecycle =
+          await this.prisma.transatelLifecycleOperation.findFirst({
+            where: {
+              action: lifecycleAction,
+              state: {
+                in: ["CREATED", "SUBMITTING", "ACCEPTED", "RECONCILE_REQUIRED"],
+              },
+              order: {
+                OR: [
+                  { inventory: { is: { iccid } } },
+                  { targetInventory: { is: { iccid } } },
+                  { customerEsim: { is: { inventory: { is: { iccid } } } } },
+                ],
+              },
+            },
+            select: { orderId: true },
+            orderBy: { createdAt: "desc" },
+          });
+        if (pendingLifecycle) orderId = pendingLifecycle.orderId;
+      }
       // Bind the event to an order by our own transaction/order reference first
       // (Transatel echoes it back as body.externalReference), falling back to the
-      // SIM serial (body.iccid) -> reserved inventory mapping.
-      if (envelope.externalReference) {
+      // provider subscription id, and finally an unambiguous SIM serial.
+      // A SIM can have many top-up orders, so blindly using its original
+      // assignedOrderId would apply a top-up event to the wrong order.
+      if (
+        !orderId &&
+        envelope.externalReference &&
+        isUuid(envelope.externalReference)
+      ) {
         const order = await this.prisma.order.findUnique({
           where: { id: envelope.externalReference },
           select: { id: true },
         });
         if (order) orderId = order.id;
       }
+      if (!orderId && envelope.subscriptionId) {
+        const order = await this.prisma.order.findFirst({
+          where: { providerSubscriptionId: envelope.subscriptionId },
+          select: { id: true },
+        });
+        if (order) orderId = order.id;
+      }
+      if (!orderId && envelope.subscriptionId) {
+        const subscription = await this.prisma.subscription.findUnique({
+          where: { providerSubscriptionId: envelope.subscriptionId },
+          select: { customerEsim: { select: { orderId: true } } },
+        });
+        if (subscription) orderId = subscription.customerEsim.orderId;
+      }
       if (!orderId) {
         const inventory = await this.prisma.esimInventory.findUnique({
           where: { iccid },
-          select: { assignedOrderId: true },
+          select: {
+            assignedOrderId: true,
+            customerEsims: { select: { orderId: true }, take: 2 },
+          },
         });
-        orderId = inventory?.assignedOrderId ?? undefined;
+        const candidates = new Set(
+          [
+            inventory?.assignedOrderId,
+            ...(inventory?.customerEsims ?? []).map((item) => item.orderId),
+          ].filter((candidate): candidate is string => Boolean(candidate)),
+        );
+        if (subscriberEvent && inventory?.assignedOrderId)
+          orderId = inventory.assignedOrderId;
+        else if (candidates.size === 1) orderId = [...candidates][0];
+        else if (candidates.size > 1)
+          return {
+            handled: false,
+            reason: `Webhook ${eventType} for ICCID ${iccid} is ambiguous across ${candidates.size} orders and did not carry a usable externalReference or subscriptionId`,
+          };
       }
     }
     if (!orderId)
@@ -1613,9 +1999,11 @@ export class TransatelProvider implements ConnectivityProvider {
         reason: `No order found for event ${eventType} (externalReference ${envelope.externalReference ?? "n/a"}, ICCID ${iccid})`,
       };
 
-    const eventStatus = this.mapEventType(eventType);
     const event: ProviderWebhookEvent = {
       eventType,
+      statusScope: eventType.startsWith("CONNECTIVITY-MANAGEMENT/SUBSCRIBER/")
+        ? "SUBSCRIBER"
+        : "PRODUCT",
       orderId,
       iccid,
       ...(envelope.msisdn ? { msisdn: envelope.msisdn } : {}),
@@ -1667,6 +2055,7 @@ export class TransatelProvider implements ConnectivityProvider {
     iccid?: string;
     msisdn?: string;
     subscriptionId?: string;
+    productId?: string;
     externalReference?: string;
     activatedAt?: string;
     expiresAt?: string;
@@ -1704,20 +2093,32 @@ export class TransatelProvider implements ConnectivityProvider {
       typeof productSubscription.subscriptionId === "string"
         ? productSubscription.subscriptionId
         : undefined;
-    const activatedAt =
+    const productDefinition =
+      typeof productSubscription.productDefinition === "object" &&
+      productSubscription.productDefinition !== null
+        ? (productSubscription.productDefinition as Record<string, unknown>)
+        : {};
+    const productId =
+      typeof productDefinition.productId === "string"
+        ? productDefinition.productId
+        : undefined;
+    const activatedAt = this.validProviderDate(
       typeof productSubscription.activationDate === "string"
         ? productSubscription.activationDate
-        : undefined;
-    const expiresAt =
+        : undefined,
+    );
+    const expiresAt = this.validProviderDate(
       typeof productSubscription.expirationDate === "string"
         ? productSubscription.expirationDate
-        : undefined;
+        : undefined,
+    );
 
     return {
       ...(eventType ? { eventType } : {}),
       ...(iccid ? { iccid } : {}),
       ...(msisdn ? { msisdn } : {}),
       ...(subscriptionId ? { subscriptionId } : {}),
+      ...(productId ? { productId } : {}),
       ...(externalReference ? { externalReference } : {}),
       ...(activatedAt ? { activatedAt } : {}),
       ...(expiresAt ? { expiresAt } : {}),
@@ -1726,6 +2127,7 @@ export class TransatelProvider implements ConnectivityProvider {
 
   private mapEventType(eventType: string): ProviderWebhookEvent["status"] {
     const normalized = eventType.toUpperCase();
+    if (normalized.endsWith("REACTIVATED")) return "ACTIVATED";
     if (normalized.endsWith("ACTIVATED")) return "ACTIVATED";
     if (normalized.endsWith("SUSPENDED")) return "SUSPENDED";
     if (normalized.endsWith("PRELOADED")) return "PRELOADED";
@@ -1800,12 +2202,10 @@ export class TransatelProvider implements ConnectivityProvider {
       }));
   }
 
-  /**
-   * Returns the raw provider subscription fee as a base-unit number (no FX
-   * conversion). Minor units ("CENT"/"CENTS") are divided by 100 so the value
-   * reflects the provider's amount in its major currency; currency is kept as
-   * a reference only and never converted to NPR.
-   */
+  /** Converts the provider fee to NPR. Minor currency units are normalized
+   * before applying the configured commercial FX rate. An invalid/missing
+   * foreign-currency rate rejects the product instead of silently underpricing
+   * it as if the provider amount were already NPR. */
   private priceNpr(fee?: Price[][]): number | null {
     if (!Array.isArray(fee) || !fee.length) return null;
     const first = Array.isArray(fee[0]) ? fee[0][0] : undefined;
@@ -1813,8 +2213,20 @@ export class TransatelProvider implements ConnectivityProvider {
     const amount = Number(first.amount);
     if (!Number.isFinite(amount) || amount <= 0) return null;
     const minor = /^(CENT|CENTS)$/i.test(String(first.unit ?? ""));
-    const value = minor ? amount / 100 : amount;
-    return Math.max(1, Math.round(value));
+    const majorValue = minor ? amount / 100 : amount;
+    const currency = String(first.currency ?? "").toUpperCase();
+    if (currency === "NPR") return Math.max(1, Math.round(majorValue));
+    const fx = Number(process.env.TRANSATEL_FX_TO_NPR);
+    if (!Number.isFinite(fx) || fx <= 0) return null;
+    return Math.max(1, Math.round(majorValue * fx));
+  }
+
+  private safeEndpoint(url: string): string {
+    try {
+      return new URL(url).pathname;
+    } catch {
+      return url.split("?", 1)[0] ?? url;
+    }
   }
 
   private iso3ToIso2(iso3: string): string | undefined {
@@ -1826,7 +2238,7 @@ export class TransatelProvider implements ConnectivityProvider {
   }
 }
 
-const ISO3_TO_ISO2: Record<string, string> = {
+export const ISO3_TO_ISO2: Readonly<Record<string, string>> = {
   AFG: "AF",
   ALB: "AL",
   DZA: "DZ",

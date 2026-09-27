@@ -1,7 +1,15 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { ApiErrorCode, PaymentStatus } from "@visa-compass/shared";
 import { ApiException } from "../../../common/api-error.js";
+import { logRedactionEnabled } from "../../../common/redact.js";
 import { PrismaService } from "../../../infrastructure/prisma.service.js";
+import { resiliencePolicy } from "../../../infrastructure/resilience-policy.js";
+import {
+  PaymentCapability,
+  initiationFailedBeforeRemoteIntent,
+  initiationRemoteOutcomeUnknown,
+} from "../payment-gateway.js";
 import type {
   PaymentContext,
   PaymentGateway,
@@ -28,6 +36,16 @@ export class KhaltiGateway implements PaymentGateway {
 
   constructor(@Optional() private readonly prisma?: PrismaService) {}
 
+  capabilities() {
+    return {
+      checkout: "REDIRECT" as const,
+      statusLookup: true,
+      refunds: "MANUAL" as const,
+      disputes: "SUPPORTED" as const,
+      extra: [PaymentCapability.MANUAL_REFUND_GUIDANCE],
+    };
+  }
+
   private get baseUrl(): string {
     return (
       process.env.KHALTI_BASE_URL ?? "https://dev.khalti.com/api/v2"
@@ -39,8 +57,7 @@ export class KhaltiGateway implements PaymentGateway {
   }
 
   private timeoutMs(): number {
-    const parsed = Number(process.env.KHALTI_REQUEST_TIMEOUT_MS);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+    return resiliencePolicy.paymentTimeoutMs();
   }
 
   private ensureConfigured(): void {
@@ -91,18 +108,23 @@ export class KhaltiGateway implements PaymentGateway {
     url: string,
     init: RequestInit,
     operation: string,
+    correlationId?: string,
   ): Promise<Response> {
     const startedAt = Date.now();
     const method = init.method ?? "POST";
     const endpoint = this.logEndpoint(url);
     try {
       const response = await fetch(url, init);
+      const responseBody = await this.logBody(response);
       await this.record({
         operation: `khalti-${operation}`,
         method,
         endpoint,
         status: response.status,
         durationMs: Date.now() - startedAt,
+        ...(correlationId ? { correlationId } : {}),
+        requestBody: this.logRequestBody(init.body),
+        responseBody,
         ...(response.ok
           ? {}
           : {
@@ -119,8 +141,10 @@ export class KhaltiGateway implements PaymentGateway {
         endpoint,
         status: 0,
         durationMs: Date.now() - startedAt,
+        ...(correlationId ? { correlationId } : {}),
         errorCode: "NETWORK_ERROR",
         errorMessage: detail,
+        requestBody: this.logRequestBody(init.body),
       });
       throw new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
@@ -148,6 +172,9 @@ export class KhaltiGateway implements PaymentGateway {
     durationMs: number;
     errorCode?: string;
     errorMessage?: string;
+    correlationId?: string;
+    requestBody?: Prisma.InputJsonValue;
+    responseBody?: Prisma.InputJsonValue;
   }): Promise<void> {
     if (!this.prisma?.enabled) return;
     try {
@@ -160,10 +187,51 @@ export class KhaltiGateway implements PaymentGateway {
     }
   }
 
+  private logRequestBody(body: BodyInit | null | undefined): Prisma.InputJsonValue {
+    if (typeof body !== "string") return {};
+    try {
+      return this.redactLogBody(JSON.parse(body));
+    } catch {
+      return body.slice(0, 20_000);
+    }
+  }
+
+  private async logBody(response: Response): Promise<Prisma.InputJsonValue> {
+    try {
+      const raw = await response.clone().text();
+      if (!raw) return "";
+      try {
+        return this.redactLogBody(JSON.parse(raw));
+      } catch {
+        return raw.slice(0, 20_000);
+      }
+    } catch {
+      return "Response body could not be read";
+    }
+  }
+
+  private redactLogBody(value: unknown): Prisma.InputJsonValue {
+    if (!logRedactionEnabled()) return value as Prisma.InputJsonValue;
+    if (Array.isArray(value)) return value.map((item) => this.redactLogBody(item));
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+          key,
+          /authorization|secret|password|api_?key|payment_url/i.test(key)
+            ? "[REDACTED]"
+            : this.redactLogBody(item),
+        ]),
+      );
+    if (["string", "number", "boolean"].includes(typeof value))
+      return value as string | number | boolean;
+    return "";
+  }
+
   private async post(
     path: string,
     body: Record<string, unknown>,
     operation: string,
+    correlationId?: string,
   ): Promise<Response> {
     this.ensureConfigured();
     return this.request(
@@ -178,6 +246,7 @@ export class KhaltiGateway implements PaymentGateway {
         signal: AbortSignal.timeout(this.timeoutMs()),
       },
       operation,
+      correlationId,
     );
   }
 
@@ -227,48 +296,63 @@ export class KhaltiGateway implements PaymentGateway {
     amountNpr: number;
     returnUrl: string;
   }): Promise<PaymentInitiation> {
-    const response = await this.post(
-      "/epayment/initiate/",
-      {
-        return_url: input.returnUrl,
-        website_url: new URL(input.returnUrl).origin,
-        amount: Math.round(input.amountNpr * 100),
-        purchase_order_id: input.orderId,
-        purchase_order_name: input.orderNumber,
-      },
-      "initiation",
-    );
-    if (!response.ok)
-      throw this.providerError(
+    try {
+      this.ensureConfigured();
+      new URL(input.returnUrl);
+    } catch (error) {
+      throw initiationFailedBeforeRemoteIntent(error);
+    }
+    let response: Response;
+    try {
+      response = await this.post(
+        "/epayment/initiate/",
+        {
+          return_url: input.returnUrl,
+          website_url: new URL(input.returnUrl).origin,
+          amount: Math.round(input.amountNpr * 100),
+          purchase_order_id: input.orderId,
+          purchase_order_name: input.orderNumber,
+        },
         "initiation",
-        response,
-        await this.providerDetail(response),
+        input.orderId,
+      );
+    } catch (error) {
+      throw initiationRemoteOutcomeUnknown(error);
+    }
+    if (!response.ok)
+      throw initiationFailedBeforeRemoteIntent(
+        this.providerError(
+          "initiation",
+          response,
+          await this.providerDetail(response),
+        ),
       );
     let data: { pidx?: string; payment_url?: string; expires_at?: string };
     try {
       data = (await response.json()) as typeof data;
     } catch {
-      throw new ApiException({
+      throw initiationRemoteOutcomeUnknown(new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
         message:
           "The payment provider is temporarily unavailable. Please try again or use another method.",
         status: 502,
         details: "Khalti initiation returned a non-JSON response",
-      });
+      }));
     }
     if (!data.pidx || !data.payment_url)
-      throw new ApiException({
+      throw initiationRemoteOutcomeUnknown(new ApiException({
         code: ApiErrorCode.PAYMENT_PROVIDER_ERROR,
         message:
           "The payment provider is temporarily unavailable. Please try again or use another method.",
         status: 502,
         details: `Khalti initiation response is missing pidx/payment_url: ${JSON.stringify(data)}`,
-      });
+      }));
     return {
       reference: data.pidx,
       redirectUrl: data.payment_url,
       expiresAt:
         data.expires_at ?? new Date(Date.now() + 60 * 60_000).toISOString(),
+      correlationId: input.orderId,
     };
   }
 
@@ -280,6 +364,7 @@ export class KhaltiGateway implements PaymentGateway {
       "/epayment/lookup/",
       { pidx: reference },
       "lookup",
+      context.correlationId ?? context.orderId,
     );
     let data: {
       status?: string;
@@ -307,7 +392,10 @@ export class KhaltiGateway implements PaymentGateway {
       };
       return {
         reference,
-        status: statuses[data.status.toLowerCase()] ?? PaymentStatus.FAILED,
+        // Khalti requires any status outside its documented terminal set to
+        // remain on hold. Treating an unfamiliar future status as FAILED can
+        // incorrectly close a payment that may still complete.
+        status: statuses[data.status.toLowerCase()] ?? PaymentStatus.PENDING,
         // A completed lookup without an amount is not verifiable. Never
         // substitute our expected amount: that turns a missing provider field
         // into a false successful amount check.

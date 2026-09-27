@@ -134,9 +134,13 @@ Requests presigned Amazon S3 upload signatures for traveler documents.
 
 - **Scope:** `documents:write`
 - **Headers:** `Idempotency-Key: <unique-key>`
-- **Request Body:**
+- **Request Body:** `mode` is required and must be `EXTRACT_FIRST`. Traveler
+  details are not collected here; they are confirmed after passport extraction
+  via `POST /document-verifications/{verificationId}/traveler`.
+
   ```json
   {
+    "mode": "EXTRACT_FIRST",
     "externalOrderId": "flow-agency-order-3001",
     "documents": [
       {

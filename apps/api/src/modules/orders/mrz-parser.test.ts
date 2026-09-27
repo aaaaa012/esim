@@ -120,6 +120,49 @@ describe("parseMrz", () => {
   it("returns null for non-passport or garbled input", () => {
     expect(parseMrz("not an MRZ at all, just some words")).toBeNull();
   });
+
+  it("recovers names when OCR drops trailing fillers from passport line 1", () => {
+    const shortenedLine1 = LINE1.replace(/<+$/g, "");
+    const mrz = parseMrz(`${shortenedLine1}\n${LINE2}`);
+    expect(mrz?.surname).toBe("ERIKSSON");
+    expect(mrz?.givenNames).toBe("ANNA MARIA");
+  });
+
+  it("recovers names when a noise line sits between line 1 and line 2", () => {
+    // OCR emitted a stray fragment between the name line and the numeric line.
+    const mrz = parseMrz(`P<UTOERIKSSON<<ANNA<MARIA\nQ7\n${LINE2}`);
+    expect(mrz?.surname).toBe("ERIKSSON");
+    expect(mrz?.givenNames).toBe("ANNA MARIA");
+  });
+
+  it("recovers an embedded name line merged with the text above it", () => {
+    // Full-page OCR glued the human-readable zone onto line 1; the name zone
+    // is still present and the 'P<' anchor locates it.
+    const merged = `OMAN SULTANATE P<UTOERIKSSON<<ANNA<MARIA${"<".repeat(30)}`;
+    const mrz = parseMrz(`${merged}\n${LINE2}`);
+    expect(mrz?.surname).toBe("ERIKSSON");
+    expect(mrz?.givenNames).toBe("ANNA MARIA");
+  });
+
+  it("recovers names when Tesseract splits line 1 across two text lines", () => {
+    const mrz = parseMrz(`P<UTOERIKSSON\n<<ANNA<MARIA${"<".repeat(26)}\n${LINE2}`);
+    expect(mrz?.surname).toBe("ERIKSSON");
+    expect(mrz?.givenNames).toBe("ANNA MARIA");
+  });
+
+  it("recovers a line 2 with surrounding OCR border noise only through checksums", () => {
+    const mrz = parseMrz(`${LINE1}\nXX${LINE2}ZZ`);
+    expect(mrz?.passportNumber.value).toBe("L898902C3");
+    expect(mrz?.valid).toBe(true);
+  });
+
+  it("does not accept an arbitrary long alphanumeric line as an MRZ window", () => {
+    expect(
+      parseMrz(
+        `${LINE1}\nTHISISNOTAPASSPORTMACHINEZONE123456789012345678901234567890`,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("confusableNormalize", () => {

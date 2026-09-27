@@ -6,8 +6,21 @@ import {
   NestInterceptor,
 } from "@nestjs/common";
 import { ApiIdempotencyStatus, Prisma } from "@prisma/client";
-import { createHash } from "node:crypto";
-import { catchError, from, map, of, switchMap, throwError, type Observable } from "rxjs";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "node:crypto";
+import {
+  catchError,
+  from,
+  map,
+  of,
+  switchMap,
+  throwError,
+  type Observable,
+} from "rxjs";
 import { PrismaService } from "../infrastructure/prisma.service.js";
 
 const conflict = (message: string) =>
@@ -38,15 +51,31 @@ export class IdempotencyInterceptor implements NestInterceptor {
     if (
       !["POST", "PATCH", "PUT", "DELETE"].includes(request.method) ||
       request.path.includes("/webhooks/") ||
+      request.path.includes("/recharges") ||
+      // Append-only client diagnostics: fire-and-forget events are keyed by
+      // per-event bodies, so replay semantics (and the same-key/different-body
+      // 409) do not apply. Skipping also avoids leaking stale session keys
+      // built up while the checkout navigates away to a banking app.
+      request.path.includes("/payment/telemetry") ||
+      Boolean(
+        request.body &&
+        typeof request.body === "object" &&
+        "lookupToken" in request.body,
+      ) ||
       !this.prisma.enabled
     )
       return next.handle();
 
-    const key = request.headers["x-idempotency-key"];
+    const key =
+      request.headers["idempotency-key"] ??
+      request.headers["x-idempotency-key"];
     if (!key) {
       if (request.partner)
         throw new HttpException(
-          { code: "IDEMPOTENCY_KEY_REQUIRED", message: "Idempotency-Key is required for partner mutations" },
+          {
+            code: "IDEMPOTENCY_KEY_REQUIRED",
+            message: "Idempotency-Key is required for partner mutations",
+          },
           400,
         );
       return next.handle();
@@ -63,12 +92,17 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const requestHash = createHash("sha256")
       .update(canonicalJson(request.body ?? null))
       .digest("hex");
-    const response = http.getResponse<{ statusCode?: number; status(code: number): unknown }>();
+    const response = http.getResponse<{
+      statusCode?: number;
+      status(code: number): unknown;
+      setHeader(name: string, value: string): unknown;
+    }>();
 
     return from(this.claim(principalId, method, route, key, requestHash)).pipe(
       switchMap((claim) => {
         if (!claim.owned) {
           if (claim.responseStatus) response.status(claim.responseStatus);
+          response.setHeader("Idempotency-Replayed", "true");
           return of(claim.response);
         }
         return next.handle().pipe(
@@ -79,7 +113,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
                 data: {
                   status: ApiIdempotencyStatus.COMPLETED,
                   responseStatus: response.statusCode ?? 200,
-                  response: toJson(body),
+                  response: sealReplayResponse(body),
                   claimExpiresAt: new Date(),
                 },
               }),
@@ -88,8 +122,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
           catchError((error) =>
             from(
               this.prisma.apiIdempotencyRecord.updateMany({
-                where: { id: claim.id, status: ApiIdempotencyStatus.PROCESSING },
-                data: { status: ApiIdempotencyStatus.FAILED, claimExpiresAt: new Date() },
+                where: {
+                  id: claim.id,
+                  status: ApiIdempotencyStatus.PROCESSING,
+                },
+                data: {
+                  status: ApiIdempotencyStatus.FAILED,
+                  claimExpiresAt: new Date(),
+                },
               }),
             ).pipe(switchMap(() => throwError(() => error))),
           ),
@@ -127,16 +167,24 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const deadline = Date.now() + CLAIM_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const record = await this.prisma.apiIdempotencyRecord.findUnique({
-        where: { principalId_method_route_key: { principalId, method, route, key } },
+        where: {
+          principalId_method_route_key: { principalId, method, route, key },
+        },
       });
       if (!record) {
         await wait();
         continue;
       }
       if (record.requestHash !== requestHash)
-        throw conflict("Idempotency key was already used with a different request");
+        throw conflict(
+          "Idempotency key was already used with a different request",
+        );
       if (record.status === ApiIdempotencyStatus.COMPLETED)
-        return { owned: false, response: record.response, responseStatus: record.responseStatus };
+        return {
+          owned: false,
+          response: openReplayResponse(record.response),
+          responseStatus: record.responseStatus,
+        };
       if (
         record.status === ApiIdempotencyStatus.FAILED ||
         record.claimExpiresAt.getTime() <= Date.now()
@@ -147,7 +195,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
             requestHash,
             OR: [
               { status: ApiIdempotencyStatus.FAILED },
-              { status: ApiIdempotencyStatus.PROCESSING, claimExpiresAt: { lte: new Date() } },
+              {
+                status: ApiIdempotencyStatus.PROCESSING,
+                claimExpiresAt: { lte: new Date() },
+              },
             ],
           },
           data: {
@@ -162,7 +213,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
       }
       await wait();
     }
-    throw conflict("Idempotent request is still being processed; retry shortly");
+    throw conflict(
+      "Idempotent request is still being processed; retry shortly",
+    );
   }
 }
 
@@ -187,4 +240,74 @@ function canonicalJson(value: unknown): string {
 
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
+const SEALED_RESPONSE = "visa-compass-aes-256-gcm-v1";
+
+function containsBearerMaterial(value: unknown, depth = 0): boolean {
+  if (depth > 8 || !value || typeof value !== "object") return false;
+  if (Array.isArray(value))
+    return value.some((item) => containsBearerMaterial(item, depth + 1));
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, item]) => {
+      const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+      return (
+        /(^token$|sessiontoken|recoverytoken|accesstoken|guesttoken|lookupToken)/i.test(
+          normalized,
+        ) || containsBearerMaterial(item, depth + 1)
+      );
+    },
+  );
+}
+
+function replayEncryptionKey() {
+  const secret = process.env.GUEST_ORDER_SECRET;
+  return secret
+    ? createHash("sha256").update(`idempotency-replay:${secret}`).digest()
+    : null;
+}
+
+export function sealReplayResponse(value: unknown): Prisma.InputJsonValue {
+  if (!containsBearerMaterial(value)) return toJson(value);
+  const key = replayEncryptionKey();
+  if (!key) return { _sealed: SEALED_RESPONSE, unavailable: true };
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(value ?? null), "utf8"),
+    cipher.final(),
+  ]);
+  return {
+    _sealed: SEALED_RESPONSE,
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+  };
+}
+
+export function openReplayResponse(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const sealed = value as Record<string, unknown>;
+  if (sealed._sealed !== SEALED_RESPONSE) return value;
+  const key = replayEncryptionKey();
+  if (!key || sealed.unavailable)
+    throw conflict(
+      "This protected response cannot be replayed; recover the guest order instead",
+    );
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      key,
+      Buffer.from(String(sealed.iv), "base64"),
+    );
+    decipher.setAuthTag(Buffer.from(String(sealed.tag), "base64"));
+    return JSON.parse(
+      Buffer.concat([
+        decipher.update(Buffer.from(String(sealed.ciphertext), "base64")),
+        decipher.final(),
+      ]).toString("utf8"),
+    );
+  } catch {
+    throw conflict("The protected replay response could not be authenticated");
+  }
 }

@@ -86,14 +86,12 @@ Webhook events are processed by `IntegrationProcessor`
 - `complete()` sets `processedAt` and `errorMessage` on the `WebhookEvent`
   row.
 
-## Transatel outbound webhook registration
+## Transatel datastream configuration
 
-`TransatelProvider.ensureWebhook` (`transatel.provider.ts:477-506`) registers
-or updates a webhook on the Transatel side when
-`TRANSATEL_WEBHOOK_TARGET_URL` is configured (also triggered on startup by
-`connectivity.service.ts:11-16`). Default events:
-`OCS/PRODUCT/PRELOADED,OCS/PRODUCT/ACTIVATED,OCS/PRODUCT/EXPIRED,
-OCS/PRODUCT/TERMINATED` (`transatel.provider.ts:483-484`).
+Transatel no longer accepts webhook subscriptions through its API. Configure
+the callback URL, shared secret and required lifecycle events as a datastream
+in the Transatel Developer Console. The application receives, authenticates,
+deduplicates and processes those callbacks.
 
 ## Idempotency note
 

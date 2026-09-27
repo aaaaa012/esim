@@ -22,6 +22,7 @@ export const ApiErrorCode = {
   ACCOUNT_DISABLED: "ACCOUNT_DISABLED",
   ACCOUNT_TYPE_FORBIDDEN: "ACCOUNT_TYPE_FORBIDDEN",
   MFA_REQUIRED: "MFA_REQUIRED",
+  PASSWORD_CHANGE_REQUIRED: "PASSWORD_CHANGE_REQUIRED",
   INTEGRATION_TYPE_FORBIDDEN: "INTEGRATION_TYPE_FORBIDDEN",
 
   // Catalog & plans
@@ -37,8 +38,12 @@ export const ApiErrorCode = {
   ORDER_INVALID_STATE: "ORDER_INVALID_STATE",
   ORDER_NOT_FOUND: "ORDER_NOT_FOUND",
   ORDER_IMMUTABLE: "ORDER_IMMUTABLE",
+  ORDER_CONFLICT: "ORDER_CONFLICT",
+  TRAVELER_REVIEW_LOCKED: "TRAVELER_REVIEW_LOCKED",
   COMPATIBILITY_REQUIRED: "COMPATIBILITY_REQUIRED",
   TRAVELER_REQUIRED: "TRAVELER_REQUIRED",
+  NEPAL_CONTACT_REQUIRED: "NEPAL_CONTACT_REQUIRED",
+  ESIM_CONTACT_ALREADY_LINKED: "ESIM_CONTACT_ALREADY_LINKED",
   DOCUMENTS_REQUIRED: "DOCUMENTS_REQUIRED",
   DOCUMENT_NOT_FOUND: "DOCUMENT_NOT_FOUND",
   DOCUMENT_STORAGE_UNAVAILABLE: "DOCUMENT_STORAGE_UNAVAILABLE",
@@ -50,6 +55,7 @@ export const ApiErrorCode = {
   PAYMENT_NOT_CONFIRMED: "PAYMENT_NOT_CONFIRMED",
   PAYMENT_REFERENCE_MISMATCH: "PAYMENT_REFERENCE_MISMATCH",
   PAYMENT_EXPIRED: "PAYMENT_EXPIRED",
+  PAYMENT_RETRY_NOT_SAFE: "PAYMENT_RETRY_NOT_SAFE",
 
   // Connectivity (Transatel)
   CONNECTIVITY_CONFIGURATION: "CONNECTIVITY_CONFIGURATION",
@@ -63,6 +69,7 @@ export const ApiErrorCode = {
   ESIM_NOT_FOUND: "ESIM_NOT_FOUND",
   ESIM_LOOKUP_UNAVAILABLE: "ESIM_LOOKUP_UNAVAILABLE",
   USAGE_UNAVAILABLE: "USAGE_UNAVAILABLE",
+  ESIM_LIFECYCLE_NOT_ALLOWED: "ESIM_LIFECYCLE_NOT_ALLOWED",
 } as const;
 
 export type ApiErrorCode = (typeof ApiErrorCode)[keyof typeof ApiErrorCode];
@@ -87,6 +94,8 @@ export const apiErrorMessage = (
       return "This partner is not approved for hosted checkout links.";
     case ApiErrorCode.MFA_REQUIRED:
       return "Additional verification is required to continue.";
+    case ApiErrorCode.PASSWORD_CHANGE_REQUIRED:
+      return "Set a new password before continuing.";
     case ApiErrorCode.PLAN_NOT_AVAILABLE:
       return "This plan is no longer available. Please choose another plan.";
     case ApiErrorCode.PLAN_UNAVAILABLE:
@@ -97,10 +106,19 @@ export const apiErrorMessage = (
       return "We could not find this order. It may have expired.";
     case ApiErrorCode.ORDER_INVALID_STATE:
       return "This order cannot be changed in its current state.";
+    case ApiErrorCode.ORDER_CONFLICT:
+    case "HTTP_409":
+      return "This order changed while you were editing. Reload it and check the latest details before continuing.";
+    case ApiErrorCode.TRAVELER_REVIEW_LOCKED:
+      return "Your traveller details are locked during review. Contact support with your order number if something needs correcting.";
     case ApiErrorCode.COMPATIBILITY_REQUIRED:
       return "Please confirm your device is eSIM-compatible to continue.";
     case ApiErrorCode.TRAVELER_REQUIRED:
       return "Traveller details are required before payment.";
+    case ApiErrorCode.NEPAL_CONTACT_REQUIRED:
+      return "Enter exactly 10 digits for the Nepali mobile number.";
+    case ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED:
+      return "This contact number or account already has an active eSIM. Recharge it instead of buying another.";
     case ApiErrorCode.DOCUMENTS_REQUIRED:
       return "Passport and travel ticket are required before payment.";
     case ApiErrorCode.DOCUMENT_REQUIRED:
@@ -121,6 +139,8 @@ export const apiErrorMessage = (
       return "The payment reference does not match this order.";
     case ApiErrorCode.PAYMENT_EXPIRED:
       return "This payment attempt has expired. Please start a new one.";
+    case ApiErrorCode.PAYMENT_RETRY_NOT_SAFE:
+      return "A payment is still being confirmed for this order. Starting a new one now is not safe.";
     case ApiErrorCode.CONNECTIVITY_UNAVAILABLE:
       return "Our connectivity provider is temporarily unavailable. Please try again shortly.";
     case ApiErrorCode.ELIGIBILITY_REJECTED:
@@ -141,10 +161,22 @@ export const apiErrorMessage = (
       return "No active eSIM was found for that number. It will be processed as a new purchase.";
     case ApiErrorCode.USAGE_UNAVAILABLE:
       return "Usage details are not available yet. Please check back shortly.";
+    case ApiErrorCode.ESIM_LIFECYCLE_NOT_ALLOWED:
+      return "This action is not available for the eSIM's current network status.";
     default:
       return fallback;
   }
 };
+
+/**
+ * Converts an API error envelope into copy that is safe to render publicly.
+ * The server's free-form message is deliberately ignored: provider messages,
+ * correlation IDs and implementation details belong in logs, not in the UI.
+ */
+export const publicApiErrorMessage = (
+  error: { code?: string } | null | undefined,
+  fallback = "Something went wrong. Please try again.",
+): string => apiErrorMessage(error?.code ?? "", fallback);
 
 /**
  * Customer-facing reasons an eSIM activation can fail on. Each code maps to a

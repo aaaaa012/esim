@@ -12,9 +12,9 @@ export default function AccessErrorPage() {
           Operations access could not be verified
         </h1>
         <p className="mt-3 text-sm text-muted-foreground">
-          Your account is not permitted to use this portal, or the identity
-          service is temporarily unavailable. No operations data has been
-          loaded.
+          This portal is for invited staff accounts. If you are signed in with
+          a customer account, sign out and use your staff account instead. No
+          operations data has been loaded.
         </p>
         <div className="mt-6 flex gap-3">
           <Button onClick={() => window.location.assign("/")}>Retry</Button>

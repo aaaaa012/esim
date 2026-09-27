@@ -44,6 +44,20 @@ enum PlanStatus {
   ARCHIVED
 }
 
+enum CatalogImportStatus {
+  APPLIED
+  FAILED
+}
+
+enum CatalogImportRowChange {
+  NEW
+  UPDATED
+  UNCHANGED
+  MISSING
+  RETURNED
+  INVALID
+}
+
 enum OrderType {
   INITIAL_PURCHASE
   TOPUP
@@ -404,12 +418,53 @@ model Plan {
   coverage       Json
   popular        Boolean                @default(false)
   status         PlanStatus             @default(DRAFT)
+  lastCatalogSeenAt DateTime?
+  providerMissingSince DateTime?
   orders         Order[]
   partnerPrices  PartnerPriceListItem[]
   partnerQuotes  PartnerQuote[]
+  homepageFeatures HomepageFeaturedPlan[]
   updatedAt      DateTime               @updatedAt
 
   @@unique([countryId, providerPlanId])
+}
+
+model CatalogImportBatch {
+  id             String              @id @default(uuid()) @db.Uuid
+  batchReference String              @unique
+  fileName       String?
+  contentHash    String
+  mode           String
+  status         CatalogImportStatus @default(APPLIED)
+  uploadedById   String?             @db.Uuid
+  totalRows      Int
+  newCount       Int                 @default(0)
+  updatedCount   Int                 @default(0)
+  unchangedCount Int                 @default(0)
+  missingCount   Int                 @default(0)
+  returnedCount  Int                 @default(0)
+  invalidCount   Int                 @default(0)
+  rows           CatalogImportRow[]
+  createdAt      DateTime            @default(now())
+
+  @@index([createdAt])
+}
+
+model CatalogImportRow {
+  id             String                 @id @default(uuid()) @db.Uuid
+  batchId        String                 @db.Uuid
+  batch          CatalogImportBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  planId         String?                @db.Uuid
+  countryIso2    String
+  providerPlanId String
+  change         CatalogImportRowChange
+  previousValue  Json?
+  proposedValue  Json?
+  error          String?
+  createdAt      DateTime               @default(now())
+
+  @@index([batchId, change])
+  @@index([countryIso2, providerPlanId])
 }
 
 model Order {
@@ -584,7 +639,7 @@ model EsimInventory {
   batch                   InventoryBatch                @relation(fields: [batchId], references: [id])
   iccid                   String                        @unique
   eid                     String                        @unique
-  msisdn                  String?                       @unique
+  msisdn                  String                        @unique
   status                  InventoryStatus               @default(IMPORTED)
   assignedOrderId         String?                       @unique @db.Uuid
   assignedOrder           Order?                        @relation(fields: [assignedOrderId], references: [id])
@@ -910,6 +965,7 @@ model PartnerEvent {
   resourceId    String
   correlationId String
   payload       Json
+  dedupeKey     String?                  @unique
   occurredAt    DateTime                 @default(now())
   deliveries    PartnerWebhookDelivery[]
 
@@ -1247,6 +1303,67 @@ model PartnerShowcase {
   updatedAt DateTime @updatedAt
 
   @@index([active, sortOrder])
+}
+
+enum HomepageCampaignPlacement {
+  FEATURED_BANNER
+  OFFER_GALLERY
+  HOW_GUIDE
+  WHY_ESIM_BANNER
+}
+
+enum HomepageCampaignFormat {
+  PORTRAIT
+  SQUARE
+  LANDSCAPE
+}
+
+model HomepageCampaign {
+  id          String                    @id @default(uuid()) @db.Uuid
+  title       String
+  altText     String
+  imageUrl    String
+  assetKey    String?
+  placement   HomepageCampaignPlacement
+  format      HomepageCampaignFormat
+  imageWidth  Int
+  imageHeight Int
+  countryCode String?
+  ctaLabel    String
+  eyebrow     String?
+  summary     String?
+  priceLabel  String?
+  termsLabel  String?
+  ctaHrefOverride String?
+  mobileImageUrl String?
+  mobileAssetKey String?
+  mobileImageWidth Int?
+  mobileImageHeight Int?
+  mobileFormat HomepageCampaignFormat?
+  sortOrder   Int                       @default(0)
+  active      Boolean                   @default(true)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  @@index([active, placement, sortOrder])
+  @@index([placement, startsAt, endsAt])
+}
+
+model HomepageFeaturedPlan {
+  id        String   @id @default(uuid()) @db.Uuid
+  planId    String   @db.Uuid
+  plan      Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, sortOrder])
+  @@index([planId, startsAt, endsAt])
 }
 
 model AuditLog {

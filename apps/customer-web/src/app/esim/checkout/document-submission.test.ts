@@ -58,7 +58,11 @@ describe("submitCheckoutDocumentsSequentially", () => {
 
     await expect(
       submitCheckoutDocumentsSequentially(
-        { passport: undefined, ticket: oversized, visa: undefined },
+        {
+          passport: new File(["passport"], "passport.pdf"),
+          ticket: oversized,
+          visa: undefined,
+        },
         async (document) => {
           submitted.push(document.key);
         },

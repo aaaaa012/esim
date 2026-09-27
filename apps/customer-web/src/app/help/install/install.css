@@ -1,0 +1,177 @@
+.install-guide-page {
+  min-height: calc(100dvh - 72px);
+  padding: 56px 0 100px;
+  background: var(--bg);
+}
+.install-guide-shell {
+  display: grid;
+  gap: 24px;
+}
+.install-back {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+.install-back svg {
+  width: 17px;
+}
+.install-guide-hero h1 {
+  max-width: 720px;
+  margin: 18px 0 12px;
+  font-size: clamp(40px, 6vw, 68px);
+  line-height: 0.98;
+  letter-spacing: -0.055em;
+}
+.install-guide-hero p {
+  max-width: 650px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 17px;
+  line-height: 1.6;
+}
+.install-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.install-steps article {
+  display: flex;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+.install-steps article > span {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.install-steps h2 {
+  margin: 3px 0 5px;
+  font-size: 18px;
+}
+.install-steps p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.install-steps small {
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.install-support {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  background: var(--navy-panel);
+  color: white;
+}
+.install-support p {
+  max-width: 620px;
+  margin: 5px 0 0;
+  color: var(--navy-panel-sub);
+  font-size: 13px;
+}
+.install-support > div:last-child {
+  display: flex;
+  gap: 10px;
+}
+
+@media (max-width: 880px) {
+  .install-guide-page {
+    position: relative;
+    isolation: isolate;
+    padding: 28px 0 132px;
+    overflow: hidden;
+    background: linear-gradient(180deg, #f8fdff, #f4fbfb 76%, var(--bg));
+  }
+  .install-guide-page::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--bg) 98%, transparent),
+      color-mix(in srgb, var(--bg) 86%, transparent) 48%,
+      transparent 84%
+    );
+    pointer-events: none;
+  }
+  .install-guide-shell {
+    position: relative;
+    z-index: 2;
+    gap: 18px;
+  }
+  .install-guide-hero h1 {
+    max-width: 480px;
+    font-size: clamp(38px, 8vw, 54px);
+    background: linear-gradient(105deg, var(--text), var(--primary));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .install-steps {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .install-support {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 540px) {
+  .install-guide-shell {
+    padding-inline: 16px;
+  }
+  .install-guide-hero h1 {
+    margin-top: 12px;
+    font-size: 40px;
+  }
+  .install-guide-hero p {
+    font-size: 15px;
+  }
+  .install-steps article {
+    gap: 12px;
+    padding: 15px;
+    border-radius: 16px;
+  }
+  .install-steps article > span {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+  }
+  .install-steps h2 {
+    font-size: 16px;
+  }
+  .install-support {
+    padding: 18px;
+    border-radius: 18px;
+  }
+  .install-support > div:last-child {
+    flex-direction: column;
+  }
+  .install-support .button {
+    width: 100%;
+  }
+}

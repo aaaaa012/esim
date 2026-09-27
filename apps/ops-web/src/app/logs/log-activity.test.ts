@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityLabel } from "./log-activity";
+import { activityLabel, providerLabel } from "./log-activity";
 
 describe("activityLabel", () => {
   it("labels Khalti provider calls", () => {
@@ -39,7 +39,76 @@ describe("activityLabel", () => {
         identifier: "unknown-operation",
         title: "POST /external/check",
       }),
-    ).toBe("Transatel Service Request");
+    ).toBe("External Provider Service Request");
+  });
+
+  it.each([
+    [
+      "fonepay-authentication",
+      "POST /merchantDetailsForThirdParty/v2/login",
+      "Fonepay Authentication",
+    ],
+    [
+      "fonepay-list",
+      "GET /api/merchant/third-party/v2/banks/list",
+      "Fonepay Bank List",
+    ],
+    [
+      "fonepay-generate-intent-qr",
+      "POST /api/merchant/third-party/v2/generate-intent-qr",
+      "Fonepay Payment Initiation",
+    ],
+    [
+      "fonepay-thirdPartyDynamicQrGetStatus",
+      "POST /api/merchant/third-party/v2/thirdPartyDynamicQrGetStatus",
+      "Fonepay Payment Status Lookup",
+    ],
+  ])("labels %s as a Fonepay operation", (identifier, title, label) => {
+    const entry = { group: "provider" as const, identifier, title };
+    expect(providerLabel(entry)).toBe("Fonepay");
+    expect(activityLabel(entry)).toBe(label);
+  });
+
+  it.each([
+    ["fonepay-client-qr-rendered", "Fonepay QR Displayed"],
+    [
+      "fonepay-client-socket-connected",
+      "Fonepay WebSocket Connected",
+    ],
+    ["fonepay-client-socket-error", "Fonepay WebSocket Error"],
+    ["fonepay-client-socket-closed", "Fonepay WebSocket Closed"],
+    [
+      "fonepay-client-socket-reconnecting",
+      "Fonepay WebSocket Reconnecting",
+    ],
+    [
+      "fonepay-client-qr-verified-signal",
+      "Fonepay QR Scan Recognized",
+    ],
+    [
+      "fonepay-client-payment-result-signal",
+      "Fonepay Payment Result Signal Received",
+    ],
+    [
+      "fonepay-client-bank-launch-attempted",
+      "Fonepay Banking App Launch Attempted",
+    ],
+    [
+      "fonepay-client-bank-launch-blocked",
+      "Fonepay Banking App Launch Blocked",
+    ],
+    [
+      "fonepay-client-bank-app-navigation-observed",
+      "Fonepay Banking App Opened",
+    ],
+  ])("labels %s client telemetry", (identifier, label) => {
+    const entry = {
+      group: "provider" as const,
+      identifier,
+      title: "customer-checkout",
+    };
+    expect(providerLabel(entry)).toBe("Fonepay");
+    expect(activityLabel(entry)).toBe(label);
   });
 
   it.each([

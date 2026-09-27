@@ -6,7 +6,10 @@ coverage
 .env
 .env.*
 !.env.example
+!.env.e2e.example
 !.env.production.example
+artifacts/
+.audit-fonepay/
 Live-visa-compass-api.env
 graphify-out/
 *.log
@@ -23,6 +26,7 @@ apps/api/.postgres-transfer-checkpoint.json
 .opencode/
 apps/api/eng.traineddata
 apps/customer-web/.next-dev/
+apps/customer-web/.next-e2e-signed-in/
 apps/ops-web/.next-dev/
 
 # local diagnostic scripts
@@ -32,3 +36,6 @@ apps/api/prisma/reset-for-fresh.cjs
 
 # Local security assessment; do not publish vulnerability details.
 docs/security/VAPT-2026-08-25.md
+
+# Stale codex push-worktree clone; do not commit as an embedded repo.
+.codex-push-worktree/

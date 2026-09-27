@@ -13,9 +13,9 @@ import { QueueService } from "../jobs/queue.service.js";
 type Bucket = { tokens: number; lastRefill: number };
 
 /**
- * Aggressive rate limiter for the login-free top-up lookup endpoint.
+ * Aggressive rate limiter for login-free number lookups and traveller saves.
  *
- * The endpoint is an oracle for whether an MSISDN has an existing subscriber,
+ * These endpoints can reveal whether a number is already linked to an eSIM,
  * so it is throttled per (IP, normalized number) to slow number enumeration
  * while still tolerating legitimate retries. Keys are derived from a SHA-256
  * hash of the normalized number rather than the raw number to avoid holding
@@ -35,16 +35,20 @@ export class GuestLookupRateLimitGuard implements CanActivate {
   constructor(private readonly queues?: QueueService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context
-      .switchToHttp()
-      .getRequest<{
-        ip?: string;
-        socket?: { remoteAddress?: string };
-        body?: { mobile?: unknown };
-      }>();
+    const request = context.switchToHttp().getRequest<{
+      ip?: string;
+      socket?: { remoteAddress?: string };
+      body?: { mobile?: unknown; orderNumber?: unknown; email?: unknown };
+    }>();
     const ip = clientIp(request);
     const mobile =
-      typeof request.body?.mobile === "string" ? request.body.mobile : "";
+      typeof request.body?.mobile === "string"
+        ? request.body.mobile
+        : [request.body?.orderNumber, request.body?.email]
+            .filter((value) => typeof value === "string")
+            .join(":")
+            .trim()
+            .toLowerCase();
     const mobileHash = createHash("sha256")
       .update(normalizeMsisdn(mobile) || mobile)
       .digest("hex")
@@ -76,7 +80,10 @@ export class GuestLookupRateLimitGuard implements CanActivate {
         if (!allowed) {
           response.setHeader(
             "retry-after",
-            Math.max(ipBucket.retryAfterSeconds, numberBucket.retryAfterSeconds),
+            Math.max(
+              ipBucket.retryAfterSeconds,
+              numberBucket.retryAfterSeconds,
+            ),
           );
           throw this.rejected();
         }
@@ -128,12 +135,12 @@ export class GuestLookupRateLimitGuard implements CanActivate {
 
   private rejected() {
     return new HttpException(
-        {
-          code: "RATE_LIMITED",
-          message:
-            "Too many lookup attempts. Please wait a moment and try again.",
-        },
-        HttpStatus.TOO_MANY_REQUESTS,
+      {
+        code: "RATE_LIMITED",
+        message:
+          "Too many lookup attempts. Please wait a moment and try again.",
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
     );
   }
 

@@ -1,5 +1,13 @@
 import { createHmac } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { UserRole } from "@visa-compass/shared";
 import { UserRoleName, UserStatus } from "@prisma/client";
 import type { RawBodyRequest } from "@nestjs/common";
@@ -13,6 +21,14 @@ import {
   sanitizeOperationsLog,
 } from "./webhooks.controller.js";
 
+beforeAll(() => {
+  process.env.LOG_REDACTION = "true";
+});
+
+afterAll(() => {
+  delete process.env.LOG_REDACTION;
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.TRANSATEL_WEBHOOK_SECRET;
@@ -20,7 +36,7 @@ afterEach(() => {
 });
 
 describe("sanitizeOperationsLog", () => {
-  it("redacts credentials, personal data, and QR installation material", () => {
+  it("keeps operational identifiers while redacting credentials and personal data", () => {
     expect(
       sanitizeOperationsLog({
         authorization: "Bearer credential",
@@ -30,7 +46,7 @@ describe("sanitizeOperationsLog", () => {
       }),
     ).toEqual({
       authorization: "[REDACTED]",
-      msisdn: "[REDACTED]",
+      msisdn: "9779800000000",
       qrCode: "[REDACTED]",
       safe: "kept",
     });
@@ -73,8 +89,30 @@ describe("OperationsLogsController", () => {
             createdAt,
             payload: { msisdn: "9779800000000" },
           },
+          {
+            id: "webhook-retry-1",
+            source: "transatel",
+            eventId: "event-retry-1",
+            processedAt: null,
+            deadLetteredAt: null,
+            signatureValid: true,
+            errorMessage: "Queue dispatch pending: Redis unavailable",
+            createdAt,
+            payload: { event: "retry" },
+          },
+          {
+            id: "webhook-processing-failed-1",
+            source: "transatel",
+            eventId: "event-processing-failed-1",
+            processedAt: null,
+            deadLetteredAt: null,
+            signatureValid: true,
+            errorMessage: "Order correlation failed",
+            createdAt,
+            payload: { event: "processing-failed" },
+          },
         ]),
-        count: vi.fn().mockResolvedValue(1),
+        count: vi.fn().mockResolvedValue(3),
       },
       auditLog: {
         findMany: vi.fn().mockResolvedValue([
@@ -153,21 +191,39 @@ describe("OperationsLogsController", () => {
       },
     };
 
-    const result = await new OperationsLogsController(prisma).list(request);
+    const result = await new OperationsLogsController(prisma).list(
+      request,
+      "all",
+      "",
+      "1",
+      "25",
+      "2026-08-22T18:15:00.000Z",
+      "2026-08-23T18:15:00.000Z",
+    );
 
-    expect(result.total).toBe(6);
-    expect(result.items).toHaveLength(6);
+    expect(result.total).toBe(8);
+    expect(result.items).toHaveLength(8);
     expect(result.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "integration-1",
-          title: "GET /usage",
-          requestBody: { msisdn: "[REDACTED]" },
+          title: "Transatel product inventory and balances",
+          requestBody: { msisdn: "9779800000000" },
           responseBody: { accessToken: "[REDACTED]", safe: true },
         }),
         expect.objectContaining({
           id: "webhook-1",
+          title: "Transatel callback received",
           statusLabel: "FAILED",
+        }),
+        expect.objectContaining({
+          id: "webhook-retry-1",
+          statusLabel: "RETRY_PENDING",
+        }),
+        expect.objectContaining({
+          id: "webhook-processing-failed-1",
+          status: 500,
+          statusLabel: "PROCESSING_FAILED",
         }),
         expect.objectContaining({ id: "attempt-attempt-1" }),
         expect.objectContaining({ id: "operation-operation-1" }),
@@ -178,6 +234,25 @@ describe("OperationsLogsController", () => {
           ),
         }),
       ]),
+    );
+    const expectedCreatedAtRange = {
+      createdAt: {
+        gte: new Date("2026-08-22T18:15:00.000Z"),
+        lt: new Date("2026-08-23T18:15:00.000Z"),
+      },
+    };
+    expect(prisma.integrationLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expectedCreatedAtRange }),
+    );
+    expect(prisma.webhookEvent.count).toHaveBeenCalledWith({
+      where: expect.objectContaining(expectedCreatedAtRange),
+    });
+    expect(prisma.provisioningOperation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          updatedAt: expectedCreatedAtRange.createdAt,
+        },
+      }),
     );
   });
 });
@@ -203,6 +278,7 @@ describe("WebhooksController payment inbox", () => {
       "payment-callback",
       expect.objectContaining({ provider: "khalti", eventId: body.eventId }),
       `khalti-${body.eventId}`,
+      expect.objectContaining({ attempts: 8 }),
     );
   });
 
@@ -223,6 +299,7 @@ describe("WebhooksController payment inbox", () => {
       "payment-callback",
       expect.objectContaining({ provider: "khalti" }),
       `khalti-${body.eventId}`,
+      expect.objectContaining({ attempts: 8 }),
     );
     await expect(
       value.payment("unknown", body, { rawBody }, signature),
@@ -236,6 +313,7 @@ function controller(processedAt: Date | null = null) {
     webhookEvent: {
       findUnique: vi.fn().mockResolvedValue({ processedAt }),
       upsert: vi.fn().mockResolvedValue({}),
+      update: vi.fn().mockResolvedValue({}),
     },
   } as unknown as PrismaService;
   const queues = {
@@ -268,6 +346,7 @@ describe("WebhooksController connectivity inbox", () => {
       "connectivity-callback",
       { provider: "transatel", eventId: "event-12345" },
       "transatel:event-12345",
+      expect.objectContaining({ attempts: 8 }),
     );
   });
 
@@ -293,5 +372,31 @@ describe("WebhooksController connectivity inbox", () => {
     );
     expect(result).toEqual({ accepted: true, duplicate: true });
     expect(queues.add).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges a durably persisted event when queue dispatch is temporarily unavailable", async () => {
+    const { value, prisma, queues } = controller(null);
+    vi.mocked(queues.add).mockRejectedValueOnce(new Error("Redis unavailable"));
+
+    const result = await value.connectivity(
+      "transatel",
+      { eventId: "event-12345" },
+      {},
+      {} as RawBodyRequest<Request>,
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      persisted: true,
+      queued: false,
+    });
+    expect(prisma.webhookEvent.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          errorMessage: expect.stringContaining("Redis unavailable"),
+          nextAttemptAt: expect.any(Date),
+        }),
+      }),
+    );
   });
 });

@@ -44,6 +44,20 @@ enum PlanStatus {
   ARCHIVED
 }
 
+enum CatalogImportStatus {
+  APPLIED
+  FAILED
+}
+
+enum CatalogImportRowChange {
+  NEW
+  UPDATED
+  UNCHANGED
+  MISSING
+  RETURNED
+  INVALID
+}
+
 enum OrderType {
   INITIAL_PURCHASE
   TOPUP
@@ -93,7 +107,16 @@ enum PaymentStatus {
 
 enum PaymentInitiationStatus {
   PROCESSING
+  RECONCILIATION_REQUIRED
+  REMOTE_CREATED
+  ATTACHED
   COMPLETED
+  FAILED
+}
+
+enum PartnerApiAuditStatus {
+  STARTED
+  SUCCEEDED
   FAILED
 }
 
@@ -180,6 +203,7 @@ enum DocumentReviewStatus {
   OCR_PENDING
   OCR_BACKGROUND
   VERIFIED
+  CORRECTION_REQUIRED
   MANUAL_REVIEW
   REUPLOAD_REQUIRED
   MANUALLY_APPROVED
@@ -210,16 +234,20 @@ enum ProvisioningOperationState {
 
 enum TransatelLifecycleAction {
   SUSPEND
+  REACTIVATE
   TERMINATE
 }
 
 enum TransatelLifecycleState {
+  APPROVAL_REQUIRED
   CREATED
   SUBMITTING
   ACCEPTED
   CONFIRMED
   RECONCILE_REQUIRED
   FAILED
+  REJECTED
+  EXPIRED
 }
 
 enum ManualRefundStatus {
@@ -327,38 +355,45 @@ enum ApiIdempotencyStatus {
 }
 
 model User {
-  id                           String                        @id @default(uuid()) @db.Uuid
-  clerkId                      String                        @unique
-  email                        String                        @unique
-  status                       UserStatus                    @default(ACTIVE)
-  accountType                  UserRoleName                  @default(CUSTOMER)
-  mustChangePassword           Boolean                       @default(false)
-  roles                        UserRole[]
-  customer                     Customer?
-  reviews                      OrderReview[]
-  auditLogs                    AuditLog[]
-  transatelLifecycleOperations TransatelLifecycleOperation[]
-  manualRefundsRequested       ManualRefund[]                @relation("ManualRefundRequester")
-  manualRefundsReviewed        ManualRefund[]                @relation("ManualRefundReviewer")
-  staffInvitationsSent         StaffInvitation[]             @relation("StaffInvitationInviter")
-  createdAt                    DateTime                      @default(now())
-  updatedAt                    DateTime                      @updatedAt
+  id                                    String                        @id @default(uuid()) @db.Uuid
+  clerkId                               String                        @unique
+  email                                 String                        @unique
+  status                                UserStatus                    @default(ACTIVE)
+  accountType                           UserRoleName                  @default(CUSTOMER)
+  mustChangePassword                    Boolean                       @default(false)
+  passwordChangeRequiredAt              DateTime?
+  passwordChangeCompletedAt             DateTime?
+  passwordChangeClaimToken              String?                        @db.Uuid
+  passwordChangeClaimExpiresAt          DateTime?
+  roles                                 UserRole[]
+  rechargePurchases                     Order[]                       @relation("RechargePurchaser")
+  customer                              Customer?
+  reviews                               OrderReview[]
+  auditLogs                             AuditLog[]
+  transatelLifecycleOperationsRequested TransatelLifecycleOperation[] @relation("TransatelLifecycleRequester")
+  transatelLifecycleOperationsApproved  TransatelLifecycleOperation[] @relation("TransatelLifecycleApprover")
+  manualRefundsRequested                ManualRefund[]                @relation("ManualRefundRequester")
+  manualRefundsReviewed                 ManualRefund[]                @relation("ManualRefundReviewer")
+  staffInvitationsSent                  StaffInvitation[]             @relation("StaffInvitationInviter")
+  createdAt                             DateTime                      @default(now())
+  updatedAt                             DateTime                      @updatedAt
 }
 
 model StaffInvitation {
-  id                String                @id @default(uuid()) @db.Uuid
-  email             String
-  accountType       UserRoleName
-  status            StaffInvitationStatus @default(PENDING)
-  clerkInvitationId String?               @unique
-  invitedById       String                @db.Uuid
-  invitedBy         User                  @relation("StaffInvitationInviter", fields: [invitedById], references: [id])
-  acceptedById      String?               @db.Uuid
-  expiresAt         DateTime
-  acceptedAt        DateTime?
-  revokedAt         DateTime?
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
+  id                  String                @id @default(uuid()) @db.Uuid
+  email               String
+  accountType         UserRoleName
+  status              StaffInvitationStatus @default(PENDING)
+  clerkInvitationId   String?               @unique
+  activationTokenHash String?               @unique
+  invitedById         String                @db.Uuid
+  invitedBy           User                  @relation("StaffInvitationInviter", fields: [invitedById], references: [id])
+  acceptedById        String?               @db.Uuid
+  expiresAt           DateTime
+  acceptedAt          DateTime?
+  revokedAt           DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
 
   @@index([email, status])
 }
@@ -406,30 +441,77 @@ model Country {
 }
 
 model Plan {
-  id             String                 @id @default(uuid()) @db.Uuid
-  countryId      String                 @db.Uuid
-  country        Country                @relation(fields: [countryId], references: [id])
-  providerPlanId String
-  name           String
-  dataAllowance  String
-  validityDays   Int
-  costPrice      Decimal                @db.Decimal(12, 2)
-  sellingPrice   Decimal                @db.Decimal(12, 2)
-  currency       String                 @default("NPR")
-  coverage       Json
-  popular        Boolean                @default(false)
-  status         PlanStatus             @default(DRAFT)
-  orders         Order[]
-  partnerPrices  PartnerPriceListItem[]
-  partnerQuotes  PartnerQuote[]
-  updatedAt      DateTime               @updatedAt
+  id                   String                 @id @default(uuid()) @db.Uuid
+  countryId            String                 @db.Uuid
+  country              Country                @relation(fields: [countryId], references: [id])
+  providerPlanId       String
+  name                 String
+  dataAllowance        String
+  validityDays         Int
+  costPrice            Decimal                @db.Decimal(12, 2)
+  sellingPrice         Decimal                @db.Decimal(12, 2)
+  currency             String                 @default("NPR")
+  coverage             Json
+  popular              Boolean                @default(false)
+  status               PlanStatus             @default(DRAFT)
+  lastCatalogSeenAt    DateTime?
+  providerMissingSince DateTime?
+  orders               Order[]
+  partnerPrices        PartnerPriceListItem[]
+  partnerQuotes        PartnerQuote[]
+  homepageFeatures     HomepageFeaturedPlan[]
+  updatedAt            DateTime               @updatedAt
 
   @@unique([countryId, providerPlanId])
+}
+
+model CatalogImportBatch {
+  id             String              @id @default(uuid()) @db.Uuid
+  batchReference String              @unique
+  fileName       String?
+  contentHash    String
+  mode           String
+  status         CatalogImportStatus @default(APPLIED)
+  uploadedById   String?             @db.Uuid
+  totalRows      Int
+  newCount       Int                 @default(0)
+  updatedCount   Int                 @default(0)
+  unchangedCount Int                 @default(0)
+  missingCount   Int                 @default(0)
+  returnedCount  Int                 @default(0)
+  invalidCount   Int                 @default(0)
+  rows           CatalogImportRow[]
+  createdAt      DateTime            @default(now())
+
+  @@index([createdAt])
+}
+
+model CatalogImportRow {
+  id             String                 @id @default(uuid()) @db.Uuid
+  batchId        String                 @db.Uuid
+  batch          CatalogImportBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  planId         String?                @db.Uuid
+  countryIso2    String
+  providerPlanId String
+  change         CatalogImportRowChange
+  previousValue  Json?
+  proposedValue  Json?
+  error          String?
+  createdAt      DateTime               @default(now())
+
+  @@index([batchId, change])
+  @@index([countryIso2, providerPlanId])
 }
 
 model Order {
   id                           String                         @id @default(uuid()) @db.Uuid
   orderNumber                  String                         @unique
+  purchasedByUserId            String?                        @db.Uuid
+  purchasedBy                  User?                          @relation("RechargePurchaser", fields: [purchasedByUserId], references: [id], onDelete: SetNull)
+  targetInventoryId            String?                        @db.Uuid
+  targetInventory              EsimInventory?                 @relation("RechargeTarget", fields: [targetInventoryId], references: [id], onDelete: Restrict)
+  checkoutAttemptKey           String?                        @unique
+  checkoutRequestHash          String?
   customerId                   String                         @db.Uuid
   customer                     Customer                       @relation(fields: [customerId], references: [id])
   partnerId                    String?                        @db.Uuid
@@ -447,6 +529,7 @@ model Order {
   orderType                    OrderType                      @default(INITIAL_PURCHASE)
   channel                      OrderChannel                   @default(CUSTOMER_WEB)
   status                       OrderStatus                    @default(DRAFT)
+  contactRuleVersion           Int                            @default(1)
   currency                     String                         @default("NPR")
   subtotal                     Decimal                        @db.Decimal(12, 2)
   discount                     Decimal                        @default(0) @db.Decimal(12, 2)
@@ -466,8 +549,11 @@ model Order {
   lastProvisioningRecoveryAt   DateTime?
   operationalDisposition       OperationalDisposition?
   traveler                     Traveler?
+  contactClaim                 EsimContactClaim?
+  passportExtraction           PassportExtraction?
   documents                    TravelerDocument[]
   payments                     Payment[]
+  paymentEvents                PaymentEvent[]
   paymentInitiation            PaymentInitiation?
   inventory                    EsimInventory?
   customerEsim                 CustomerEsim?
@@ -479,6 +565,7 @@ model Order {
   manualRefunds                ManualRefund[]
   paymentDisputes              PaymentDispute[]
   notifications                Notification[]
+  guestAccessTokens            GuestOrderAccessToken[]
   partnerLedgerEntries         PartnerLedgerEntry[]
   partnerHostedSessions        PartnerHostedCheckoutSession[]
   partnerRefundRequests        PartnerRefundRequest[]
@@ -490,9 +577,26 @@ model Order {
   version                      Int                            @default(0)
 
   @@unique([partnerId, externalOrderId])
+  @@index([purchasedByUserId, createdAt])
+  @@index([targetInventoryId])
   @@index([customerId, status])
   @@index([status, createdAt])
   @@index([partnerId])
+}
+
+model GuestOrderAccessToken {
+  id            String    @id @default(uuid()) @db.Uuid
+  orderId       String    @db.Uuid
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  tokenHash     String    @unique
+  purpose       String
+  recipientHash String?
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([orderId, purpose, revokedAt, expiresAt])
 }
 
 model PlatformConfiguration {
@@ -518,6 +622,7 @@ model Traveler {
   employerOrBusinessName  String?
   email                   String
   mobile                  String
+  contactNumberNormalized String?
   passportNumberEncrypted String
   passportNumberHash      String
   passportExpiryEncrypted String
@@ -526,6 +631,18 @@ model Traveler {
   subscriberLanguage      String  @default("en")
 
   @@index([passportNumberHash])
+  @@index([contactNumberNormalized])
+}
+
+// Acquired before payment or fulfillment for new first purchases. The unique
+// contact and customer keys make concurrent checkouts fail closed.
+model EsimContactClaim {
+  contactNumber String   @id
+  orderId       String   @unique @db.Uuid
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId    String?  @unique @db.Uuid
+  createdAt     DateTime @default(now())
+
 }
 
 model TravelerDocument {
@@ -535,6 +652,9 @@ model TravelerDocument {
   type                       DocumentType
   fileName                   String
   privateAssetId             String
+  activeAssetVersionId       String?        @unique @db.Uuid
+  activeAssetVersion         DocumentAssetVersion? @relation("ActiveDocumentAssetVersion", fields: [activeAssetVersionId], references: [id], onDelete: Restrict)
+  assetVersions              DocumentAssetVersion[] @relation("DocumentAssetVersions")
   status                     DocumentStatus @default(PENDING)
   uploadVerified             Boolean        @default(false)
   reviewedById               String?        @db.Uuid
@@ -550,12 +670,55 @@ model TravelerDocument {
   @@index([status])
 }
 
+model DocumentAssetVersion {
+  id             String           @id @default(uuid()) @db.Uuid
+  documentId     String           @db.Uuid
+  document       TravelerDocument @relation("DocumentAssetVersions", fields: [documentId], references: [id], onDelete: Cascade)
+  activeFor      TravelerDocument? @relation("ActiveDocumentAssetVersion")
+  temporaryAssetId String
+  finalizedAssetId String         @unique
+  sha256         String
+  byteSize       Int
+  contentType    String
+  storageVersionId String?
+  createdAt      DateTime         @default(now())
+  supersededAt   DateTime?
+
+  @@index([documentId, createdAt])
+  @@unique([documentId, sha256])
+}
+
+model PassportExtraction {
+  id                    String                       @id @default(uuid()) @db.Uuid
+  orderId               String?                      @unique @db.Uuid
+  order                 Order?                       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  partnerVerificationId String?                      @unique @db.Uuid
+  partnerVerification   PartnerDocumentVerification? @relation(fields: [partnerVerificationId], references: [id], onDelete: Cascade)
+  passportAssetId       String
+  status                String
+  payloadEncrypted      String?
+  fieldsRequiringInput  Json?
+  confidence            Float?
+  method                String?
+  failureCode           String?
+  confirmedAt           DateTime?
+  correctionAttempts    Int                          @default(0)
+  lastMismatchFingerprint String?
+  lastMismatchFields      Json?
+  confirmedMismatchFingerprint String?
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+
+  @@index([status, updatedAt])
+}
+
 model Payment {
   id                    String           @id @default(uuid()) @db.Uuid
   orderId               String           @db.Uuid
   order                 Order            @relation(fields: [orderId], references: [id])
   manualRefunds         ManualRefund[]
   disputes              PaymentDispute[]
+  events                PaymentEvent[]
   provider              PaymentProvider
   providerTransactionId String?
   providerCorrelationId String?
@@ -576,21 +739,82 @@ model Payment {
   @@index([orderId])
 }
 
+model PaymentEvent {
+  id                    String          @id @default(uuid()) @db.Uuid
+  orderId               String          @db.Uuid
+  order                 Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  paymentId             String?         @db.Uuid
+  payment               Payment?        @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  provider              PaymentProvider
+  eventType             String
+  source                String
+  paymentReference      String?
+  fromStatus            PaymentStatus?
+  toStatus              PaymentStatus?
+  amount                Decimal?        @db.Decimal(12, 2)
+  currency              String          @default("NPR")
+  providerTransactionId String?
+  providerMessage       String?
+  evidence              Json?
+  dedupeKey             String?         @unique
+  createdAt             DateTime        @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([paymentId, createdAt])
+  @@index([provider, eventType, createdAt])
+}
+
 model PaymentInitiation {
   id             String                  @id @default(uuid()) @db.Uuid
   orderId        String                  @unique @db.Uuid
   order          Order                   @relation(fields: [orderId], references: [id])
   provider       PaymentProvider
   amountNpr      Int
+  currency       String                  @default("NPR")
   status         PaymentInitiationStatus @default(PROCESSING)
   claimToken     String                  @db.Uuid
   leaseExpiresAt DateTime
   result         Json?
+  paymentReference String?
+  providerCorrelationId String?
+  remoteCreatedAt DateTime?
+  attachedAt     DateTime?
+  lastReconciledAt DateTime?
   errorCode      String?
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
 
   @@index([status, leaseExpiresAt])
+  @@index([provider, paymentReference])
+}
+
+model FonepayBankDirectoryEntry {
+  bankCode     String   @id
+  bankName     String
+  bankIcon     String?
+  packageName  String?
+  intentScheme String
+  active       Boolean  @default(true)
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([active, bankName])
+}
+
+model FonepayBankDirectorySync {
+  id               String    @id @default(uuid()) @db.Uuid
+  status           String
+  requestedById    String?   @db.Uuid
+  totalCount       Int       @default(0)
+  addedCount       Int       @default(0)
+  updatedCount     Int       @default(0)
+  deactivatedCount Int       @default(0)
+  errorMessage     String?
+  startedAt        DateTime  @default(now())
+  completedAt      DateTime?
+
+  @@index([startedAt])
 }
 
 model InventoryBatch {
@@ -612,29 +836,31 @@ model InventoryBatch {
 }
 
 model EsimInventory {
-  id                      String                        @id @default(uuid()) @db.Uuid
-  batchId                 String                        @db.Uuid
-  batch                   InventoryBatch                @relation(fields: [batchId], references: [id])
-  iccid                   String                        @unique
-  eid                     String                        @unique
-  msisdn                  String?                       @unique
-  status                  InventoryStatus               @default(IMPORTED)
-  assignedOrderId         String?                       @unique @db.Uuid
-  assignedOrder           Order?                        @relation(fields: [assignedOrderId], references: [id])
-  activationCodeEncrypted String?
-  smDpAddress             String?
-  providerSubscriptionId  String?
-  providerStatus          String?
-  lastProviderCheckedAt   DateTime?
-  providerCheckError      String?
-  quarantineReason        String?
-  activatedAt             DateTime?
-  expiresAt               DateTime?
-  customerEsims           CustomerEsim[]
-  reconciliationItems     InventoryReconciliationItem[]
-  version                 Int                           @default(0)
-  createdAt               DateTime                      @default(now())
-  updatedAt               DateTime                      @updatedAt
+  id                           String                        @id @default(uuid()) @db.Uuid
+  batchId                      String                        @db.Uuid
+  batch                        InventoryBatch                @relation(fields: [batchId], references: [id])
+  iccid                        String                        @unique
+  eid                          String                        @unique
+  msisdn                       String                        @unique
+  status                       InventoryStatus               @default(IMPORTED)
+  assignedOrderId              String?                       @unique @db.Uuid
+  assignedOrder                Order?                        @relation(fields: [assignedOrderId], references: [id])
+  activationCodeEncrypted      String?
+  smDpAddress                  String?
+  providerSubscriptionId       String?
+  providerStatus               String?
+  lastProviderCheckedAt        DateTime?
+  providerCheckError           String?
+  quarantineReason             String?
+  activatedAt                  DateTime?
+  expiresAt                    DateTime?
+  rechargeOrders               Order[]                       @relation("RechargeTarget")
+  customerEsims                CustomerEsim[]
+  transatelLifecycleOperations TransatelLifecycleOperation[]
+  reconciliationItems          InventoryReconciliationItem[]
+  version                      Int                           @default(0)
+  createdAt                    DateTime                      @default(now())
+  updatedAt                    DateTime                      @updatedAt
 
   @@index([status])
 }
@@ -727,6 +953,7 @@ model Partner {
   rateBuckets              PartnerRateBucket[]
   documentUploadIntents    PartnerDocumentUploadIntent[]
   documentVerifications    PartnerDocumentVerification[]
+  apiAudits                PartnerApiAudit[]
   createdAt                DateTime                       @default(now())
   updatedAt                DateTime                       @updatedAt
 }
@@ -743,6 +970,9 @@ model PartnerDocumentUploadIntent {
   contentType        String
   declaredSizeBytes  Int
   privateAssetId     String                       @unique
+  temporaryAssetId   String?
+  contentSha256      String?
+  storageVersionId   String?
   expiresAt          DateTime
   consumedAt         DateTime?
   consumedOrderId    String?                      @db.Uuid
@@ -758,25 +988,43 @@ model PartnerDocumentUploadIntent {
 }
 
 model PartnerDocumentVerification {
-  id                String                        @id @default(uuid()) @db.Uuid
-  partnerId         String                        @db.Uuid
-  partner           Partner                       @relation(fields: [partnerId], references: [id])
-  externalOrderId   String
-  activeExternalOrderKey String?                  @unique
-  status            String                        @default("AWAITING_UPLOAD")
-  travelerSnapshot  Json
-  expiresAt         DateTime
-  consumedAt        DateTime?
-  consumedOrderId   String?                       @unique @db.Uuid
-  failureCode       String?
-  reviewPolicy      DocumentReviewPolicy          @default(AUTO_OCR)
-  checkoutReleaseAt DateTime?
-  createdAt         DateTime                      @default(now())
-  updatedAt         DateTime                      @updatedAt
-  documents         PartnerDocumentUploadIntent[]
+  id                     String                        @id @default(uuid()) @db.Uuid
+  partnerId              String                        @db.Uuid
+  partner                Partner                       @relation(fields: [partnerId], references: [id])
+  externalOrderId        String
+  activeExternalOrderKey String?                       @unique
+  status                 String                        @default("AWAITING_UPLOAD")
+  mode                   String                        @default("EXTRACT_FIRST")
+  travelerSnapshot       Json?
+  expiresAt              DateTime
+  consumedAt             DateTime?
+  consumedOrderId        String?                       @unique @db.Uuid
+  failureCode            String?
+  reviewPolicy           DocumentReviewPolicy          @default(AUTO_OCR)
+  checkoutReleaseAt      DateTime?
+  createdAt              DateTime                      @default(now())
+  updatedAt              DateTime                      @updatedAt
+  documents              PartnerDocumentUploadIntent[]
+  passportExtraction     PassportExtraction?
+  travelerRevisions      PartnerTravelerRevision[]
 
   @@index([partnerId, externalOrderId])
   @@index([status, expiresAt])
+}
+
+model PartnerTravelerRevision {
+  id                 String                       @id @default(uuid()) @db.Uuid
+  verificationId     String                       @db.Uuid
+  verification       PartnerDocumentVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+  version            Int
+  idempotencyKeyHash String
+  reason             String
+  travelerSnapshot   Json
+  createdAt          DateTime                     @default(now())
+
+  @@unique([verificationId, version])
+  @@unique([verificationId, idempotencyKeyHash])
+  @@index([verificationId, createdAt])
 }
 
 model PartnerCredential {
@@ -944,6 +1192,7 @@ model PartnerEvent {
   version       String                   @default("1.0")
   resourceId    String
   correlationId String
+  dedupeKey     String?                  @unique
   payload       Json
   occurredAt    DateTime                 @default(now())
   deliveries    PartnerWebhookDelivery[]
@@ -1095,12 +1344,17 @@ model TransatelLifecycleOperation {
   id                    String                   @id @default(uuid()) @db.Uuid
   orderId               String                   @db.Uuid
   order                 Order                    @relation(fields: [orderId], references: [id])
+  inventoryId           String                   @db.Uuid
+  inventory             EsimInventory            @relation(fields: [inventoryId], references: [id])
   action                TransatelLifecycleAction
   state                 TransatelLifecycleState  @default(CREATED)
   idempotencyKey        String                   @unique
   reason                String
   performedById         String                   @db.Uuid
-  performedBy           User                     @relation(fields: [performedById], references: [id])
+  performedBy           User                     @relation("TransatelLifecycleRequester", fields: [performedById], references: [id])
+  approvedById          String?                  @db.Uuid
+  approvedBy            User?                    @relation("TransatelLifecycleApprover", fields: [approvedById], references: [id])
+  approvedAt            DateTime?
   providerTransactionId String?
   requestSnapshot       Json
   responseSnapshot      Json?
@@ -1111,7 +1365,9 @@ model TransatelLifecycleOperation {
   updatedAt             DateTime                 @updatedAt
 
   @@index([orderId, createdAt])
+  @@index([inventoryId, createdAt])
   @@index([state, createdAt])
+  @@index([approvedById])
 }
 
 model ManualRefund {
@@ -1197,6 +1453,7 @@ model IntegrationLog {
   errorCode     String?
   errorMessage  String?
   correlationId String?
+  requestHeaders Json?
   requestBody   Json?
   responseBody  Json?
   createdAt     DateTime @default(now())
@@ -1206,20 +1463,22 @@ model IntegrationLog {
 }
 
 model Notification {
-  id            String    @id @default(uuid()) @db.Uuid
-  orderId       String?   @db.Uuid
-  order         Order?    @relation(fields: [orderId], references: [id])
-  channel       String
-  template      String
-  recipient     String?
-  orderNumber   String?
-  reason        String?
-  status        String
-  sentAt        DateTime?
-  attemptCount  Int       @default(0)
-  nextAttemptAt DateTime?
-  errorMessage  String?
-  createdAt     DateTime  @default(now())
+  dedupeKey            String?   @unique
+  recoveryUrlEncrypted String?
+  id                   String    @id @default(uuid()) @db.Uuid
+  orderId              String?   @db.Uuid
+  order                Order?    @relation(fields: [orderId], references: [id])
+  channel              String
+  template             String
+  recipient            String?
+  orderNumber          String?
+  reason               String?
+  status               String
+  sentAt               DateTime?
+  attemptCount         Int       @default(0)
+  nextAttemptAt        DateTime?
+  errorMessage         String?
+  createdAt            DateTime  @default(now())
 
   @@index([status, nextAttemptAt])
 }
@@ -1274,13 +1533,41 @@ model OutboxMessage {
 }
 
 model WorkerHeartbeat {
-  worker     String   @id
+  worker     String
   instanceId String
+  buildVersion String?
   status     String   @default("RUNNING")
   lastSeenAt DateTime @default(now())
   metadata   Json?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  @@id([worker, instanceId])
+  @@index([worker, lastSeenAt])
+}
+
+model PartnerApiAudit {
+  id            String                @id @default(uuid()) @db.Uuid
+  requestId     String                @unique
+  partnerId     String                @db.Uuid
+  partner       Partner               @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  credentialId  String?               @db.Uuid
+  method        String
+  route         String
+  action        String
+  targetId      String?
+  correlationId String?
+  requestMeta   Json?
+  responseMeta  Json?
+  responseStatus Int?
+  status        PartnerApiAuditStatus @default(STARTED)
+  errorCode     String?
+  startedAt     DateTime              @default(now())
+  completedAt   DateTime?
+  updatedAt     DateTime              @updatedAt
+
+  @@index([partnerId, startedAt])
+  @@index([status, startedAt])
 }
 
 model CustomerConsent {
@@ -1304,6 +1591,67 @@ model PartnerShowcase {
   updatedAt DateTime @updatedAt
 
   @@index([active, sortOrder])
+}
+
+enum HomepageCampaignPlacement {
+  FEATURED_BANNER
+  OFFER_GALLERY
+  HOW_GUIDE
+  WHY_ESIM_BANNER
+}
+
+enum HomepageCampaignFormat {
+  PORTRAIT
+  SQUARE
+  LANDSCAPE
+}
+
+model HomepageCampaign {
+  id                String                    @id @default(uuid()) @db.Uuid
+  title             String
+  altText           String
+  imageUrl          String
+  assetKey          String?
+  placement         HomepageCampaignPlacement
+  format            HomepageCampaignFormat
+  imageWidth        Int
+  imageHeight       Int
+  countryCode       String?
+  ctaLabel          String
+  eyebrow           String?
+  summary           String?
+  priceLabel        String?
+  termsLabel        String?
+  ctaHrefOverride   String?
+  mobileImageUrl    String?
+  mobileAssetKey    String?
+  mobileImageWidth  Int?
+  mobileImageHeight Int?
+  mobileFormat      HomepageCampaignFormat?
+  sortOrder         Int                       @default(0)
+  active            Boolean                   @default(true)
+  startsAt          DateTime?
+  endsAt            DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  @@index([active, placement, sortOrder])
+  @@index([placement, startsAt, endsAt])
+}
+
+model HomepageFeaturedPlan {
+  id        String    @id @default(uuid()) @db.Uuid
+  planId    String    @db.Uuid
+  plan      Plan      @relation(fields: [planId], references: [id], onDelete: Cascade)
+  sortOrder Int       @default(0)
+  active    Boolean   @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([active, sortOrder])
+  @@index([planId, startsAt, endsAt])
 }
 
 model AuditLog {

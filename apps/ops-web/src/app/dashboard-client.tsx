@@ -1,6 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "./authenticated-api-provider";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -59,15 +59,28 @@ export default function DashboardClient() {
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await authFetch(`${API}/operations/dashboard`, { headers });
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value?.error?.message ?? "Could not load the overview");
+      setData(value.data);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Could not load the overview",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [authFetch]);
+
   useEffect(() => {
-    void authFetch(`${API}/operations/dashboard`, { headers })
-      .then(async (r) => {
-        const v = await r.json();
-        if (!r.ok) throw new Error(v?.error?.message ?? 'Could not load the overview');
-        setData(v.data);
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Could not load the overview'));
-  }, []);
+    void load();
+  }, [load]);
 
   if (!data)
     return (
@@ -79,7 +92,10 @@ export default function DashboardClient() {
               <p className="max-w-md text-center text-sm text-muted-foreground">
                 Could not load the operations overview. Please try again.
               </p>
-              <Button onClick={() => window.location.reload()}>Try again</Button>
+              <Button disabled={loading} onClick={() => void load()}>
+                {loading ? <Spinner /> : null}
+                {loading ? "Trying again" : "Try again"}
+              </Button>
             </>
           ) : (
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
@@ -137,7 +153,7 @@ export default function DashboardClient() {
       icon: <Clock3 className="size-4" />,
       tone: "warning" as const,
       hint: "Completed plans past their validity window",
-      href: "/orders",
+      href: "/orders?status=EXPIRED",
     },
   ];
 

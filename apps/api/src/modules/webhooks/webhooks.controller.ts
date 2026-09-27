@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Logger,
   Param,
   Post,
   Query,
@@ -19,7 +20,11 @@ import {
   requireRole,
 } from "../../common/auth.guard.js";
 import { AccountGuard, AccountTypes } from "../../common/auth.guard.js";
-import { UserRoleName, Prisma } from "@prisma/client";
+import {
+  UserRoleName,
+  Prisma,
+  ProvisioningOperationState,
+} from "@prisma/client";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request } from "express";
 import { Webhook } from "svix";
@@ -27,12 +32,15 @@ import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { ReconciliationService } from "../../jobs/reconciliation.service.js";
 import { QUEUES } from "../../jobs/queues.js";
+import { INBOUND_WEBHOOK_JOB_OPTIONS } from "../../infrastructure/resilience-policy.js";
 import { paymentSimulatorSecret } from "../../common/payment-simulator-secret.js";
+import { logRedactionEnabled } from "../../common/redact.js";
 import { ClerkSyncService } from "../identity/clerk-sync.service.js";
 
 @Controller("webhooks")
 export class WebhooksController {
   private readonly accepted = new Set<string>();
+  private readonly logger = new Logger(WebhooksController.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly queues: QueueService,
@@ -83,6 +91,7 @@ export class WebhooksController {
         payload: event as unknown as Record<string, unknown>,
       },
       `clerk-${eventId}`,
+      INBOUND_WEBHOOK_JOB_OPTIONS,
     );
     return {
       accepted: true,
@@ -153,13 +162,14 @@ export class WebhooksController {
       "payment-callback",
       { provider: source, eventId, payload },
       `${source}-${eventId}`,
+      INBOUND_WEBHOOK_JOB_OPTIONS,
     );
     this.remember(`${source}:${eventId}`);
     return { accepted: true, queued: true };
   }
 
   @Post("connectivity/:provider")
-  @HttpCode(202)
+  @HttpCode(204)
   async connectivity(
     @Param("provider") provider: string,
     @Body() body: { eventId?: string; header?: { eventId?: string } },
@@ -196,12 +206,49 @@ export class WebhooksController {
       await this.persistWebhook(source, eventId, body, Boolean(signature));
     // Re-enqueue persisted-but-unprocessed duplicates. This closes the failure
     // window where the database insert succeeds but Redis is temporarily down.
-    await this.queues.add(
-      QUEUES.providerCallbacks,
-      "connectivity-callback",
-      { provider: source, eventId },
-      key,
-    );
+    try {
+      await this.queues.add(
+        QUEUES.providerCallbacks,
+        "connectivity-callback",
+        { provider: source, eventId },
+        key,
+        INBOUND_WEBHOOK_JOB_OPTIONS,
+      );
+    } catch (error) {
+      if (!this.prisma.enabled) throw error;
+      // The inbox row is durable. Reconciliation will dispatch it after Redis
+      // recovers, so acknowledge receipt instead of suspending the stream.
+      const message = error instanceof Error ? error.message : "unknown";
+      this.logger.error(
+        `Transatel event ${eventId} was persisted but not queued: ${message}`,
+      );
+      if (this.prisma.enabled)
+        await this.prisma.webhookEvent
+          .update({
+            where: { source_eventId: { source, eventId } },
+            data: {
+              errorMessage: `Queue dispatch pending: ${message}`.slice(0, 2000),
+              nextAttemptAt: new Date(),
+            },
+          })
+          .catch((stateError) =>
+            this.logger.error(
+              `Could not mark Transatel event ${eventId} for queue recovery: ${stateError instanceof Error ? stateError.message : "unknown"}`,
+            ),
+          );
+      return { accepted: true, persisted: true, queued: false };
+    }
+    if (this.prisma.enabled)
+      await this.prisma.webhookEvent
+        .update({
+          where: { source_eventId: { source, eventId } },
+          data: { errorMessage: null, nextAttemptAt: null },
+        })
+        .catch((stateError) =>
+          this.logger.warn(
+            `Queued Transatel event ${eventId}, but could not clear its recovery state: ${stateError instanceof Error ? stateError.message : "unknown"}`,
+          ),
+        );
     this.remember(key);
     return { accepted: true, queued: true };
   }
@@ -355,6 +402,7 @@ export class OperationsIntegrationEventsController {
         payload: event.payload as Record<string, unknown>,
       },
       `replay-${source}-${event.eventId}-${Date.now()}`,
+      { ...INBOUND_WEBHOOK_JOB_OPTIONS, allowDuplicate: true },
     );
     return { id, eventId: event.eventId, source, status: "QUEUED" };
   }
@@ -371,7 +419,7 @@ export class OperationsIntegrationLogsController {
   ) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     if (!this.prisma.enabled) return [];
-    return this.prisma.integrationLog.findMany({
+    const rows = await this.prisma.integrationLog.findMany({
       where: operation ? { operation } : {},
       select: {
         id: true,
@@ -382,11 +430,21 @@ export class OperationsIntegrationLogsController {
         durationMs: true,
         errorCode: true,
         errorMessage: true,
+        correlationId: true,
+        requestBody: true,
+        responseBody: true,
         createdAt: true,
       },
       orderBy: { createdAt: "desc" },
       take: 200,
     });
+    return rows.map((row) => ({
+      ...row,
+      endpoint: sanitizeLogEndpoint(row.endpoint),
+      errorMessage: sanitizeLogText(row.errorMessage),
+      requestBody: sanitizeOperationsLog(row.requestBody),
+      responseBody: sanitizeOperationsLog(row.responseBody),
+    }));
   }
 }
 
@@ -397,9 +455,10 @@ export class OperationsIntegrationLogsController {
  * diagnostic API used by the integrations workspace.
  */
 const SENSITIVE_LOG_KEY =
-  /authorization|cookie|password|secret|token|api.?key|signature|passport|document|email|phone|mobile|msisdn|qr|activation.?code|otp|pin|card|account.?number/i;
+  /(^|_)(authorization|cookie|password|secret|client_?secret|webhook_?secret|access_?token|refresh_?token|lookup_?token|guest_?access_?token|api_?key|signature|passport|document|email|phone|mobile|qr_?(code|payload)|activation_?code|matching_?id|otp|pin|card|account_?number|payment_?url|recovery_?(link|url|token))$/i;
 
 export function sanitizeOperationsLog(value: unknown, depth = 0): unknown {
+  if (!logRedactionEnabled()) return value;
   if (depth > 8) return "[TRUNCATED]";
   if (value === null || value === undefined) return value;
   if (typeof value === "string") {
@@ -428,6 +487,7 @@ export function sanitizeOperationsLog(value: unknown, depth = 0): unknown {
 
 function sanitizeLogText(value: string | null | undefined) {
   if (!value) return value ?? null;
+  if (!logRedactionEnabled()) return value;
   return value
     .replace(/LPA:1\$[^\s"']+/gi, "[REDACTED QR CREDENTIAL]")
     .replace(/Bearer\s+[^\s"']+/gi, "[REDACTED AUTHORIZATION]")
@@ -436,8 +496,62 @@ function sanitizeLogText(value: string | null | undefined) {
 }
 
 function sanitizeLogEndpoint(endpoint: string) {
+  if (!logRedactionEnabled()) return endpoint;
   const [path] = endpoint.split("?", 1);
   return path ?? endpoint;
+}
+
+function transatelOperationTitle(
+  operation: string,
+  requestBody: Prisma.JsonValue,
+  method: string,
+  endpoint: string,
+) {
+  const normalized = operation.replace(/-auth-retry$/, "");
+  const orderType =
+    requestBody &&
+    typeof requestBody === "object" &&
+    !Array.isArray(requestBody)
+      ? String((requestBody as Record<string, unknown>).orderType ?? "")
+      : "";
+  const labels: Record<string, string> = {
+    token: "Transatel authentication",
+    usage: "Transatel product inventory and balances",
+    "esim-details": "Transatel eSIM profile lookup",
+    "subscriber-details": "Transatel subscriber status lookup",
+    "subscriber-suspend": "Transatel subscriber suspension",
+    "subscriber-reactivate": "Transatel subscriber reactivation",
+    "subscriber-terminate": "Transatel subscriber termination",
+    catalog: "Transatel product catalog lookup",
+    eligibility: "Transatel product eligibility check",
+  };
+  if (normalized === "provision")
+    return orderType.toLowerCase() === "subscribe"
+      ? "Transatel top-up subscription"
+      : "Transatel plan preload";
+  return labels[normalized] ?? `${method} ${sanitizeLogEndpoint(endpoint)}`;
+}
+
+function transatelWebhookTitle(payload: Prisma.JsonValue) {
+  const eventType =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as { header?: { eventType?: unknown } }).header?.eventType
+      : null;
+  if (typeof eventType !== "string") return "Transatel callback received";
+  const labels: Record<string, string> = {
+    "OCS/PRODUCT/PRELOADED": "Transatel plan preloaded",
+    "OCS/PRODUCT/ACTIVATED": "Transatel plan activated",
+    "OCS/PRODUCT/CANCELED": "Transatel plan renewal canceled",
+    "OCS/PRODUCT/EXPIRED": "Transatel plan expired",
+    "OCS/PRODUCT/TERMINATED": "Transatel plan terminated",
+    "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED":
+      "Transatel subscriber suspended",
+    "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/REACTIVATED":
+      "Transatel subscriber reactivated",
+    "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED":
+      "Transatel subscriber terminated",
+  };
+  return labels[eventType.toUpperCase()] ?? `Transatel ${eventType}`;
 }
 
 @Controller("operations/logs")
@@ -453,12 +567,39 @@ export class OperationsLogsController {
     @Query("q") query = "",
     @Query("page") pageInput = "1",
     @Query("pageSize") pageSizeInput = "25",
+    @Query("from") fromInput = "",
+    @Query("to") toInput = "",
   ) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    const allowedGroups = new Set(["all", "provider", "incoming", "orders", "staff"]);
-    if (!allowedGroups.has(group)) throw new BadRequestException("Invalid log group");
+    const allowedGroups = new Set([
+      "all",
+      "provider",
+      "incoming",
+      "orders",
+      "staff",
+    ]);
+    if (!allowedGroups.has(group))
+      throw new BadRequestException("Invalid log group");
     const page = Math.max(1, Number.parseInt(pageInput, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number.parseInt(pageSizeInput, 10) || 25));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Number.parseInt(pageSizeInput, 10) || 25),
+    );
+    const parseBoundary = (value: string, label: string) => {
+      if (!value) return undefined;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime()))
+        throw new BadRequestException(`Invalid ${label} date`);
+      return date;
+    };
+    const from = parseBoundary(fromInput, "from");
+    const to = parseBoundary(toInput, "to");
+    if (from && to && from >= to)
+      throw new BadRequestException("The from date must be before the to date");
+    const timestampRange =
+      from || to
+        ? { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) }
+        : undefined;
     if (!this.prisma.enabled) return { items: [], total: 0, page, pageSize };
 
     // Pull only enough records to serve the requested page from each source,
@@ -466,11 +607,15 @@ export class OperationsLogsController {
     const take = page * pageSize;
     const normalizedQuery = query.trim().toLowerCase();
     const matches = (...values: Array<string | null | undefined>) =>
-      !normalizedQuery || values.some((value) => value?.toLowerCase().includes(normalizedQuery));
+      !normalizedQuery ||
+      values.some((value) => value?.toLowerCase().includes(normalizedQuery));
     const isOrderModule = (module: string) =>
       /ORDER|PAYMENT|VERIFICATION|TRANSATEL|INVENTORY|REFUND/i.test(module);
 
-    const safeQuery = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+    const safeQuery = async <T>(
+      fn: () => Promise<T>,
+      fallback: T,
+    ): Promise<T> => {
       try {
         return await fn();
       } catch {
@@ -487,6 +632,7 @@ export class OperationsLogsController {
       durationMs: number | null;
       errorCode: string | null;
       errorMessage: string | null;
+      correlationId: string | null;
       createdAt: Date;
       requestBody: Prisma.JsonValue;
       responseBody: Prisma.JsonValue;
@@ -552,11 +698,21 @@ export class OperationsLogsController {
 
     if (group === "all" || group === "provider") {
       integrationRows = await safeQuery(
-        () => this.prisma.integrationLog.findMany({ orderBy: { createdAt: "desc" }, take }),
+        () =>
+          this.prisma.integrationLog.findMany({
+            ...(timestampRange ? { where: { createdAt: timestampRange } } : {}),
+            orderBy: { createdAt: "desc" },
+            take,
+          }),
         [],
       );
       integrationTotal = await safeQuery(
-        () => this.prisma.integrationLog.count(),
+        () =>
+          timestampRange
+            ? this.prisma.integrationLog.count({
+                where: { createdAt: timestampRange },
+              })
+            : this.prisma.integrationLog.count(),
         integrationRows.length,
       );
     }
@@ -564,7 +720,10 @@ export class OperationsLogsController {
       webhookRows = await safeQuery(
         () =>
           this.prisma.webhookEvent.findMany({
-            where: { NOT: { source: { startsWith: "idempotency:" } } },
+            where: {
+              NOT: { source: { startsWith: "idempotency:" } },
+              ...(timestampRange ? { createdAt: timestampRange } : {}),
+            },
             orderBy: { createdAt: "desc" },
             take,
           }),
@@ -573,7 +732,10 @@ export class OperationsLogsController {
       webhookTotal = await safeQuery(
         () =>
           this.prisma.webhookEvent.count({
-            where: { NOT: { source: { startsWith: "idempotency:" } } },
+            where: {
+              NOT: { source: { startsWith: "idempotency:" } },
+              ...(timestampRange ? { createdAt: timestampRange } : {}),
+            },
           }),
         webhookRows.length,
       );
@@ -582,6 +744,7 @@ export class OperationsLogsController {
       auditRows = await safeQuery(
         () =>
           this.prisma.auditLog.findMany({
+            ...(timestampRange ? { where: { createdAt: timestampRange } } : {}),
             orderBy: { createdAt: "desc" },
             take,
             include: { performedBy: { select: { email: true } } },
@@ -589,7 +752,12 @@ export class OperationsLogsController {
         [],
       );
       auditTotal = await safeQuery(
-        () => this.prisma.auditLog.count(),
+        () =>
+          timestampRange
+            ? this.prisma.auditLog.count({
+                where: { createdAt: timestampRange },
+              })
+            : this.prisma.auditLog.count(),
         auditRows.length,
       );
     }
@@ -597,6 +765,7 @@ export class OperationsLogsController {
       orderRows = await safeQuery(
         () =>
           this.prisma.order.findMany({
+            ...(timestampRange ? { where: { createdAt: timestampRange } } : {}),
             select: {
               id: true,
               orderNumber: true,
@@ -611,12 +780,18 @@ export class OperationsLogsController {
         [],
       );
       orderTotal = await safeQuery(
-        () => this.prisma.order.count(),
+        () =>
+          timestampRange
+            ? this.prisma.order.count({
+                where: { createdAt: timestampRange },
+              })
+            : this.prisma.order.count(),
         orderRows.length,
       );
       provisioningAttemptRows = await safeQuery(
         () =>
           this.prisma.provisioningAttempt.findMany({
+            ...(timestampRange ? { where: { createdAt: timestampRange } } : {}),
             orderBy: { createdAt: "desc" },
             take,
           }),
@@ -625,6 +800,7 @@ export class OperationsLogsController {
       provisioningOperationRows = await safeQuery(
         () =>
           this.prisma.provisioningOperation.findMany({
+            ...(timestampRange ? { where: { updatedAt: timestampRange } } : {}),
             orderBy: { updatedAt: "desc" },
             take,
             select: {
@@ -641,11 +817,21 @@ export class OperationsLogsController {
         [],
       );
       provisioningAttemptTotal = await safeQuery(
-        () => this.prisma.provisioningAttempt.count(),
+        () =>
+          timestampRange
+            ? this.prisma.provisioningAttempt.count({
+                where: { createdAt: timestampRange },
+              })
+            : this.prisma.provisioningAttempt.count(),
         provisioningAttemptRows.length,
       );
       provisioningOperationTotal = await safeQuery(
-        () => this.prisma.provisioningOperation.count(),
+        () =>
+          timestampRange
+            ? this.prisma.provisioningOperation.count({
+                where: { updatedAt: timestampRange },
+              })
+            : this.prisma.provisioningOperation.count(),
         provisioningOperationRows.length,
       );
     }
@@ -655,12 +841,21 @@ export class OperationsLogsController {
         group: "provider",
         id: row.id,
         identifier: row.operation,
-        title: `${row.method} ${sanitizeLogEndpoint(row.endpoint)}`,
-        detail: sanitizeLogText(row.errorMessage ?? row.errorCode) ?? "Provider request completed",
+        title: transatelOperationTitle(
+          row.operation,
+          row.requestBody,
+          row.method,
+          row.endpoint,
+        ),
+        detail:
+          sanitizeLogText(row.errorMessage ?? row.errorCode) ??
+          "Provider request completed",
         status: row.status,
-        statusLabel: row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
+        statusLabel:
+          row.status >= 200 && row.status < 400 ? "SUCCESS" : "FAILED",
         createdAt: row.createdAt,
         durationMs: row.durationMs,
+        correlationId: row.correlationId,
         error: sanitizeLogText(row.errorMessage),
         requestBody: sanitizeOperationsLog(row.requestBody),
         responseBody: sanitizeOperationsLog(row.responseBody),
@@ -669,8 +864,13 @@ export class OperationsLogsController {
         group: "incoming",
         id: row.id,
         identifier: row.source,
-        title: row.eventId,
-        detail: sanitizeLogText(row.errorMessage) ?? (row.processedAt ? "Callback processed" : "Callback queued"),
+        title:
+          row.source === "transatel"
+            ? transatelWebhookTitle(row.payload)
+            : `${row.source} callback received`,
+        detail:
+          sanitizeLogText(row.errorMessage) ??
+          `${row.processedAt ? "Callback processed" : "Callback queued"} / Event ${row.eventId}`,
         status: row.signatureValid
           ? row.deadLetteredAt || row.errorMessage
             ? 500
@@ -682,7 +882,11 @@ export class OperationsLogsController {
             ? "FAILED"
             : row.processedAt
               ? "PROCESSED"
-              : "QUEUED",
+              : row.errorMessage?.startsWith("Queue dispatch pending:")
+                ? "RETRY_PENDING"
+                : row.errorMessage
+                  ? "PROCESSING_FAILED"
+                  : "QUEUED",
         createdAt: row.createdAt,
         error: sanitizeLogText(row.errorMessage),
         requestBody: sanitizeOperationsLog(row.payload),
@@ -690,8 +894,18 @@ export class OperationsLogsController {
       ...orderRows.map((row) => ({
         group: "orders" as const,
         id: `order-${row.id}`,
-        identifier: row.channel === "PARTNER_HOSTED" ? "Hosted checkout" : row.channel === "PARTNER_API" ? "API partner" : "Visa Compass checkout",
-        title: row.channel === "PARTNER_HOSTED" ? "Hosted checkout order created" : row.channel === "PARTNER_API" ? "API partner order created" : "Visa Compass checkout order created",
+        identifier:
+          row.channel === "PARTNER_HOSTED"
+            ? "Hosted checkout"
+            : row.channel === "PARTNER_API"
+              ? "API partner"
+              : "Visa Compass checkout",
+        title:
+          row.channel === "PARTNER_HOSTED"
+            ? "Hosted checkout order created"
+            : row.channel === "PARTNER_API"
+              ? "API partner order created"
+              : "Visa Compass checkout order created",
         detail: `${row.orderNumber} is ${row.status.toLowerCase().replaceAll("_", " ")}${row.partner ? ` · ${row.partner.name}` : ""}`,
         statusLabel: "RECORDED",
         createdAt: row.createdAt,
@@ -725,7 +939,13 @@ export class OperationsLogsController {
         responseBody: sanitizeOperationsLog(row.responseSnapshot),
       })),
       ...auditRows
-        .filter((row) => group === "all" || (group === "orders" ? isOrderModule(row.module) : !isOrderModule(row.module)))
+        .filter(
+          (row) =>
+            group === "all" ||
+            (group === "orders"
+              ? isOrderModule(row.module)
+              : !isOrderModule(row.module)),
+        )
         .map((row) => ({
           group: isOrderModule(row.module) ? "orders" : "staff",
           id: row.id,
@@ -738,7 +958,16 @@ export class OperationsLogsController {
           responseBody: sanitizeOperationsLog(row.newValue),
         })),
     ]
-      .filter((row) => matches(row.identifier, row.title, row.detail))
+      .filter((row) =>
+        matches(
+          row.identifier,
+          row.title,
+          row.detail,
+          "correlationId" in row && typeof row.correlationId === "string"
+            ? row.correlationId
+            : null,
+        ),
+      )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
     const total =
@@ -785,8 +1014,17 @@ export class OperationsProvisioningOperationsController {
     ];
     const selected =
       state && allowed.includes(state) ? (state as never) : undefined;
+    const pendingStates: ProvisioningOperationState[] = [
+      ProvisioningOperationState.CREATED,
+      ProvisioningOperationState.SUBMITTING,
+      ProvisioningOperationState.ACCEPTED,
+      ProvisioningOperationState.WAITING_FOR_QR,
+      ProvisioningOperationState.RECONCILE_REQUIRED,
+      ProvisioningOperationState.MANUAL_REVIEW,
+      ProvisioningOperationState.REJECTED,
+    ];
     return this.prisma.provisioningOperation.findMany({
-      where: selected ? { state: selected } : {},
+      where: selected ? { state: selected } : { state: { in: pendingStates } },
       select: {
         id: true,
         orderId: true,

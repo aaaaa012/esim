@@ -36,6 +36,7 @@ export class TransatelOperationsController {
   ) {
     requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     return this.transatel.dashboard({
+      actorId: request.user!.localUserId,
       ...(scope ? { scope } : {}),
       ...(q ? { q } : {}),
     });
@@ -77,6 +78,20 @@ export class TransatelOperationsController {
     });
   }
 
+  @Post("inventory/:id/suspend")
+  suspendInventory(
+    @Param("id") inventoryId: string,
+    @Body() body: LifecycleBody,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.transatel.suspendInventory(inventoryId, {
+      reason: body.reason ?? "",
+      idempotencyKey: body.idempotencyKey ?? "",
+      actorId: request.user!.localUserId,
+    });
+  }
+
   @Post("orders/:id/terminate")
   terminate(
     @Param("id") orderId: string,
@@ -90,5 +105,74 @@ export class TransatelOperationsController {
       idempotencyKey: body.idempotencyKey ?? "",
       actorId: request.user!.localUserId,
     });
+  }
+
+  @Post("inventory/:id/terminate")
+  terminateInventory(
+    @Param("id") inventoryId: string,
+    @Body() body: LifecycleBody,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireRole(request, [UserRole.SUPER_ADMIN]);
+    return this.transatel.terminateInventory(inventoryId, {
+      reason: body.reason ?? "",
+      idempotencyKey: body.idempotencyKey ?? "",
+      actorId: request.user!.localUserId,
+    });
+  }
+
+  @Post("orders/:id/reactivate-request")
+  requestReactivation(
+    @Param("id") orderId: string,
+    @Body() body: LifecycleBody,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.transatel.requestReactivation({
+      orderId,
+      reason: body.reason ?? "",
+      idempotencyKey: body.idempotencyKey ?? "",
+      actorId: request.user!.localUserId,
+    });
+  }
+
+  @Post("inventory/:id/reactivate-request")
+  requestInventoryReactivation(
+    @Param("id") inventoryId: string,
+    @Body() body: LifecycleBody,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireRole(request, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.transatel.requestInventoryReactivation(inventoryId, {
+      reason: body.reason ?? "",
+      idempotencyKey: body.idempotencyKey ?? "",
+      actorId: request.user!.localUserId,
+    });
+  }
+
+  @Post("reactivations/:id/approve")
+  approveReactivation(
+    @Param("id") operationId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireRole(request, [UserRole.SUPER_ADMIN]);
+    return this.transatel.approveReactivation(
+      operationId,
+      request.user!.localUserId,
+    );
+  }
+
+  @Post("reactivations/:id/reject")
+  rejectReactivation(
+    @Param("id") operationId: string,
+    @Body() body: { reason?: string },
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireRole(request, [UserRole.SUPER_ADMIN]);
+    return this.transatel.rejectReactivation(
+      operationId,
+      request.user!.localUserId,
+      body.reason ?? "",
+    );
   }
 }

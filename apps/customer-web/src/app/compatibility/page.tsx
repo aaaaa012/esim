@@ -3,7 +3,6 @@ import Link from "next/link";
 import {
   ArrowRight,
   CheckCircle2,
-  LockKeyhole,
   Smartphone,
   Wifi,
 } from "lucide-react";
@@ -34,15 +33,13 @@ export default function Compatibility() {
           </div>
           <div className="compatibility-visual">
             <Image
-              src="/images/esim-device-check-v1.webp"
-              alt="Phone showing a successful eSIM compatibility check"
-              fill
+              src="/images/esim-compatibility-guide.jpeg"
+              alt="Three-step guide to check eSIM compatibility by dialing star hash zero six hash and looking for an EID"
+              width={768}
+              height={1376}
               priority
-              sizes="(max-width: 800px) 100vw, 48vw"
+              sizes="(max-width: 800px) 100vw, 460px"
             />
-            <span className="visual-trust">
-              <LockKeyhole size={16} /> Check before payment
-            </span>
           </div>
         </div>
 
@@ -81,11 +78,11 @@ export default function Compatibility() {
           </div>
         </div>
         <div className="compatibility-actions">
-          <Link href="/#plans" className="button">
+          <Link href="/destinations" className="button">
             Browse plans <ArrowRight size={17} />
           </Link>
-          <Link href="/" className="button secondary">
-            Back to home
+          <Link href="/help" className="button secondary">
+            Back to Help
           </Link>
         </div>
       </div>

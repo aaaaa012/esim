@@ -1,10 +1,29 @@
 "use client";
+import {
+  canEnterTravelerFromPassport,
+  isIsoAlpha2CountryCode,
+  orderStatusLabel,
+  passportAutomationUnavailable,
+  passportFailurePresentation,
+  passportRequiresReplacement,
+  travelerChangeKind,
+} from "@visa-compass/shared";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
-import { useAuth } from "@clerk/nextjs";
+import { SignInButton, useAuth } from "@clerk/nextjs";
 
 import { useEffect, useRef, useState } from "react";
 import ErrorModal from "../../../components/error-modal";
-import { fonepayBankIntentUrl } from "./payment-intent";
+import { formatPlanDataText } from "../../../lib/format-data";
+import { fonepaySocketSignal } from "./payment-intent";
+import {
+  postFonepayTelemetry,
+  type FonepayTelemetryPayload,
+} from "./fonepay-telemetry";
+import {
+  ActiveFonepayPaymentMethods,
+  FonepayCheckout,
+} from "./fonepay-checkout";
+import { paymentActionDisabled, retryDeclaredAllowed } from "./payment-gates";
 import Link from "next/link";
 import {
   Check,
@@ -18,12 +37,42 @@ import {
   ShieldCheck,
   Signal,
   AlertTriangle,
+  Copy,
+  Link2,
+  UserRound,
 } from "lucide-react";
-import { flagEmoji } from "../../country-picker";
+import { JourneyArtwork } from "../../journey-chrome";
+import { countryDisplayName, flagEmoji } from "../../country-picker";
+import {
+  DocumentProgress,
+  SavedDocuments,
+  VerifiedDocumentsSummary,
+  hasSavedDocument,
+  hasUploadedDocument,
+} from "./document-progress";
+import { createDocumentUploader } from "./document-upload";
+import PaymentJourneyConfirmation from "./post-payment-confirmation";
+import ManualReviewTracking from "./manual-review-tracking";
+import { useDocumentRefresh } from "./use-document-refresh";
+import { DocumentFileField as FileField } from "./document-file-field";
+import {
+  DocumentRecoveryFields,
+  replacementReasonsFromTimeline,
+} from "./document-recovery";
+import {
+  CompatibilityConfirmation,
+  PurchaseConsent,
+} from "./checkout-confirmation";
+import { useCheckoutTransition } from "./use-checkout-transition";
 import DatePicker from "./date-picker";
 import { submitCheckoutDocumentsSequentially } from "./document-submission";
 import {
-  DocumentType,
+  checkoutDetailsLocked,
+  checkoutResumeDisposition,
+  checkoutResumeStep,
+  paymentStatusHeading,
+} from "./checkout-resume";
+import {
   PaymentProvider,
   apiErrorMessage,
   type PlanSummary,
@@ -31,50 +80,95 @@ import {
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const SIMULATOR = process.env.NEXT_PUBLIC_PAYMENT_MODE === "simulator";
-type Envelope<T> = { data: T; error?: { code?: string; message: string } };
+type Envelope<T> = { data: T; error?: { code?: string; message: string }; meta?: { correlationId?: string } };
 type Order = {
   id: string;
+  createdAt: string;
+  contactRuleVersion?: number;
   orderNumber: string;
   status: string;
   totalAmountNpr: number;
   plan: PlanSummary;
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   traveler?: Partial<Traveler>;
-  documents?: { type: string; status: string }[];
-  payment?: { reference: string; status: string };
+  documents?: {
+    type: string;
+    status: string;
+    fileName?: string;
+    uploadVerified?: boolean;
+  }[];
+  payment?: {
+    provider?: PaymentProvider;
+    reference: string;
+    status: string;
+  };
   passportVerification?: {
     status: string;
     matchedFields?: string[];
+    mismatchedFields?: Array<keyof typeof FIELD_LABELS>;
     confidence?: number;
     checkedAt?: string;
     method?: string;
     detail?: string;
+  };
+  passportExtraction?: {
+    status:
+      "PROCESSING" | "READY" | "PARTIAL" | "MANUAL_ENTRY_REQUIRED" | "SKIPPED";
+    fields?: Partial<
+      Pick<
+        Traveler,
+        | "firstName"
+        | "middleName"
+        | "surname"
+        | "dateOfBirth"
+        | "passportNumber"
+        | "passportExpiryDate"
+        | "nationality"
+      >
+    >;
+    fieldsRequiringInput?: string[];
+    failureCode?: string;
   };
   documentReviewStatus?:
     | "NOT_STARTED"
     | "OCR_PENDING"
     | "OCR_BACKGROUND"
     | "VERIFIED"
+    | "CORRECTION_REQUIRED"
     | "MANUAL_REVIEW"
     | "REUPLOAD_REQUIRED"
     | "MANUALLY_APPROVED"
     | "SKIPPED";
+  timeline?: { reason?: string }[];
+  refundStatus?: string;
   provisioningFailure?: { code: string; message: string };
-};
-type Payment = {
-  reference: string; redirectUrl: string; expiresAt: string;
-  qrDataUrl?: string; qrPayload?: string; websocketUrl?: string;
-  banks?: { bankName: string; bankCode: string; bankIcon?: string; intentScheme: string }[];
-};
-type DocumentAuthorization = {
-  id: string;
-  upload: {
-    mode: string;
-    endpoint?: string;
-    method?: "PUT";
-    headers?: Record<string, string>;
+  paymentRetry?: {
+    canRetry: boolean;
+    canChangeProvider: boolean;
+    blockedReason?: string;
   };
 };
+
+export const canEnterTravelerAfterExtraction = (
+  target: Pick<Order, "documentReviewStatus" | "passportExtraction">,
+) => canEnterTravelerFromPassport(target);
+
+type Payment = {
+  reference: string;
+  redirectUrl: string;
+  expiresAt: string;
+  qrDataUrl?: string;
+  qrPayload?: string;
+  websocketUrl?: string;
+  banks?: {
+    bankName: string;
+    bankCode: string;
+    bankIcon?: string;
+    packageName?: string;
+    intentScheme: string;
+  }[];
+};
+
 type Traveler = {
   title: "MR" | "MS" | "MRS";
   firstName: string;
@@ -97,9 +191,9 @@ const initial: Traveler = {
   middleName: "",
   surname: "",
   dateOfBirth: "",
-  nationality: "NP",
+  nationality: "",
   city: "",
-  countryOfResidence: "NP",
+  countryOfResidence: "",
   employerOrBusinessName: "",
   email: "",
   mobile: "",
@@ -115,6 +209,7 @@ export default function CheckoutClient({
   lookupToken,
   targetEsimId,
   targetCountry,
+  rechargeTargetLabel,
 }: {
   planId: string;
   orderId: string;
@@ -122,8 +217,14 @@ export default function CheckoutClient({
   lookupToken?: string;
   targetEsimId?: string;
   targetCountry?: string;
+  rechargeTargetLabel?: string;
 }) {
   const authFetch = useAuthenticatedFetch();
+  const rechargeMode = useRef(
+    Boolean(lookupToken || targetEsimId) ||
+      (typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).get("recharge") === "1"),
+  );
   const { isLoaded, isSignedIn } = useAuth();
   const tokenKey = (id?: string) => `vc_guest_token_${id || orderId || "new"}`;
   const readToken = (id?: string) => {
@@ -154,10 +255,35 @@ export default function CheckoutClient({
   guestRef.current = guest;
   useEffect(() => {
     if (!isLoaded) return;
-    const next = isSignedIn !== true;
-    setGuest(next);
-    guestRef.current = next;
+    if (currentToken()) return;
+    if (isSignedIn === true) {
+      setGuest(false);
+      guestRef.current = false;
+    }
   }, [isLoaded, isSignedIn]);
+  const [showAccountChoice, setShowAccountChoice] = useState(false);
+  const [pendingSignIn, setPendingSignIn] = useState(false);
+  const [claimIntent, setClaimIntent] = useState(false);
+  const [copiedRecovery, setCopiedRecovery] = useState(false);
+  const [mismatchError, setMismatchError] = useState("");
+  const [recovery, setRecovery] = useState<{
+    token: string;
+    expiresAt: string;
+  } | null>(null);
+  const [recoveryReady, setRecoveryReady] = useState(!orderId);
+  const recoveryKey = (id: string) => `vc_guest_recovery_${id}`;
+  const consentKey = `vc_checkout_consent:v1:${orderId || planId || "checkout"}`;
+  const storeRecovery = (id: string, token: string, expiresAt: string) => {
+    const value = { token, expiresAt };
+    setRecovery(value);
+    try {
+      // A recovery token is a bearer credential. Keep it only for this tab;
+      // cross-device and closed-tab recovery must use the copied/emailed link.
+      sessionStorage.setItem(recoveryKey(id), JSON.stringify(value));
+    } catch {
+      /* sessionStorage unavailable; the copyable link remains usable */
+    }
+  };
 
   const mutationKey = (scope: string) => {
     const storageKey = `vc_mutation_${scope}`;
@@ -181,11 +307,21 @@ export default function CheckoutClient({
   };
 
   const api = async <T,>(path: string, init?: RequestInit) => {
-    let url = `${API}${path}`;
+    const rechargeRequest =
+      rechargeMode.current && path.startsWith("/customer/orders");
+    let url = `${API}${
+      rechargeRequest
+        ? path
+            .replace("/customer/orders", "/recharges")
+            .replace(/\/payment$/, "/payment/initiate")
+            .replace("/simulate-complete", "/simulate")
+        : path
+    }`;
     let body = init?.body as BodyInit | null | undefined;
     const isGet = !init?.method || init.method.toUpperCase() === "GET";
     const currentGuest = guestRef.current;
-    let guestHeaderToken = currentGuest ? currentToken() : "";
+    let guestHeaderToken =
+      currentGuest || rechargeRequest ? currentToken() : "";
     const toGuest = () => {
       const token = currentToken();
       guestHeaderToken = token;
@@ -193,9 +329,16 @@ export default function CheckoutClient({
       return token;
     };
     const method = init?.method?.toUpperCase() ?? "GET";
-    let mutation = isGet
-      ? null
-      : mutationKey(`${currentGuest ? "guest" : "customer"}:${method}:${path}`);
+    // Fire-and-forget diagnostics are intentionally not idempotent: each event
+    // has a unique body, so an idempotency claim would be keyed to one event
+    // and every later event with the same stored key would be rejected with a
+    // 409 (and the key would never be released across deep-link navigation).
+    let mutation =
+      isGet || path.includes("/payment/telemetry")
+        ? null
+        : mutationKey(
+            `${currentGuest ? "guest" : "customer"}:${method}:${path}`,
+          );
     const makeInit = () => ({
       ...init,
       ...(body !== undefined ? { body } : {}),
@@ -208,21 +351,32 @@ export default function CheckoutClient({
         ...init?.headers,
       },
     });
-    if (currentGuest) toGuest();
+    if (currentGuest && !rechargeRequest) toGuest();
     let response = await authFetch(url, makeInit());
     let payload = (await response.json()) as Envelope<T>;
-    if (mutation) releaseMutationKey(mutation.storageKey);
     if (
+      (payload.data as { purchaseType?: string } | undefined)?.purchaseType ===
+      "TOPUP"
+    )
+      rechargeMode.current = true;
+    if (mutation && response.ok) releaseMutationKey(mutation.storageKey);
+    if (
+      !rechargeRequest &&
       !response.ok &&
       isLoaded &&
       isSignedIn !== true &&
-      ["AUTHENTICATION_REQUIRED", "FORBIDDEN", "ACCOUNT_TYPE_FORBIDDEN"].includes(
-        payload.error?.code ?? "",
-      ) &&
+      [
+        "AUTHENTICATION_REQUIRED",
+        "FORBIDDEN",
+        "ACCOUNT_TYPE_FORBIDDEN",
+      ].includes(payload.error?.code ?? "") &&
       currentToken()
     ) {
       toGuest();
-      mutation = isGet ? null : mutationKey(`guest:${method}:${path}`);
+      mutation =
+        isGet || path.includes("/payment/telemetry")
+          ? null
+          : mutationKey(`guest:${method}:${path}`);
       setGuest((g) => {
         const next = g || true;
         guestRef.current = next;
@@ -233,11 +387,12 @@ export default function CheckoutClient({
       if (mutation) releaseMutationKey(mutation.storageKey);
     }
     if (!response.ok) {
+      const fallback = "This request could not be completed. Please try again.";
+      const safeMessage = apiErrorMessage(payload.error?.code ?? "", fallback);
       const error = new Error(
-        apiErrorMessage(
-          payload.error?.code ?? "",
-          payload.error?.message ?? "Something went wrong",
-        ),
+        safeMessage === fallback && payload.meta?.correlationId
+          ? `${safeMessage} Reference: ${payload.meta.correlationId}.`
+          : safeMessage,
       ) as Error & { code?: string; status?: number };
       if (payload.error?.code) error.code = payload.error.code;
       error.status = response.status;
@@ -246,23 +401,37 @@ export default function CheckoutClient({
     return payload.data;
   };
 
-  // A payment-provider return already has an order to resume.  Start at payment
-  // so the compatibility screen never flashes while that order is loaded.
-  const [step, setStep] = useState(() => (orderId ? 4 : 1)),
-    [compatible, setCompatible] = useState(false),
+  // A top-up or payment-provider return starts at payment immediately so the
+  // new-purchase compatibility form never flashes before effects run.
+  const isTopUpIntent =
+    Boolean((mobile && lookupToken) || targetEsimId) && !orderId;
+  const [step, setStep] = useState(() => (isTopUpIntent ? 4 : orderId ? 2 : 1)),
+    [compatible, setCompatible] = useState(() => {
+      try {
+        return sessionStorage.getItem(consentKey) === "accepted";
+      } catch {
+        return false;
+      }
+    }),
+    [legalAccepted, setLegalAccepted] = useState(() => {
+      try {
+        return sessionStorage.getItem(consentKey) === "accepted";
+      } catch {
+        return false;
+      }
+    }),
     [traveler, setTraveler] = useState(initial);
   const [previewPlan, setPreviewPlan] = useState<PlanSummary | null>(null);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
+  const [compatibilityError, setCompatibilityError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof Traveler, string>>
   >({});
-  // A top-up lookup supplies a short-lived token, mobile number, and the
+  // A top-up lookup supplies a short-lived token, eSIM MSISDN, and the
   // eSIM's country. Treat that as a top-up from the first render so the
   // normal purchase form never flashes while the plan preview is loading.
   // The API independently verifies that the selected plan is valid for this
   // eSIM before it creates the order.
-  const isTopUpIntent =
-    Boolean(mobile && lookupToken && targetCountry) && !orderId;
   useEffect(() => {
     if (!planId || orderId) return;
     let cancelled = false;
@@ -287,13 +456,107 @@ export default function CheckoutClient({
     ticket: File | undefined;
     visa: File | undefined;
   }>({ passport: undefined, ticket: undefined, visa: undefined });
+  const [editingVerifiedDocuments, setEditingVerifiedDocuments] =
+    useState(false);
   const [order, setOrder] = useState<Order | null>(null),
     [payment, setPayment] = useState<Payment | null>(null),
     [uxResending, setUxResending] = useState(false);
   const [resumingOrder, setResumingOrder] = useState(Boolean(orderId));
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
+  useEffect(() => {
+    try {
+      if (compatible && legalAccepted)
+        sessionStorage.setItem(consentKey, "accepted");
+      else sessionStorage.removeItem(consentKey);
+    } catch {
+      /* sessionStorage unavailable */
+    }
+  }, [compatible, legalAccepted, consentKey]);
+  useEffect(() => {
+    if (!orderId) {
+      setRecoveryReady(true);
+      return;
+    }
+    let cancelled = false;
+    const restore = async () => {
+      let saved: { token: string; expiresAt?: string } | null = null;
+      try {
+        const fragment = new URLSearchParams(window.location.hash.slice(1));
+        const fragmentToken = fragment.get("resume");
+        if (fragmentToken) {
+          saved = { token: fragmentToken };
+        } else {
+          const stored = sessionStorage.getItem(recoveryKey(orderId));
+          saved = stored ? (JSON.parse(stored) as typeof saved) : null;
+        }
+      } catch {
+        saved = null;
+      }
+      if (!saved?.token) {
+        if (!cancelled) setRecoveryReady(true);
+        return;
+      }
+      if (saved.expiresAt)
+        setRecovery({ token: saved.token, expiresAt: saved.expiresAt });
+      if (currentToken()) {
+        if (!cancelled) {
+          setGuest(true);
+          guestRef.current = true;
+          setRecoveryReady(true);
+        }
+        return;
+      }
+      try {
+        const response = await fetch(`${API}/guest/orders/${orderId}/recover`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: saved.token }),
+        });
+        const payload = (await response.json()) as Envelope<{
+          order: Order;
+          token: string;
+          recoveryExpiresAt: string;
+        }>;
+        if (!response.ok || !payload.data)
+          throw new Error(
+            apiErrorMessage(
+              payload.error?.code ?? "UNEXPECTED",
+              "This recovery link is invalid or expired",
+            ),
+          );
+        if (cancelled) return;
+        setGuest(true);
+        guestRef.current = true;
+        storeGuestToken(payload.data.token, orderId);
+        storeRecovery(orderId, saved.token, payload.data.recoveryExpiresAt);
+        if (payload.data.order.purchaseType === "TOPUP")
+          rechargeMode.current = true;
+        setOrder(payload.data.order);
+      } catch (cause) {
+        if (!cancelled)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "This recovery link is invalid or expired",
+          );
+      } finally {
+        if (!cancelled) setRecoveryReady(true);
+      }
+    };
+    void restore();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
   const verifyRunToken = useRef(0);
+  const paymentVerificationInFlight = useRef(false);
+  const fonepayExpiryChecked = useRef("");
   const passportRetryNoBefore = useRef(0);
-  const passportRecoveryNoBefore = useRef(0);
+  const appliedExtraction = useRef("");
+  const awaitingVerificationAdvance = useRef(false);
+  const previousDocumentReviewStatus = useRef<string | undefined>(undefined);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [documentAttentionMessage, setDocumentAttentionMessage] = useState("");
   const resendQrEmail = async () => {
     if (!order || uxResending) return;
     setUxResending(true);
@@ -314,48 +577,82 @@ export default function CheckoutClient({
   // (instead of exiting the page), and the on-page Back button shares the same
   // stack. Programmatic/mount transitions still use setStep directly.
   const stepFromUrl = () => {
-    const value = Number(new URLSearchParams(window.location.search).get("step"));
+    const value = Number(
+      new URLSearchParams(window.location.search).get("step"),
+    );
     return Number.isInteger(value) && value >= 1 && value <= 4 ? value : 1;
   };
-  const advance = (next: number) => {
-    if (typeof window === "undefined") { setStep(next); return; }
+  const navigateStep = (next: number, mode: "push" | "replace") => {
+    // A pending provider reference locks the identity, documents, plan and
+    // price snapshot that the provider may still confirm.
+    const paymentSnapshotLocked = checkoutDetailsLocked(order);
+    const requested = Math.min(4, Math.max(1, next));
+    const normalized = paymentSnapshotLocked && requested < 4 ? 4 : requested;
+    if (typeof window === "undefined") {
+      setStep(normalized);
+      return;
+    }
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("step", String(next));
-      window.history.pushState({ step: next }, "", url.toString());
+      url.searchParams.set("step", String(normalized));
+      window.history[mode === "push" ? "pushState" : "replaceState"](
+        { ...window.history.state, checkout: true, step: normalized },
+        "",
+        url.toString(),
+      );
     } catch {
       /* history unavailable */
     }
-    setStep(next);
+    setStep(normalized);
   };
-  const goBack = () => {
-    if (typeof window !== "undefined" && window.history.state?.step) {
-      window.history.back();
-    } else {
-      setStep((current) => Math.max(1, current - 1));
-    }
-  };
-  // Jump back to an already-completed step: replaces the current entry so the
-  // back-stack stays intact (no forward clutter from navigation backwards).
-  const jumpTo = (next: number) => {
-    if (typeof window !== "undefined") {
-      try {
-        const url = new URL(window.location.href);
-        url.searchParams.set("step", String(next));
-        window.history.replaceState({ step: next }, "", url.toString());
-      } catch {
-        /* history unavailable */
-      }
-    }
-    setStep(next);
-  };
+  const advance = (next: number) => navigateStep(next, "push");
+  // Backward navigation replaces the current entry so browser Back cannot
+  // immediately send the user forward in the checkout again.
+  const jumpTo = (next: number) => navigateStep(next, "replace");
   useEffect(() => {
-    const onPop = () => setStep(Math.min(4, Math.max(1, stepFromUrl())));
+    const onPop = () => {
+      const requested = Math.min(4, Math.max(1, stepFromUrl()));
+      const furthest = order ? checkoutResumeStep(order) : step;
+      const paymentSnapshotLocked = checkoutDetailsLocked(order);
+      const resolved = Math.min(requested, furthest);
+      if (paymentSnapshotLocked && resolved < 4) {
+        navigateStep(4, "replace");
+        return;
+      }
+      setStep(resolved);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
+  }, [order, step]);
+  useEffect(() => {
+    navigateStep(step, "replace");
   }, []);
+  useEffect(() => {
+    const hasUnsavedCheckoutProgress = step > 1 && step < 4 && !resumingOrder;
+    if (!hasUnsavedCheckoutProgress) return;
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [resumingOrder, step]);
   const summaryPlan = order?.plan ?? previewPlan;
+  const summaryPrice = order?.totalAmountNpr ?? summaryPlan?.sellingPriceNpr;
   const isTopUp = order?.purchaseType === "TOPUP" || isTopUpIntent;
+  const showPaymentChoice =
+    !isTopUp &&
+    step === 4 &&
+    !payment &&
+    (!order || ["DRAFT", "PAYMENT_FAILED"].includes(order.status));
+  const documentsVerified =
+    order?.documentReviewStatus === "VERIFIED" ||
+    order?.documentReviewStatus === "MANUALLY_APPROVED";
+  const manualNeedsTraveler =
+    order?.documentReviewStatus === "MANUAL_REVIEW" &&
+    !order.traveler &&
+    hasSavedDocument(order.documents, "PASSPORT") &&
+    hasSavedDocument(order.documents, "TICKET");
   const [provider, setProvider] = useState<PaymentProvider>(
       PaymentProvider.KHALTI,
     ),
@@ -363,15 +660,25 @@ export default function CheckoutClient({
     [error, setError] = useState(""),
     [verifying, setVerifying] = useState(false);
   const [verifyingPassport, setVerifyingPassport] = useState(false);
-  const [availableProviders, setAvailableProviders] = useState<PaymentProvider[]>([
-    PaymentProvider.KHALTI,
-  ]);
+  const passportVerificationInFlight = useRef(false);
+  const [fonepayBankHint, setFonepayBankHint] = useState("");
+  const [fonepaySocketReady, setFonepaySocketReady] = useState(false);
+  const [showPaymentMethods, setShowPaymentMethods] = useState(false);
+  const [lockedProvider, setLockedProvider] = useState<PaymentProvider | null>(
+    null,
+  );
+  const [availableProviders, setAvailableProviders] = useState<
+    PaymentProvider[]
+  >([PaymentProvider.KHALTI]);
   useEffect(() => {
     void api<{ providers: PaymentProvider[] }>("/payments/providers")
       .then((value) => {
         if (!value.providers.length) return;
         setAvailableProviders(value.providers);
-        if (!value.providers.includes(provider)) setProvider(value.providers[0]!);
+        if (!value.providers.includes(provider)) {
+          setProvider(value.providers[0]!);
+          setLockedProvider(null);
+        }
       })
       .catch(() => undefined);
   }, []);
@@ -385,64 +692,82 @@ export default function CheckoutClient({
       setResumingOrder(false);
       return;
     }
+    if (!recoveryReady) return;
     if (!isLoaded && !guestToken) return;
     setResumingOrder(true);
     setBusy(true);
     api<Order>(`/customer/orders/${orderId}`)
-      .then((value) => {
-        if (
-          ![
-            "DRAFT",
-            "PAYMENT_PENDING",
-            "PAYMENT_FAILED",
-            "PAYMENT_REVIEW_REQUIRED",
-          ].includes(value.status)
-        )
+      .then(async (value) => {
+        const disposition = checkoutResumeDisposition(value.status);
+        if (disposition === "UNSUPPORTED")
           throw new Error("This order can no longer be resumed from checkout");
         setOrder(value);
         setCompatible(true);
-        if (value.traveler) setTraveler({ ...initial, ...value.traveler });
-        if (value.purchaseType === "TOPUP") {
-          setStep(4);
-          if (value.status === "PAYMENT_PENDING" && value.payment) {
-            setPayment({
-              reference: value.payment.reference,
-              redirectUrl: "",
-              expiresAt: "",
-            });
-            void verifyPayment(value);
-          }
-          return;
+        setLegalAccepted(true);
+        if (value.payment?.provider) {
+          setProvider(value.payment.provider);
+          setLockedProvider(
+            value.paymentRetry?.canChangeProvider
+              ? null
+              : value.payment.provider,
+          );
         }
-        const hasRequiredDocs = Boolean(
-          value.documents?.some((document) => document.type === "PASSPORT") &&
-          value.documents?.some((document) => document.type === "TICKET"),
-        );
+        if (value.traveler) setTraveler({ ...initial, ...value.traveler });
+        awaitingVerificationAdvance.current =
+          Boolean(value.traveler) &&
+          ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
+            value.documentReviewStatus ?? "",
+          );
+        const resumeStep = checkoutResumeStep(value);
+        navigateStep(resumeStep, "replace");
+        if (disposition === "POST_PAYMENT") return;
         if (value.status === "PAYMENT_PENDING" && value.payment) {
-          setPayment({
+          const paymentSummary: Payment = {
             reference: value.payment.reference,
             redirectUrl: "",
             expiresAt: "",
-          });
-          setStep(4);
-          void verifyPayment(value);
+          };
+          if (value.payment.provider === PaymentProvider.FONEPAY) {
+            try {
+              const restored = await api<Payment>(
+                `/customer/orders/${value.id}/payment`,
+                {
+                  method: "POST",
+                  body: JSON.stringify({ provider: PaymentProvider.FONEPAY }),
+                },
+              );
+              setPayment(restored);
+            } catch {
+              // Keep status recovery available even when the provider cannot
+              // restore the QR session at this moment.
+              setPayment(paymentSummary);
+            }
+          } else {
+            setPayment(paymentSummary);
+          }
+          if (
+            value.payment.provider !== PaymentProvider.FONEPAY &&
+            hasGatewayReturnSignal()
+          )
+            void verifyPayment(value, true);
         } else if (value.status === "PAYMENT_FAILED") {
           setPayment(null);
-          setStep(4);
-        } else if (!value.traveler) setStep(2);
-        else if (!hasRequiredDocs) setStep(3);
-        else setStep(4);
+        }
       })
       .catch((cause) =>
         setError(
-          cause instanceof Error ? cause.message : "Order could not be resumed",
+          isSignedIn !== true && !currentToken()
+            ? "Open the private recovery link sent to your email to continue this guest order."
+            : cause instanceof Error
+              ? cause.message
+              : "Order could not be resumed",
         ),
       )
       .finally(() => {
         setBusy(false);
         setResumingOrder(false);
       });
-  }, [orderId, isLoaded, guestToken]);
+  }, [orderId, isLoaded, guestToken, recoveryReady, restoreAttempt]);
   const VERIFY_DELAYS = [
     0, 2_000, 4_000, 7_000, 10_000, 15_000, 20_000, 30_000, 45_000,
   ];
@@ -459,6 +784,8 @@ export default function CheckoutClient({
     "PAYMENT_FAILED",
     "PROVISIONING_FAILED",
     "CANCELLED",
+    "REFUND_PENDING",
+    "REFUNDED",
   ];
   const FULFILLMENT_IN_PROGRESS_STATUSES = [
     "PAYMENT_CONFIRMED",
@@ -487,83 +814,158 @@ export default function CheckoutClient({
       url.searchParams.delete(key);
     window.history.replaceState({}, "", url.toString());
   };
-  const verifyPayment = async (initialOrder: Order) => {
-    const token = ++verifyRunToken.current;
-    setVerifying(true);
-    setError("");
-    stripReturnParams();
-    const started = Date.now();
-    let current = initialOrder;
-    let attempt = 0;
-    while (Date.now() - started < VERIFY_BUDGET_MS) {
-      if (verifyRunToken.current !== token) return;
-      const wait =
-        VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
-      if (wait > 0) {
-        await new Promise((resolve) => setTimeout(resolve, wait));
+  const hasGatewayReturnSignal = () => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return [
+      "reference",
+      "pidx",
+      "status",
+      "transaction_id",
+      "purchase_order_id",
+    ].some((key) => params.has(key));
+  };
+  const verifyPayment = async (initialOrder: Order, poll = false) => {
+    // Serialize manual and silent verification so two concurrent lookups
+    // cannot race and regress the order to a stale snapshot.
+    if (paymentVerificationInFlight.current) {
+      setError(
+        "We are already checking this payment. Please wait a moment, then check again.",
+      );
+      setVerifying(false);
+      return;
+    }
+    paymentVerificationInFlight.current = true;
+    try {
+      const token = ++verifyRunToken.current;
+      setVerifying(true);
+      setError("");
+      stripReturnParams();
+      const started = Date.now();
+      let current = initialOrder;
+      let attempt = 0;
+      while (Date.now() - started < VERIFY_BUDGET_MS) {
         if (verifyRunToken.current !== token) return;
-      }
-      attempt += 1;
-      try {
-        // Retry the verification lookup itself (not just the order poll):
-        // Khalti can report pending/initiated for a few seconds after the
-        // wallet redirect, so a single attempt is not enough.
-        const updated = await api<Order>(
-          `/customer/orders/${current.id}/payment/verify`,
-          {
-            method: "POST",
-            body: JSON.stringify({ reference: current.payment?.reference }),
-          },
-        );
-        setOrder(updated);
-        current = updated;
-        if (TERMINAL_STATUSES.includes(updated.status)) {
-          setVerifying(false);
-          return;
+        const wait =
+          VERIFY_DELAYS[Math.min(attempt, VERIFY_DELAYS.length - 1)] ?? 0;
+        if (wait > 0) {
+          await new Promise((resolve) => setTimeout(resolve, wait));
+          if (verifyRunToken.current !== token) return;
         }
-      } catch (cause) {
-        const code = (cause as { code?: string })?.code;
-        if (
-          code === "PAYMENT_EXPIRED" ||
-          code === "PAYMENT_REFERENCE_MISMATCH" ||
-          code === "PAYMENT_NOT_CONFIRMED"
-        ) {
+        attempt += 1;
+        try {
+          // Retry the verification lookup itself (not just the order poll):
+          // Khalti can report pending/initiated for a few seconds after the
+          // wallet redirect, so a single attempt is not enough.
+          const updated = await api<Order>(
+            `/customer/orders/${current.id}/payment/verify`,
+            {
+              method: "POST",
+              body: JSON.stringify({ reference: current.payment?.reference }),
+            },
+          );
+          setOrder(updated);
+          current = updated;
+          if (updated.paymentRetry?.canRetry) {
+            setPayment(null);
+            if (updated.paymentRetry.canChangeProvider) setLockedProvider(null);
+          }
+          if (TERMINAL_STATUSES.includes(updated.status)) {
+            setVerifying(false);
+            return;
+          }
+          if (!poll) {
+            setError(
+              "Your payment provider has not confirmed this payment yet. Complete payment in the provider app, then check again.",
+            );
+            setVerifying(false);
+            return;
+          }
+        } catch (cause) {
+          const code = (cause as { code?: string })?.code;
+          if (
+            code === "PAYMENT_EXPIRED" ||
+            code === "PAYMENT_REFERENCE_MISMATCH" ||
+            code === "PAYMENT_NOT_CONFIRMED" ||
+            code === "PAYMENT_RETRY_NOT_SAFE"
+          ) {
+            const refreshed = await api<Order>(
+              `/customer/orders/${current.id}`,
+            ).catch(() => current);
+            setOrder(refreshed);
+            current = refreshed;
+            if (refreshed.paymentRetry?.canRetry) {
+              setPayment(null);
+              if (refreshed.paymentRetry.canChangeProvider)
+                setLockedProvider(null);
+            }
+            if (code === "PAYMENT_RETRY_NOT_SAFE")
+              setError(
+                "A previous payment must be confirmed before a new attempt is safe. Our team is verifying it and no second charge will be made.",
+              );
+            setVerifying(false);
+            return;
+          }
+          // Transient network/provider errors retry; refresh the order so the
+          // UI stays current without treating an unknown error as "pending".
           const refreshed = await api<Order>(
             `/customer/orders/${current.id}`,
           ).catch(() => current);
           setOrder(refreshed);
           current = refreshed;
-          setVerifying(false);
-          return;
-        }
-        // Transient network/provider errors retry; refresh the order so the
-        // UI stays current without treating an unknown error as "pending".
-        const refreshed = await api<Order>(
-          `/customer/orders/${current.id}`,
-        ).catch(() => current);
-        setOrder(refreshed);
-        current = refreshed;
-        if (TERMINAL_STATUSES.includes(refreshed.status)) {
-          setVerifying(false);
-          return;
+          if (refreshed.paymentRetry?.canRetry) {
+            setPayment(null);
+            if (refreshed.paymentRetry.canChangeProvider)
+              setLockedProvider(null);
+          }
+          if (TERMINAL_STATUSES.includes(refreshed.status)) {
+            setVerifying(false);
+            return;
+          }
+          if (!poll) {
+            setError(
+              "We could not reach the payment provider just now. No second charge was made: your order stays pending until a confirmation comes back. Please check again shortly.",
+            );
+            setVerifying(false);
+            return;
+          }
         }
       }
+      const refreshed = await api<Order>(
+        `/customer/orders/${current.id}`,
+      ).catch(() => current);
+      setOrder(refreshed);
+      if (refreshed.paymentRetry?.canRetry) {
+        setPayment(null);
+        if (refreshed.paymentRetry.canChangeProvider) setLockedProvider(null);
+      }
+      setError(
+        "Your payment is still being confirmed. Return to this tracking page shortly.",
+      );
+      setVerifying(false);
+    } finally {
+      paymentVerificationInFlight.current = false;
     }
-    setOrder(
-      await api<Order>(`/customer/orders/${current.id}`).catch(() => current),
-    );
-    setError(
-      "Your payment is still being confirmed. Check your eSIMs shortly.",
-    );
+  };
+  const cancelPaymentVerification = () => {
+    verifyRunToken.current += 1;
     setVerifying(false);
   };
   const update = (key: keyof Traveler, value: string) => {
     setTraveler((v) => ({ ...v, [key]: value }));
     setFieldErrors((current) => ({ ...current, [key]: undefined }));
+    setMismatchError("");
   };
   const verifyPassport = async (): Promise<Order | null> => {
-    if (!order || verifyingPassport) return order;
-    passportRecoveryNoBefore.current = Date.now() + 30_000;
+    if (!order || passportVerificationInFlight.current) return null;
+    if (Date.now() < passportRetryNoBefore.current) {
+      setDocumentError(
+        "Please wait a minute before checking again. Your documents are saved.",
+      );
+      return null;
+    }
+    setDocumentMessage("Checking your passport…");
+    passportVerificationInFlight.current = true;
     setVerifyingPassport(true);
     setError("");
     try {
@@ -572,63 +974,229 @@ export default function CheckoutClient({
         { method: "POST", body: "{}" },
       );
       setOrder(updated);
+      if (updated.documentReviewStatus === "CORRECTION_REQUIRED") {
+        const mismatched = new Set(
+          updated.passportVerification?.mismatchedFields ?? [],
+        );
+        setFieldErrors({
+          ...(mismatched.has("firstName")
+            ? {
+                firstName:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
+            : {}),
+          ...(mismatched.has("middleName")
+            ? {
+                middleName:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
+            : {}),
+          ...(mismatched.has("surname")
+            ? {
+                surname:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
+            : {}),
+          ...(mismatched.has("dateOfBirth")
+            ? {
+                dateOfBirth:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
+            : {}),
+          ...(mismatched.has("passportNumber")
+            ? {
+                passportNumber:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
+            : {}),
+          ...(mismatched.has("passportExpiryDate")
+            ? {
+                passportExpiryDate:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
+            : {}),
+          ...(mismatched.has("nationality")
+            ? {
+                nationality:
+                  "We couldn't automatically match this detail with your uploaded passport. Please check it.",
+              }
+            : {}),
+        });
+      } else if (updated.documentReviewStatus === "MANUAL_REVIEW") {
+        setFieldErrors({});
+        setDocumentAttentionMessage("");
+      }
       return updated;
     } catch (e) {
       if ((e as { code?: string }).code === "RATE_LIMITED")
         passportRetryNoBefore.current = Date.now() + 60_000;
-      setError(
-        e instanceof Error ? e.message : "We could not verify your passport",
+      setDocumentError(
+        "We couldn't start document verification. Your documents are securely saved. Please try again.",
       );
       return null;
     } finally {
+      passportVerificationInFlight.current = false;
       setVerifyingPassport(false);
+      setDocumentMessage("");
     }
   };
+  const [documentMessage, setDocumentMessage] = useState("");
+  const [documentError, setDocumentError] = useState("");
+  const documentFailureMessage = (cause: unknown) => {
+    const message = cause instanceof Error ? cause.message : "";
+    return message === "Failed to fetch" ||
+      /network request failed/i.test(message)
+      ? "We couldn't reach the verification service. Your documents are securely saved. Check your connection and try again."
+      : message || "Could not complete the document check. Try again.";
+  };
+  const uploadDocument = useRef(createDocumentUploader());
   const passportGatePassed = (target: Order | null) =>
     !target ||
     isTopUp ||
     ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
       target.documentReviewStatus ?? "",
     );
+  const passportFailureCode = order?.passportExtraction?.failureCode;
+  const hardPassportReplacementRequired =
+    passportRequiresReplacement(passportFailureCode);
+  const displayDocuments = (order?.documents ?? []).map((document) =>
+    hardPassportReplacementRequired && document.type === "PASSPORT"
+      ? { ...document, status: "REUPLOAD_REQUIRED" }
+      : document,
+  );
+  const effectiveDocumentReviewStatus = displayDocuments.some(
+    (document) => document.status === "REUPLOAD_REQUIRED",
+  )
+    ? ("REUPLOAD_REQUIRED" as const)
+    : order?.documentReviewStatus;
   useEffect(() => {
-    if (step !== 4 || isTopUp) return;
-    if (!order || order.passportVerification) return;
-    if (!order.documents?.some((document) => document.type === "PASSPORT"))
-      return;
-    void verifyPassport();
-  }, [step, order?.id, isTopUp]);
-  useEffect(() => {
-    if (step !== 4 || isTopUp || verifyingPassport) return;
+    const current = effectiveDocumentReviewStatus;
+    const previous = previousDocumentReviewStatus.current;
+    previousDocumentReviewStatus.current = current;
     if (
-      !order ||
-      !["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
-        order.documentReviewStatus ?? "",
+      previous &&
+      !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(previous) &&
+      ["VERIFIED", "MANUALLY_APPROVED"].includes(current ?? "")
+    )
+      setSuccessMessage(
+        current === "MANUALLY_APPROVED"
+          ? "Our team approved your documents. You can continue to payment."
+          : "Your passport was matched with your traveller details. You can continue to payment.",
+      );
+    if (
+      current &&
+      current !== previous &&
+      ["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(current)
+    ) {
+      if (current === "CORRECTION_REQUIRED") {
+        // The comparison panel itself explains mismatches; a second modal
+        // would cover it and make the customer dismiss an unrelated sheet.
+        setDocumentAttentionMessage("");
+      } else setDocumentAttentionMessage("");
+    }
+    if (current === "MANUAL_REVIEW") setDocumentAttentionMessage("");
+    if (current === "REUPLOAD_REQUIRED" && current !== previous && step !== 2)
+      jumpTo(2);
+  }, [effectiveDocumentReviewStatus, passportFailureCode, step]);
+  const technicalOcrNoticeShown = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      step === 3 &&
+      passportAutomationUnavailable(passportFailureCode) &&
+      technicalOcrNoticeShown.current !== passportFailureCode
+    ) {
+      technicalOcrNoticeShown.current = passportFailureCode ?? null;
+      setDocumentAttentionMessage(
+        passportFailurePresentation(passportFailureCode).message,
+      );
+    } else if (!passportAutomationUnavailable(passportFailureCode))
+      technicalOcrNoticeShown.current = null;
+  }, [passportFailureCode, step]);
+  useEffect(() => {
+    if (
+      step === 3 &&
+      awaitingVerificationAdvance.current &&
+      passportGatePassed(order)
+    ) {
+      awaitingVerificationAdvance.current = false;
+      advance(4);
+    }
+  }, [step, order?.documentReviewStatus]);
+  useEffect(() => {
+    if (![2, 3, 4].includes(step) || isTopUp || busy) return;
+    if (!order || order.passportVerification) return;
+    if (
+      !["PASSPORT", "TICKET"].every((type) =>
+        hasSavedDocument(order.documents, type),
       )
     )
       return;
-    if (Date.now() < passportRetryNoBefore.current) return;
+    void verifyPassport();
+  }, [step, order?.id, isTopUp]);
+  useDocumentRefresh(
+    [2, 3, 4].includes(step) &&
+      !isTopUp &&
+      !busy &&
+      !verifyingPassport &&
+      ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
+        order?.documentReviewStatus ?? "",
+      ),
+    async (isCurrent) => {
+      if (!order) return;
+      const refreshed = await api<Order>(`/customer/orders/${order.id}`);
+      if (!isCurrent()) return;
+      setOrder(refreshed);
+      setDocumentError("");
+    },
+    () =>
+      setDocumentError(
+        "Connection interrupted. Your files are saved. We’ll keep trying to refresh verification.",
+      ),
+    order?.documentReviewStatus === "MANUAL_REVIEW",
+  );
+  useEffect(() => {
+    const extraction = order?.passportExtraction;
     if (
-      order.documentReviewStatus !== "MANUAL_REVIEW" &&
-      Date.now() >= passportRecoveryNoBefore.current
-    ) {
-      void verifyPassport();
+      !extraction ||
+      !["READY", "PARTIAL", "SKIPPED"].includes(extraction.status)
+    )
       return;
+    const key = `${order?.id}:${extraction.status}:${JSON.stringify(extraction.fields ?? {})}`;
+    if (appliedExtraction.current !== key) {
+      appliedExtraction.current = key;
+      setTraveler((current) => {
+        const updates: Partial<Traveler> = {};
+        for (const [field, value] of Object.entries(extraction.fields ?? {})) {
+          const key = field as keyof Traveler;
+          if (typeof value === "string" && !current[key])
+            Object.assign(updates, { [key]: value });
+        }
+        return { ...current, ...updates };
+      });
     }
-    // OCR is asynchronous. Polling the order is deliberately read-only so a
-    // slow worker never receives duplicate verification submissions.
-    const timer = setTimeout(() => {
-      void api<Order>(`/customer/orders/${order.id}`)
-        .then(setOrder)
-        .catch((cause) =>
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "We could not refresh passport verification",
-          ),
-        );
-    }, 3_000);
-    return () => clearTimeout(timer);
-  }, [step, order, isTopUp, verifyingPassport]);
+    if (
+      step === 2 &&
+      !editingVerifiedDocuments &&
+      order &&
+      canEnterTravelerAfterExtraction(order)
+    )
+      advance(3);
+  }, [
+    order?.id,
+    order?.passportExtraction,
+    order?.documentReviewStatus,
+    step,
+    editingVerifiedDocuments,
+  ]);
+  useEffect(() => {
+    if (
+      order?.status === "DRAFT" &&
+      step === 4 &&
+      !isTopUp &&
+      (!passportGatePassed(order) || Object.values(files).some(Boolean))
+    )
+      setStep(3);
+  }, [step, order, isTopUp, files]);
   useEffect(() => {
     if (
       verifying ||
@@ -657,7 +1225,43 @@ export default function CheckoutClient({
       setBusy(false);
     }
   };
-  const begin = () =>
+  const requestPayment = async (target: Order) => {
+    const value = await api<Payment>(`/customer/orders/${target.id}/payment`, {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+    });
+    setPayment(value);
+    setShowPaymentMethods(false);
+    // The initiation endpoint only returns the provider session. It has already
+    // persisted PAYMENT_PENDING before responding, so keep the local order in
+    // step immediately; otherwise a freshly returned Fonepay QR is hidden by
+    // the stale DRAFT render branch until the order is fetched again.
+    setOrder((current) =>
+      current?.id === target.id
+        ? {
+            ...current,
+            status: "PAYMENT_PENDING",
+            payment: {
+              provider,
+              reference: value.reference,
+              status: "PENDING",
+            },
+          }
+        : current,
+    );
+    void api<Order>(`/customer/orders/${target.id}`)
+      .then((current) => setOrder(current))
+      .catch(() => undefined);
+    let isExternal = true;
+    try {
+      isExternal = new URL(value.redirectUrl).origin !== window.location.origin;
+    } catch {
+      isExternal = true;
+    }
+    if (value.redirectUrl && isExternal)
+      window.location.assign(value.redirectUrl);
+  };
+  const createOrder = (asGuest: boolean) =>
     run(async () => {
       if (order) {
         if (isTopUp) {
@@ -674,23 +1278,96 @@ export default function CheckoutClient({
       if (!planId) throw new Error("Choose a plan before checkout");
       if (!compatible && !isTopUpIntent)
         throw new Error("Confirm device compatibility");
-      if (guest) {
-        const created = await api<{ order: Order; token: string }>(
-          "/customer/orders",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              planId,
-              compatibilityAccepted: true,
-              mobile: mobile || traveler.mobile || undefined,
-              lookupToken: lookupToken || undefined,
-            }),
-          },
-        );
+      if (!legalAccepted)
+        throw new Error("Accept the Terms and Privacy Policy to continue");
+      if (isTopUp) {
+        rechargeMode.current = true;
+        const storageKey = "vc_recharge_checkout_attempt";
+        const fingerprint = JSON.stringify({
+          planId,
+          targetEsimId: targetEsimId ?? null,
+          mobile: mobile ?? null,
+        });
+        let attempt: { key: string; fingerprint: string } | null = null;
+        try {
+          attempt = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+        } catch {
+          /* invalid saved attempt */
+        }
+        if (!attempt || attempt.fingerprint !== fingerprint) {
+          attempt = { key: crypto.randomUUID(), fingerprint };
+          localStorage.setItem(storageKey, JSON.stringify(attempt));
+        }
+        const created = await api<{
+          order: Order;
+          token: string;
+          recovery: { token: string; expiresAt: string };
+        }>("/customer/orders", {
+          method: "POST",
+          body: JSON.stringify({
+            planId,
+            termsAccepted: true,
+            privacyAccepted: true,
+            checkoutAttemptKey: attempt.key,
+            ...(lookupToken ? { lookupToken } : { targetEsimId }),
+          }),
+        });
         setOrder(created.order);
+        setShowAccountChoice(false);
+        guestRef.current = isSignedIn !== true;
+        setGuest(isSignedIn !== true);
         storeGuestToken(created.token, created.order.id);
+        storeRecovery(
+          created.order.id,
+          created.recovery.token,
+          created.recovery.expiresAt,
+        );
+        window.history.replaceState(
+          window.history.state,
+          "",
+          `/esim/checkout?order=${encodeURIComponent(created.order.id)}&recharge=1${isSignedIn === true ? "" : `#resume=${encodeURIComponent(created.recovery.token)}`}`,
+        );
+        setStep(4);
+        await requestPayment(created.order);
+        return;
+      }
+      guestRef.current = asGuest;
+      setGuest(asGuest);
+      if (asGuest) {
+        const created = await api<{
+          order: Order;
+          token: string;
+          recovery: { token: string; expiresAt: string };
+        }>("/customer/orders", {
+          method: "POST",
+          body: JSON.stringify({
+            planId,
+            compatibilityAccepted: true,
+            termsAccepted: true,
+            privacyAccepted: true,
+            mobile: mobile || traveler.mobile || undefined,
+            lookupToken: lookupToken || undefined,
+          }),
+        });
+        setOrder(created.order);
+        setShowAccountChoice(false);
+        storeGuestToken(created.token, created.order.id);
+        storeRecovery(
+          created.order.id,
+          created.recovery.token,
+          created.recovery.expiresAt,
+        );
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set("order", created.order.id);
+          url.hash = `resume=${encodeURIComponent(created.recovery.token)}`;
+          window.history.replaceState(window.history.state, "", url.toString());
+        } catch {
+          /* history unavailable; the recovery card remains copyable */
+        }
         if (created.order.purchaseType === "TOPUP") {
           setStep(4);
+          await requestPayment(created.order);
         } else {
           setStep(2);
         }
@@ -703,6 +1380,10 @@ export default function CheckoutClient({
         body: JSON.stringify({
           planId,
           compatibilityAccepted: true,
+          termsAccepted: true,
+          privacyAccepted: true,
+          mobile: mobile || traveler.mobile || undefined,
+          lookupToken: lookupToken || undefined,
           ...(targetEsimId ? { targetEsimId } : {}),
         }),
       });
@@ -715,6 +1396,7 @@ export default function CheckoutClient({
         ? (payload as { order: Order }).order
         : (payload as Order);
       setOrder(finalOrder);
+      setShowAccountChoice(false);
       if (finalOrder.traveler)
         setTraveler({ ...initial, ...finalOrder.traveler });
       if (isGuestPayload) {
@@ -722,13 +1404,95 @@ export default function CheckoutClient({
       }
       if (finalOrder.purchaseType === "TOPUP") {
         setStep(4);
+        await requestPayment(finalOrder);
       } else {
         setStep(2);
       }
     });
+  const begin = () => {
+    if (order) {
+      void createOrder(guestRef.current);
+      return;
+    }
+    if (!compatible && !isTopUpIntent) {
+      setCompatibilityError(
+        "Confirm that your device is eSIM-compatible before continuing.",
+      );
+      return;
+    }
+    if (!legalAccepted) {
+      setCompatibilityError(
+        "Accept the Terms and Privacy Policy before continuing.",
+      );
+      return;
+    }
+    if (!isLoaded) {
+      setError("Finishing secure sign-in. Please try again in a moment.");
+      return;
+    }
+    if (isTopUpIntent || isSignedIn === true) {
+      void createOrder(false);
+      return;
+    }
+    setShowAccountChoice(true);
+  };
+  useEffect(() => {
+    if (!pendingSignIn || isSignedIn !== true) return;
+    setPendingSignIn(false);
+    setShowAccountChoice(false);
+    void createOrder(false);
+  }, [pendingSignIn, isSignedIn]);
+
+  const claimGuestOrder = () =>
+    run(async () => {
+      if (!order || isTopUp || !currentToken()) return;
+      const mutation = mutationKey(`claim-guest:${order.id}`);
+      const response = await authFetch(
+        `${API}/customer/orders/${order.id}/claim-guest`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-idempotency-key": mutation.key,
+            "x-guest-order-token": currentToken(),
+          },
+          body: "{}",
+        },
+      );
+      releaseMutationKey(mutation.storageKey);
+      const payload = (await response.json()) as Envelope<Order>;
+      if (!response.ok || !payload.data)
+        throw new Error(
+          apiErrorMessage(
+            payload.error?.code ?? "UNEXPECTED",
+            "We could not save this order to your account",
+          ),
+        );
+      try {
+        sessionStorage.removeItem(tokenKey(order.id));
+        sessionStorage.removeItem(recoveryKey(order.id));
+      } catch {
+        /* storage unavailable */
+      }
+      guestTokenRef.current = "";
+      setGuestToken("");
+      guestRef.current = false;
+      setGuest(false);
+      setRecovery(null);
+      setOrder(payload.data);
+    });
+  useEffect(() => {
+    if (!claimIntent || isSignedIn !== true) return;
+    setClaimIntent(false);
+    void claimGuestOrder();
+  }, [claimIntent, isSignedIn]);
   const saveTraveler = () =>
     run(async () => {
       if (!order) return;
+      const changeKind = travelerChangeKind(order.traveler, traveler);
+      const newContactRuleApplies =
+        order.contactRuleVersion !== 0 &&
+        (!order.traveler || traveler.mobile !== order.traveler.mobile);
       const required: [keyof Traveler, string][] = [
         ["firstName", "First name"],
         ["surname", "Surname"],
@@ -739,15 +1503,17 @@ export default function CheckoutClient({
         ["nationality", "Nationality"],
         ["countryOfResidence", "Country of residence"],
         ["email", "Email"],
-        ["mobile", "Mobile / WhatsApp"],
+        ["mobile", "Nepali mobile number"],
       ];
       const nextErrors: Partial<Record<keyof Traveler, string>> = {};
       for (const [key, label] of required)
         if (!traveler[key].trim()) nextErrors[key] = `${label} is required`;
       if (traveler.email && !/^\S+@\S+\.\S+$/.test(traveler.email))
         nextErrors.email = "Enter a valid email address";
-      if (traveler.mobile && !/^\+?[0-9][0-9\s-]{6,19}$/.test(traveler.mobile))
-        nextErrors.mobile = "Enter a valid mobile number";
+      if (traveler.mobile && newContactRuleApplies) {
+        if (!/^\d{10}$/.test(traveler.mobile))
+          nextErrors.mobile = "Enter exactly 10 digits";
+      }
       if (traveler.passportNumber && traveler.passportNumber.length < 5)
         nextErrors.passportNumber =
           "Passport number must be at least 5 characters";
@@ -758,88 +1524,178 @@ export default function CheckoutClient({
         new Date(traveler.passportExpiryDate) <= new Date()
       )
         nextErrors.passportExpiryDate = "Passport must not be expired";
+      if (!isIsoAlpha2CountryCode(traveler.nationality))
+        nextErrors.nationality =
+          "Enter a valid two-letter country code, such as PL";
+      if (!isIsoAlpha2CountryCode(traveler.countryOfResidence))
+        nextErrors.countryOfResidence =
+          "Enter a valid two-letter country code, such as PL";
       setFieldErrors(nextErrors);
       const firstError = Object.keys(nextErrors)[0];
       if (firstError) {
-        document.querySelector<HTMLElement>(`[name="${firstError}"]`)?.focus();
+        const field = document.querySelector<HTMLElement>(
+          `[name="${firstError}"]`,
+        );
+        field?.scrollIntoView({ behavior: "smooth", block: "center" });
+        field?.focus();
         throw new Error("Check the highlighted traveller details");
       }
-      if (
-        traveler.nationality.length !== 2 ||
-        traveler.countryOfResidence.length !== 2
-      )
-        throw new Error(
-          "Nationality and country of residence must use two-letter country codes",
-        );
       const body = Object.fromEntries(
-        Object.entries(traveler).filter(([, v]) => v !== ""),
+        Object.entries(traveler)
+          .map(([key, value]) => [key, value.trim()])
+          .filter(([, value]) => value !== ""),
       );
-      await api(`/customer/orders/${order.id}/traveler`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      });
-      setOrder((o) =>
-        o &&
-        ["FAILED", "PARTIAL"].includes(o.passportVerification?.status ?? "")
-          ? (({ passportVerification: _drop, ...rest }) => rest)(o)
-          : o,
-      );
-      advance(3);
+      if (changeKind === "unchanged" && passportGatePassed(order)) {
+        advance(4);
+        return;
+      }
+      if (changeKind === "unchanged" && ["OCR_PENDING", "OCR_BACKGROUND"].includes(order.documentReviewStatus ?? "")) {
+        awaitingVerificationAdvance.current = true;
+        return;
+      }
+      let updated: Order;
+      try {
+        updated = await api<Order>(
+          `/customer/orders/${order.id}/traveler`,
+          {
+            method: "PATCH",
+            body: JSON.stringify(body),
+          },
+        );
+      } catch (cause) {
+        if (
+          (cause as { code?: string }).code === "ESIM_CONTACT_ALREADY_LINKED" &&
+          cause instanceof Error &&
+          cause.message
+        ) {
+          setFieldErrors((current) => ({ ...current, mobile: cause.message }));
+          document.querySelector<HTMLElement>('[name="mobile"]')?.focus();
+          return;
+        }
+        throw cause;
+      }
+      setOrder(updated);
+      if (changeKind === "contact" && passportGatePassed(updated)) {
+        advance(4);
+        return;
+      }
+      awaitingVerificationAdvance.current = true;
+      const verified = await verifyPassport();
+      if (verified && passportGatePassed(verified)) {
+        awaitingVerificationAdvance.current = false;
+        advance(4);
+      }
     });
+  const confirmPassportDetails = () =>
+    (async () => {
+      if (!order) return;
+      setBusy(true);
+      setMismatchError("");
+      try {
+        const updated = await api<Order>(
+          `/customer/orders/${order.id}/confirm-passport-details`,
+          { method: "POST", body: "{}" },
+        );
+        setOrder(updated);
+        setFieldErrors({});
+        if (passportGatePassed(updated)) advance(4);
+      } catch (cause) {
+        const status = (cause as { status?: number }).status;
+        setMismatchError(
+          status === 409
+            ? "Your details changed since the last check. Save them and compare again before requesting review."
+            : "We couldn't send your details for review. Please try again; your saved details are still here.",
+        );
+      } finally {
+        setBusy(false);
+      }
+    })();
   const saveDocuments = () =>
     run(async () => {
-      if (!order || !files.passport || !files.ticket)
-        throw new Error("Passport and travel ticket are required");
-      await submitCheckoutDocumentsSequentially(
-        files,
-        async ({ file, type }) => {
-          if (file.size > 10 * 1024 * 1024)
-            throw new Error(`${file.name} exceeds the 10 MB limit`);
-          if (
-            !["application/pdf", "image/jpeg", "image/png"].includes(
-              file.type || "application/pdf",
-            )
-          )
-            throw new Error(`${file.name} must be a PDF, JPG or PNG`);
-          const authorization = await api<DocumentAuthorization>(
-            `/customer/orders/${order.id}/documents`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                type,
-                fileName: file.name,
-                contentType: file.type || "application/pdf",
-              }),
-            },
-          );
-          if (authorization.upload.mode === "local-simulator") {
-            await api(
-              `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
-              { method: "POST", body: "{}" },
-            );
-            return;
-          }
-          if (
-            authorization.upload.mode !== "s3-presigned" ||
-            !authorization.upload.endpoint
-          )
-            throw new Error("Private document storage is unavailable");
-          const uploaded = await fetch(authorization.upload.endpoint, {
-            method: authorization.upload.method ?? "PUT",
-            ...(authorization.upload.headers
-              ? { headers: authorization.upload.headers }
-              : {}),
-            body: file,
-          });
-          if (!uploaded.ok) throw new Error(`Upload failed for ${file.name}`);
-          await api(
-            `/customer/orders/${order.id}/documents/${authorization.id}/confirm`,
-            { method: "POST", body: "{}" },
-          );
-        },
+      setDocumentError("");
+      const requestedReplacements = displayDocuments.filter(
+        (document) => document.status === "REUPLOAD_REQUIRED",
       );
-      setOrder(await api<Order>(`/customer/orders/${order.id}`));
-      advance(4);
+      if (
+        effectiveDocumentReviewStatus === "REUPLOAD_REQUIRED" &&
+        requestedReplacements.some(
+          (document) =>
+            !files[
+              document.type.toLowerCase() as "passport" | "ticket" | "visa"
+            ],
+        )
+      ) {
+        setDocumentError(
+          "Choose a new file for every document marked for replacement.",
+        );
+        return;
+      }
+      const replacedPassport = Boolean(files.passport);
+      if (replacedPassport) {
+        // A verdict belongs to one uploaded passport. Retire its message before
+        // starting the replacement so it cannot flash over the new review.
+        setDocumentAttentionMessage("");
+        previousDocumentReviewStatus.current = "NOT_STARTED";
+      }
+      try {
+        if (
+          !order ||
+          ["PASSPORT", "TICKET"].some(
+            (type) =>
+              !files[type.toLowerCase() as "passport" | "ticket"] &&
+              !hasUploadedDocument(order.documents, type),
+          )
+        )
+          throw new Error("Passport and travel ticket are required");
+        await submitCheckoutDocumentsSequentially(
+          files,
+          async ({ key, file, type }) => {
+            const saved = await uploadDocument.current({
+              type,
+              file,
+              basePath: `/customer/orders/${order.id}/documents`,
+              request: api,
+              progress: setDocumentMessage,
+            });
+            setOrder((current) => {
+              if (!current) return current;
+              const {
+                passportExtraction: _staleExtraction,
+                ...withoutExtraction
+              } = current;
+              return {
+                ...(type === "PASSPORT" ? withoutExtraction : current),
+                ...(type === "PASSPORT"
+                  ? {
+                      documentReviewStatus: "NOT_STARTED" as const,
+                      passportVerification: { status: "NOT_STARTED" },
+                    }
+                  : {}),
+                documents: [
+                  ...(current.documents ?? []).filter(
+                    (doc) => doc.type !== type,
+                  ),
+                  saved,
+                ],
+              };
+            });
+            setFiles((current) => ({
+              ...current,
+              [key]: current[key] === file ? undefined : current[key],
+            }));
+          },
+        );
+        setEditingVerifiedDocuments(false);
+        // Confirmation is durable. Start the idempotent verification command
+        // directly instead of making OCR depend on a redundant order refresh.
+        const extractionOrder = await verifyPassport();
+        if (extractionOrder && canEnterTravelerAfterExtraction(extractionOrder))
+          advance(3);
+      } catch (cause) {
+        setDocumentError(documentFailureMessage(cause));
+      } finally {
+        setDocumentMessage("");
+      }
     });
   const initiate = (orderArg?: Order) =>
     run(async () => {
@@ -865,23 +1721,7 @@ export default function CheckoutClient({
         if (!isTopUp && !passportGatePassed(target)) {
           throw new Error("Verify your passport before continuing to payment.");
         }
-        const value = await api<Payment>(
-          `/customer/orders/${target.id}/payment`,
-          {
-            method: "POST",
-            body: JSON.stringify({ provider }),
-          },
-        );
-        setPayment(value);
-        const external = (url: string) => {
-          try {
-            return new URL(url).origin !== window.location.origin;
-          } catch {
-            return true;
-          }
-        };
-        if (value.redirectUrl && external(value.redirectUrl))
-          window.location.assign(value.redirectUrl);
+        await requestPayment(target);
       }
     });
   const complete = () =>
@@ -901,23 +1741,231 @@ export default function CheckoutClient({
       }
       void verifyPayment(order);
     });
-  useEffect(() => {
-    if (!payment?.websocketUrl || !order) return;
-    let socket: WebSocket | undefined;
+  const reportTelemetry = (
+    telemetry: FonepayTelemetryPayload,
+    reference: string | undefined = payment?.reference,
+  ) => {
+    if (!order) return;
+    postFonepayTelemetry(
+      api,
+      `/customer/orders/${order.id}/payment/telemetry`,
+      reference,
+      telemetry,
+    );
+  };
+  const verifyFonepaySilently = async () => {
+    if (!order || paymentVerificationInFlight.current) return;
+    paymentVerificationInFlight.current = true;
+    const token = ++verifyRunToken.current;
     try {
-      socket = new WebSocket(payment.websocketUrl);
-      socket.onmessage = () => complete(); // Socket is only a prompt; API verification remains authoritative.
-    } catch { /* Manual status verification remains available. */ }
-    return () => socket?.close();
+      const updated = await api<Order>(
+        `/customer/orders/${order.id}/payment/verify`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reference: payment?.reference }),
+        },
+      );
+      if (verifyRunToken.current !== token) return;
+      setOrder(updated);
+      if (
+        ["PAYMENT_FAILED", "PROVISIONING_FAILED", "CANCELLED"].includes(
+          updated.status,
+        )
+      )
+        setPayment(null);
+    } catch {
+      if (verifyRunToken.current !== token) return;
+      void api<Order>(`/customer/orders/${order.id}`)
+        .then((refreshed) => {
+          setOrder(refreshed);
+          if (refreshed.paymentRetry?.canRetry) {
+            setPayment(null);
+            if (refreshed.paymentRetry.canChangeProvider)
+              setLockedProvider(null);
+          }
+        })
+        .catch(() => undefined);
+    } finally {
+      paymentVerificationInFlight.current = false;
+    }
+  };
+  useEffect(() => {
+    if (
+      !order ||
+      order.status !== "PAYMENT_PENDING" ||
+      provider !== PaymentProvider.FONEPAY ||
+      !payment?.reference ||
+      !payment.expiresAt
+    )
+      return;
+
+    const expiry = new Date(payment.expiresAt).getTime();
+    if (!Number.isFinite(expiry)) return;
+    let timeout: number | undefined;
+    let stopped = false;
+
+    const schedule = () => {
+      if (stopped) return;
+      timeout = window.setTimeout(poll, 5_000);
+    };
+    const poll = () => {
+      if (stopped) return;
+      if (Date.now() >= expiry) {
+        if (fonepayExpiryChecked.current !== payment.reference) {
+          fonepayExpiryChecked.current = payment.reference;
+          void verifyFonepaySilently();
+        }
+        return;
+      }
+      if (document.visibilityState === "visible") void verifyFonepaySilently();
+      schedule();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && Date.now() < expiry)
+        void verifyFonepaySilently();
+    };
+
+    schedule();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      stopped = true;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [
+    order?.id,
+    order?.status,
+    payment?.reference,
+    payment?.expiresAt,
+    provider,
+  ]);
+  useEffect(() => {
+    setFonepaySocketReady(false);
+    if (!payment?.websocketUrl || !order) return;
+    const wsUrl = payment.websocketUrl;
+    const reference = payment.reference;
+    let socket: WebSocket | undefined;
+    let locallyClosed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    let backoffMs = 1_000;
+    const maxBackoffMs = 30_000;
+    const maxReconnects = 5;
+    let reconnects = 0;
+    // Some networks drop an in-flight socket without firing onclose; onerror
+    // alone would wedge the UI on "connecting". If no open/close happens
+    // within a budget, treat it as a failed connect and schedule a retry.
+    const scheduleReconnect = () => {
+      if (locallyClosed || reconnects >= maxReconnects) return;
+      reconnects += 1;
+      reportTelemetry(
+        { event: "SOCKET_RECONNECTING", attempt: reconnects },
+        reference,
+      );
+      reconnectTimer = setTimeout(() => {
+        backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+        connect();
+      }, backoffMs);
+    };
+    const connect = () => {
+      try {
+        socket = new WebSocket(wsUrl);
+        socket.onopen = () => {
+          setFonepaySocketReady(true);
+          if (connectTimer !== undefined) {
+            clearTimeout(connectTimer);
+            connectTimer = undefined;
+          }
+          backoffMs = 1_000;
+          reconnects = 0;
+          reportTelemetry({ event: "SOCKET_CONNECTED" }, reference);
+        };
+        socket.onerror = () => {
+          setFonepaySocketReady(false);
+          reportTelemetry(
+            { event: "SOCKET_ERROR", reason: "SOCKET_TRANSPORT_ERROR" },
+            reference,
+          );
+          // If onclose does not follow (unreliable transport), reconnect here.
+          scheduleReconnect();
+        };
+        socket.onclose = () => {
+          setFonepaySocketReady(false);
+          if (connectTimer !== undefined) {
+            clearTimeout(connectTimer);
+            connectTimer = undefined;
+          }
+          reportTelemetry(
+            {
+              event: "SOCKET_CLOSED",
+              reason: locallyClosed
+                ? "SOCKET_LOCAL_CLOSE"
+                : "SOCKET_REMOTE_CLOSE",
+            },
+            reference,
+          );
+          if (!locallyClosed) scheduleReconnect();
+        };
+        // A socket message can mean that the QR was merely scanned. Keep the QR
+        // visible while the authoritative status endpoint still reports pending.
+        socket.onmessage = (event) => {
+          const signal = fonepaySocketSignal(event.data);
+          if (signal === "QR_VERIFIED") {
+            reportTelemetry({ event: "QR_VERIFIED_SIGNAL" }, reference);
+            setFonepayBankHint(
+              "QR recognized. Complete the payment in your banking app.",
+            );
+            void verifyFonepaySilently();
+            return;
+          }
+          if (signal === "PAYMENT_RESULT") {
+            reportTelemetry({ event: "PAYMENT_RESULT_SIGNAL" }, reference);
+            locallyClosed = true;
+            socket?.close();
+            void verifyFonepaySilently();
+          }
+        };
+      } catch {
+        /* Manual status verification remains available. */
+      }
+    };
+    connect();
+    // Guard against a connect that neither opens nor errors out; treat as a
+    // failed attempt so the UI does not stay wedged in "connecting".
+    connectTimer = setTimeout(scheduleReconnect, 15_000);
+    return () => {
+      locallyClosed = true;
+      clearTimeout(reconnectTimer);
+      if (connectTimer !== undefined) clearTimeout(connectTimer);
+      socket?.close();
+    };
   }, [payment?.websocketUrl, order?.id]);
   useEffect(() => {
-    if (!payment || !order || SIMULATOR) return;
-    const interval = window.setInterval(() => {
-      if (new Date(payment.expiresAt).getTime() > Date.now()) void complete();
-    }, 5_000);
-    return () => window.clearInterval(interval);
-  }, [payment?.reference, payment?.expiresAt, order?.id]);
+    if (!order || !payment?.qrDataUrl || provider !== PaymentProvider.FONEPAY)
+      return;
+    reportTelemetry({ event: "QR_RENDERED" }, payment.reference);
+  }, [payment?.reference, provider, order?.id]);
+  const recoveryUrl =
+    order && recovery && typeof window !== "undefined"
+      ? `${window.location.origin}/esim/checkout?order=${encodeURIComponent(order.id)}${isTopUp ? "&recharge=1" : ""}#resume=${encodeURIComponent(recovery.token)}`
+      : "";
+  const copyRecoveryLink = async () => {
+    if (!recoveryUrl) return;
+    try {
+      await navigator.clipboard.writeText(recoveryUrl);
+      setCopiedRecovery(true);
+      window.setTimeout(() => setCopiedRecovery(false), 2_500);
+    } catch {
+      setError(
+        "Copy was blocked. Keep this tab open or use the emailed link after entering your details.",
+      );
+    }
+  };
 
+  const transitionRef = useCheckoutTransition(
+    `${step}:${showAccountChoice}`,
+    !busy && !resumingOrder,
+  );
   if ((!planId && !orderId) || planLoadFailed)
     return (
       <main className="checkout-page">
@@ -926,7 +1974,7 @@ export default function CheckoutClient({
           <h1>We could not load this checkout</h1>
           <p>The plan link may be incomplete or no longer available.</p>
           <div>
-            <Link className="button" href="/#plans">
+            <Link className="button" href="/destinations">
               Choose a plan
             </Link>
             {isSignedIn === true && (
@@ -938,8 +1986,68 @@ export default function CheckoutClient({
         </div>
       </main>
     );
+  if (orderId && !order && !resumingOrder && recoveryReady)
+    return (
+      <main className="checkout-page">
+        <div className="checkout-recovery" role="alert">
+          <FileCheck2 aria-hidden="true" />
+          <h1>We couldn’t restore your order</h1>
+          <p>
+            Your uploaded documents have not been removed. Check your connection
+            and try again. If you opened a private recovery link, use that same
+            link to return to this order.
+          </p>
+          {error ? <p>{error}</p> : null}
+          <div>
+            <button
+              className="button"
+              type="button"
+              onClick={() => {
+                setError("");
+                setResumingOrder(true);
+                setRestoreAttempt((attempt) => attempt + 1);
+              }}
+            >
+              Try again
+            </button>
+            <Link className="button secondary" href="/destinations">
+              Browse plans
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  if (
+    !isTopUp &&
+    !resumingOrder &&
+    order?.documentReviewStatus === "MANUAL_REVIEW" &&
+    order.traveler
+  )
+    return (
+      <main className="checkout-page manual-review-page">
+        <div className="checkout-shell">
+          <div className="manual-review-page-top">
+            <Link href="/">Visa Compass</Link>
+            <span>Order #{order.orderNumber}</span>
+          </div>
+          <ManualReviewTracking
+            traveler={traveler}
+            orderNumber={order.orderNumber}
+            failureCode={order.passportExtraction?.failureCode}
+          />
+          {documentError ? (
+            <p className="manual-review-refresh-error" role="status">
+              {documentError}
+            </p>
+          ) : null}
+        </div>
+      </main>
+    );
   return (
-    <main className="checkout-page">
+    <main
+      className={`checkout-page ${isTopUp ? "recharge-checkout" : "initial-purchase-checkout"}${!isTopUp && step === 4 ? " payment-summary-stage" : ""}${provider === PaymentProvider.FONEPAY && payment ? " fonepay-active" : ""}${showPaymentChoice ? " payment-selection" : ""}`}
+    >
+      {!isTopUp ? <JourneyArtwork /> : null}
       <div className="checkout-shell">
         <div className="checkout-heading">
           <Link href="/" className="back-link">
@@ -949,36 +2057,130 @@ export default function CheckoutClient({
             <LockKeyhole size={13} />
             Secure checkout
           </span>
-          <h1>{isTopUp ? "Top up your eSIM" : "Your travel eSIM"}</h1>
+          <h1>
+            {isTopUp
+              ? "Top up your eSIM"
+              : showPaymentChoice
+                ? "Choose how to pay"
+                : "Your travel eSIM"}
+          </h1>
           <p>
             {isTopUp
-              ? "Recharge your existing eSIM. No verification needed. Pay and activate in seconds."
-              : "Complete verification once. We’ll keep your order safe while our team reviews it."}
+              ? "Add a package to the authorized eSIM. Review your plan, pay, and track the recharge here."
+              : showPaymentChoice
+                ? "Review your plan and select a secure payment method."
+                : "Complete verification once. We’ll keep your order safe while our team reviews it."}
           </p>
         </div>
-        <div className="checkout-progress">
+        {!isTopUp ? (
+          <div
+            className="compact-checkout-progress"
+            role="progressbar"
+            aria-label={`Checkout step ${step} of 4`}
+            aria-valuemin={1}
+            aria-valuemax={4}
+            aria-valuenow={step}
+          >
+            <b>Step {step} of 4</b>
+            <span aria-hidden="true">
+              {[1, 2, 3, 4].map((item) => (
+                <i className={item <= step ? "complete" : ""} key={item} />
+              ))}
+            </span>
+          </div>
+        ) : null}
+        <div className="checkout-progress" aria-hidden="true">
           <span style={{ width: `${(isTopUp ? 1 : step * 0.25) * 100}%` }} />
         </div>
-        <div className="checkout-layout">
-          <section className="checkout-card">
+        <div
+          className={`checkout-layout${!isTopUp ? " initial-checkout" : ""}${!isTopUp && step === 4 ? " step-payment" : ""}`}
+        >
+          {!isTopUp && step === 4 && documentsVerified ? (
+            <div className="payment-verified-strip" role="status">
+              <CheckCircle2 size={21} aria-hidden="true" />
+              <span>Documents verified</span>
+            </div>
+          ) : null}
+          {(!isTopUp && step === 4) ||
+          (isTopUp && provider === PaymentProvider.FONEPAY && payment) ? (
+            <div className="payment-mobile-summary">
+              <div className="payment-mobile-summary-main">
+                <span className="summary-flag" aria-hidden="true">
+                  {summaryPlan ? (
+                    flagEmoji(summaryPlan.countryCode)
+                  ) : (
+                    <Signal size={22} />
+                  )}
+                </span>
+                <span>
+                  <small>Order summary</small>
+                  <b>
+                    {summaryPlan
+                      ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)} / ${summaryPlan.validityDays} days`
+                      : "Loading plan"}
+                  </b>
+                </span>
+                <strong>
+                  {summaryPrice === undefined
+                    ? "—"
+                    : `NPR ${summaryPrice.toLocaleString()}`}
+                </strong>
+              </div>
+              <details>
+                <summary>View details</summary>
+                <div>
+                  <span>Plan</span>
+                  <b>{summaryPlan?.name ?? "Loading plan"}</b>
+                </div>
+                <div>
+                  <span>Destination</span>
+                  <b>
+                    {summaryPlan
+                      ? countryDisplayName(summaryPlan.countryCode)
+                      : "—"}
+                  </b>
+                </div>
+                <div>
+                  <span>Data & validity</span>
+                  <b>
+                    {summaryPlan
+                      ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
+                      : "—"}
+                  </b>
+                </div>
+              </details>
+            </div>
+          ) : null}
+          <section className="checkout-card" ref={transitionRef}>
             <div className="step-tabs">
               {(isTopUp
                 ? ["Payment"]
-                : ["Compatibility", "Traveller", "Documents", "Payment"]
+                : ["Compatibility", "Documents", "Traveller", "Payment"]
               ).map((label, index) => (
                 <div
                   key={label}
                   className={
-                    step === index + 1
+                    isTopUp || step === index + 1
                       ? "active"
                       : step > index + 1
                         ? "done"
                         : ""
                   }
                 >
-                  <i>{step > index + 1 ? <Check size={13} /> : index + 1}</i>
-                  {step > index + 1 ? (
-                    <button type="button" onClick={() => jumpTo(index + 1)} title={`Go back to ${label}`}>
+                  <i>
+                    {!isTopUp && step > index + 1 ? (
+                      <Check size={13} />
+                    ) : (
+                      index + 1
+                    )}
+                  </i>
+                  {!isTopUp && step > index + 1 ? (
+                    <button
+                      type="button"
+                      disabled={busy || checkoutDetailsLocked(order)}
+                      onClick={() => jumpTo(index + 1)}
+                      title={`Go back to ${label}`}
+                    >
                       <span>{label}</span>
                     </button>
                   ) : (
@@ -988,19 +2190,221 @@ export default function CheckoutClient({
               ))}
             </div>
             {error && <ErrorModal error={error} onClose={() => setError("")} />}
-            {resumingOrder && (
-              <div className="form-section" role="status" aria-live="polite">
+            {documentError && (
+              <ErrorModal
+                error={documentError}
+                title="Document check could not complete"
+                onClose={() => setDocumentError("")}
+              />
+            )}
+            {successMessage && (
+              <ErrorModal
+                error={successMessage}
+                title="Verification complete"
+                tone="success"
+                onClose={() => setSuccessMessage("")}
+              />
+            )}
+            {documentAttentionMessage && (
+              <ErrorModal
+                error={documentAttentionMessage}
+                title={passportFailurePresentation(passportFailureCode).title}
+                onClose={() => setDocumentAttentionMessage("")}
+              />
+            )}
+            {showAccountChoice && (
+              <div
+                className="form-section account-choice"
+                aria-labelledby="checkout-account-title"
+              >
                 <span className="form-icon">
-                  <LoaderCircle className="spin" />
+                  <UserRound />
                 </span>
-                <h2>Verifying your Khalti payment</h2>
+                <h2 id="checkout-account-title">
+                  How would you like to continue?
+                </h2>
                 <p>
-                  We are securely checking your payment and restoring your
-                  order. Please do not refresh or pay again.
+                  Sign in to keep this order in My eSIMs and check verification
+                  status from any device.
                 </p>
+                <div className="account-choice-grid">
+                  <div className="account-choice-primary">
+                    <span className="choice-badge">Recommended</span>
+                    <b>Continue with an account</b>
+                    <small>
+                      Order history, easier status checks, and secure access
+                      across devices.
+                    </small>
+                    {!isTopUp &&
+                      (isSignedIn === true ? (
+                        <button
+                          className="button wide"
+                          disabled={busy}
+                          onClick={() => {
+                            void createOrder(false);
+                          }}
+                        >
+                          {busy ? (
+                            <>
+                              <LoaderCircle className="spin" size={18} />{" "}
+                              Creating your secure order…
+                            </>
+                          ) : (
+                            <>
+                              Continue with my account{" "}
+                              <ChevronRight size={18} />
+                            </>
+                          )}
+                        </button>
+                      ) : (
+                        <SignInButton mode="modal">
+                          <button
+                            className="button wide"
+                            disabled={busy}
+                            onClick={() => setPendingSignIn(true)}
+                          >
+                            Sign in or create account <ChevronRight size={18} />
+                          </button>
+                        </SignInButton>
+                      ))}
+                  </div>
+                  <div className="account-choice-guest">
+                    <b>Continue as guest</b>
+                    <small>
+                      No account required. You’ll receive a private recovery
+                      link to keep this order.
+                    </small>
+                    <button
+                      className="button secondary wide"
+                      disabled={busy}
+                      onClick={() => {
+                        void createOrder(true);
+                      }}
+                    >
+                      {busy ? (
+                        <>
+                          <LoaderCircle className="spin" size={18} /> Creating
+                          your secure order…
+                        </>
+                      ) : (
+                        "Continue as guest"
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <button
+                  className="account-choice-back"
+                  type="button"
+                  onClick={() => setShowAccountChoice(false)}
+                >
+                  <ChevronLeft size={16} /> Back to compatibility
+                </button>
               </div>
             )}
-            {!resumingOrder && step === 1 && (
+            {!showAccountChoice &&
+              isTopUp &&
+              order &&
+              recovery &&
+              guest &&
+              isSignedIn !== true && (
+                <div className="guest-recovery-card" role="note">
+                  <span className="guest-recovery-icon">
+                    <Link2 />
+                  </span>
+                  <div>
+                    <b>Keep your private order link</b>
+                    <p>
+                      Save this link before closing the tab. It restores order{" "}
+                      {order.orderNumber} and its verification status for 24
+                      hours. Anyone with the link can access this order.
+                    </p>
+                    <small>
+                      A tracking link is queued for the original purchase email.
+                      You can also copy it here.
+                    </small>
+                    <div className="guest-recovery-actions">
+                      <button
+                        className="button secondary"
+                        type="button"
+                        onClick={() => void copyRecoveryLink()}
+                      >
+                        <Copy size={16} />{" "}
+                        {copiedRecovery ? "Link copied" : "Copy private link"}
+                      </button>
+                    </div>
+                    <span className="sr-only" aria-live="polite">
+                      {copiedRecovery ? "Private recovery link copied" : ""}
+                    </span>
+                  </div>
+                </div>
+              )}
+            {isTopUp && order && (
+              <div
+                className="guest-recovery-card recharge-status-card"
+                role="status"
+              >
+                <div>
+                  <b>{order.orderNumber}</b>
+                  <p>
+                    Payment: {order.payment?.status ?? "Not started"} ·{" "}
+                    Recharge: {orderStatusLabel(order.status)}
+                  </p>
+                  {order.refundStatus && (
+                    <p>
+                      Refund:{" "}
+                      {order.refundStatus.toLowerCase().replaceAll("_", " ")}
+                    </p>
+                  )}
+                  {["COMPLETED", "QR_READY", "CANCELLED", "REFUNDED"].includes(
+                    order.status,
+                  ) && (
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={() => {
+                        localStorage.removeItem("vc_recharge_checkout_attempt");
+                        window.location.assign("/recharge");
+                      }}
+                    >
+                      Start another recharge
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            {resumingOrder && (
+              <div
+                className="form-section checkout-restore-skeleton"
+                role="status"
+                aria-live="polite"
+                aria-label="Restoring your order"
+              >
+                <span className="sr-only">Restoring your order</span>
+                <div className="checkout-restore-fields" aria-hidden="true">
+                  <span
+                    className="skel"
+                    style={{ width: 190, height: 24, borderRadius: 6 }}
+                  />
+                  <span
+                    className="skel"
+                    style={{ width: "78%", height: 14, borderRadius: 6 }}
+                  />
+                  <span
+                    className="skel"
+                    style={{ width: "100%", height: 48, borderRadius: 8 }}
+                  />
+                  <span
+                    className="skel"
+                    style={{ width: "100%", height: 48, borderRadius: 8 }}
+                  />
+                  <span
+                    className="skel"
+                    style={{ width: "58%", height: 44, borderRadius: 8 }}
+                  />
+                </div>
+              </div>
+            )}
+            {!showAccountChoice && !resumingOrder && step === 1 && (
               <div className="form-section">
                 <span className="form-icon">
                   <ShieldCheck />
@@ -1010,33 +2414,112 @@ export default function CheckoutClient({
                   Your phone must support eSIM and be carrier-unlocked. Coverage
                   starts after first connection at your destination.
                 </p>
-                <label className="confirm-box">
-                  <input
-                    type="checkbox"
-                    checked={compatible}
-                    onChange={(e) => setCompatible(e.target.checked)}
-                  />
-                  <span>
-                    <b>I confirm my device is compatible</b>
-                    <small>
-                      I understand incompatible devices are not eligible for a
-                      refund.
-                    </small>
-                  </span>
-                </label>
-                <Action busy={busy} onClick={begin}>
+                <CompatibilityConfirmation
+                  checked={compatible}
+                  invalid={Boolean(compatibilityError) && !compatible}
+                  errorId={
+                    compatibilityError ? "compatibility-error" : undefined
+                  }
+                  onChange={(checked) => {
+                    setCompatible(checked);
+                    if (checked) setCompatibilityError("");
+                  }}
+                />
+                <PurchaseConsent
+                  checked={legalAccepted}
+                  invalid={Boolean(compatibilityError) && !legalAccepted}
+                  errorId={
+                    compatibilityError ? "compatibility-error" : undefined
+                  }
+                  onChange={(checked) => {
+                    setLegalAccepted(checked);
+                    if (checked) setCompatibilityError("");
+                  }}
+                />
+                {compatibilityError ? (
+                  <p
+                    id="compatibility-error"
+                    className="field-error"
+                    role="alert"
+                  >
+                    {compatibilityError}
+                  </p>
+                ) : null}
+                <Action
+                  busy={busy}
+                  disabled={!compatible || !legalAccepted}
+                  onClick={begin}
+                >
                   Continue
                 </Action>
               </div>
             )}
-            {!resumingOrder && step === 2 && (
+            {!showAccountChoice && !resumingOrder && step === 3 && (
               <div className="form-section">
                 <h2>Traveller information</h2>
                 <p>
-                  Enter details exactly as shown on the passport. Use two-letter
+                  We used your passport to prefill what we could. Check every
+                  detail, complete the remaining fields, and use two-letter
                   country codes.
                 </p>
-                <div className="form-grid">
+                <div className="checkout-disclosure compact" role="note">
+                  <LockKeyhole size={19} aria-hidden="true" />
+                  <p>
+                    Your passport details are encrypted and used to verify this
+                    purchase before payment.{" "}
+                    <Link href="/privacy">Read the privacy policy</Link>.
+                  </p>
+                </div>
+                {order &&
+                  [
+                    "OCR_PENDING",
+                    "OCR_BACKGROUND",
+                    "CORRECTION_REQUIRED",
+                  ].includes(order.documentReviewStatus ?? "") && (
+                    <PassportCheck
+                      result={order.passportVerification}
+                      extracted={order.passportExtraction?.fields}
+                      failureCode={order?.passportExtraction?.failureCode}
+                      replacementReason={order.timeline
+                        ?.slice()
+                        .reverse()
+                        .find((event) => event.reason?.startsWith("PASSPORT:"))
+                        ?.reason?.replace(/^PASSPORT:\s*/, "")}
+                      entered={traveler}
+                      busy={busy}
+                      reviewStatus={order.documentReviewStatus}
+                      actionError={mismatchError}
+                      {...(order.payment?.status
+                        ? { paymentStatus: order.payment.status }
+                        : {})}
+                      onRecheck={() =>
+                        void run(async () => void (await verifyPassport()))
+                      }
+                      onFieldChange={(field, value) =>
+                        update(field as keyof Traveler, value)
+                      }
+                      onSave={() => void saveTraveler()}
+                      confirmationDisabled={(
+                        order.passportVerification?.mismatchedFields ?? []
+                      ).some(
+                        (field) =>
+                          String(traveler[field as keyof Traveler] ?? "") !==
+                          String(
+                            order.traveler?.[field as keyof Traveler] ?? "",
+                          ),
+                      )}
+                      onConfirm={() => void confirmPassportDetails()}
+                      onReplace={() => jumpTo(2)}
+                    />
+                  )}
+                <div
+                  className="form-grid"
+                  hidden={
+                    order?.documentReviewStatus === "CORRECTION_REQUIRED" ||
+                    (order?.documentReviewStatus === "MANUAL_REVIEW" &&
+                      Boolean(order.traveler))
+                  }
+                >
                   <Field label="Title">
                     <select
                       value={traveler.title}
@@ -1055,8 +2538,13 @@ export default function CheckoutClient({
                       onChange={(e) => update("firstName", e.target.value)}
                     />
                   </Field>
-                  <Field label="Middle name (optional)">
+                  <Field
+                    label="Middle name (optional)"
+                    error={fieldErrors.middleName}
+                  >
                     <input
+                      name="middleName"
+                      autoComplete="additional-name"
                       value={traveler.middleName}
                       onChange={(e) => update("middleName", e.target.value)}
                     />
@@ -1154,11 +2642,12 @@ export default function CheckoutClient({
                       onChange={(e) => update("email", e.target.value)}
                     />
                   </Field>
-                  <Field label="Mobile / WhatsApp" error={fieldErrors.mobile}>
+                  <Field label="Nepali mobile number" error={fieldErrors.mobile}>
                     <input
                       name="mobile"
-                      inputMode="tel"
+                      inputMode="numeric"
                       autoComplete="tel"
+                      placeholder="10-digit mobile number"
                       value={traveler.mobile}
                       onChange={(e) => update("mobile", e.target.value)}
                     />
@@ -1183,43 +2672,306 @@ export default function CheckoutClient({
                   <option value="JP">Japan</option>
                   <option value="KR">South Korea</option>
                 </datalist>
-                <Nav back={() => goBack()} busy={busy} next={saveTraveler} />
+                {order?.documentReviewStatus ===
+                "CORRECTION_REQUIRED" ? null : (
+                  <Nav
+                    back={() => {
+                      setEditingVerifiedDocuments(true);
+                      jumpTo(2);
+                    }}
+                    busy={busy}
+                    next={saveTraveler}
+                  />
+                )}
+                {guest && order && recovery ? (
+                  <details className="draft-recovery-option">
+                    <summary>Need to finish this order later?</summary>
+                    <div>
+                      <p>
+                        Copy a private draft link before closing this tab. It
+                        expires in 24 hours and anyone with it can continue this
+                        order. After you save these details, recovery access is
+                        sent to the email above.
+                      </p>
+                      <div className="guest-recovery-actions">
+                        <button
+                          className="button secondary"
+                          type="button"
+                          onClick={() => void copyRecoveryLink()}
+                        >
+                          <Copy size={16} />
+                          {copiedRecovery ? "Link copied" : "Copy draft link"}
+                        </button>
+                        {isSignedIn === true ? (
+                          <button
+                            className="button secondary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void claimGuestOrder()}
+                          >
+                            Save to My eSIMs
+                          </button>
+                        ) : (
+                          <SignInButton mode="modal">
+                            <button
+                              className="button secondary"
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setClaimIntent(true)}
+                            >
+                              Sign in instead
+                            </button>
+                          </SignInButton>
+                        )}
+                      </div>
+                      <span className="sr-only" aria-live="polite">
+                        {copiedRecovery ? "Private draft link copied" : ""}
+                      </span>
+                    </div>
+                  </details>
+                ) : null}
               </div>
             )}
-            {!resumingOrder && step === 3 && (
+            {!showAccountChoice && !resumingOrder && step === 2 && (
               <div className="form-section">
                 <span className="form-icon">
                   <FileCheck2 />
                 </span>
                 <h2>Travel documents</h2>
                 <p>
-                  PDF, JPG or PNG. Upload authorization is private and
-                  short-lived.
+                  To meet customer identification requirements applicable to
+                  Visa Compass in Nepal, we verify the traveller using a valid
+                  passport. Your encrypted information is used only for
+                  verification, order fulfilment, and applicable record-keeping.
                 </p>
-                <div className="upload-list">
-                  <FileField
-                    label="Passport"
-                    file={files.passport}
-                    onChange={(v) => setFiles((f) => ({ ...f, passport: v }))}
-                    capture
+                {!["CORRECTION_REQUIRED", "REUPLOAD_REQUIRED"].includes(
+                  effectiveDocumentReviewStatus ?? "",
+                ) && (
+                  <DocumentProgress
+                    status={
+                      Object.values(files).some(Boolean)
+                        ? "NOT_STARTED"
+                        : effectiveDocumentReviewStatus
+                    }
+                    busy={busy || verifyingPassport}
+                    message={documentMessage}
+                    needsTravelerDetails={manualNeedsTraveler}
+                    failureCode={order?.passportExtraction?.failureCode}
                   />
-                  <FileField
-                    label="Travel ticket"
-                    file={files.ticket}
-                    onChange={(v) => setFiles((f) => ({ ...f, ticket: v }))}
-                    capture
-                  />
-                  <FileField
-                    label="Visa (optional)"
-                    file={files.visa}
-                    onChange={(v) => setFiles((f) => ({ ...f, visa: v }))}
-                    capture
-                  />
-                </div>
-                <Nav back={() => goBack()} busy={busy} next={saveDocuments} />
+                )}
+                {passportGatePassed(order) && !editingVerifiedDocuments ? (
+                  <>
+                    <VerifiedDocumentsSummary
+                      documents={displayDocuments}
+                      reviewStatus={effectiveDocumentReviewStatus}
+                    />
+                    <div className="form-actions verified-document-actions">
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => setEditingVerifiedDocuments(true)}
+                      >
+                        Change documents
+                      </button>
+                      <button
+                        type="button"
+                        className="button primary"
+                        onClick={() => advance(3)}
+                      >
+                        Review traveller details
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {effectiveDocumentReviewStatus !== "REUPLOAD_REQUIRED" && (
+                      <SavedDocuments documents={displayDocuments} />
+                    )}
+                    {!["OCR_PENDING", "OCR_BACKGROUND"].includes(
+                      effectiveDocumentReviewStatus ?? "",
+                    ) && (
+                      <>
+                        {editingVerifiedDocuments && (
+                          <p className="document-change-warning">
+                            Replacing your passport starts verification again.
+                            Changing the optional visa does not affect your
+                            passport result.
+                          </p>
+                        )}
+                        {effectiveDocumentReviewStatus ===
+                        "REUPLOAD_REQUIRED" ? (
+                          <DocumentRecoveryFields
+                            documents={displayDocuments}
+                            types={["PASSPORT", "TICKET", "VISA"]}
+                            files={{
+                              PASSPORT: files.passport,
+                              TICKET: files.ticket,
+                              VISA: files.visa,
+                            }}
+                            onChange={(type, file) =>
+                              setFiles((current) => ({
+                                ...current,
+                                [type.toLowerCase()]: file,
+                              }))
+                            }
+                            disabled={busy}
+                            passportFailureCode={passportFailureCode}
+                            replacementReasons={replacementReasonsFromTimeline(
+                              order?.timeline,
+                            )}
+                          />
+                        ) : (
+                          <fieldset
+                            className="upload-list document-fields"
+                            disabled={busy}
+                          >
+                            <FileField
+                              label="Passport"
+                              file={files.passport}
+                              savedName={
+                                order?.documents?.find(
+                                  (doc) =>
+                                    doc.type === "PASSPORT" &&
+                                    doc.uploadVerified,
+                                )?.fileName
+                              }
+                              onChange={(v) =>
+                                setFiles((f) => ({ ...f, passport: v }))
+                              }
+                              capture
+                            />
+                            <FileField
+                              label="Travel ticket"
+                              file={files.ticket}
+                              savedName={
+                                order?.documents?.find(
+                                  (doc) =>
+                                    doc.type === "TICKET" && doc.uploadVerified,
+                                )?.fileName
+                              }
+                              onChange={(v) =>
+                                setFiles((f) => ({ ...f, ticket: v }))
+                              }
+                              capture
+                            />
+                            <FileField
+                              label="Visa (optional)"
+                              file={files.visa}
+                              savedName={
+                                order?.documents?.find(
+                                  (doc) =>
+                                    doc.type === "VISA" && doc.uploadVerified,
+                                )?.fileName
+                              }
+                              onChange={(v) =>
+                                setFiles((f) => ({ ...f, visa: v }))
+                              }
+                              capture
+                            />
+                          </fieldset>
+                        )}
+                      </>
+                    )}
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="button secondary"
+                        disabled={busy || verifyingPassport}
+                        onClick={() => {
+                          if (editingVerifiedDocuments) {
+                            setFiles({
+                              passport: undefined,
+                              ticket: undefined,
+                              visa: undefined,
+                            });
+                            setEditingVerifiedDocuments(false);
+                          } else if (
+                            [
+                              "REUPLOAD_REQUIRED",
+                              "CORRECTION_REQUIRED",
+                            ].includes(order?.documentReviewStatus ?? "") &&
+                            order?.traveler
+                          )
+                            advance(3);
+                          else jumpTo(1);
+                        }}
+                      >
+                        {editingVerifiedDocuments
+                          ? "Cancel changes"
+                          : [
+                                "REUPLOAD_REQUIRED",
+                                "CORRECTION_REQUIRED",
+                              ].includes(order?.documentReviewStatus ?? "") &&
+                              order?.traveler
+                            ? "Check traveller details"
+                            : "Back"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button primary"
+                        disabled={
+                          busy ||
+                          verifyingPassport ||
+                          (editingVerifiedDocuments &&
+                            !Object.values(files).some(Boolean)) ||
+                          (!Object.values(files).some(Boolean) &&
+                            [
+                              "OCR_PENDING",
+                              "OCR_BACKGROUND",
+                              "CORRECTION_REQUIRED",
+                              "MANUAL_REVIEW",
+                            ].includes(order?.documentReviewStatus ?? "") &&
+                            !manualNeedsTraveler) ||
+                          (!Object.values(files).some(Boolean) &&
+                            order?.documentReviewStatus ===
+                              "REUPLOAD_REQUIRED") ||
+                          (effectiveDocumentReviewStatus ===
+                            "REUPLOAD_REQUIRED" &&
+                            displayDocuments.some(
+                              (document) =>
+                                document.status === "REUPLOAD_REQUIRED" &&
+                                !files[
+                                  document.type.toLowerCase() as
+                                    "passport" | "ticket" | "visa"
+                                ],
+                            ))
+                        }
+                        onClick={() => {
+                          if (
+                            manualNeedsTraveler &&
+                            !Object.values(files).some(Boolean)
+                          )
+                            advance(3);
+                          else void saveDocuments();
+                        }}
+                      >
+                        {busy
+                          ? "Saving documents…"
+                          : editingVerifiedDocuments
+                            ? "Save changes"
+                            : manualNeedsTraveler &&
+                                !Object.values(files).some(Boolean)
+                              ? "Continue to traveller details"
+                              : !Object.values(files).some(Boolean) &&
+                                  order?.documentReviewStatus ===
+                                    "MANUAL_REVIEW"
+                                ? "Awaiting approval"
+                                : !Object.values(files).some(Boolean) &&
+                                    ["OCR_PENDING", "OCR_BACKGROUND"].includes(
+                                      order?.documentReviewStatus ?? "",
+                                    )
+                                  ? "Verification in progress"
+                                  : order?.documentReviewStatus ===
+                                      "REUPLOAD_REQUIRED"
+                                    ? "Submit replacement for review"
+                                    : "Save documents"}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
-            {!resumingOrder && step === 4 && (
+            {!showAccountChoice && !resumingOrder && step === 4 && (
               <div className="form-section">
                 <h2>
                   {order &&
@@ -1239,72 +2991,75 @@ export default function CheckoutClient({
                           "PROVISIONING_FAILED",
                           "CANCELLED",
                         ].includes(order.status)
-                      ? "Payment issue"
-                      : "Choose payment method"}
+                      ? order.purchaseType === "TOPUP" &&
+                        order.status === "PROVISIONING_FAILED"
+                        ? "Recharge needs attention"
+                        : "Payment issue"
+                      : order?.status === "PAYMENT_PENDING"
+                        ? payment?.qrDataUrl
+                          ? "Complete your payment"
+                          : "Payment status not confirmed"
+                        : "Choose payment method"}
                 </h2>
-                {order &&
-                ["QR_READY", "ACTIVATION_ATTENTION"].includes(order.status) ? (
+                {!isTopUp && !checkoutDetailsLocked(order) ? (
+                  <button
+                    className="button secondary payment-step-back"
+                    type="button"
+                    onClick={() => jumpTo(2)}
+                    disabled={busy || verifying}
+                  >
+                    Back to documents
+                  </button>
+                ) : null}
+                {isTopUp &&
+                order &&
+                ["REFUNDED", "REFUND_PENDING", "CANCELLED"].includes(
+                  order.status,
+                ) ? (
                   <div className="success-panel">
-                    <QrCode size={42} />
-                    <b>Your activation QR has been sent</b>
+                    <b>{orderStatusLabel(order.status)}</b>
                     <span>{order.orderNumber}</span>
                     <p>
-                      Install your eSIM using the QR image emailed to you, then
-                      connect to the network once to activate it. Your order
-                      will complete automatically.
+                      {order.status === "REFUND_PENDING"
+                        ? "Your refund is being processed. Return to this tracking link for updates."
+                        : "This recharge is closed. No further payment is needed for this order."}
                     </p>
-                    {isSignedIn === true && (
-                      <>
-                        <Link className="button" href="/account/esims">
-                          View my eSIMs
-                        </Link>
-                        <Link
-                          className="button"
-                          href={`/account/esims/${order.id}`}
-                        >
-                          Didn&apos;t get the QR? Recover it
-                        </Link>
-                        <button
-                          className="button secondary"
-                          onClick={resendQrEmail}
-                          disabled={uxResending}
-                        >
-                          {uxResending ? "Sending…" : "Re-send email"}
-                        </button>
-                      </>
-                    )}
                   </div>
+                ) : order &&
+                  ["QR_READY", "ACTIVATION_ATTENTION"].includes(
+                    order.status,
+                  ) ? (
+                  !isTopUp ? (
+                    <InitialOrderConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                      onResend={isSignedIn === true ? resendQrEmail : undefined}
+                      resending={uxResending}
+                    />
+                  ) : (
+                    <RechargeConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                    />
+                  )
                 ) : order?.status === "COMPLETED" ? (
-                  <div className="success-panel">
-                    <CheckCircle2 size={42} />
-                    <b>Your eSIM is ready</b>
-                    <span>{order.orderNumber}</span>
-                    <p>
-                      Your activation QR was emailed to you as an image. Open it
-                      on another screen and scan it from your phone&apos;s eSIM
-                      settings.
-                    </p>
-                    {isSignedIn === true && (
-                      <>
-                        <Link className="button" href="/account/esims">
-                          View my eSIMs
-                        </Link>
-                        <Link
-                          className="button"
-                          href={`/account/esims/${order.id}`}
-                        >
-                          Didn&apos;t get the QR? Recover it
-                        </Link>
-                        <button
-                          className="button secondary"
-                          onClick={resendQrEmail}
-                          disabled={uxResending}
-                        >
-                          {uxResending ? "Sending…" : "Re-send email"}
-                        </button>
-                      </>
-                    )}
-                  </div>
+                  !isTopUp ? (
+                    <InitialOrderConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                      onResend={isSignedIn === true ? resendQrEmail : undefined}
+                      resending={uxResending}
+                    />
+                  ) : (
+                    <RechargeConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                    />
+                  )
                 ) : order?.status === "PAYMENT_REVIEW_REQUIRED" ? (
                   <div className="info-panel">
                     <AlertTriangle size={42} />
@@ -1318,7 +3073,11 @@ export default function CheckoutClient({
                     {isSignedIn === true && (
                       <Link
                         className="button secondary"
-                        href={`/account/esims/${order.id}`}
+                        href={
+                          isTopUp
+                            ? `/esim/checkout?order=${order.id}&recharge=1`
+                            : `/account/orders/${order.id}`
+                        }
                       >
                         Check status
                       </Link>
@@ -1327,11 +3086,17 @@ export default function CheckoutClient({
                 ) : order && order.status === "PROVISIONING_FAILED" ? (
                   <div className="error-panel">
                     <AlertTriangle size={42} />
-                    <b>Your recharge needs attention</b>
+                    <b>
+                      {isTopUp
+                        ? "Your recharge needs attention"
+                        : "Your eSIM activation needs attention"}
+                    </b>
                     <span>{order.orderNumber}</span>
                     <p>
                       {order.provisioningFailure?.message ??
-                        "Your payment was received, but we could not complete the recharge with the network provider. Our team is reviewing it and will contact you."}
+                        (isTopUp
+                          ? "Your payment was received, but we could not complete the recharge with the network provider. Our team is reviewing it and will contact you."
+                          : "Your payment was received, but we could not finish the eSIM activation. Our team is reviewing it and will contact you.")}
                     </p>
                     <Link className="button secondary" href="/">
                       Return home
@@ -1339,7 +3104,11 @@ export default function CheckoutClient({
                     {isSignedIn === true && (
                       <Link
                         className="button"
-                        href={`/account/esims/${order.id}`}
+                        href={
+                          isTopUp
+                            ? `/esim/checkout?order=${order.id}&recharge=1`
+                            : `/account/orders/${order.id}`
+                        }
                       >
                         Check status
                       </Link>
@@ -1352,43 +3121,61 @@ export default function CheckoutClient({
                     "APPROVED",
                     "PROVISIONING",
                   ].includes(order.status) ? (
-                  <div className="success-panel">
-                    <LoaderCircle className="spin" size={42} />
-                    <b>Payment verified. Activating your eSIM</b>
-                    <span>{order.orderNumber}</span>
-                    <p>
-                      Your eSIM is being activated automatically. Your QR image
-                      will be emailed to you shortly.
-                    </p>
-                    {isSignedIn === true && (
-                      <Link className="button" href="/account/esims">
-                        View my eSIMs
-                      </Link>
-                    )}
-                  </div>
+                  !isTopUp ? (
+                    <InitialOrderConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                    />
+                  ) : (
+                    <RechargeConfirmation
+                      order={order}
+                      signedIn={isSignedIn === true}
+                      guestRecoveryUrl={recoveryUrl}
+                    />
+                  )
                 ) : verifying ? (
                   <div className="success-panel">
                     <LoaderCircle className="spin" size={42} />
-                    <b>Checking payment status</b>
+                    <b>
+                      {paymentStatusHeading(
+                        order?.payment?.provider ?? provider,
+                      )}
+                    </b>
                     <span>{order?.orderNumber}</span>
                     <p>
                       We are checking with your payment provider. Your order
-                      will only be marked as paid after the gateway confirms
-                      the transaction.
+                      will only be marked as paid after the gateway confirms the
+                      transaction.
                     </p>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={cancelPaymentVerification}
+                    >
+                      Return to payment
+                    </button>
                   </div>
                 ) : (
                   <>
-                    {order && !isTopUp && (
+                    {order && !isTopUp && !passportGatePassed(order) && (
                       <PassportCheck
                         result={order.passportVerification}
+                        extracted={order.passportExtraction?.fields}
+                        entered={order.traveler}
                         reviewStatus={order.documentReviewStatus}
                         {...(order.payment?.status
                           ? { paymentStatus: order.payment.status }
                           : {})}
                         busy={verifyingPassport}
                         onRecheck={() => void verifyPassport()}
-                        onEdit={() => goBack()}
+                        onEdit={() =>
+                          jumpTo(
+                            order.documentReviewStatus === "CORRECTION_REQUIRED"
+                              ? 3
+                              : 2,
+                          )
+                        }
                       />
                     )}
                     {order &&
@@ -1402,21 +3189,170 @@ export default function CheckoutClient({
                           try again below.
                         </p>
                       )}
-                    <p>
-                      The server checks the exact order, reference and immutable
-                      NPR amount.
+                    <p className="payment-method-intro">
+                      {order?.status === "PAYMENT_PENDING"
+                        ? payment?.qrDataUrl
+                          ? "Scan the QR or choose your banking app below. Your order remains unpaid until Fonepay confirms the payment."
+                          : "We have not received payment confirmation. Check the latest status before trying again."
+                        : "Review the order total, then choose how you would like to pay."}
                     </p>
-                    <div className="gateway-grid">
-                      <button className={provider === PaymentProvider.KHALTI ? "selected" : ""} onClick={() => setProvider(PaymentProvider.KHALTI)}>
-                        <b>Khalti</b>
-                        <small>Digital wallet</small>
-                      </button>
-                      {availableProviders.includes(PaymentProvider.FONEPAY) ? <button className={provider === PaymentProvider.FONEPAY ? "selected" : ""} onClick={() => setProvider(PaymentProvider.FONEPAY)}>
-                        <b>Fonepay</b>
-                        <small>Mobile banking & QR</small>
-                      </button> : null}
-                    </div>
-                    {payment ? (
+                    {isTopUp && rechargeTargetLabel && (
+                      <p className="form-note">
+                        Adding data to {rechargeTargetLabel}. Keep using your
+                        existing eSIM.
+                      </p>
+                    )}
+                    {!payment ? (
+                      lockedProvider ? (
+                        <div className="gateway-grid chosen-provider">
+                          <div className="chosen-provider-card">
+                            <img
+                              src={
+                                lockedProvider === PaymentProvider.FONEPAY
+                                  ? "/brand/fonepay-logo.png"
+                                  : "/brand/khalti-logo.png"
+                              }
+                              alt={
+                                lockedProvider === PaymentProvider.FONEPAY
+                                  ? "Checkout by Fonepay"
+                                  : "Khalti"
+                              }
+                            />
+                            <span className="gateway-copy">
+                              <b>
+                                {lockedProvider === PaymentProvider.FONEPAY
+                                  ? "Mobile banking"
+                                  : "Khalti wallet"}
+                              </b>
+                              <small>
+                                {lockedProvider === PaymentProvider.FONEPAY
+                                  ? "Pay with any supported banking app or scan the QR."
+                                  : "Pay from your Khalti balance."}
+                              </small>
+                            </span>
+                            <button
+                              type="button"
+                              className="change-provider"
+                              onClick={() => setLockedProvider(null)}
+                            >
+                              Change
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="gateway-grid payment-gateway-grid">
+                          <button
+                            type="button"
+                            className={`khalti-provider ${provider === PaymentProvider.KHALTI ? "selected" : ""}`}
+                            aria-pressed={provider === PaymentProvider.KHALTI}
+                            disabled={
+                              !retryDeclaredAllowed(
+                                order?.paymentRetry,
+                                "canChangeProvider",
+                              )
+                            }
+                            onClick={() => {
+                              setProvider(PaymentProvider.KHALTI);
+                            }}
+                          >
+                            <img src="/brand/khalti-logo.png" alt="Khalti" />
+                            <span className="gateway-copy">
+                              <b>Khalti wallet</b>
+                              <small>Pay from your Khalti balance.</small>
+                            </span>
+                          </button>
+                          {availableProviders.includes(
+                            PaymentProvider.FONEPAY,
+                          ) ? (
+                            <button
+                              type="button"
+                              className={`fonepay-provider ${provider === PaymentProvider.FONEPAY ? "selected" : ""}`}
+                              aria-pressed={
+                                provider === PaymentProvider.FONEPAY
+                              }
+                              disabled={
+                                !retryDeclaredAllowed(
+                                  order?.paymentRetry,
+                                  "canChangeProvider",
+                                )
+                              }
+                              onClick={() => {
+                                setProvider(PaymentProvider.FONEPAY);
+                              }}
+                            >
+                              <img
+                                src="/brand/fonepay-logo.png"
+                                alt="Checkout by Fonepay"
+                              />
+                              <span className="gateway-copy">
+                                <b>Mobile banking</b>
+                                <small>
+                                  Use any supported banking app or scan the QR.
+                                </small>
+                              </span>
+                            </button>
+                          ) : null}
+                        </div>
+                      )
+                    ) : null}
+                    {showPaymentChoice && !lockedProvider ? (
+                      <p className="payment-security-note">
+                        <LockKeyhole size={15} aria-hidden="true" /> Secure
+                        payment in NPR
+                      </p>
+                    ) : null}
+                    {order?.paymentRetry &&
+                    !payment &&
+                    !order.paymentRetry.canRetry &&
+                    order.paymentRetry.blockedReason ? (
+                      <p className="form-note" role="status">
+                        {order.paymentRetry.blockedReason}
+                      </p>
+                    ) : null}
+                    {isTopUp && !order ? (
+                      <>
+                        <PurchaseConsent
+                          checked={legalAccepted}
+                          compact
+                          invalid={Boolean(compatibilityError)}
+                          errorId={
+                            compatibilityError
+                              ? "payment-consent-error"
+                              : undefined
+                          }
+                          onChange={(checked) => {
+                            setLegalAccepted(checked);
+                            if (checked) setCompatibilityError("");
+                          }}
+                        />
+                        {compatibilityError ? (
+                          <p
+                            id="payment-consent-error"
+                            className="field-error"
+                            role="alert"
+                          >
+                            {compatibilityError}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {payment && showPaymentMethods ? (
+                      <ActiveFonepayPaymentMethods
+                        canChangeProvider={Boolean(
+                          order?.paymentRetry?.canChangeProvider,
+                        )}
+                        busy={busy}
+                        onResume={() => setShowPaymentMethods(false)}
+                        onCheck={complete}
+                        onChooseKhalti={() => {
+                          if (!order?.paymentRetry?.canChangeProvider) return;
+                          setPayment(null);
+                          setProvider(PaymentProvider.KHALTI);
+                          setLockedProvider(PaymentProvider.KHALTI);
+                          setShowPaymentMethods(false);
+                        }}
+                      />
+                    ) : payment ? (
                       SIMULATOR ? (
                         <div className="simulator-box">
                           <span>Local signed simulator</span>
@@ -1425,37 +3361,82 @@ export default function CheckoutClient({
                           </small>
                           <Action
                             busy={busy}
-                            disabled={
-                              verifyingPassport || !passportGatePassed(order)
-                            }
+                            disabled={paymentActionDisabled({
+                              isTopUp,
+                              verifyingPassport,
+                              passportGatePassed: passportGatePassed(order),
+                            })}
                             onClick={complete}
                           >
                             Simulate verified payment
                           </Action>
                         </div>
-                      ) : payment.qrDataUrl ? (
-                        <div className="simulator-box">
-                          <span>Scan with Fonepay mobile banking</span>
-                          <img src={payment.qrDataUrl} alt="Fonepay payment QR code" style={{ width: 220, height: 220, alignSelf: "center" }} />
-                          {payment.banks?.length ? <div className="gateway-grid">{payment.banks.map((bank) => <button key={bank.bankCode} onClick={() => { if (!payment.qrPayload) return; const target = fonepayBankIntentUrl(bank.intentScheme, payment.qrPayload); if (target) window.location.assign(target); }}><b>{bank.bankName}</b><small>Open banking app</small></button>)}</div> : null}
-                          <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>I&apos;ve paid — check status</Action>
-                        </div>
+                      ) : provider === PaymentProvider.FONEPAY &&
+                        order?.status === "PAYMENT_PENDING" &&
+                        (payment.qrDataUrl || payment.qrPayload) ? (
+                        <FonepayCheckout
+                          titleId="fonepay-checkout-title"
+                          banks={
+                            provider === PaymentProvider.FONEPAY
+                              ? payment.banks
+                              : undefined
+                          }
+                          qrPayload={payment.qrPayload}
+                          qrDataUrl={payment.qrDataUrl}
+                          expiresAt={payment.expiresAt}
+                          socketReady={fonepaySocketReady}
+                          onError={setError}
+                          onTelemetry={(event) => reportTelemetry(event)}
+                          hint={fonepayBankHint}
+                          busy={busy}
+                          disabled={paymentActionDisabled({
+                            isTopUp,
+                            verifyingPassport,
+                            passportGatePassed: passportGatePassed(order),
+                          })}
+                          checkLabel="Check payment status"
+                          onCheck={complete}
+                          onBackToMethods={() => setShowPaymentMethods(true)}
+                        />
                       ) : (
-                        <Action busy={busy} disabled={verifyingPassport || !passportGatePassed(order)} onClick={complete}>Check payment status</Action>
+                        <Action
+                          busy={busy}
+                          disabled={paymentActionDisabled({
+                            isTopUp,
+                            verifyingPassport,
+                            passportGatePassed: passportGatePassed(order),
+                          })}
+                          onClick={complete}
+                        >
+                          Check payment status
+                        </Action>
                       )
                     ) : isTopUp && !order ? (
-                      <Action busy={busy} onClick={begin}>
+                      <Action
+                        busy={busy}
+                        disabled={!legalAccepted}
+                        onClick={begin}
+                      >
                         Continue to payment
                       </Action>
                     ) : (
                       <Action
                         busy={busy}
-                        disabled={
-                          verifyingPassport || !passportGatePassed(order)
-                        }
+                        disabled={paymentActionDisabled({
+                          isTopUp,
+                          verifyingPassport,
+                          passportGatePassed: passportGatePassed(order),
+                          retryAllowed: retryDeclaredAllowed(
+                            order?.paymentRetry,
+                            "canRetry",
+                          ),
+                        })}
                         onClick={() => void initiate()}
                       >
-                        Continue to {provider === PaymentProvider.FONEPAY ? "Fonepay" : "Khalti"}
+                        Continue to{" "}
+                        {provider === PaymentProvider.FONEPAY
+                          ? "Fonepay"
+                          : "Khalti"}
                       </Action>
                     )}
                   </>
@@ -1463,56 +3444,158 @@ export default function CheckoutClient({
               </div>
             )}
           </section>
-          <aside className="order-summary">
-            <div className="summary-plan">
-              <span className="summary-flag">
-                {summaryPlan ? (
-                  flagEmoji(summaryPlan.countryCode)
-                ) : (
-                  <Signal size={22} />
-                )}
-              </span>
-              <span className="summary-plan-info">
-                <span className="summary-label">Order summary</span>
-                <b>{summaryPlan?.name ?? "Selected eSIM plan"}</b>
-                <small>
+          {provider === PaymentProvider.FONEPAY && payment ? (
+            <aside className="order-summary compact-order-summary">
+              <div className="payment-mobile-summary">
+                <div className="payment-mobile-summary-main">
+                  <span className="summary-flag" aria-hidden="true">
+                    {summaryPlan ? (
+                      flagEmoji(summaryPlan.countryCode)
+                    ) : (
+                      <Signal size={22} />
+                    )}
+                  </span>
+                  <span>
+                    <small>Order summary</small>
+                    <b>
+                      {summaryPlan
+                        ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)} / ${summaryPlan.validityDays} days`
+                        : "Loading plan"}
+                    </b>
+                  </span>
+                  <strong>
+                    {summaryPrice === undefined
+                      ? "—"
+                      : `NPR ${summaryPrice.toLocaleString()}`}
+                  </strong>
+                </div>
+                <details>
+                  <summary>View details</summary>
+                  <div>
+                    <span>Plan</span>
+                    <b>{summaryPlan?.name ?? "Loading plan"}</b>
+                  </div>
+                  <div>
+                    <span>Destination</span>
+                    <b>
+                      {summaryPlan
+                        ? countryDisplayName(summaryPlan.countryCode)
+                        : "—"}
+                    </b>
+                  </div>
+                  <div>
+                    <span>Data & validity</span>
+                    <b>
+                      {summaryPlan
+                        ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
+                        : "—"}
+                    </b>
+                  </div>
+                </details>
+              </div>
+            </aside>
+          ) : (
+            <aside className="order-summary">
+              <div className="summary-plan">
+                <span className="summary-flag">
+                  {summaryPlan ? (
+                    flagEmoji(summaryPlan.countryCode)
+                  ) : (
+                    <Signal size={22} />
+                  )}
+                </span>
+                <span className="summary-plan-info">
+                  <span className="summary-label">Order summary</span>
+                  <b>{summaryPlan?.name ?? "Loading selected plan"}</b>
+                  <small>
+                    {summaryPlan
+                      ? `${countryDisplayName(summaryPlan.countryCode)} · ${formatPlanDataText(summaryPlan.dataAllowance)}`
+                      : "Plan details loading"}
+                  </small>
+                </span>
+              </div>
+              <div>
+                <small>Destination</small>
+                <b>
                   {summaryPlan
-                    ? `${summaryPlan.countryCode} · ${summaryPlan.dataAllowance}`
-                    : "Loaded securely"}
-                </small>
-              </span>
-            </div>
-            <div>
-              <small>Destination</small>
-              <b>{summaryPlan?.countryCode ?? "Not selected"}</b>
-            </div>
-            <div>
-              <small>Data & validity</small>
-              <b>
-                {summaryPlan
-                  ? `${summaryPlan.dataAllowance} · ${summaryPlan.validityDays} days`
-                  : "Loaded securely"}
-              </b>
-            </div>
-            <div className="summary-total">
-              <small>Total</small>
-              <b>
-                NPR{" "}
-                {(
-                  order?.totalAmountNpr ??
-                  summaryPlan?.sellingPriceNpr ??
-                  0
-                ).toLocaleString()}
-              </b>
-            </div>
-            <p>
-              <LockKeyhole size={14} /> Price is frozen when your order is
-              created.
-            </p>
-          </aside>
+                    ? countryDisplayName(summaryPlan.countryCode)
+                    : "Loading destination"}
+                </b>
+              </div>
+              <div>
+                <small>Data & validity</small>
+                <b>
+                  {summaryPlan
+                    ? `${formatPlanDataText(summaryPlan.dataAllowance)} · ${summaryPlan.validityDays} days`
+                    : "Plan details loading"}
+                </b>
+              </div>
+              <div className="summary-total">
+                <small>Total</small>
+                <b>
+                  {summaryPrice === undefined
+                    ? "Loading price"
+                    : "NPR " + summaryPrice.toLocaleString()}
+                </b>
+              </div>
+              <p>
+                <LockKeyhole size={14} /> Price is frozen when your order is
+                created.
+              </p>
+            </aside>
+          )}
         </div>
       </div>
     </main>
+  );
+}
+
+function InitialOrderConfirmation({
+  order,
+  signedIn,
+  guestRecoveryUrl,
+  onResend,
+  resending = false,
+}: {
+  order: Order;
+  signedIn: boolean;
+  guestRecoveryUrl?: string;
+  onResend?: (() => void) | undefined;
+  resending?: boolean;
+}) {
+  return (
+    <PaymentJourneyConfirmation
+      orderNumber={order.orderNumber}
+      amountNpr={order.totalAmountNpr}
+      status={order.status}
+      trackingHref={signedIn ? `/account/orders/${order.id}` : guestRecoveryUrl}
+      trackingLabel={signedIn ? "View order" : "Track this order"}
+      deliveryNote="Your installation QR is ready and is being sent to the email you entered at checkout. Open your order if it does not arrive."
+      pendingDeliveryNote="We’ll email the installation QR to the address you entered at checkout as soon as your eSIM is ready."
+      onResend={onResend}
+      resending={resending}
+    />
+  );
+}
+
+function RechargeConfirmation({
+  order,
+  signedIn,
+  guestRecoveryUrl,
+}: {
+  order: Order;
+  signedIn: boolean;
+  guestRecoveryUrl?: string;
+}) {
+  return (
+    <PaymentJourneyConfirmation
+      mode="recharge"
+      orderNumber={order.orderNumber}
+      amountNpr={order.totalAmountNpr}
+      status={order.status}
+      trackingHref={signedIn ? "/account/esims" : guestRecoveryUrl}
+      trackingLabel={signedIn ? "View my eSIM" : "Track this recharge"}
+    />
   );
 }
 
@@ -1548,12 +3631,16 @@ function Action({
 }) {
   return (
     <button
+      type="button"
       className="button wide"
       disabled={busy || disabled}
       onClick={onClick}
     >
       {busy ? (
-        <LoaderCircle className="spin" size={18} />
+        <>
+          <LoaderCircle className="spin" size={18} />
+          {children}
+        </>
       ) : (
         <>
           {children}
@@ -1565,27 +3652,50 @@ function Action({
 }
 
 const FIELD_LABELS: Record<string, string> = {
+  firstName: "First name",
+  middleName: "Middle name",
   passportNumber: "Passport number",
   surname: "Surname",
   givenNames: "Given name(s)",
   dateOfBirth: "Date of birth",
   passportExpiryDate: "Passport expiry",
+  nationality: "Nationality",
 };
 
 function PassportCheck({
   result,
+  extracted,
+  failureCode,
+  replacementReason: explicitReplacementReason,
+  entered,
   reviewStatus,
   paymentStatus,
   busy,
   onRecheck,
   onEdit,
+  onFieldChange,
+  onSave,
+  confirmationDisabled = false,
+  onConfirm,
+  onReplace,
+  actionError,
 }: {
   result: Order["passportVerification"];
+  extracted?: NonNullable<Order["passportExtraction"]>["fields"] | undefined;
+  failureCode?: string | undefined;
+  replacementReason?: string | undefined;
+  entered?: Partial<Traveler> | undefined;
   reviewStatus?: Order["documentReviewStatus"];
   paymentStatus?: string;
   busy: boolean;
   onRecheck: () => void;
   onEdit?: () => void;
+  onFieldChange?: (field: string, value: string) => void;
+  onSave?: () => void;
+  confirmationDisabled?: boolean;
+  onConfirm?: () => void;
+  onReplace?: () => void;
+  actionError?: string;
 }) {
   const status = result?.status;
   const paymentLabel =
@@ -1601,8 +3711,8 @@ function PassportCheck({
         <span>
           <b>Verifying your passport</b>
           <small>
-            Payment unlocks as soon as the check completes. This usually takes
-            only a few seconds.
+            Your latest saved traveller details are being compared with the
+            passport. We will show the next step when this check completes.
           </small>
         </span>
         <span className="passport-check-tag">{paymentLabel}</span>
@@ -1614,29 +3724,136 @@ function PassportCheck({
       <div className="passport-check manual" role="status">
         <ShieldCheck size={20} />
         <span>
-          <b>Documents saved for review</b>
+          <b>Your documents are being reviewed</b>
           <small>
-            Our team needs to review your document before payment. We will
-            notify you once it is approved — this page updates automatically.
+            We could not automatically confirm your corrected details. Your
+            documents have been sent for review. You do not need to upload them
+            again unless requested.
           </small>
         </span>
         <span className="passport-check-tag">{paymentLabel}</span>
       </div>
     );
   }
+  if (reviewStatus === "CORRECTION_REQUIRED") {
+    const fields = result?.mismatchedFields ?? [];
+    return (
+      <div
+        className="passport-mismatch"
+        role="region"
+        aria-labelledby="passport-mismatch-title"
+      >
+        <div className="passport-check warning" role="status">
+          <AlertTriangle size={20} aria-hidden="true" />
+          <span>
+            <b id="passport-mismatch-title">Check the details that differ</b>
+            <small>
+              We found {fields.length || "some"} detail
+              {fields.length === 1 ? "" : "s"} that did not match. Only these
+              fields need your attention.
+            </small>
+          </span>
+        </div>
+        <div
+          className="passport-comparison"
+          role="list"
+          aria-label="Passport differences"
+        >
+          {fields.map((field) => (
+            <div
+              className="passport-comparison-row"
+              role="listitem"
+              key={field}
+            >
+              <b>{FIELD_LABELS[field] ?? field}</b>
+              <span>
+                <small>We read</small>
+                <strong>
+                  {String(
+                    extracted?.[field as keyof typeof extracted] || "Not clear",
+                  )}
+                </strong>
+              </span>
+              <span>
+                <small>You entered</small>
+                {onFieldChange ? (
+                  <input
+                    aria-label={`Correct ${FIELD_LABELS[field] ?? field}`}
+                    value={String(entered?.[field as keyof Traveler] ?? "")}
+                    onChange={(event) =>
+                      onFieldChange(field, event.target.value)
+                    }
+                  />
+                ) : (
+                  <strong>
+                    {String(
+                      entered?.[field as keyof Traveler] || "Not entered",
+                    )}
+                  </strong>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="passport-mismatch-actions">
+          {onSave ? (
+            <button
+              type="button"
+              className="button"
+              disabled={busy}
+              onClick={onSave}
+            >
+              Save corrected details
+            </button>
+          ) : onEdit ? (
+            <button type="button" className="button" onClick={onEdit}>
+              Edit these details
+            </button>
+          ) : null}
+          {onConfirm ? (
+            <button
+              type="button"
+              className="button secondary"
+              disabled={busy || confirmationDisabled}
+              onClick={onConfirm}
+            >
+              I checked—my details are correct
+            </button>
+          ) : null}
+        </div>
+        {actionError ? (
+          <p className="passport-mismatch-error" role="alert">
+            {actionError}
+          </p>
+        ) : null}
+        {confirmationDisabled ? (
+          <p className="passport-mismatch-note" role="status">
+            Save your edits and check again before confirming that the original
+            details were correct.
+          </p>
+        ) : null}
+      </div>
+    );
+  }
   if (reviewStatus === "REUPLOAD_REQUIRED") {
+    const replacementReason =
+      explicitReplacementReason ||
+      (failureCode === "PASSPORT_EXPIRED"
+        ? "This passport is expired. Upload the information page of a valid passport."
+        : failureCode === "PASSPORT_BIODATA_NOT_DETECTED"
+          ? "We could not find the passport information page. Upload the page showing your photo and identity details."
+          : failureCode === "MRZ_NOT_READABLE"
+            ? "The two machine-readable lines at the bottom were not clear. Upload a sharp, uncropped image with those lines visible."
+            : "The passport image could not be read reliably. Upload a sharp, uncropped image of the information page.");
     return (
       <div className="passport-check failed">
         <AlertTriangle size={20} />
         <span>
           <b>A clearer passport image is needed</b>
-          <small>
-            We could not match the uploaded passport reliably. Replace it with a
-            sharp image of the information page before continuing.
-          </small>
+          <small>{replacementReason}</small>
         </span>
         {onEdit && (
-          <button className="button secondary" onClick={onEdit}>
+          <button type="button" className="button secondary" onClick={onEdit}>
             Replace document
           </button>
         )}
@@ -1648,7 +3865,7 @@ function PassportCheck({
       <div className="passport-check verified">
         <CheckCircle2 size={20} />
         <span>
-          <b>Documents approved</b>
+          <b>Documents verified</b>
           <small>
             Our team reviewed and approved your documents. You can continue to
             payment.
@@ -1662,7 +3879,7 @@ function PassportCheck({
       <div className="passport-check verified">
         <CheckCircle2 size={20} />
         <span>
-          <b>Passport verified</b>
+          <b>Documents verified</b>
           <small>
             We matched your passport against your traveller details before
             payment.
@@ -1708,11 +3925,11 @@ function PassportCheck({
           </small>
         </span>
         {onEdit && (
-          <button className="button secondary" onClick={onEdit}>
+          <button type="button" className="button secondary" onClick={onEdit}>
             Edit traveller details
           </button>
         )}
-        <button className="button secondary" onClick={onRecheck}>
+        <button type="button" className="button secondary" onClick={onRecheck}>
           Re-check
         </button>
       </div>
@@ -1731,11 +3948,11 @@ function PassportCheck({
           </small>
         </span>
         {onEdit && (
-          <button className="button secondary" onClick={onEdit}>
+          <button type="button" className="button secondary" onClick={onEdit}>
             Edit traveller details
           </button>
         )}
-        <button className="button secondary" onClick={onRecheck}>
+        <button type="button" className="button secondary" onClick={onRecheck}>
           Re-check
         </button>
       </div>
@@ -1770,62 +3987,12 @@ function Nav({
 }) {
   return (
     <div className="form-actions">
-      <button className="button secondary" onClick={back}>
+      <button type="button" className="button secondary" onClick={back}>
         Back
       </button>
       <Action busy={busy} onClick={next}>
         Save and continue
       </Action>
-    </div>
-  );
-}
-function FileField({
-  label,
-  file,
-  onChange,
-  capture,
-}: {
-  label: string;
-  file: File | undefined;
-  onChange: (file: File | undefined) => void;
-  capture?: boolean;
-}) {
-  const captureRef = useRef<HTMLInputElement>(null);
-  return (
-    <div className="file-field">
-      <label className="file-input">
-        <input
-          type="file"
-          accept="application/pdf,image/jpeg,image/png"
-          onChange={(e) => onChange(e.target.files?.[0])}
-        />
-        <span>
-          <b>{file?.name ?? label}</b>
-          <small>
-            {file ? `${Math.ceil(file.size / 1024)} KB` : "PDF, JPG or PNG"}
-          </small>
-        </span>
-        <em>{file ? "Replace" : "Choose file"}</em>
-      </label>
-      {capture && (
-        <>
-          <input
-            ref={captureRef}
-            type="file"
-            accept="image/jpeg,image/png"
-            capture="environment"
-            style={{ display: "none" }}
-            onChange={(e) => onChange(e.target.files?.[0])}
-          />
-          <button
-            type="button"
-            className="button secondary"
-            onClick={() => captureRef.current?.click()}
-          >
-            Take photo
-          </button>
-        </>
-      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -7,14 +8,15 @@ import {
   Bell,
   Boxes,
   ClipboardCheck,
-  Compass,
   Gauge,
   Handshake,
+  Images,
   History,
   PackageSearch,
   RadioTower,
   RotateCw,
   Settings,
+  Star,
   Undo2,
   Users,
   X,
@@ -43,6 +45,17 @@ const overviewItems: NavItem[] = [
   },
 ];
 const systemItems: NavItem[] = [
+  {
+    href: "/admin/homepage-campaigns",
+    label: "Homepage campaigns",
+    icon: Images,
+  },
+  {
+    href: "/admin/homepage-featured-plans",
+    label: "Traveller favourites",
+    icon: Star,
+  },
+  { href: "/admin/partners-showcase", label: "Partners", icon: Handshake },
   { href: "/manual-refunds", label: "Refunds", icon: Undo2 },
   { href: "/notifications", label: "Messages", icon: Bell },
   { href: "/logs", label: "Logs", icon: History },
@@ -53,12 +66,22 @@ type Profile = {
   effectiveCapabilities: string[];
 };
 
-function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
+function SidebarLink({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: NavItem;
+  active: boolean;
+  onNavigate?: () => void;
+}) {
   const Icon = item.icon;
   return (
     <Link
       href={item.href}
+      prefetch={false}
       className={cn("ops-sidebar-link", active && "active")}
+      {...(onNavigate ? { onClick: onNavigate } : {})}
     >
       <Icon className="size-4" />
       {item.label}
@@ -91,14 +114,9 @@ export default function OpsSidebar({
     label: "Settings",
     icon: Settings,
   };
-  const showcaseItem: NavItem = {
-    href: "/admin/partners-showcase",
-    label: "Partners",
-    icon: Handshake,
-  };
   const path = usePathname();
   const items = isAdmin
-    ? [...overviewItems, ...systemItems, adminItem, showcaseItem]
+    ? [...overviewItems, ...systemItems, adminItem]
     : [...overviewItems, ...systemItems];
   return (
     <>
@@ -112,12 +130,27 @@ export default function OpsSidebar({
         className={cn("ops-sidebar", open && "open")}
         aria-label="Operations navigation"
       >
-        <div className="ops-sidebar-brand">
-          <span className="mark">
-            <Compass className="size-4" />
-          </span>
+        <div
+          className="ops-sidebar-brand"
+          aria-label="Visa Compass Services Operations"
+        >
+          <Image
+            className="ops-brand-mark"
+            src="/brand/visa-compass-mark.png"
+            alt=""
+            width={370}
+            height={484}
+            priority
+          />
           <div className="word">
-            <b>Visa Compass</b>
+            <Image
+              className="ops-brand-wordmark"
+              src="/brand/visa-compass-services-white.png"
+              alt=""
+              width={933}
+              height={373}
+              priority
+            />
             <span>Operations</span>
           </div>
           <button
@@ -136,6 +169,7 @@ export default function OpsSidebar({
               key={item.href}
               item={item}
               active={isActive(path, item.href)}
+              {...(onClose ? { onNavigate: onClose } : {})}
             />
           ))}
         </nav>
@@ -143,10 +177,10 @@ export default function OpsSidebar({
         <div className="ops-sidebar-foot">
           <div className="ops-sidebar-user">
             <span className="avatar">
-              {profile?.email.slice(0, 1).toUpperCase() ?? "…"}
+              {profile?.email.slice(0, 1).toUpperCase() ?? "..."}
             </span>
             <div className="meta">
-              <b>{profile?.email ?? "Loading…"}</b>
+              <b>{profile?.email ?? "Loading..."}</b>
               <span>
                 {profile ? humane(profile.accountType) : "Authenticating"}
               </span>

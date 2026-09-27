@@ -20,8 +20,8 @@ export class ConnectivityService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    // Transatel deprecated self-service webhook registration in February 2026.
-    // Registration remains an explicit operations action for legacy tenants;
+    // Transatel deprecated API-based webhook registration in February 2026.
+    // Configure the callback in the Transatel Developer Console instead;
     // application startup must not depend on that control-plane endpoint.
     if (process.env.TRANSATEL_CATALOG_SYNC_ON_STARTUP === "true") {
       try {
@@ -56,8 +56,14 @@ export class ConnectivityService implements OnModuleInit {
   getEsimDetails(subscriptionId: string) {
     return this.selected().getEsimDetails(subscriptionId);
   }
+  getSubscriberDetails(subscriptionId: string) {
+    return this.transatel.getSubscriberDetails(subscriptionId);
+  }
   suspend(subscriptionId: string, transactionReference: string) {
     return this.transatel.suspend(subscriptionId, transactionReference);
+  }
+  reactivate(subscriptionId: string, transactionReference: string) {
+    return this.transatel.reactivate(subscriptionId, transactionReference);
   }
   terminate(subscriptionId: string, transactionReference: string) {
     return this.transatel.terminate(subscriptionId, transactionReference);
@@ -70,9 +76,6 @@ export class ConnectivityService implements OnModuleInit {
   }
   checkEligibility(planId: string, msisdn: string) {
     return this.transatel.checkEligibility(planId, msisdn);
-  }
-  ensureWebhook() {
-    return this.transatel.ensureWebhook();
   }
   handleWebhook(payload: unknown) {
     return this.transatel.handleWebhook(payload);

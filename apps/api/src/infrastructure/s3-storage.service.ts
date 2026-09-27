@@ -1,4 +1,5 @@
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -12,15 +13,21 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DocumentType } from "@visa-compass/shared";
 
 const execFileAsync = promisify(execFile);
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+export const passportOcrMaxPages = () => {
+  const configured = Number(process.env.PASSPORT_OCR_MAX_PAGES ?? 8);
+  return Number.isInteger(configured) && configured >= 1 && configured <= 16
+    ? configured
+    : 8;
+};
 const ALLOWED_CONTENT_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -40,6 +47,55 @@ export type PresignedDocumentUpload = {
 
 @Injectable()
 export class S3StorageService {
+  async finalizeDocument(assetId: string) {
+    const verified = await this.verifyDocument(assetId);
+    if (!this.isConfigured())
+      return {
+        temporaryAssetId: assetId,
+        finalizedAssetId: assetId,
+        sha256: createHash("sha256").update(assetId).digest("hex"),
+        byteSize: verified.bytes,
+        contentType: "application/pdf",
+        storageVersionId: null,
+      };
+    const downloaded = await this.downloadDocument(assetId);
+    const sha256 = createHash("sha256").update(downloaded.bytes).digest("hex");
+    const extension =
+      verified.format === "pdf"
+        ? "pdf"
+        : verified.format === "png"
+          ? "png"
+          : "jpg";
+    const finalizedAssetId = `${assetId.replace(/-doc_[^/]+$/, "")}/finalized/${sha256}.${extension}`;
+    const copied = await this.client().send(
+      new CopyObjectCommand({
+        Bucket: this.bucket(),
+        Key: finalizedAssetId,
+        CopySource: encodeURIComponent(
+          `${this.bucket()}/${assetId}`,
+        ).replaceAll("%2F", "/"),
+        ContentType: downloaded.contentType,
+        MetadataDirective: "REPLACE",
+        ServerSideEncryption: "AES256",
+      }),
+    );
+    const finalHead = await this.client().send(
+      new HeadObjectCommand({ Bucket: this.bucket(), Key: finalizedAssetId }),
+    );
+    if (Number(finalHead.ContentLength ?? 0) !== downloaded.bytes.length)
+      throw new ServiceUnavailableException(
+        "Finalized document integrity check failed",
+      );
+    return {
+      temporaryAssetId: assetId,
+      finalizedAssetId,
+      sha256,
+      byteSize: downloaded.bytes.length,
+      contentType: downloaded.contentType,
+      storageVersionId: copied.VersionId ?? finalHead.VersionId ?? null,
+    };
+  }
+
   async createDocumentUpload(
     orderId: string,
     type: DocumentType,
@@ -92,6 +148,7 @@ export class S3StorageService {
           Bucket: this.bucket(),
           Key: assetId,
           ContentType: normalizedContentType,
+          ServerSideEncryption: "AES256",
         }),
         {
           expiresIn: expiresInSeconds,
@@ -104,7 +161,10 @@ export class S3StorageService {
           mode: "s3-presigned",
           endpoint,
           method: "PUT",
-          headers: { "content-type": normalizedContentType },
+          headers: {
+            "content-type": normalizedContentType,
+            "x-amz-server-side-encryption": "AES256",
+          },
           expiresInSeconds,
         },
       };
@@ -188,10 +248,7 @@ export class S3StorageService {
       );
       if (Number(response.ContentLength ?? 0) > MAX_DOCUMENT_BYTES)
         throw new BadRequestException("Document content is unavailable");
-      const bytes = await this.bodyToBuffer(
-        response.Body,
-        MAX_DOCUMENT_BYTES,
-      );
+      const bytes = await this.bodyToBuffer(response.Body, MAX_DOCUMENT_BYTES);
       if (!bytes.length)
         throw new BadRequestException("Document content is unavailable");
       return {
@@ -205,6 +262,13 @@ export class S3StorageService {
   }
 
   async downloadDocumentImage(assetId: string) {
+    return (await this.downloadDocumentImages(assetId))[0]!;
+  }
+
+  /** Returns every page relevant to document OCR. Passport uploads sometimes
+   * contain the cover and information page as a two-page PDF, so examining
+   * only page one incorrectly rejects an otherwise valid document. */
+  async downloadDocumentImages(assetId: string) {
     const document = await this.downloadDocument(assetId);
     const maxBytes = Number(
       process.env.PASSPORT_OCR_MAX_IMAGE_BYTES ?? 5 * 1024 * 1024,
@@ -213,10 +277,12 @@ export class S3StorageService {
     if (format !== "pdf") {
       if (document.bytes.length > maxBytes)
         throw new BadRequestException("Passport image is too large to verify");
-      return {
-        bytes: document.bytes,
-        contentType: format === "png" ? "image/png" : "image/jpeg",
-      };
+      return [
+        {
+          bytes: document.bytes,
+          contentType: format === "png" ? "image/png" : "image/jpeg",
+        },
+      ];
     }
 
     const workDir = await mkdtemp(join(tmpdir(), "visa-passport-ocr-"));
@@ -230,8 +296,7 @@ export class S3StorageService {
           "-f",
           "1",
           "-l",
-          "1",
-          "-singlefile",
+          String(passportOcrMaxPages()),
           "-scale-to",
           "2000",
           "-gray",
@@ -241,10 +306,24 @@ export class S3StorageService {
         ],
         { timeout: 30_000, maxBuffer: 256 * 1024 },
       );
-      const bytes = await readFile(`${outputPrefix}.jpg`);
-      if (!bytes.length || bytes.length > maxBytes)
-        throw new BadRequestException("Passport image is too large to verify");
-      return { bytes, contentType: "image/jpeg" };
+      const pageNames = (await readdir(workDir))
+        .filter((name) => /^passport-page-\d+\.jpg$/i.test(name))
+        .sort((left, right) =>
+          left.localeCompare(right, undefined, { numeric: true }),
+        );
+      if (!pageNames.length)
+        throw new BadRequestException("Document could not be read as an image");
+      const pages = await Promise.all(
+        pageNames.map(async (name) => {
+          const bytes = await readFile(join(workDir, name));
+          if (!bytes.length || bytes.length > maxBytes)
+            throw new BadRequestException(
+              "Passport image is too large to verify",
+            );
+          return { bytes, contentType: "image/jpeg" };
+        }),
+      );
+      return pages;
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
       throw new BadRequestException("Document could not be read as an image");
@@ -255,6 +334,15 @@ export class S3StorageService {
 
   isConfigured() {
     return Boolean(process.env.AWS_REGION && process.env.AWS_S3_BUCKET);
+  }
+
+  /** Provider-neutral asset ids are the exact private S3 object keys. */
+  documentLocation(assetId: string) {
+    if (!this.isConfigured())
+      throw new ServiceUnavailableException(
+        "Private document storage is not configured",
+      );
+    return { bucket: this.bucket(), key: assetId };
   }
 
   private client() {

@@ -1,9 +1,30 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clientIp } from "./client-ip.js";
 import { redactUrl } from "./redact.js";
 import { tabularToRecords } from "./tabular.util.js";
+import { trustProxySetting } from "./trust-proxy.js";
+
+describe("trustProxySetting", () => {
+  beforeEach(() => delete process.env.TRUST_PROXY);
+
+  it("rejects blanket trust and accepts bounded explicit proxy settings", () => {
+    process.env.TRUST_PROXY = "true";
+    expect(() => trustProxySetting()).toThrow(/unsafe/i);
+    process.env.TRUST_PROXY = "1";
+    expect(trustProxySetting()).toBe(1);
+    process.env.TRUST_PROXY = "10.0.0.0/8, loopback";
+    expect(trustProxySetting()).toBe("10.0.0.0/8, loopback");
+  });
+});
 
 describe("redactUrl", () => {
+  beforeAll(() => {
+    process.env.LOG_REDACTION = "true";
+  });
+  afterAll(() => {
+    delete process.env.LOG_REDACTION;
+  });
+
   it("leaves URLs without a query string untouched", () => {
     expect(redactUrl("/api/v1/health")).toBe("/api/v1/health");
   });

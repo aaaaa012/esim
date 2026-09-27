@@ -5,24 +5,39 @@ import {
   AlertTriangle,
   Boxes,
   Database,
+  Download,
   RefreshCcw,
   RadioTower,
   ShieldAlert,
+  XCircle,
   Wifi,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
-import { LifecycleActions } from "./lifecycle-actions";
+import {
+  LifecycleActions,
+  type LifecycleCompletion,
+} from "./lifecycle-actions";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge } from "@/components/status-badge";
 import ErrorDialog from "@/components/error-dialog";
+import { operationalIssue } from "@/lib/operational-issue";
 import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
+import { downloadCsv } from "@/lib/csv";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -51,6 +66,24 @@ type Subscriber = {
   usageLastCheckedAt?: string | null;
   expiresAt?: string | null;
 };
+type EsimPlan = Omit<
+  Subscriber,
+  "ownerId" | "customer" | "email" | "iccid" | "msisdn" | "providerStatus"
+> & {
+  orderType: string;
+  source: string;
+  purchaser: string;
+};
+type CustomerEsim = {
+  inventoryId: string;
+  iccid: string;
+  msisdn?: string | null;
+  providerStatus?: string | null;
+  ownerId: string;
+  ownerName: string;
+  ownerEmail: string;
+  plans: EsimPlan[];
+};
 type Inventory = {
   id: string;
   iccid: string;
@@ -74,15 +107,22 @@ type Failure = {
 type LifecycleOperation = {
   id: string;
   orderNumber: string;
+  inventoryId: string;
+  iccid: string;
+  owner: string;
   action: string;
   state: string;
   reason: string;
   actor: string;
+  requesterId: string;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
   providerTransactionId?: string | null;
   errorMessage?: string | null;
   createdAt: string;
 };
 type Dashboard = {
+  currentActorId?: string | null;
   health: {
     ok: boolean;
     configured?: boolean;
@@ -101,25 +141,37 @@ type Dashboard = {
     webhookDeadLetters: number;
   };
   subscribers: Subscriber[];
+  esims: CustomerEsim[];
   inventory: Inventory[];
   failures: Failure[];
   lifecycleOperations: LifecycleOperation[];
 };
-type SearchScope = "subscribers" | "inventory" | "failures" | "actions";
+type SearchScope = "subscribers" | "inventory" | "actions";
 const formatDate = (value?: string | null) =>
   value ? new Date(value).toLocaleString() : "Never";
+
+export function lifecycleApprovalMessage(
+  operation: Pick<LifecycleOperation, "state" | "requesterId">,
+  currentActorId?: string | null,
+) {
+  if (operation.state !== "APPROVAL_REQUIRED") return null;
+  return operation.requesterId === currentActorId
+    ? "Request sent · awaiting another Super Admin"
+    : "Awaiting another Super Admin";
+}
 
 export default function TransatelDashboard() {
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState("");
+  const [rejection, setRejection] = useState<LifecycleOperation | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
   const [busy, setBusy] = useState("");
   const [canTerminate, setCanTerminate] = useState(false);
   const [activeTab, setActiveTab] = useState<SearchScope>("subscribers");
   const [searches, setSearches] = useState<Record<SearchScope, string>>({
     subscribers: "",
     inventory: "",
-    failures: "",
     actions: "",
   });
   const [searchRequest, setSearchRequest] = useState<{
@@ -192,6 +244,13 @@ export default function TransatelDashboard() {
       className="w-full sm:w-80"
     />
   );
+  const lifecycleCompleted = (completion: LifecycleCompletion) => {
+    if (completion.action === "reactivate-request") {
+      setActiveTab("actions");
+      setSearchRequest({ scope: "actions", q: "" });
+    }
+    void load();
+  };
   const reconcile = async (profile: Inventory) => {
     setBusy(profile.id);
     try {
@@ -202,7 +261,7 @@ export default function TransatelDashboard() {
       const value = await response.json();
       if (!response.ok)
         throw new Error(value.error?.message ?? "Reconciliation failed");
-      toast.success(`${profile.iccid} reconciled`);
+      toast.success(`Network status refreshed for ${profile.iccid}`);
       await load();
     } catch (cause) {
       toast.error(
@@ -230,7 +289,7 @@ export default function TransatelDashboard() {
       setBusy("");
     }
   };
-  const refreshUsage = async (subscriber: Subscriber) => {
+  const refreshUsage = async (subscriber: EsimPlan) => {
     setBusy(subscriber.orderId);
     try {
       const response = await authFetch(
@@ -297,7 +356,7 @@ export default function TransatelDashboard() {
           icon: AlertTriangle,
         },
         {
-          label: "Missed notifications",
+          label: "Webhook dead letters",
           value: data.counts.webhookDeadLetters,
           icon: Database,
         },
@@ -314,17 +373,190 @@ export default function TransatelDashboard() {
       const value = await response.json();
       if (!response.ok)
         throw new Error(value.error?.message ?? "Usage sync failed");
-      toast.success(
-        `Usage synchronization complete (${value.data?.synced ?? 0} active subscriptions updated)`,
-      );
-      void load();
+      const synced = Number(value.data?.synced ?? 0);
+      const failed = Number(value.data?.failed ?? 0);
+      if (failed > 0) {
+        toast.warning(
+          `Usage sync finished: ${synced} eSIMs updated, ${failed} need attention`,
+        );
+      } else {
+        toast.success(`Usage sync finished: ${synced} eSIMs updated`);
+      }
+      await load();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Usage sync failed");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const refreshDashboard = async () => {
+    setBusy("refresh-dashboard");
+    try {
+      await load();
+      toast.success("Saved dashboard data reloaded");
     } catch (cause) {
       toast.error(
-        cause instanceof Error ? cause.message : "Usage sync failed",
+        cause instanceof Error ? cause.message : "Dashboard refresh failed",
       );
     } finally {
       setBusy("");
     }
+  };
+
+  const approveReactivation = async (operation: LifecycleOperation) => {
+    setBusy(`approve:${operation.id}`);
+    try {
+      const response = await authFetch(
+        `${API}/operations/transatel/reactivations/${operation.id}/approve`,
+        {
+          method: "POST",
+          headers: { "x-idempotency-key": crypto.randomUUID() },
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Reactivation approval failed");
+      toast.success("Reactivation approved and sent to the network");
+      await load();
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error ? cause.message : "Reactivation approval failed",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const rejectReactivation = async () => {
+    if (!rejection || rejectionReason.trim().length < 5) return;
+    setBusy(`reject:${rejection.id}`);
+    try {
+      const response = await authFetch(
+        `${API}/operations/transatel/reactivations/${rejection.id}/reject`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({ reason: rejectionReason.trim() }),
+        },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Reactivation rejection failed",
+        );
+      toast.success("Reactivation request rejected");
+      setRejection(null);
+      setRejectionReason("");
+      await load();
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : "Reactivation rejection failed",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const exportCurrentView = () => {
+    if (!data) return;
+    const date = new Date().toISOString().slice(0, 10);
+    if (activeTab === "subscribers") {
+      downloadCsv(
+        `transatel-customer-plans-${date}.csv`,
+        [
+          "Customer",
+          "Email",
+          "Order",
+          "ICCID / SIM serial",
+          "MSISDN",
+          "Plan",
+          "Remaining MB",
+          "Used MB",
+          "Total MB",
+          "eSIM status",
+          "Package status",
+          "Subscription ID",
+          "Usage checked at",
+          "Expires at",
+        ],
+        data.esims.flatMap((esim) =>
+          esim.plans.map((plan) => [
+            esim.ownerName,
+            esim.ownerEmail,
+            plan.orderNumber,
+            esim.iccid,
+            esim.msisdn,
+            plan.plan,
+            plan.remainingMb,
+            plan.usedMb,
+            plan.totalMb,
+            esim.providerStatus,
+            plan.status,
+            plan.providerSubscriptionId,
+            plan.usageLastCheckedAt,
+            plan.expiresAt,
+          ]),
+        ),
+      );
+      return;
+    }
+    if (activeTab === "inventory") {
+      downloadCsv(
+        `transatel-unassigned-esims-${date}.csv`,
+        [
+          "ICCID / SIM serial",
+          "MSISDN",
+          "Batch",
+          "Local status",
+          "Network status",
+          "Last checked",
+          "Issue",
+        ],
+        data.inventory.map((row) => [
+          row.iccid,
+          row.msisdn,
+          row.batchReference,
+          row.status,
+          row.providerStatus,
+          row.lastProviderCheckedAt,
+          row.quarantineReason ?? row.providerCheckError,
+        ]),
+      );
+      return;
+    }
+    downloadCsv(
+      `transatel-lifecycle-actions-${date}.csv`,
+      [
+        "Time",
+        "Owner",
+        "ICCID / SIM serial",
+        "Order",
+        "Action",
+        "State",
+        "Actor",
+        "Reason",
+        "Provider reference",
+        "Error",
+      ],
+      data.lifecycleOperations.map((row) => [
+        row.createdAt,
+        row.owner,
+        row.iccid,
+        row.orderNumber,
+        row.action,
+        row.state,
+        row.actor,
+        row.reason,
+        row.providerTransactionId,
+        row.errorMessage,
+      ]),
+    );
   };
 
   return (
@@ -341,7 +573,7 @@ export default function TransatelDashboard() {
           ) : undefined
         }
         actions={
-          <div className="flex gap-2">
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto">
             <Button
               variant="outline"
               disabled={busy === "sync-usage"}
@@ -359,10 +591,26 @@ export default function TransatelDashboard() {
               disabled={busy === "diagnostics"}
               onClick={() => void runDiagnostics()}
             >
-              <Database className="size-4" /> Run diagnostics
+              {busy === "diagnostics" ? (
+                <Spinner />
+              ) : (
+                <Database className="size-4" />
+              )}
+              Check integration health
             </Button>
-            <Button variant="outline" onClick={() => void load()}>
-              <RefreshCcw className="size-4" /> Refresh
+            <Button
+              variant="outline"
+              disabled={busy === "refresh-dashboard"}
+              onClick={() => void refreshDashboard()}
+            >
+              {busy === "refresh-dashboard" ? (
+                <Spinner />
+              ) : (
+                <RefreshCcw className="size-4" />
+              )}
+              {busy === "refresh-dashboard"
+                ? "Reloading…"
+                : "Reload saved data"}
             </Button>
           </div>
         }
@@ -452,116 +700,153 @@ export default function TransatelDashboard() {
             value={activeTab}
             onValueChange={(value) => setActiveTab(value as SearchScope)}
           >
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                Exports contain the currently displayed section and applied
+                search.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!data}
+                onClick={exportCurrentView}
+              >
+                <Download className="size-4" /> Export current section
+              </Button>
+            </div>
             <TabsList>
-              <TabsTrigger value="subscribers">Customer plans</TabsTrigger>
+              <TabsTrigger value="subscribers">Customer eSIMs</TabsTrigger>
               <TabsTrigger value="inventory">Unassigned eSIMs</TabsTrigger>
-              <TabsTrigger value="failures">Issues</TabsTrigger>
               <TabsTrigger value="actions">
-                Suspend &amp; terminate history
+                Mobile data pause and eSIM closure history
               </TabsTrigger>
             </TabsList>
             <TabsContent value="subscribers" className="mt-4">
               <Panel
-                title="Customer plans"
-                description="Balances and plan controls"
+                title="Customer eSIMs"
+                description="One network profile with its purchase and recharge plans"
                 actions={searchControl(
                   "subscribers",
                   "Search customer, order, ICCID or plan…",
                 )}
                 noPadding
               >
-                {data.subscribers.length ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Customer / Order</TableHead>
-                        <TableHead>eSIM</TableHead>
-                        <TableHead>Plan</TableHead>
-                        <TableHead>Balance</TableHead>
-                        <TableHead>eSIM / Subscription</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.subscribers.map((row) => (
-                        <TableRow key={row.providerSubscriptionId}>
-                          <TableCell>
-                            <p className="font-medium">{row.customer}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {row.orderNumber} · {row.email}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            <code className="text-xs">{row.iccid}</code>
-                            <p className="text-xs text-muted-foreground">
-                              {row.msisdn ?? "No mobile number"}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            {row.plan}
-                            <p className="text-xs text-muted-foreground">
-                              Expires {formatDate(row.expiresAt)}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            {row.usageLastCheckedAt ? (
-                              <>
-                                <p className="font-medium">
-                                  {row.remainingMb.toLocaleString()} MB left
-                                </p>
-                                <p className="text-xs text-muted-foreground">
-                                  {row.usedMb.toLocaleString()} /{" "}
-                                  {row.totalMb.toLocaleString()} MB
-                                </p>
-                              </>
-                            ) : (
-                              <p className="text-xs text-muted-foreground">
-                                Usage not available yet
-                              </p>
-                            )}
-                            <Button
-                              className="mt-1 h-7 px-2 text-xs"
-                              variant="ghost"
-                              disabled={busy === row.orderId}
-                              onClick={() => void refreshUsage(row)}
-                            >
-                              <RefreshCcw className="size-3" /> Refresh
-                            </Button>
-                          </TableCell>
-                          <TableCell>
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className="text-muted-foreground">
-                                  eSIM
-                                </span>
-                                <StatusBadge
-                                  label={row.providerStatus ?? "UNKNOWN"}
-                                />
-                              </div>
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className="text-muted-foreground">
-                                  Plan
-                                </span>
-                                <StatusBadge label={row.status} />
-                              </div>
+                {data.esims.length ? (
+                  <div className="space-y-4 p-4">
+                    {data.esims.map((esim) => (
+                      <section
+                        key={esim.inventoryId}
+                        className="overflow-hidden rounded-xl border bg-background"
+                      >
+                        <div className="flex flex-col gap-4 border-b bg-muted/30 p-4 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold">{esim.ownerName}</p>
+                              <StatusBadge
+                                label={esim.providerStatus ?? "UNKNOWN"}
+                              />
                             </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <LifecycleActions
-                              orderId={row.orderId}
-                              iccid={row.iccid}
-                              providerStatus={row.providerStatus}
-                              canTerminate={canTerminate}
-                              onCompleted={() => void load()}
-                            />
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                            <p className="text-sm text-muted-foreground">
+                              {esim.ownerEmail}
+                            </p>
+                            <p className="mt-1 break-all text-xs text-muted-foreground">
+                              ICCID {esim.iccid} · MSISDN{" "}
+                              {esim.msisdn ?? "Not assigned"}
+                            </p>
+                          </div>
+                          <LifecycleActions
+                            inventoryId={esim.inventoryId}
+                            iccid={esim.iccid}
+                            providerStatus={esim.providerStatus}
+                            canTerminate={canTerminate}
+                            onCompleted={lifecycleCompleted}
+                          />
+                        </div>
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Plan / order</TableHead>
+                                <TableHead>Purchase</TableHead>
+                                <TableHead>Balance</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="text-right">
+                                  Plan actions
+                                </TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {esim.plans.map((plan) => (
+                                <TableRow key={plan.providerSubscriptionId}>
+                                  <TableCell>
+                                    <p className="font-medium">{plan.plan}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {plan.orderNumber} · Expires{" "}
+                                      {formatDate(plan.expiresAt)}
+                                    </p>
+                                    <p className="break-all text-[11px] text-muted-foreground">
+                                      Subscription ID:{" "}
+                                      {plan.providerSubscriptionId}
+                                    </p>
+                                  </TableCell>
+                                  <TableCell>
+                                    <p className="text-sm">
+                                      {plan.orderType === "INITIAL_PURCHASE"
+                                        ? "Initial purchase"
+                                        : "Recharge"}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Purchased by {plan.purchaser}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {plan.source}
+                                    </p>
+                                  </TableCell>
+                                  <TableCell>
+                                    <p className="font-medium">
+                                      {plan.usageLastCheckedAt
+                                        ? `${plan.remainingMb.toLocaleString()} MB left`
+                                        : "Usage not available yet"}
+                                    </p>
+                                    {plan.usageLastCheckedAt ? (
+                                      <p className="text-xs text-muted-foreground">
+                                        {plan.usedMb.toLocaleString()} /{" "}
+                                        {plan.totalMb.toLocaleString()} MB used
+                                      </p>
+                                    ) : null}
+                                  </TableCell>
+                                  <TableCell>
+                                    <StatusBadge label={plan.status} />
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <div className="flex justify-end gap-1">
+                                      <Button asChild size="sm" variant="ghost">
+                                        <a href={`/orders/${plan.orderId}`}>
+                                          Open order
+                                        </a>
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={busy === plan.orderId}
+                                        onClick={() => void refreshUsage(plan)}
+                                      >
+                                        <RefreshCcw className="size-3" />{" "}
+                                        Refresh
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </section>
+                    ))}
+                  </div>
                 ) : (
                   <EmptyState
-                    title="No customer plans found"
+                    title="No customer eSIMs found"
                     description="Try another customer, order, ICCID, MSISDN, or plan."
                   />
                 )}
@@ -581,7 +866,7 @@ export default function TransatelDashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>eSIM</TableHead>
+                        <TableHead>SIM identifiers</TableHead>
                         <TableHead>Batch</TableHead>
                         <TableHead>Our system</TableHead>
                         <TableHead>Network</TableHead>
@@ -594,7 +879,13 @@ export default function TransatelDashboard() {
                       {data.inventory.map((row) => (
                         <TableRow key={row.id}>
                           <TableCell>
+                            <p className="text-[11px] text-muted-foreground">
+                              ICCID / SIM serial
+                            </p>
                             <code className="text-xs">{row.iccid}</code>
+                            <p className="text-[11px] text-muted-foreground">
+                              MSISDN: {row.msisdn ?? "Not assigned"}
+                            </p>
                           </TableCell>
                           <TableCell>{row.batchReference}</TableCell>
                           <TableCell>
@@ -615,7 +906,7 @@ export default function TransatelDashboard() {
                               </span>
                             ) : row.providerCheckError ? (
                               <span className="text-destructive">
-                                {row.providerCheckError}
+                                {operationalIssue(row.providerCheckError).title}
                               </span>
                             ) : (
                               <span className="text-muted-foreground">—</span>
@@ -629,7 +920,8 @@ export default function TransatelDashboard() {
                                 disabled={busy === row.id}
                                 onClick={() => void reconcile(row)}
                               >
-                                <RefreshCcw className="size-3.5" /> Check network
+                                <RefreshCcw className="size-3.5" /> Refresh
+                                network status
                               </Button>
                               {row.status === "QUARANTINED" && canTerminate ? (
                                 <Button
@@ -656,63 +948,13 @@ export default function TransatelDashboard() {
                 )}
               </Panel>
             </TabsContent>
-            <TabsContent value="failures" className="mt-4">
-              <Panel
-                title="Recent network issues"
-                description="Recent requests to the network that did not succeed"
-                actions={searchControl(
-                  "failures",
-                  "Search operation, endpoint or error…",
-                )}
-                noPadding
-              >
-                {data.failures.length ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Time</TableHead>
-                        <TableHead>Operation</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Endpoint</TableHead>
-                        <TableHead>Error</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.failures.map((row) => (
-                        <TableRow key={row.id}>
-                          <TableCell>{formatDate(row.createdAt)}</TableCell>
-                          <TableCell>{row.operation}</TableCell>
-                          <TableCell>
-                            <StatusBadge
-                              label={String(row.status)}
-                              tone="warning"
-                            />
-                          </TableCell>
-                          <TableCell className="max-w-64 truncate font-mono text-xs">
-                            {row.endpoint}
-                          </TableCell>
-                          <TableCell className="max-w-80 truncate text-xs text-destructive">
-                            {row.errorCode ?? row.errorMessage ?? "Unknown"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <EmptyState
-                    title="No network issues found"
-                    description="Try another operation, endpoint, error code, or correlation ID."
-                  />
-                )}
-              </Panel>
-            </TabsContent>
             <TabsContent value="actions" className="mt-4">
               <Panel
-                title="Suspend and terminate history"
-                description="Record of suspend and terminate requests"
+                title="Network lifecycle history"
+                description="Audited suspension, reactivation and permanent termination requests"
                 actions={searchControl(
                   "actions",
-                  "Search order, actor, reason or reference…",
+                  "Search ICCID, order, actor, reason or reference…",
                 )}
                 noPadding
               >
@@ -721,26 +963,41 @@ export default function TransatelDashboard() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Time</TableHead>
-                        <TableHead>Order</TableHead>
+                        <TableHead>eSIM / initiating order</TableHead>
                         <TableHead>Action</TableHead>
                         <TableHead>State</TableHead>
                         <TableHead>Actor</TableHead>
                         <TableHead>Reason</TableHead>
                         <TableHead>Reference</TableHead>
+                        <TableHead />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {data.lifecycleOperations.map((row) => (
                         <TableRow key={row.id}>
                           <TableCell>{formatDate(row.createdAt)}</TableCell>
-                          <TableCell>{row.orderNumber}</TableCell>
+                          <TableCell>
+                            <p>{row.owner}</p>
+                            <p className="font-mono text-xs text-muted-foreground">
+                              {row.iccid}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Initiated from {row.orderNumber}
+                            </p>
+                          </TableCell>
                           <TableCell>{row.action}</TableCell>
                           <TableCell>
                             <StatusBadge
                               label={row.state}
                               tone={
                                 row.state === "FAILED" ||
-                                row.state === "RECONCILE_REQUIRED"
+                                row.state === "RECONCILE_REQUIRED" ||
+                                row.state === "APPROVAL_REQUIRED" ||
+                                row.state === "REJECTED" ||
+                                row.state === "EXPIRED" ||
+                                row.state === "CREATED" ||
+                                row.state === "SUBMITTING" ||
+                                row.state === "ACCEPTED"
                                   ? "warning"
                                   : "success"
                               }
@@ -752,6 +1009,48 @@ export default function TransatelDashboard() {
                           </TableCell>
                           <TableCell className="font-mono text-xs">
                             {row.providerTransactionId ?? "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {canTerminate &&
+                            row.action === "REACTIVATE" &&
+                            row.state === "APPROVAL_REQUIRED" &&
+                            row.requesterId !== data.currentActorId ? (
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={Boolean(busy)}
+                                  onClick={() => setRejection(row)}
+                                >
+                                  <XCircle className="size-4" />
+                                  Reject
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  disabled={Boolean(busy)}
+                                  onClick={() => void approveReactivation(row)}
+                                >
+                                  {busy === `approve:${row.id}` ? (
+                                    <Spinner />
+                                  ) : null}
+                                  Approve reactivation
+                                </Button>
+                              </div>
+                            ) : row.state === "APPROVAL_REQUIRED" ? (
+                              <span className="text-xs text-muted-foreground">
+                                {lifecycleApprovalMessage(
+                                  row,
+                                  data.currentActorId,
+                                )}
+                              </span>
+                            ) : row.approvedBy ? (
+                              <span className="text-xs text-muted-foreground">
+                                {row.state === "REJECTED"
+                                  ? "Rejected"
+                                  : "Approved"}{" "}
+                                by {row.approvedBy}
+                              </span>
+                            ) : null}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -768,6 +1067,56 @@ export default function TransatelDashboard() {
           </Tabs>
         </>
       ) : null}
+      <Dialog
+        open={Boolean(rejection)}
+        onOpenChange={(open) => {
+          if (!open && !busy) {
+            setRejection(null);
+            setRejectionReason("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject reactivation request</DialogTitle>
+            <DialogDescription>
+              Record why network service must remain suspended. No request will
+              be sent to Transatel.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="block space-y-1.5 text-sm font-medium">
+            Rejection reason
+            <textarea
+              className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm"
+              maxLength={500}
+              value={rejectionReason}
+              onChange={(event) => setRejectionReason(event.target.value)}
+            />
+          </label>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={Boolean(busy)}
+              onClick={() => {
+                setRejection(null);
+                setRejectionReason("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={Boolean(busy) || rejectionReason.trim().length < 5}
+              onClick={() => void rejectReactivation()}
+            >
+              {rejection && busy === `reject:${rejection.id}` ? (
+                <Spinner />
+              ) : null}
+              Reject request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

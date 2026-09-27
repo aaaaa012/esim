@@ -16,7 +16,7 @@
 .compatibility-hero {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
-  align-items: center;
+  align-items: start;
   gap: 58px;
 }
 .compatibility-page h1 {
@@ -54,7 +54,8 @@
 }
 .compatibility-visual {
   position: relative;
-  min-height: 430px;
+  width: min(100%, 460px);
+  justify-self: end;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
@@ -62,24 +63,9 @@
   box-shadow: var(--shadow-lg);
 }
 .compatibility-visual img {
-  object-fit: cover;
-}
-.visual-trust {
-  position: absolute;
-  left: 20px;
-  bottom: 20px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.86);
-  color: #0f3140;
-  font-size: 12px;
-  font-weight: 800;
-  box-shadow: var(--shadow-md);
-  backdrop-filter: blur(10px);
+  display: block;
+  width: 100%;
+  height: auto;
 }
 .compatibility-guide {
   display: grid;
@@ -169,7 +155,8 @@
     gap: 30px;
   }
   .compatibility-visual {
-    min-height: 360px;
+    width: min(100%, 520px);
+    justify-self: center;
   }
   .compatibility-guide {
     grid-template-columns: 1fr;
@@ -177,23 +164,56 @@
   }
 }
 @media (max-width: 540px) {
+  .compatibility-page {
+    padding: 32px 0 calc(88px + env(safe-area-inset-bottom));
+  }
+  .compatibility-hero { gap: 22px; }
   .compatibility-page h1 {
-    font-size: 40px;
+    margin: 12px 0 10px;
+    font-size: clamp(30px, 9vw, 38px);
+    line-height: 1.04;
   }
   .compatibility-intro {
     font-size: 16px;
+    line-height: 1.55;
   }
+  .compatibility-points { gap: 8px; margin-top: 18px; }
   .compatibility-visual {
-    min-height: 300px;
+    border-radius: 16px;
+    box-shadow: var(--shadow-sm);
   }
+  .compatibility-guide { gap: 0; margin-top: 24px; }
   .check-card {
-    padding: 20px;
+    gap: 14px;
+    padding: 18px 0;
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
+  .check-card.primary-check {
+    border-color: var(--border);
+    background: transparent;
+  }
+  .check-card:first-child { border-top: 0; }
+  .check-number {
+    width: 44px;
+    height: 44px;
+    border-radius: 13px;
+    box-shadow: none;
+  }
+  .check-card h2 { margin-bottom: 5px; font-size: 17px; }
+  .check-card p { line-height: 1.55; }
+  .compatibility-note { gap: 10px; margin-top: 10px; padding: 16px; border-radius: 14px; }
   .compatibility-actions {
     align-items: stretch;
     flex-direction: column;
+    gap: 8px;
+    margin-top: 20px;
   }
   .compatibility-actions .button {
     width: 100%;
+    min-height: 48px;
   }
 }

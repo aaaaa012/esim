@@ -14,7 +14,11 @@ const transitions: Record<OrderStatus, readonly OrderStatus[]> = {
     OrderStatus.PAYMENT_PENDING,
     OrderStatus.CANCELLED,
   ],
-  PAYMENT_CONFIRMED: [OrderStatus.APPROVED, OrderStatus.REVIEW_PENDING],
+  PAYMENT_CONFIRMED: [
+    OrderStatus.APPROVED,
+    OrderStatus.REVIEW_PENDING,
+    OrderStatus.REFUND_PENDING,
+  ],
   REVIEW_PENDING: [
     OrderStatus.AWAITING_CUSTOMER,
     OrderStatus.APPROVED,
@@ -26,14 +30,19 @@ const transitions: Record<OrderStatus, readonly OrderStatus[]> = {
     OrderStatus.QR_READY,
     OrderStatus.COMPLETED,
     OrderStatus.PROVISIONING_FAILED,
+    OrderStatus.REFUND_PENDING,
   ],
-  QR_READY: [OrderStatus.COMPLETED, OrderStatus.ACTIVATION_ATTENTION],
+  QR_READY: [
+    OrderStatus.COMPLETED,
+    OrderStatus.ACTIVATION_ATTENTION,
+    OrderStatus.REFUND_PENDING,
+  ],
   ACTIVATION_ATTENTION: [OrderStatus.COMPLETED, OrderStatus.REFUND_PENDING],
   PROVISIONING_FAILED: [OrderStatus.PROVISIONING, OrderStatus.REFUND_PENDING],
   REFUND_PENDING: [OrderStatus.REFUNDED],
   PAYMENT_FAILED: [OrderStatus.PAYMENT_PENDING, OrderStatus.CANCELLED],
   CANCELLED: [],
-  COMPLETED: [],
+  COMPLETED: [OrderStatus.REFUND_PENDING, OrderStatus.REFUNDED],
   REFUNDED: [],
 };
 export function canTransition(from: OrderStatus, to: OrderStatus) {

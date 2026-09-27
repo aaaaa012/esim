@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { ocrJobOptions, ocrRecoveryConfig } from "./ocr-recovery.config.js";
+import {
+  ocrJobOptions,
+  ocrRecoveryConfig,
+  orderPassportOcrJobId,
+} from "./ocr-recovery.config.js";
 
 const original = {
   grace: process.env.OCR_FAILURE_GRACE_SECONDS,
@@ -47,4 +51,30 @@ describe("OCR recovery configuration", () => {
       sweepMs: 5_000,
     });
   });
+});
+
+it("deduplicates retries of the same upload but not a replacement in the same row", () => {
+  const first = orderPassportOcrJobId("order", "passport", "original-upload");
+  expect(orderPassportOcrJobId("order", "passport", "original-upload")).toBe(
+    first,
+  );
+  expect(
+    orderPassportOcrJobId("order", "passport", "replacement-upload"),
+  ).not.toBe(first);
+  expect(
+    orderPassportOcrJobId(
+      "order",
+      "passport",
+      "original-upload",
+      "corrected-traveller-details",
+    ),
+  ).not.toBe(first);
+  expect(
+    orderPassportOcrJobId(
+      "order",
+      "passport",
+      "original-upload",
+      "replacement:2026-09-22T00:00:00.000Z",
+    ),
+  ).not.toBe(first);
 });

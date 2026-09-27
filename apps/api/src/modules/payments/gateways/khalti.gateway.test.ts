@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../../../infrastructure/prisma.service.js";
 import { KhaltiGateway } from "./khalti.gateway.js";
 
@@ -6,6 +6,14 @@ describe("KhaltiGateway diagnostics", () => {
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.KHALTI_SECRET_KEY;
   const originalBase = process.env.KHALTI_BASE_URL;
+
+  beforeAll(() => {
+    process.env.LOG_REDACTION = "true";
+  });
+
+  afterAll(() => {
+    delete process.env.LOG_REDACTION;
+  });
 
   function prismaWithLog(create = vi.fn().mockResolvedValue({})) {
     return {
@@ -64,11 +72,14 @@ describe("KhaltiGateway diagnostics", () => {
     });
   });
 
-  it("records successful provider calls without request or response bodies", async () => {
+  it("records redacted request and response bodies for provider calls", async () => {
     process.env.KHALTI_SECRET_KEY = "sandbox-secret";
     const { prisma, create } = prismaWithLog();
     globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ status: "Completed" }), { status: 200 }),
+      new Response(
+        JSON.stringify({ status: "Completed", payment_url: "https://pay.example/private" }),
+        { status: 200 },
+      ),
     );
 
     await new KhaltiGateway(prisma).diagnose();
@@ -83,10 +94,51 @@ describe("KhaltiGateway diagnostics", () => {
       }),
     });
     const data = create.mock.calls[0]?.[0]?.data;
-    expect(data).not.toHaveProperty("requestBody");
-    expect(data).not.toHaveProperty("responseBody");
+    expect(data).toMatchObject({
+      requestBody: { pidx: expect.stringContaining("visa-compass-health-") },
+      responseBody: { status: "Completed", payment_url: "[REDACTED]" },
+    });
     expect(JSON.stringify(data)).not.toContain("sandbox-secret");
     expect(String(data?.endpoint)).not.toContain("?");
+  });
+
+  it("holds an unknown Khalti lookup status instead of falsely failing it", async () => {
+    process.env.KHALTI_SECRET_KEY = "sandbox-secret";
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ status: "Under Review", total_amount: 12500 }),
+        { status: 200 },
+      ),
+    );
+
+    await expect(
+      new KhaltiGateway().verify("pidx-1", {
+        orderId: "order-1",
+        amountNpr: 125,
+      }),
+    ).resolves.toMatchObject({ status: "PENDING", amountNpr: 125 });
+  });
+
+  it("correlates payment lookups with the local order", async () => {
+    process.env.KHALTI_SECRET_KEY = "sandbox-secret";
+    const { prisma, create } = prismaWithLog();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "Pending", total_amount: 12500 }), {
+        status: 200,
+      }),
+    );
+
+    await new KhaltiGateway(prisma).verify("pidx-1", {
+      orderId: "order-1",
+      amountNpr: 125,
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        operation: "khalti-lookup",
+        correlationId: "order-1",
+      }),
+    });
   });
 
   it("records provider HTTP failures", async () => {

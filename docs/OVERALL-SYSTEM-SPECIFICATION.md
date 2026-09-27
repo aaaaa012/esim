@@ -1,7 +1,7 @@
 # Visa Compass System and Operating Guide
 
 **Purpose:** product overview, business-process guide and technical reference  
-**Verified against the implementation:** 2026-08-13
+**Verified against the implementation:** 2026-09-08
 
 ## 1. What Visa Compass does
 
@@ -32,19 +32,19 @@ The API is the central decision point. It validates requests, applies business r
 
 ## 2. Main parts of the system
 
-| Component              | What it is                                           | Why it is needed                                                                                      | What relies on it                                                    |
-| ---------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Customer Web (Next.js) | The customer-facing website.                         | Lets travellers browse, checkout, view orders/eSIMs and notification history.                         | Customers and the API.                                               |
-| Hosted checkout        | A token-based partner traveller/document flow.       | Lets a partner use Visa Compass pages instead of building its own checkout.                           | Checkout-link partners and travellers.                               |
-| Ops Web (Next.js)      | Internal Operations/Admin website.                   | Lets staff investigate and resolve operational work.                                                  | Operations and Super Admin users.                                    |
-| API (NestJS)           | Backend service.                                     | Enforces validation, RBAC, lifecycle changes, integrations and response redaction.                    | Every portal and integration.                                        |
-| PostgreSQL / Prisma   | Primary business database.                           | Holds users, plans, orders, payments, documents, eSIM stock, subscriptions, events and audit records. | Every durable business process.                                      |
-| Khalti                 | Customer payment gateway.                            | Starts and verifies direct customer payments.                                                         | Customer checkout.                                                   |
-| Transatel              | Connectivity/eSIM provider.                          | Supplies catalogue, provisioning, lifecycle and usage information.                                    | eSIM fulfilment.                                                     |
-| Clerk                  | Identity provider.                                   | Handles customer/staff sign-in and identity synchronisation. Database roles still decide permissions. | Sign-in and staff access.                                            |
-| Amazon S3             | Private document storage.                            | Supports signed uploads and controlled document reads.                                                | Checkout and document review.                                        |
-| Amazon SES / WhatsApp      | Notification channels.                               | Delivers order updates. QR-ready email attaches a PNG QR image.                                       | Customers and support.                                               |
-| Redis / BullMQ         | Background-job and shared rate-limit infrastructure. | Makes delayed work reliable across instances.                                                         | Provisioning, callbacks, notifications, reconciliation and webhooks. |
+| Component              | What it is                                           | Why it is needed                                                                                              | What relies on it                                                    |
+| ---------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Customer Web (Next.js) | The customer-facing website.                         | Lets travellers browse, checkout, view orders/eSIMs and notification history.                                 | Customers and the API.                                               |
+| Hosted checkout        | A token-based partner traveller/document flow.       | Lets a partner use Visa Compass pages instead of building its own checkout.                                   | Checkout-link partners and travellers.                               |
+| Ops Web (Next.js)      | Internal Operations/Admin website.                   | Lets staff investigate and resolve operational work.                                                          | Operations and Super Admin users.                                    |
+| API (NestJS)           | Backend service.                                     | Enforces validation, RBAC, lifecycle changes, integrations and response redaction.                            | Every portal and integration.                                        |
+| PostgreSQL / Prisma    | Primary business database.                           | Holds users, plans, orders, payments, documents, eSIM stock, subscriptions, events and audit records.         | Every durable business process.                                      |
+| Khalti / Fonepay       | Customer payment gateways.                           | Starts and authoritatively verifies direct customer payments; Fonepay QR/socket events trigger server lookup. | Customer, guest and hosted checkout payment flows.                   |
+| Transatel              | Connectivity/eSIM provider.                          | Supplies catalogue, provisioning, lifecycle and usage information.                                            | eSIM fulfilment.                                                     |
+| Clerk                  | Identity provider.                                   | Handles customer/staff sign-in and identity synchronisation. Database roles still decide permissions.         | Sign-in and staff access.                                            |
+| Amazon S3              | Private document storage.                            | Supports signed uploads and controlled document reads.                                                        | Checkout and document review.                                        |
+| Amazon SES / WhatsApp  | Notification channels.                               | Delivers order updates. QR-ready email attaches a PNG QR image.                                               | Customers and support.                                               |
+| Redis / BullMQ         | Background-job and shared rate-limit infrastructure. | Makes delayed work reliable across instances.                                                                 | Provisioning, callbacks, notifications, reconciliation and webhooks. |
 
 ## 3. Users and roles
 
@@ -64,7 +64,7 @@ Clerk proves who has signed in. The database is the authority for `CUSTOMER`, `O
 2. **Check compatibility.** The customer chooses a plan and accepts the eSIM compatibility requirement before checkout continues.
 3. **Create the order.** The customer starts in `DRAFT` and submits validated traveller details.
 4. **Provide documents.** Passport and ticket are required. VISA is required only where destination configuration says so. Uploads are private and verified. Passport verification compares document/OCR details with the traveller details.
-5. **Make payment.** The customer starts a Khalti payment. The order becomes `PAYMENT_PENDING` until Visa Compass confirms the gateway result.
+5. **Make payment.** The customer chooses an enabled Khalti or Fonepay payment method. The order remains `PAYMENT_PENDING` until Visa Compass verifies the authoritative provider result; a browser redirect or socket notification alone never confirms payment.
 6. **Approve and provision.** A verified direct payment moves forward automatically. Replacement-document cases may wait for Operations review. The system reserves inventory and asks Transatel to prepare the eSIM in the background.
 7. **Receive the eSIM.** Once QR activation data exists, the order reaches `QR_READY`. Visa Compass emails the traveller an unencrypted QR image attachment. An authenticated customer can also download an unencrypted QR PDF through the API.
 8. **Install, activate and use.** When Transatel confirms activation, the order becomes `COMPLETED`. The customer can refresh/view usage. Provider expiry, suspension or termination updates subscription and inventory lifecycle.
@@ -124,7 +124,11 @@ eSIM stock records move through `IMPORTED → AVAILABLE → RESERVED → ASSIGNE
 
 The system stores a `ProvisioningOperation` so it can recover a delayed provider request safely. Its states are `CREATED`, `SUBMITTING`, `ACCEPTED`, `WAITING_FOR_QR`, `QR_READY`, `ACTIVATED`, `RECONCILE_REQUIRED`, `REJECTED`, `MANUAL_REVIEW` and `CANCELLED`. This allows Operations to check the provider before retrying instead of accidentally sending a second preload request.
 
-Operations can suspend and terminate a Transatel subscription. **[PARTIALLY IMPLEMENTED]** Ops does not yet expose provider reactivation/unsuspend. That is a Phase 2 item.
+Operations can suspend a Transatel subscriber and request reactivation. A
+different Super Admin must approve reactivation before the provider request is
+sent. Termination remains Super-Admin-only and irreversible. Suspension affects
+network service only; it does not automatically cancel a product or issue a
+refund, and recurring provider charges may continue.
 
 ## 7. Operations guide — what staff can do today
 
@@ -217,7 +221,9 @@ Production requires `ORDER_WORKFLOW_MODE=database-first`. Lifecycle mutations re
 - Partner complete orders require compatibility, terms and privacy consent. Direct checkout requires compatibility acceptance before progress.
 - Passport and ticket are required. VISA requirement comes from destination configuration.
 - Direct payment requires passport verification where the flow calls it. Sensitive information must not go into metadata or logs.
-- Khalti is the only payment provider. Only a verified matching result confirms payment.
+- Khalti and Checkout by Fonepay are supported payment providers. Only an
+  authoritative server-side lookup with matching reference, provider, order,
+  currency and amount confirms payment.
 - QR data is delivered once available. Email uses an unencrypted QR image attachment, not a PDF. An authenticated customer can download an unencrypted QR PDF.
 - Partner accounts use prepaid NPR paisa. Optimistic locking protects balance changes and partner IDs isolate records.
 - Inventory reservation is atomic. Provider events decide the provider lifecycle state.
@@ -232,7 +238,8 @@ Production requires `ORDER_WORKFLOW_MODE=database-first`. Lifecycle mutations re
 
 ### High-priority product gaps
 
-- Operations can suspend/terminate but cannot reactivate/unsuspend an eSIM.
+- Operations can suspend or request reactivation; reactivation requires approval
+  by a different Super Admin. Termination cannot be reversed.
 - Manual payment confirmation and refund-reconciliation rules/workflow need business approval.
 - The business rule for manual review versus automatic approval after verified payment needs to be agreed and documented.
 

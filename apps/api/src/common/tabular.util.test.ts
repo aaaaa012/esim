@@ -62,4 +62,22 @@ describe("tabularToRecords", () => {
     expect(records).toEqual([]);
     expect(errors[0]).toMatch(/could not be read/);
   });
+
+  it("rejects CSV files above the row limit instead of partially importing", async () => {
+    const result = await tabularToRecords("id\n1\n2\n3", ["id"], {
+      maxRows: 2,
+    });
+    expect(result.records).toEqual([]);
+    expect(result.errors[0]).toContain("2 rows");
+  });
+
+  it("rejects Excel files above the row limit instead of truncating them", async () => {
+    const base64 = await excelBase64([["id"], ["1"], ["2"], ["3"]]);
+    const result = await tabularToRecords(base64, ["id"], {
+      fileName: "rows.xlsx",
+      maxRows: 2,
+    });
+    expect(result.records).toEqual([]);
+    expect(result.errors[0]).toContain("2 rows");
+  });
 });

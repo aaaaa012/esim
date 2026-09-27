@@ -1,6 +1,6 @@
 "use client";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Building2,
@@ -17,7 +17,6 @@ import {
   Settings2,
   ShieldCheck,
   Upload,
-  UsersRound,
   XCircle,
   Wallet,
 } from "lucide-react";
@@ -52,6 +51,7 @@ import { PaginationBar } from "@/components/pagination-bar";
 import { SearchInput } from "@/components/search-input";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Table,
   TableBody,
@@ -149,26 +149,33 @@ const fileToTabularContent = async (file: File): Promise<string> => {
 
 export default function AdminWorkspace() {
   const authFetch = useAuthenticatedFetch();
-  const request = async <T,>(path: string, init?: RequestInit) => {
-    const r = await authFetch(`${API}${path}`, {
-      ...init,
-      headers: { ...headers, ...init?.headers },
-    });
-    const v = await r.json();
-    if (!r.ok) {
-      const error = new Error(v.error?.message ?? "Request failed") as Error & {
-        code?: string;
-      };
-      error.code = v.error?.code;
-      throw error;
-    }
-    return v.data as T;
-  };
+  const confirm = useConfirmation();
+  const request = useCallback(
+    async <T,>(path: string, init?: RequestInit) => {
+      const r = await authFetch(`${API}${path}`, {
+        ...init,
+        headers: { ...headers, ...init?.headers },
+      });
+      const v = await r.json();
+      if (!r.ok) {
+        const error = new Error(
+          v.error?.message ?? "Request failed",
+        ) as Error & { code?: string };
+        error.code = v.error?.code;
+        throw error;
+      }
+      return v.data as T;
+    },
+    [authFetch],
+  );
   const [tab, setTab] = useState("Plans");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [planTotal, setPlanTotal] = useState(0);
   const [planPage, setPlanPage] = useState(1);
   const [planQuery, setPlanQuery] = useState("");
+  const [planStatusFilter, setPlanStatusFilter] = useState<
+    "ALL" | Plan["status"]
+  >("ACTIVE");
   const [planLoading, setPlanLoading] = useState(true);
   const planPageSize = 50;
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -240,24 +247,31 @@ export default function AdminWorkspace() {
   const [logs, setLogs] = useState<IntegrationLog[]>([]);
   const [logsBusy, setLogsBusy] = useState(false);
 
-  const load = () =>
-    Promise.all([
-      request<Integration[]>("/admin/integrations"),
-      request<{ items: User[] }>("/admin/users?limit=200"),
-      request<Invitation[]>("/admin/staff-invitations"),
-      request<Partner[]>("/admin/partners"),
-    ])
-      .then(([i, u, invitationsValue, partnerValues]) => {
-        setIntegrations(i);
-        setUsers(u.items);
-        setInvitations(invitationsValue);
-        setPartners(partnerValues);
-      })
-      .catch((e) => toast.error(e.message));
+  const load = useCallback(
+    () =>
+      Promise.all([
+        request<Integration[]>("/admin/integrations"),
+        request<{ items: User[] }>("/admin/users?limit=200"),
+        request<Invitation[]>("/admin/staff-invitations"),
+        request<Partner[]>("/admin/partners"),
+      ])
+        .then(([i, u, invitationsValue, partnerValues]) => {
+          setIntegrations(i);
+          setUsers(u.items);
+          setInvitations(invitationsValue);
+          setPartners(partnerValues);
+        })
+        .catch((e) => toast.error(e.message)),
+    [request],
+  );
   useEffect(() => {
     void load();
-  }, []);
-  const loadPlans = async (page = planPage, query = planQuery) => {
+  }, [load]);
+  const loadPlans = async (
+    page = planPage,
+    query = planQuery,
+    status = planStatusFilter,
+  ) => {
     setPlanLoading(true);
     try {
       const params = new URLSearchParams({
@@ -265,6 +279,7 @@ export default function AdminWorkspace() {
         offset: String((page - 1) * planPageSize),
       });
       if (query.trim()) params.set("q", query.trim());
+      if (status !== "ALL") params.set("status", status);
       const value = await request<{ items: Plan[]; total: number }>(
         `/admin/plans/page?${params}`,
       );
@@ -331,9 +346,12 @@ export default function AdminWorkspace() {
     }
   };
   useEffect(() => {
-    const timer = setTimeout(() => void loadPlans(planPage, planQuery), 250);
+    const timer = setTimeout(
+      () => void loadPlans(planPage, planQuery, planStatusFilter),
+      250,
+    );
     return () => clearTimeout(timer);
-  }, [planPage, planQuery]);
+  }, [planPage, planQuery, planStatusFilter]);
   useEffect(() => {
     const timer = setTimeout(() => {
       const params = new URLSearchParams({ limit: "200" });
@@ -359,8 +377,12 @@ export default function AdminWorkspace() {
         }),
       });
       setPlans((v) =>
-        v.map((item) => (item.id === updated.id ? updated : item)),
+        planStatusFilter !== "ALL" && updated.status !== planStatusFilter
+          ? v.filter((item) => item.id !== updated.id)
+          : v.map((item) => (item.id === updated.id ? updated : item)),
       );
+      if (planStatusFilter !== "ALL" && updated.status !== planStatusFilter)
+        setPlanTotal((total) => Math.max(0, total - 1));
       toast.success(`${updated.name} saved`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
@@ -409,7 +431,11 @@ export default function AdminWorkspace() {
         errors: string[];
       }>("/admin/plans/import-csv", {
         method: "POST",
-        body: JSON.stringify({ content, fileName: planCsvFile.name }),
+        body: JSON.stringify({
+          content,
+          fileName: planCsvFile.name,
+          mode: "UPDATE_LISTED",
+        }),
       });
       toast.success(
         `Imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} row(s)`,
@@ -417,7 +443,7 @@ export default function AdminWorkspace() {
       if (result.errors?.length)
         toast.error(result.errors.slice(0, 5).join(" · "));
       setPlanCsvFile(null);
-      await loadPlans(1, "");
+      await loadPlans(1, "", planStatusFilter);
       setPlanPage(1);
       setPlanQuery("");
     } catch (e) {
@@ -426,7 +452,7 @@ export default function AdminWorkspace() {
       setPlanCsvBusy(false);
     }
   };
-  const downloadCatalog = async () => {
+  const downloadCatalog = async (source: "provider" | "operating") => {
     setCatalogBusy(true);
     try {
       const result = await request<{
@@ -434,7 +460,12 @@ export default function AdminWorkspace() {
         csv: string;
         count: number;
         skipped: number;
-      }>("/admin/integrations/transatel/catalog-export", { method: "POST" });
+      }>(
+        source === "provider"
+          ? "/admin/integrations/transatel/catalog-export"
+          : "/admin/plans/export",
+        { method: "POST" },
+      );
       const blob = new Blob(["\uFEFF" + result.csv], {
         type: "text/csv;charset=utf-8",
       });
@@ -447,7 +478,7 @@ export default function AdminWorkspace() {
       link.remove();
       URL.revokeObjectURL(url);
       toast.success(
-        `Downloaded ${result.count} catalog row(s)${result.skipped ? ` (${result.skipped} skipped)` : ""}`,
+        `Downloaded ${result.count} ${source === "provider" ? "latest Transatel" : "Visa Compass"} catalogue row(s)${result.skipped ? ` (${result.skipped} skipped)` : ""}`,
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Catalog download failed");
@@ -471,16 +502,27 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
-  const transatelAction = async (action: "sync-catalog" | "ensure-webhook") => {
+  const transatelAction = async (action: "sync-catalog") => {
+    if (
+      action === "sync-catalog" &&
+      !(await confirm({
+        title: "Sync provider catalogue?",
+        description:
+          "Package data and costs will be refreshed. Existing selling prices, visibility, and popularity are preserved; new plans are created as drafts.",
+        confirmLabel: "Sync catalogue",
+      }))
+    )
+      return;
     setBusy(`transatel:${action}`);
     try {
-      await request(`/admin/integrations/transatel/${action}`, {
-        method: "POST",
-      });
+      const result = await request<{ synced?: number; skipped?: string[] }>(
+        `/admin/integrations/transatel/${action}`,
+        {
+          method: "POST",
+        },
+      );
       toast.success(
-        action === "sync-catalog"
-          ? "Plans synced with the network provider"
-          : "Automatic notifications set up",
+        `Synced ${result.synced ?? 0} plan row(s)${result.skipped?.length ? `; ${result.skipped.length} product(s) skipped` : ""}`,
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
@@ -494,7 +536,6 @@ export default function AdminWorkspace() {
       const result = await request<{
         email: string;
         accountType: string;
-        temporaryPassword: string;
       }>("/admin/staff-invitations", {
         method: "POST",
         body: JSON.stringify({ email: inviteEmail, accountType: inviteType }),
@@ -502,10 +543,51 @@ export default function AdminWorkspace() {
       setInviteEmail("");
       await load();
       toast.success(
-        `Account created for ${result.email}. One-time password: ${result.temporaryPassword} — share it securely; the staff member should change it after signing in.`,
+        `Activation email sent to ${result.email}. The link is single-use and expires in 48 hours.`,
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Invitation failed");
+    } finally {
+      setBusy("");
+    }
+  };
+  const resendInvitation = async (invitation: Invitation) => {
+    setBusy(`invite:${invitation.id}`);
+    try {
+      await request(`/admin/staff-invitations/${invitation.id}/resend`, {
+        method: "POST",
+      });
+      await load();
+      toast.success(`A new activation link was sent to ${invitation.email}.`);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to resend invitation",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+  const revokeInvitation = async (invitation: Invitation) => {
+    if (
+      !(await confirm({
+        title: "Revoke staff invitation?",
+        description: `The activation link for ${invitation.email} will stop working immediately.`,
+        confirmLabel: "Revoke invitation",
+        destructive: true,
+      }))
+    )
+      return;
+    setBusy(`invite:${invitation.id}`);
+    try {
+      await request(`/admin/staff-invitations/${invitation.id}`, {
+        method: "DELETE",
+      });
+      await load();
+      toast.success(`Invitation for ${invitation.email} was revoked.`);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to revoke invitation",
+      );
     } finally {
       setBusy("");
     }
@@ -534,6 +616,12 @@ export default function AdminWorkspace() {
     }
   };
   const createPartner = async () => {
+    const ok = await confirm({
+      title: `Create ${partnerName.trim()}?`,
+      description: `This creates a ${partnerType === "API" ? "Partner API" : "hosted checkout"} partner in pending state${partnerBalance ? ` with NPR ${Number(partnerBalance).toLocaleString()} starting balance` : ""}. Review the details before continuing.`,
+      confirmLabel: "Create partner",
+    });
+    if (!ok) return;
     setBusy("partner-create");
     try {
       await request("/admin/partners", {
@@ -565,14 +653,35 @@ export default function AdminWorkspace() {
     partner: Partner,
     status: Partner["status"],
   ) => {
-    if (["SUSPENDED", "DISABLED"].includes(status)) {
-      const ok = window.confirm(
-        status === "SUSPENDED"
-          ? `Suspend ${partner.name}? They can still view details but cannot make changes.`
-          : `Disable ${partner.name}? They will no longer be able to connect.`,
-      );
-      if (!ok) return;
-    }
+    if (status === partner.status) return;
+    const statusCopy = {
+      ACTIVE: {
+        verb: "Activate",
+        description:
+          "The partner will be able to use the access permitted by its integration type and credentials.",
+      },
+      PENDING: {
+        verb: "Move to pending",
+        description:
+          "The partner will remain configured, but production access will not be active.",
+      },
+      SUSPENDED: {
+        verb: "Suspend",
+        description:
+          "The partner can view permitted details but cannot make changes or place orders.",
+      },
+      DISABLED: {
+        verb: "Disable",
+        description: "The partner will immediately lose access.",
+      },
+    }[status];
+    const ok = await confirm({
+      title: `${statusCopy.verb} ${partner.name}?`,
+      description: `${statusCopy.description} Current status: ${partner.status}. New status: ${status}.`,
+      confirmLabel: `${statusCopy.verb} partner`,
+      destructive: status === "SUSPENDED" || status === "DISABLED",
+    });
+    if (!ok) return;
     setBusy(partner.id);
     try {
       await request(`/admin/partners/${partner.id}`, {
@@ -637,9 +746,12 @@ export default function AdminWorkspace() {
     }
   };
   const revokePartnerKey = async (partner: Partner, credentialId: string) => {
-    const ok = window.confirm(
-      `Revoke this access key for ${partner.name}? This cannot be undone and the partner will lose access immediately.`,
-    );
+    const ok = await confirm({
+      title: "Revoke partner access key?",
+      description: `${partner.name} will lose access through this key immediately. This cannot be undone.`,
+      confirmLabel: "Revoke key",
+      destructive: true,
+    });
     if (!ok) return;
     setBusy(`revoke-${credentialId}`);
     try {
@@ -789,9 +901,12 @@ export default function AdminWorkspace() {
     }
     const action = adjustType === "credit" ? "add" : "deduct";
     if (
-      !window.confirm(
-        `${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} to/from ${adjustFor.name}'s balance? This changes their available credit.`,
-      )
+      !(await confirm({
+        title: `${action === "add" ? "Credit" : "Debit"} partner balance?`,
+        description: `${action === "add" ? "Add" : "Deduct"} NPR ${amountNpr.toLocaleString()} ${action === "add" ? "to" : "from"} ${adjustFor.name}. This changes available credit.`,
+        confirmLabel: action === "add" ? "Credit balance" : "Debit balance",
+        destructive: action !== "add",
+      }))
     )
       return;
     setAdjustBusy(true);
@@ -802,7 +917,6 @@ export default function AdminWorkspace() {
         method: "POST",
         body: JSON.stringify({
           amountPaisa,
-          creditLimitPaisa: 0,
           reference: adjustReference || `portal-adjustment-${Date.now()}`,
           reason: `Balance ${adjustType} via portal`,
         }),
@@ -847,7 +961,7 @@ export default function AdminWorkspace() {
       setBusy("");
     }
   };
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     setLogsBusy(true);
     try {
       setLogs(await request<IntegrationLog[]>("/operations/integration-logs"));
@@ -858,11 +972,10 @@ export default function AdminWorkspace() {
     } finally {
       setLogsBusy(false);
     }
-  };
+  }, [request]);
   useEffect(() => {
     if (tab === "Integrations") void loadLogs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [loadLogs, tab]);
 
   const planTabVisible = tab === "Plans";
 
@@ -886,6 +999,7 @@ export default function AdminWorkspace() {
             "Document Rules",
             "Inventory Settings",
             "Users",
+            "Staff Invitations",
             "Partners",
             "System Config",
           ].map((item) => (
@@ -906,12 +1020,12 @@ export default function AdminWorkspace() {
           <TabsContent value={planTabVisible ? tab : ""} className="mt-0">
             <Panel
               title="Plan catalogue"
-              description="Changes affect new immutable order quotes only."
+              description="Update-listed mode: only plans present in the uploaded file change; omitted plans remain untouched. Download the current catalogue, edit sellingprice, status, or popular, then upload it."
               actions={
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
-                    onClick={() => void downloadCatalog()}
+                    onClick={() => void downloadCatalog("provider")}
                     disabled={catalogBusy}
                   >
                     {catalogBusy ? (
@@ -919,15 +1033,24 @@ export default function AdminWorkspace() {
                     ) : (
                       <Download className="size-4" />
                     )}
-                    Download catalog
+                    Download latest Transatel catalogue
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void downloadCatalog("operating")}
+                    disabled={catalogBusy}
+                  >
+                    <Download className="size-4" />
+                    Export current Visa Compass catalogue
                   </Button>
                   <Input
+                    aria-label="Choose catalog spreadsheet"
                     type="file"
                     accept=".csv,.xlsx,.xls,text/csv"
                     onChange={(e) =>
                       setPlanCsvFile(e.target.files?.[0] ?? null)
                     }
-                    className="h-9 w-64 text-xs"
+                    className="h-9 w-full text-xs sm:w-64"
                   />
                   <Button
                     onClick={() => void importPlanCsv()}
@@ -938,27 +1061,55 @@ export default function AdminWorkspace() {
                     ) : (
                       <Upload className="size-4" />
                     )}
-                    Upload CSV
+                    Import updates
                   </Button>
                 </div>
               }
               noPadding
             >
-              <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <SearchInput
-                  value={planQuery}
-                  onChange={(value) => {
-                    setPlanQuery(value);
-                    setPlanPage(1);
-                  }}
-                  placeholder="Search country, plan, or provider ID"
-                  className="w-full sm:max-w-sm"
-                />
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  {planLoading
-                    ? "Loading plans..."
-                    : `${planTotal.toLocaleString()} plans`}
-                </p>
+              <div className="flex flex-col gap-3 border-b px-4 py-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <SearchInput
+                    value={planQuery}
+                    onChange={(value) => {
+                      setPlanQuery(value);
+                      setPlanPage(1);
+                    }}
+                    placeholder="Search country, plan, or provider ID"
+                    className="w-full sm:max-w-sm"
+                  />
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    {planLoading
+                      ? "Loading plans..."
+                      : `${planTotal.toLocaleString()} ${planStatusFilter === "ALL" ? "total" : planStatusFilter.toLowerCase()} plan${planTotal === 1 ? "" : "s"}`}
+                  </p>
+                </div>
+                <div
+                  className="flex flex-wrap gap-2"
+                  aria-label="Filter plans by status"
+                >
+                  {(
+                    ["ACTIVE", "ALL", "DRAFT", "DISABLED", "ARCHIVED"] as const
+                  ).map((status) => (
+                    <Button
+                      key={status}
+                      type="button"
+                      size="sm"
+                      variant={
+                        planStatusFilter === status ? "default" : "outline"
+                      }
+                      aria-pressed={planStatusFilter === status}
+                      onClick={() => {
+                        setPlanStatusFilter(status);
+                        setPlanPage(1);
+                      }}
+                    >
+                      {status === "ALL"
+                        ? "All"
+                        : status.charAt(0) + status.slice(1).toLowerCase()}
+                    </Button>
+                  ))}
+                </div>
               </div>
               <Table>
                 <TableHeader>
@@ -980,6 +1131,42 @@ export default function AdminWorkspace() {
                           <span className="text-sm text-muted-foreground">
                             Loading plan prices...
                           </span>
+                        </EmptyState>
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                  {!planLoading && plans.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7}>
+                        <EmptyState>
+                          <div className="py-4 text-center">
+                            <p className="text-sm font-medium">
+                              {planQuery
+                                ? "No plans match this search"
+                                : planStatusFilter === "ACTIVE"
+                                  ? "No active plans are available to customers"
+                                  : `No ${planStatusFilter.toLowerCase()} plans found`}
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {planQuery
+                                ? "Clear the search or choose another status."
+                                : "Choose another status or import catalogue updates."}
+                            </p>
+                            {planQuery ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="mt-3"
+                                onClick={() => {
+                                  setPlanQuery("");
+                                  setPlanPage(1);
+                                }}
+                              >
+                                Clear search
+                              </Button>
+                            ) : null}
+                          </div>
                         </EmptyState>
                       </TableCell>
                     </TableRow>
@@ -1057,8 +1244,8 @@ export default function AdminWorkspace() {
                           }
                         />
                       </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
+                      <TableCell className="min-w-48 text-right">
+                        <div className="flex flex-wrap justify-end gap-2">
                           {plan.status === "DRAFT" && (
                             <>
                               <Button
@@ -1097,7 +1284,7 @@ export default function AdminWorkspace() {
                             ) : (
                               <Save className="size-4" />
                             )}
-                            Save
+                            Save plan
                           </Button>
                         </div>
                       </TableCell>
@@ -1117,6 +1304,14 @@ export default function AdminWorkspace() {
 
         {tab === "Integrations" && (
           <TabsContent value="Integrations" className="mt-0 space-y-6">
+            <div className="flex justify-end">
+              <Button asChild variant="outline">
+                <Link href="/admin/integrations">
+                  <Building2 className="size-4" />
+                  Fonepay bank directory
+                </Link>
+              </Button>
+            </div>
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {integrations.map((item) => (
                 <div
@@ -1195,24 +1390,21 @@ export default function AdminWorkspace() {
                           )}
                           Sync catalog
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => transatelAction("ensure-webhook")}
-                          disabled={busy === "transatel:ensure-webhook"}
-                        >
-                          {busy === "transatel:ensure-webhook" ? (
-                            <Spinner />
-                          ) : (
-                            <Pencil className="size-4" />
-                          )}
-                          Register webhook
-                        </Button>
                       </>
                     )}
                   </div>
                   {item.id === "transatel" && (
                     <div className="mt-4 space-y-3 rounded-lg border border-dashed p-4">
+                      <div>
+                        <p className="text-sm font-medium">
+                          Provider notifications
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Configure the callback URL and subscribed events in
+                          the Transatel Developer Console. Transatel no longer
+                          permits webhook registration through its API.
+                        </p>
+                      </div>
                       <div>
                         <p className="text-sm font-medium">Eligibility check</p>
                         <p className="text-xs text-muted-foreground">
@@ -1338,9 +1530,13 @@ export default function AdminWorkspace() {
               title="Users and account types"
               description="Assign least-privilege access. Role changes are persisted transactionally."
               actions={
-                <span className="flex size-9 items-center justify-center rounded-lg bg-accent text-accent-foreground">
-                  <UsersRound className="size-4" />
-                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTab("Staff Invitations")}
+                >
+                  Staff invitations
+                </Button>
               }
               noPadding
             >
@@ -1425,31 +1621,32 @@ export default function AdminWorkspace() {
                   </Button>
                 </div>
               </div>
-              {invitations.filter((item) => item.status === "PENDING").length >
-                0 && (
-                <div className="space-y-2 p-6">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Pending invitations
-                  </p>
-                  {invitations
-                    .filter((item) => item.status === "PENDING")
-                    .map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between rounded-lg border px-4 py-3"
-                      >
-                        <div>
-                          <p className="font-medium">{item.email}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {item.accountType.replace("_", " ")} · expires{" "}
-                            {new Date(item.expiresAt).toLocaleDateString()}
-                          </p>
+              {false &&
+                invitations.filter((item) => item.status === "PENDING").length >
+                  0 && (
+                  <div className="space-y-2 p-6">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Pending invitations
+                    </p>
+                    {invitations
+                      .filter((item) => item.status === "PENDING")
+                      .map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between rounded-lg border px-4 py-3"
+                        >
+                          <div>
+                            <p className="font-medium">{item.email}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {item.accountType.replace("_", " ")} · expires{" "}
+                              {new Date(item.expiresAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <StatusBadge label="PENDING" tone="warning" />
                         </div>
-                        <StatusBadge label="PENDING" tone="warning" />
-                      </div>
-                    ))}
-                </div>
-              )}
+                      ))}
+                  </div>
+                )}
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1546,6 +1743,100 @@ export default function AdminWorkspace() {
           </TabsContent>
         )}
 
+        {tab === "Staff Invitations" && (
+          <TabsContent value="Staff Invitations" className="mt-0">
+            <Panel
+              title="Staff invitations"
+              description="Review invitation delivery, resend an expired link, or revoke a pending invitation immediately."
+              actions={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTab("Users")}
+                >
+                  Invite staff
+                </Button>
+              }
+              noPadding
+            >
+              {!invitations.length ? (
+                <EmptyState title="No staff invitations yet" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Expiry</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {invitations.map((invitation) => {
+                      const pending = invitation.status === "PENDING";
+                      const working = busy === `invite:${invitation.id}`;
+                      return (
+                        <TableRow key={invitation.id}>
+                          <TableCell className="font-medium">
+                            {invitation.email}
+                          </TableCell>
+                          <TableCell>
+                            {invitation.accountType.replace("_", " ")}
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge
+                              label={invitation.status}
+                              tone={
+                                pending
+                                  ? "warning"
+                                  : invitation.status === "ACCEPTED"
+                                    ? "success"
+                                    : "default"
+                              }
+                            />
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {new Date(invitation.expiresAt).toLocaleString()}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {pending ? (
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={working}
+                                  onClick={() =>
+                                    void resendInvitation(invitation)
+                                  }
+                                >
+                                  {working ? <Spinner /> : "Resend"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  disabled={working}
+                                  onClick={() =>
+                                    void revokeInvitation(invitation)
+                                  }
+                                >
+                                  {working ? <Spinner /> : "Revoke"}
+                                </Button>
+                              </div>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </Panel>
+          </TabsContent>
+        )}
+
         {tab === "Partners" && (
           <TabsContent value="Partners" className="mt-0">
             <Panel
@@ -1635,10 +1926,12 @@ export default function AdminWorkspace() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Partner</TableHead>
-                    <TableHead>Settlement account</TableHead>
+                    <TableHead>Cash balance</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Activity</TableHead>
                     <TableHead className="text-right">Workspace</TableHead>
+                    <TableHead>Access</TableHead>
+                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1698,7 +1991,10 @@ export default function AdminWorkspace() {
                             )
                           }
                         >
-                          <SelectTrigger className="w-32">
+                          <SelectTrigger
+                            className="w-32"
+                            aria-label={`Change ${partner.name} status`}
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -1815,7 +2111,7 @@ export default function AdminWorkspace() {
                     <div className="space-y-4 pt-1">
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">
-                          Partner customer ID
+                          Partner purchaser ID
                         </Label>
                         <Input
                           value={hostedLinkCustomerId}
@@ -1826,8 +2122,9 @@ export default function AdminWorkspace() {
                           maxLength={120}
                         />
                         <p className="text-xs text-muted-foreground">
-                          Reuse this exact ID for every order and top-up from
-                          the same customer.
+                          Use the partner's stable ID for the person buying the
+                          order. A top-up may benefit an eSIM purchased through
+                          another channel; it does not transfer eSIM ownership.
                         </p>
                       </div>
                       <div className="space-y-1.5">
@@ -2214,6 +2511,7 @@ function ConfigPanel({
   tab: string;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
 }) {
+  const confirm = useConfirmation();
   type InventoryOverview = {
     counts: {
       available: number;
@@ -2275,8 +2573,7 @@ function ConfigPanel({
           ),
         );
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [request, tab]);
   const rows: { label: string; value: string | number; ok?: boolean }[] =
     tab === "Document Rules"
       ? [
@@ -2286,7 +2583,8 @@ function ConfigPanel({
           },
           {
             label: "Travel ticket",
-            value: "Required for records; review never pauses paid fulfillment",
+            value:
+              "Required for every initial purchase; structurally validated",
           },
           { label: "Supported formats", value: "JPEG, PNG, or PDF" },
           { label: "Maximum file size", value: "10 MB" },
@@ -2294,11 +2592,11 @@ function ConfigPanel({
             label: "Review",
             value:
               documentPolicy === "MANUAL_REVIEW"
-                ? "Manual review (non-blocking)"
+                ? "Manual review blocks debit and provisioning"
                 : documentPolicy === "NO_REVIEW"
                   ? "Records only; verification skipped"
                   : documentPolicy === "AUTO_OCR"
-                    ? "OCR with 8-second checkout wait and manual failover"
+                    ? "Passport OCR with blocking manual failover"
                     : "Loading…",
           },
         ]
@@ -2423,8 +2721,8 @@ function ConfigPanel({
             No verification
           </Button>
           <p className="text-xs text-muted-foreground">
-            Only this global policy changes OCR behavior. Neither mode pauses
-            provisioning after payment.
+            This global policy controls the document gate. Debit and
+            provisioning remain blocked until the configured review succeeds.
           </p>
         </div>
       ) : null}
@@ -2534,11 +2832,14 @@ function ConfigPanel({
               variant="outline"
               className="mt-3"
               disabled={Boolean(busy)}
-              onClick={() => {
+              onClick={async () => {
                 if (
-                  !window.confirm(
-                    "Expire all abandoned payments? Customers with a pending-but-unfinished payment will be able to start again.",
-                  )
+                  !(await confirm({
+                    title: "Expire abandoned payments?",
+                    description:
+                      "Every payment past its gateway window will be marked expired, allowing affected customers to start again.",
+                    confirmLabel: "Expire payments",
+                  }))
                 )
                   return;
                 setBusy("sweep");

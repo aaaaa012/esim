@@ -41,6 +41,7 @@ export function DataTable({
               {row.map((cell, index) => (
                 <td
                   key={index}
+                  data-label={columns[index]?.label}
                   className={cn(
                     "px-3 py-3 align-middle whitespace-nowrap",
                     columns[index]?.className,

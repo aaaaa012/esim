@@ -15,7 +15,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { RefreshCcw } from "lucide-react";
+import { Download, RefreshCcw } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
+import { useConfirmation } from "@/components/confirmation-provider";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -32,6 +34,7 @@ type Event = {
 
 export default function IntegrationEventsClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [items, setItems] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -77,6 +80,39 @@ export default function IntegrationEventsClient() {
       <Panel
         title="Incoming updates"
         description={`${items.length} updates received from our payment and network providers`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `provider-events-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Received",
+                  "Provider",
+                  "Event ID",
+                  "Signature verified",
+                  "Processed",
+                  "Dead lettered",
+                  "Error",
+                ],
+                items.map((item) => [
+                  item.createdAt,
+                  item.source,
+                  item.eventId,
+                  item.signatureValid,
+                  item.processedAt,
+                  item.deadLetteredAt,
+                  item.errorMessage,
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
         noPadding
       >
         {loading ? (
@@ -88,7 +124,7 @@ export default function IntegrationEventsClient() {
         ) : !items.length ? (
           <EmptyState
             title="No updates received yet"
-            description="Messages from Khalti and the network provider will appear here."
+            description="Messages from payment and network providers will appear here."
           />
         ) : (
           <Table>
@@ -146,11 +182,14 @@ export default function IntegrationEventsClient() {
                         size="sm"
                         variant="outline"
                         disabled={busy === item.id}
-                        onClick={() => {
+                        onClick={async () => {
                           if (
-                            window.confirm(
-                              "Send this update through the system again? Only use this if the order did not update automatically.",
-                            )
+                            await confirm({
+                              title: "Replay provider update?",
+                              description:
+                                "Send this update through the system again only when the order did not update automatically.",
+                              confirmLabel: "Replay update",
+                            })
                           )
                             void replay(item.id);
                         }}

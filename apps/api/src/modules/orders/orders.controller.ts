@@ -1,7 +1,11 @@
+import { RechargesService, rechargeView } from "./recharges.service.js";
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
+  ForbiddenException,
+  Headers,
   Param,
   Patch,
   Post,
@@ -34,32 +38,94 @@ import { matchesQuery, paginate } from "../../common/paginate.js";
 import { OrdersService } from "./orders.service.js";
 import { InventoryService } from "../inventory/inventory.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { GuestOrderAccessService } from "./guest-order-access.service.js";
+import { TransatelOperationsService } from "../integration/transatel-operations.service.js";
+import { UsageService } from "../esims/usage.service.js";
+import { AdminService } from "../admin/admin.service.js";
 
 @Controller("customer/orders")
 @UseGuards(AuthGuard, AccountGuard)
 @AccountTypes(UserRoleName.CUSTOMER)
 export class OrdersController {
-  constructor(private readonly orders: OrdersService) {}
+  constructor(
+    private readonly orders: OrdersService,
+    private readonly guestAccess: GuestOrderAccessService,
+    private readonly recharges: RechargesService,
+  ) {}
   @Get() list(@Req() req: AuthenticatedRequest) {
     return this.orders.list(req.user!.id);
   }
-  @Get(":id") get(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
+  @Get(":id") async get(
+    @Param("id") id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    await this.orders.refreshOne(id, true);
+    if (this.orders.get(id).purchaseType === "TOPUP")
+      return rechargeView(await this.recharges.authorize(id, req.user));
     return this.orders.view(id, req.user!.id);
   }
-  @Post() create(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
+  @Post() async create(
+    @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
+  ) {
     const input = createOrderSchema.parse(body);
+    const candidate = body as { mobile?: unknown; lookupToken?: unknown };
+    if (candidate.mobile !== undefined && typeof candidate.mobile !== "string")
+      throw new BadRequestException("mobile must be a string");
+    const verifiedMobile =
+      candidate.lookupToken !== undefined
+        ? this.guestAccess.mobileFromLookupToken(String(candidate.lookupToken))
+        : undefined;
+    if (candidate.mobile !== undefined && !verifiedMobile)
+      throw new ForbiddenException("A valid top-up lookup is required");
     const ipAddress = (req as { ip?: string }).ip;
     const userAgent = req.headers["user-agent"];
+    if (verifiedMobile || input.targetEsimId)
+      return this.recharges.create(
+        {
+          planId: input.planId,
+          termsAccepted: input.termsAccepted,
+          privacyAccepted: input.privacyAccepted,
+          ...(verifiedMobile
+            ? { lookupToken: String(candidate.lookupToken) }
+            : { targetEsimId: input.targetEsimId }),
+          checkoutAttemptKey: String(
+            (body as { checkoutAttemptKey?: string }).checkoutAttemptKey ??
+              req.headers["x-idempotency-key"] ??
+              "",
+          ),
+        },
+        req.user,
+        { ipAddress, userAgent },
+      );
     return this.orders.create(
       req.user!.id,
       input.planId,
       input.compatibilityAccepted,
       {
         ...(input.targetEsimId ? { targetEsimId: input.targetEsimId } : {}),
+        ...(verifiedMobile ? { mobile: verifiedMobile } : {}),
         ...(ipAddress ? { ipAddress } : {}),
         ...(userAgent ? { userAgent } : {}),
+        termsAccepted: input.termsAccepted,
+        privacyAccepted: input.privacyAccepted,
       },
     );
+  }
+  @Post(":id/claim-guest")
+  async claimGuest(
+    @Param("id") id: string,
+    @Headers("x-guest-order-token") token: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    this.guestAccess.assertSessionToken(id, token);
+    const order = await this.orders.claimGuestOrder(
+      id,
+      req.user!.id,
+      req.user!.localUserId,
+    );
+    await this.guestAccess.revokeAll(id);
+    return order;
   }
   @Patch(":id/traveler") traveler(
     @Param("id") id: string,
@@ -92,6 +158,12 @@ export class OrdersController {
     @Req() req: AuthenticatedRequest,
   ) {
     return this.orders.verifyPassport(id, req.user!.id);
+  }
+  @Post(":id/confirm-passport-details") confirmPassportDetails(
+    @Param("id") id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.orders.confirmPassportDetails(id, req.user!.id);
   }
   @Patch(":id/cancel") cancel(
     @Param("id") id: string,
@@ -148,6 +220,9 @@ export class OperationsController {
     private readonly orders: OrdersService,
     private readonly inventory: InventoryService,
     private readonly prisma: PrismaService,
+    private readonly transatelOperations: TransatelOperationsService,
+    private readonly usageService: UsageService,
+    private readonly admin: AdminService,
   ) {}
   @Get("dashboard") dashboard(@Req() req: AuthenticatedRequest) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
@@ -376,22 +451,25 @@ export class OperationsController {
       const traveler = customer.orders.find(
         (order) => order.traveler,
       )?.traveler;
+      const internalIdentityEmail =
+        /@(guest|partner|local)\.visacompass\.invalid$/i.test(customer.email);
       const displayEmail =
-        customer.source === "PARTNER" &&
-        customer.email.endsWith("@partner.visacompass.invalid") &&
-        traveler?.email
+        internalIdentityEmail && traveler?.email
           ? traveler.email
           : customer.email;
       const subscriptions = customer.orders.flatMap(
         (order) => order.customerEsim?.subscriptions ?? [],
       );
-      const latestUsage = subscriptions
-        .filter((item) => item.usageLastCheckedAt)
-        .sort(
-          (a, b) =>
-            (b.usageLastCheckedAt?.getTime() ?? 0) -
-            (a.usageLastCheckedAt?.getTime() ?? 0),
-        )[0];
+      const confirmedUsage = subscriptions.filter(
+        (item) =>
+          (item.status === SubscriptionStatus.ACTIVE ||
+            item.status === SubscriptionStatus.PENDING) &&
+          item.assignmentVerificationStatus === "VERIFIED" &&
+          item.usageLastCheckedAt,
+      );
+      const usageCheckedAt = confirmedUsage
+        .map((item) => item.usageLastCheckedAt!)
+        .sort((a, b) => a.getTime() - b.getTime())[0];
       const paidOrders = customer.orders.filter((order) =>
         order.payments.some(
           (payment) => payment.status === PaymentStatus.COMPLETED,
@@ -416,23 +494,88 @@ export class OperationsController {
           (sum, order) => sum + Number(order.totalAmount),
           0,
         ),
-        remainingMb: latestUsage
-          ? Math.max(0, latestUsage.totalMb - latestUsage.usedMb)
+        remainingMb: confirmedUsage.length
+          ? confirmedUsage.reduce(
+              (sum, item) => sum + Math.max(0, item.totalMb - item.usedMb),
+              0,
+            )
           : null,
-        usageLastCheckedAt:
-          latestUsage?.usageLastCheckedAt?.toISOString() ?? null,
+        usageLastCheckedAt: usageCheckedAt?.toISOString() ?? null,
+        usagePartial: confirmedUsage.length < subscriptions.length,
         firstOrderAt: customer.orders.at(-1)?.createdAt.toISOString() ?? null,
         lastOrderAt: customer.orders[0]?.createdAt.toISOString() ?? null,
       };
     });
     return { items, total, limit: take, offset: skip };
   }
-  @Get("customers/:ownerId") customer(
+  @Get("customers/:ownerId") async customer(
     @Param("ownerId") ownerId: string,
     @Req() req: AuthenticatedRequest,
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    return this.orders.customerProfile(ownerId);
+    const profile = await this.orders.customerProfile(ownerId);
+    const inventoryIds = [
+      ...new Set(
+        profile.orders
+          .map((order) => ("esim" in order ? order.esim?.id : undefined))
+          .filter((id: unknown): id is string => typeof id === "string"),
+      ),
+    ];
+    const esimGroups = this.prisma.enabled
+      ? await Promise.all(
+          inventoryIds.map((inventoryId) =>
+            this.usageService.cached(inventoryId),
+          ),
+        )
+      : [];
+    return { ...profile, esimGroups };
+  }
+  @Patch("customers/:ownerId/email") async correctCustomerEmail(
+    @Param("ownerId") ownerId: string,
+    @Body() body: { email?: string; reason?: string; confirmation?: string },
+    @Req() req: AuthenticatedRequest,
+  ) {
+    requireRole(req, [UserRole.SUPER_ADMIN]);
+    const confirmation = (body.confirmation ?? "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+    if (confirmation !== "CHANGE EMAIL")
+      throw new BadRequestException('Type "CHANGE EMAIL" to confirm');
+    const profile = await this.orders.customerProfile(ownerId);
+    const customerId = profile.identity?.customer.id;
+    if (!customerId)
+      throw new BadRequestException("Customer identity is unavailable");
+    return this.admin.correctCustomerEmail(
+      customerId,
+      body.email ?? "",
+      body.reason ?? "",
+      req.user!.id,
+    );
+  }
+  @Get("users/:id/identity") async userIdentity(
+    @Param("id") id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    if (!this.prisma.enabled) return null;
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        email: true,
+        status: true,
+        accountType: true,
+        mustChangePassword: true,
+        createdAt: true,
+        updatedAt: true,
+        customer: {
+          select: { id: true, customerCode: true, email: true, status: true },
+        },
+      },
+    });
+    if (!user) throw new BadRequestException("Login account not found");
+    return user;
   }
   @Post("orders/:id/usage/refresh") refreshUsage(
     @Param("id") id: string,
@@ -441,9 +584,30 @@ export class OperationsController {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     return this.inventory.refreshUsage(id);
   }
-  @Get("audit") audit(@Req() req: AuthenticatedRequest) {
+  @Post("orders/:id/provider-status-check") checkProviderStatus(
+    @Param("id") id: string,
+    @Headers("x-idempotency-key") idempotencyKey: string | undefined,
+    @Req() req: AuthenticatedRequest,
+  ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    return this.orders.audit();
+    if (!idempotencyKey || !/^[a-zA-Z0-9:_-]{12,128}$/.test(idempotencyKey))
+      throw new BadRequestException("A valid idempotency key is required");
+    return this.transatelOperations.reconcile(id, req.user!.localUserId);
+  }
+  @Get("audit") audit(
+    @Req() req: AuthenticatedRequest,
+    @Query("limit") limit?: string,
+    @Query("offset") offset?: string,
+    @Query("q") query?: string,
+  ) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    const take = Math.min(100, Math.max(1, Number(limit) || 50));
+    const skip = Math.max(0, Number(offset) || 0);
+    return this.orders.audit({
+      limit: take,
+      offset: skip,
+      ...(query ? { query } : {}),
+    });
   }
   @Get("partners/options") async partnerOptions(
     @Req() req: AuthenticatedRequest,
@@ -464,6 +628,7 @@ export class OperationsController {
     @Query("channel") channel?: OrderChannel,
     @Query("partnerId") partnerId?: string,
     @Query("status") status?: string,
+    @Query("queue") queue?: string,
     @Query("from") from?: string,
     @Query("to") to?: string,
   ) {
@@ -474,6 +639,19 @@ export class OperationsController {
         .filter(
           (order) =>
             (!status || order.status === status) &&
+            (queue !== "true" ||
+              [
+                "REVIEW_PENDING",
+                "AWAITING_CUSTOMER",
+                "PAYMENT_PENDING",
+                "PAYMENT_FAILED",
+                "PAYMENT_REVIEW_REQUIRED",
+                "PROVISIONING_FAILED",
+                "ACTIVATION_ATTENTION",
+                "REFUND_PENDING",
+              ].includes(order.status) ||
+              (order.status === "DRAFT" &&
+                order.documentReviewStatus === "MANUAL_REVIEW")) &&
             matchesQuery(
               q ?? "",
               order.orderNumber,
@@ -500,7 +678,32 @@ export class OperationsController {
     const search = q?.trim();
     const where = {
       ...dateFilter,
-      ...(status ? { status: status as never } : {}),
+      ...(status
+        ? { status: status as never }
+        : queue === "true"
+          ? {
+              OR: [
+                {
+                  status: {
+                    in: [
+                      "REVIEW_PENDING",
+                      "AWAITING_CUSTOMER",
+                      "PAYMENT_PENDING",
+                      "PAYMENT_FAILED",
+                      "PAYMENT_REVIEW_REQUIRED",
+                      "PROVISIONING_FAILED",
+                      "ACTIVATION_ATTENTION",
+                      "REFUND_PENDING",
+                    ] as never,
+                  },
+                },
+                {
+                  status: "DRAFT" as never,
+                  documentReviewStatus: "MANUAL_REVIEW" as never,
+                },
+              ],
+            }
+          : {}),
       ...(source === "PARTNER"
         ? { partnerId: { not: null } }
         : source === "DIRECT"
@@ -510,61 +713,108 @@ export class OperationsController {
       ...(partnerId ? { partnerId } : {}),
       ...(search
         ? {
-            OR: [
+            AND: [
               {
-                orderNumber: { contains: search, mode: "insensitive" as const },
-              },
-              {
-                externalOrderId: {
-                  contains: search,
-                  mode: "insensitive" as const,
-                },
-              },
-              {
-                traveler: {
-                  is: {
-                    OR: [
-                      {
-                        firstName: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                      {
-                        surname: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                      {
-                        email: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                    ],
+                OR: [
+                  {
+                    orderNumber: {
+                      contains: search,
+                      mode: "insensitive" as const,
+                    },
                   },
-                },
-              },
-              {
-                partner: {
-                  is: {
-                    OR: [
-                      {
-                        name: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                      {
-                        code: {
-                          contains: search,
-                          mode: "insensitive" as const,
-                        },
-                      },
-                    ],
+                  {
+                    externalOrderId: {
+                      contains: search,
+                      mode: "insensitive" as const,
+                    },
                   },
-                },
+                  {
+                    traveler: {
+                      is: {
+                        OR: [
+                          {
+                            firstName: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
+                            surname: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
+                            email: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                  {
+                    partner: {
+                      is: {
+                        OR: [
+                          {
+                            name: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
+                            code: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                  {
+                    customer: {
+                      is: {
+                        OR: [
+                          {
+                            customerCode: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
+                            email: {
+                              contains: search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                          {
+                            user: {
+                              is: {
+                                email: {
+                                  contains: search,
+                                  mode: "insensitive" as const,
+                                },
+                              },
+                            },
+                          },
+                          {
+                            partnerIdentity: {
+                              is: {
+                                externalCustomerId: {
+                                  contains: search,
+                                  mode: "insensitive" as const,
+                                },
+                              },
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                ],
               },
             ],
           }
@@ -577,6 +827,15 @@ export class OperationsController {
           plan: { include: { country: true } },
           traveler: true,
           partner: { select: { id: true, code: true, name: true } },
+          customer: {
+            select: {
+              id: true,
+              customerCode: true,
+              email: true,
+              source: true,
+              user: { select: { id: true } },
+            },
+          },
         },
         orderBy: { createdAt: "desc" },
         take,
@@ -589,6 +848,13 @@ export class OperationsController {
         id: order.id,
         orderNumber: order.orderNumber,
         ownerId: order.customerId,
+        customer: {
+          id: order.customer.id,
+          customerCode: order.customer.customerCode,
+          email: order.customer.email,
+          source: order.customer.source,
+          hasLogin: Boolean(order.customer.user),
+        },
         status: order.status,
         createdAt: order.createdAt.toISOString(),
         totalAmountNpr: Number(order.totalAmount),
@@ -605,6 +871,7 @@ export class OperationsController {
           : undefined,
         purchaseType: order.orderType,
         channel: order.channel,
+        documentReviewStatus: order.documentReviewStatus,
         externalOrderId: order.externalOrderId,
         partner: order.partner,
       })),
@@ -619,7 +886,45 @@ export class OperationsController {
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
     await this.orders.refreshOne(id, true);
-    return this.orders.view(id);
+    const order = await this.orders.operationsView(id);
+    const esimUsage = this.prisma.enabled
+      ? await this.usageService.forOrder(id)
+      : null;
+    const paymentHistory = this.prisma.enabled
+      ? await this.prisma.paymentEvent.findMany({
+          where: { orderId: id },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+          select: {
+            id: true,
+            provider: true,
+            eventType: true,
+            source: true,
+            paymentReference: true,
+            fromStatus: true,
+            toStatus: true,
+            amount: true,
+            currency: true,
+            providerTransactionId: true,
+            providerMessage: true,
+            createdAt: true,
+          },
+        })
+      : [];
+    return {
+      ...order,
+      paymentHistory: paymentHistory.map((event) => ({
+        ...event,
+        amount: event.amount === null ? null : Number(event.amount),
+        createdAt: event.createdAt.toISOString(),
+      })),
+      ...(esimUsage
+        ? {
+            packageUsage: this.usageService.packageForOrder(esimUsage, id),
+            esimUsage,
+          }
+        : {}),
+    };
   }
   @Get("orders/:id/documents/:documentId/preview") preview(
     @Param("id") id: string,
@@ -658,7 +963,19 @@ export class OperationsController {
     @Req() req: AuthenticatedRequest,
   ) {
     requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
-    return this.orders.requestReupload(id, body.reason);
+    return this.orders.requestReupload(id, body.reason, req.user!.id);
+  }
+  @Post("orders/:id/reject-documents") rejectDocuments(
+    @Param("id") id: string,
+    @Body() body: { reason?: string },
+    @Req() req: AuthenticatedRequest,
+  ) {
+    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    return this.orders.rejectPartnerDocuments(
+      id,
+      req.user!.id,
+      body.reason ?? "",
+    );
   }
   @Post("orders/:id/documents/:documentId/approve") approveDocument(
     @Param("id") id: string,
@@ -687,7 +1004,7 @@ export class OperationsController {
     @Param("id") id: string,
     @Req() req: AuthenticatedRequest,
   ) {
-    requireRole(req, [UserRole.OPERATIONS, UserRole.SUPER_ADMIN]);
+    requireRole(req, [UserRole.SUPER_ADMIN]);
     return this.orders.retry(id);
   }
   @Post("orders/:id/resend-qr") resendQr(
@@ -706,7 +1023,8 @@ export class OperationsController {
     return this.orders.cancel(
       id,
       null,
-      body.reason ?? "Cancelled by operations",
+      body.reason?.trim() || "Cancelled by operations",
+      req.user!.id,
     );
   }
   @Post("orders/:id/payment/fail") failPayment(

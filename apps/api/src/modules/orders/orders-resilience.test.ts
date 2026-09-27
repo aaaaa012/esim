@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConflictException } from "@nestjs/common";
-import { OrderStatus, PaymentStatus } from "@visa-compass/shared";
+import {
+  DocumentStatus,
+  DocumentType,
+  OrderStatus,
+  PaymentProvider,
+  PaymentStatus,
+} from "@visa-compass/shared";
 import { OrdersService, type DemoOrder } from "./orders.service.js";
 import type { ConnectivityService } from "../integration/connectivity.service.js";
 import type { S3StorageService } from "../../infrastructure/s3-storage.service.js";
@@ -14,6 +20,9 @@ import type { QrPdfService } from "../notification/qr-pdf.service.js";
 import { PaymentsService } from "../payments/payments.service.js";
 import { PaymentSimulatorGateway } from "../payments/gateways/simulator.gateway.js";
 import type { KhaltiGateway } from "../payments/gateways/khalti.gateway.js";
+import { orderPassportOcrJobId } from "../../jobs/ocr-recovery.config.js";
+import { createHash } from "node:crypto";
+import { canonicalIdentity } from "./passport-verification.service.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -50,6 +59,22 @@ function readyOrder(overrides: Partial<DemoOrder> = {}): DemoOrder {
   } as unknown as DemoOrder;
 }
 
+function customerTraveler(): NonNullable<DemoOrder["traveler"]> {
+  return {
+    title: "MS",
+    firstName: "Jane",
+    surname: "Doe",
+    dateOfBirth: "1990-01-01",
+    nationality: "NP",
+    email: "traveler@example.com",
+    mobile: "9779800000000",
+    city: "Kathmandu",
+    countryOfResidence: "NP",
+    passportNumber: "P1234567",
+    passportExpiryDate: "2030-01-01",
+  };
+}
+
 function ordersService(
   seed: DemoOrder[],
   connectivity: unknown,
@@ -57,18 +82,35 @@ function ordersService(
   prisma: unknown = { enabled: false },
   notifications: unknown = {},
   resilience?: unknown,
+  persistenceOverrides: Record<string, unknown> = {},
+  queue: unknown = { add: vi.fn().mockResolvedValue({}) },
+  storage: unknown = {},
 ) {
+  const resolvedStorage = {
+    finalizeDocument: vi.fn(async (assetId: string) => ({
+      temporaryAssetId: assetId,
+      finalizedAssetId: `${assetId}-finalized`,
+      sha256: createHash("sha256").update(assetId).digest("hex"),
+      byteSize: 100,
+      contentType: "application/pdf",
+      storageVersionId: null,
+    })),
+    ...(storage as Record<string, unknown>),
+  };
   const persistence = {
     load: vi.fn().mockResolvedValue(seed),
     save: vi.fn().mockResolvedValue(undefined),
     provisioningAttempt: vi.fn().mockResolvedValue(undefined),
+    recordReview: vi.fn().mockResolvedValue(undefined),
+    recordBulkReupload: vi.fn().mockResolvedValue(undefined),
+    ...persistenceOverrides,
   } as unknown as OrdersPersistenceService;
   return new OrdersService(
     connectivity as unknown as ConnectivityService,
-    {} as unknown as S3StorageService,
+    resolvedStorage as unknown as S3StorageService,
     persistence,
     inventory as unknown as InventoryService,
-    {} as unknown as QueueService,
+    queue as unknown as QueueService,
     notifications as unknown as NotificationService,
     {} as unknown as CatalogService,
     prisma as unknown as PrismaService,
@@ -77,6 +119,470 @@ function ordersService(
     resilience as never,
   );
 }
+
+describe("OrdersService document decision invariants", () => {
+  it("releases manual review when Ops approves the passport and the pending ticket upload is verified", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const order = readyOrder({
+      id: "manual-passport-approval",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: customerTraveler(),
+      documentReviewStatus: "MANUAL_REVIEW",
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    });
+    const instance = ordersService(
+      [order],
+      {},
+      undefined,
+      undefined,
+      { enqueue: vi.fn().mockResolvedValue({ status: "QUEUED" }) },
+      undefined,
+      { save },
+    );
+    await instance.refreshFromPersistence();
+
+    const updated = await instance.reviewDocument(
+      order.id,
+      "passport",
+      "staff-1",
+      "APPROVE",
+    );
+
+    expect(updated.documentReviewStatus).toBe("MANUALLY_APPROVED");
+    expect(updated.documents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "passport",
+          status: DocumentStatus.APPROVED,
+        }),
+        expect.objectContaining({
+          id: "ticket",
+          status: DocumentStatus.APPROVED,
+        }),
+      ]),
+    );
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ documentReviewStatus: "MANUALLY_APPROVED" }),
+    );
+  });
+
+  it("does not release manual review when the ticket was not verified or needs replacement", async () => {
+    const order = readyOrder({
+      id: "manual-passport-blocked-ticket",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: customerTraveler(),
+      documentReviewStatus: "MANUAL_REVIEW",
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.REUPLOAD_REQUIRED,
+          uploadVerified: true,
+        },
+      ],
+    });
+    const instance = ordersService([order], {});
+    await instance.refreshFromPersistence();
+
+    const updated = await instance.reviewDocument(
+      order.id,
+      "passport",
+      "staff-1",
+      "APPROVE",
+    );
+
+    expect(updated.documentReviewStatus).toBe("MANUAL_REVIEW");
+    expect(updated.documents.find((item) => item.id === "ticket")?.status).toBe(
+      DocumentStatus.REUPLOAD_REQUIRED,
+    );
+  });
+
+  it("blocks payment when a required document needs replacement even if the aggregate review is stale", async () => {
+    const order = readyOrder({
+      id: "stale-document-review",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: customerTraveler(),
+      documentReviewStatus: "VERIFIED",
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "expired-passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.REUPLOAD_REQUIRED,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    });
+    const instance = ordersService(
+      [order],
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { verifyDocument: vi.fn().mockResolvedValue(undefined) },
+    );
+    await instance.refreshFromPersistence();
+
+    await expect(
+      instance.assertPaymentPrerequisites(order.id, "customer-1"),
+    ).rejects.toMatchObject({
+      response: { code: "PASSPORT_VERIFICATION_REQUIRED" },
+    });
+  });
+
+  it.each([
+    OrderStatus.PROVISIONING,
+    OrderStatus.QR_READY,
+    OrderStatus.COMPLETED,
+    OrderStatus.CANCELLED,
+    OrderStatus.REFUNDED,
+  ])("rejects document review mutations after entering %s", async (status) => {
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: `terminal-${status}`,
+          status,
+          documents: [
+            {
+              id: "passport",
+              type: DocumentType.PASSPORT,
+              fileName: "passport.png",
+              privateAssetId: "passport-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+    );
+    await instance.refreshFromPersistence();
+    await expect(
+      instance.reviewDocument(
+        `terminal-${status}`,
+        "passport",
+        "staff-1",
+        "APPROVE",
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("makes final partner approval webhook creation retry-safe and notifies the customer", async () => {
+    const partnerEventUpsert = vi.fn().mockResolvedValue({ id: "event-1" });
+    const verificationUpdate = vi.fn().mockResolvedValue({});
+    const notify = vi.fn().mockResolvedValue({ status: "QUEUED" });
+    const order = readyOrder({
+      id: "partner-review",
+      status: OrderStatus.REVIEW_PENDING,
+      partner: { id: "partner-1", code: "P1", name: "Partner" },
+      externalOrderId: "external-1",
+      traveler: customerTraveler(),
+      documentReviewStatus: "MANUAL_REVIEW",
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.APPROVED,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    });
+    const instance = ordersService(
+      [order],
+      {},
+      undefined,
+      {
+        enabled: true,
+        $transaction: vi.fn((items: Promise<unknown>[]) => Promise.all(items)),
+        partnerDocumentVerification: {
+          findFirst: vi.fn().mockResolvedValue({ id: "verification-1" }),
+          update: verificationUpdate,
+        },
+        partnerWebhookEndpoint: { findMany: vi.fn().mockResolvedValue([]) },
+        partnerEvent: { upsert: partnerEventUpsert },
+        user: { findUnique: vi.fn().mockResolvedValue({ id: "staff-local" }) },
+      },
+      { enqueue: notify },
+    );
+    await instance.refreshFromPersistence();
+    await instance.reviewDocument(order.id, "ticket", "staff-1", "APPROVE");
+    await instance.reviewDocument(order.id, "ticket", "staff-1", "APPROVE");
+    expect(verificationUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: "MANUALLY_APPROVED", failureCode: null },
+      }),
+    );
+    expect(partnerEventUpsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: {
+          dedupeKey: "document-verification:partner-review:manually-approved",
+        },
+      }),
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template: "DOCUMENT_APPROVED",
+        dedupeKey: "order-notification:partner-review:DOCUMENT_APPROVED",
+      }),
+    );
+  });
+});
+
+describe("OrdersService operations attribution", () => {
+  it.each(["PARTNER_HOSTED", "PARTNER_API", "CUSTOMER_WEB"])(
+    "uses the order's partner customer independently of its login owner (%s)",
+    async (channel) => {
+      const partnerCustomer =
+        channel === "CUSTOMER_WEB"
+          ? null
+          : {
+              id: "order-partner-customer",
+              externalCustomerId: "partner-traveler-reference",
+              partner: { id: "partner-1", code: "test2", name: "test2" },
+            };
+      const now = new Date();
+      const findUnique = vi.fn().mockResolvedValue({
+        channel,
+        partnerCustomer,
+        purchasedBy: null,
+        targetInventoryId: null,
+        notifications: [],
+        customer: {
+          id: "signed-in-customer",
+          customerCode: "VC-CUSTOMER",
+          email: "customer@example.com",
+          phone: null,
+          source: "WEBSITE",
+          status: "ACTIVE",
+          createdAt: now,
+          user: {
+            id: "login-1",
+            email: "customer@example.com",
+            status: "ACTIVE",
+            accountType: "CUSTOMER",
+            createdAt: now,
+          },
+          partnerIdentity: {
+            id: "unrelated-partner-customer",
+            externalCustomerId: "unrelated",
+            partner: { id: "other-partner" },
+          },
+        },
+      });
+      const instance = ordersService([readyOrder()], {}, undefined, {
+        enabled: true,
+        order: { findUnique },
+      });
+      await instance.refreshFromPersistence();
+      const result = await instance.operationsView("q-1");
+      expect(result).toMatchObject({
+        channel,
+        customer: { id: "signed-in-customer", source: "WEBSITE" },
+        loginAccount: { id: "login-1" },
+        partnerCustomer,
+      });
+      expect(findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({
+            partnerCustomer: expect.any(Object),
+          }),
+        }),
+      );
+    },
+  );
+});
+
+describe("OrdersService document evidence invalidation", () => {
+  it("invalidates a successful verdict when the passport is replaced", async () => {
+    const saved = vi.fn().mockResolvedValue(undefined);
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: "document-order",
+          ownerId: "customer-1",
+          status: OrderStatus.DRAFT,
+          traveler: customerTraveler(),
+          documentReviewStatus: "VERIFIED",
+          documentReviewStartedAt: new Date().toISOString(),
+          passportVerification: {
+            status: "VERIFIED",
+            matchedFields: ["passportNumber"],
+            checkedAt: new Date().toISOString(),
+            method: "tesseract-ocr",
+          },
+          documents: [
+            {
+              id: "old-passport",
+              type: DocumentType.PASSPORT,
+              fileName: "old.jpg",
+              privateAssetId: "old-asset",
+              status: DocumentStatus.APPROVED,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { save: saved },
+      undefined,
+      {
+        createDocumentUpload: vi.fn().mockResolvedValue({
+          assetId: "new-asset",
+          upload: { mode: "test" },
+        }),
+      },
+    );
+    await instance.refreshFromPersistence();
+
+    await instance.addDocument("document-order", "customer-1", {
+      type: DocumentType.PASSPORT,
+      fileName: "new.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const updated = instance.get("document-order", "customer-1");
+    expect(updated.documentReviewStatus).toBe("NOT_STARTED");
+    expect(updated.documentReviewStartedAt).toBeUndefined();
+    expect(updated.passportVerification).toBeUndefined();
+    expect(updated.documents).toHaveLength(1);
+    expect(updated.documents[0]).toMatchObject({ privateAssetId: "new-asset" });
+    expect(updated.documents[0]).not.toHaveProperty("uploadVerified");
+    expect(saved).toHaveBeenCalled();
+  });
+
+  it("keeps a successful passport verdict when the optional visa is replaced", async () => {
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: "visa-order",
+          ownerId: "customer-1",
+          status: OrderStatus.DRAFT,
+          documentReviewStatus: "VERIFIED",
+          documentReviewStartedAt: new Date().toISOString(),
+          passportVerification: {
+            status: "VERIFIED",
+            matchedFields: ["passportNumber"],
+            checkedAt: new Date().toISOString(),
+            method: "tesseract-ocr",
+          },
+          documents: [
+            {
+              id: "old-visa",
+              type: DocumentType.VISA,
+              fileName: "old-visa.jpg",
+              privateAssetId: "old-visa-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      undefined,
+      {
+        createDocumentUpload: vi.fn().mockResolvedValue({
+          assetId: "new-visa-asset",
+          upload: { mode: "test" },
+        }),
+      },
+    );
+    await instance.refreshFromPersistence();
+
+    await instance.addDocument("visa-order", "customer-1", {
+      type: DocumentType.VISA,
+      fileName: "new-visa.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const updated = instance.get("visa-order", "customer-1");
+    expect(updated.documentReviewStatus).toBe("VERIFIED");
+    expect(updated.documentReviewStartedAt).toBeDefined();
+    expect(updated.passportVerification?.status).toBe("VERIFIED");
+  });
+});
+
+describe("OrdersService guest ownership claims", () => {
+  it("allows one explicit claim and rejects a different account afterward", async () => {
+    const instance = ordersService(
+      [readyOrder({ id: "guest-order", ownerId: null })],
+      {},
+    );
+    await instance.refreshFromPersistence();
+
+    await expect(
+      instance.claimGuestOrder("guest-order", "customer-a"),
+    ).resolves.toMatchObject({ id: "guest-order" });
+    await expect(
+      instance.claimGuestOrder("guest-order", "customer-b"),
+    ).rejects.toMatchObject({
+      response: { code: "ORDER_ALREADY_CLAIMED" },
+    });
+    await expect(
+      instance.claimGuestOrder("guest-order", "customer-a"),
+    ).resolves.toMatchObject({ id: "guest-order" });
+  });
+});
 
 describe("OrdersService provider callback conflict safety", () => {
   it("ignores an older preload callback after activation", async () => {
@@ -158,6 +664,160 @@ describe("OrdersService provider callback conflict safety", () => {
     );
     expect(orders.get(order.id).status).toBe(OrderStatus.QR_READY);
   });
+
+  it("does not regress a QR-ready provisioning operation on a late preload event", async () => {
+    const order = readyOrder();
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const inventory = {
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+        providerSubscriptionId: "sub-1",
+      }),
+      applyLifecycle: vi.fn().mockResolvedValue(undefined),
+    };
+    const prisma = {
+      enabled: true,
+      provisioningOperation: { updateMany },
+    };
+    const orders = ordersService(
+      [order],
+      { descriptor: () => ({ provider: "TRANSATEL" }) },
+      inventory,
+      prisma,
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.applyProviderEvent({
+      eventType: "OCS/PRODUCT/PRELOADED",
+      orderId: order.id,
+      status: "PRELOADED",
+      iccid: "8988247076000000319",
+      subscriptionId: "sub-1",
+    });
+
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          orderId: order.id,
+          state: { notIn: ["QR_READY", "ACTIVATED"] },
+        },
+      }),
+    );
+    expect(orders.get(order.id).status).toBe(OrderStatus.QR_READY);
+  });
+
+  it("accepts duplicate termination confirmation without false attention", async () => {
+    const order = readyOrder();
+    const lifecycleUpdate = vi.fn().mockResolvedValue({ count: 1 });
+    const attention = vi.fn().mockResolvedValue(undefined);
+    const inventory = {
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+        providerSubscriptionId: "sub-1",
+      }),
+      applyLifecycle: vi.fn().mockResolvedValue(undefined),
+    };
+    const prisma = {
+      enabled: true,
+      provisioningOperation: { updateMany: vi.fn() },
+      transatelLifecycleOperation: { updateMany: lifecycleUpdate },
+    };
+    const orders = ordersService(
+      [order],
+      { descriptor: () => ({ provider: "TRANSATEL" }) },
+      inventory,
+      prisma,
+      {},
+      { attention },
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.applyProviderEvent({
+      eventType: "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/TERMINATED",
+      orderId: order.id,
+      status: "TERMINATED",
+      iccid: "8988247076000000319",
+      subscriptionId: "sub-1",
+    });
+
+    expect(lifecycleUpdate).toHaveBeenCalledWith({
+      where: {
+        orderId: order.id,
+        action: "TERMINATE",
+        state: { in: ["ACCEPTED", "CONFIRMED"] },
+      },
+      data: { state: "CONFIRMED" },
+    });
+    expect(attention).not.toHaveBeenCalledWith(
+      expect.objectContaining({ category: "UNEXPECTED_PROVIDER_LIFECYCLE" }),
+    );
+  });
+});
+
+describe("OrdersService.beginPayment double-charge guard", () => {
+  it("rejects a second payment session once the order is already paid", async () => {
+    const order = {
+      ...readyOrder({
+        status: OrderStatus.PAYMENT_CONFIRMED,
+      }),
+      payment: {
+        provider: PaymentProvider.KHALTI,
+        reference: "pidx-1",
+        status: PaymentStatus.COMPLETED,
+      },
+    };
+    const orders = ordersService([order as DemoOrder], {
+      descriptor: () => ({ provider: "TRANSATEL" }),
+    });
+    await orders.refreshFromPersistence();
+
+    await expect(
+      orders.beginPayment(order.id, null, PaymentProvider.KHALTI, {
+        reference: "pidx-2",
+        returnUrl: "https://app.example/esim/checkout?order=q-1",
+        redirectUrl: "https://khalti.example/pay",
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    // The paid session is untouched — no double charge can be handed out.
+    expect(orders.get(order.id).payment?.reference).toBe("pidx-1");
+    expect(orders.get(order.id).payment?.status).toBe(PaymentStatus.COMPLETED);
+  });
+
+  it("keeps an identical PENDING reference idempotent instead of rejecting", async () => {
+    const order = {
+      ...readyOrder({
+        status: OrderStatus.PAYMENT_PENDING,
+      }),
+      payment: {
+        provider: PaymentProvider.KHALTI,
+        reference: "pidx-1",
+        status: PaymentStatus.PENDING,
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        redirectUrl: "https://khalti.example/pay",
+      },
+    };
+    const orders = ordersService([order as DemoOrder], {
+      descriptor: () => ({ provider: "TRANSATEL" }),
+    });
+    await orders.refreshFromPersistence();
+
+    const result = await orders.beginPayment(
+      order.id,
+      null,
+      PaymentProvider.KHALTI,
+      {
+        reference: "pidx-1",
+        returnUrl: "https://app.example/esim/checkout?order=q-1",
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        redirectUrl: "https://khalti.example/pay",
+      },
+    );
+    expect(result.payment?.reference).toBe("pidx-1");
+    expect(result.payment?.status).toBe(PaymentStatus.PENDING);
+  });
 });
 
 describe("OrdersService provisioning retry safety", () => {
@@ -186,6 +846,271 @@ describe("OrdersService provisioning retry safety", () => {
 });
 
 describe("OrdersService asynchronous provisioning", () => {
+  it("recovers a persisted QR result on retry without another provider request", async () => {
+    const order = readyOrder({
+      id: "p-persisted",
+      status: OrderStatus.PROVISIONING,
+      qrPayload: "LPA:1$persisted",
+      providerSubscriptionId: "sub-persisted",
+      traveler: customerTraveler(),
+      assignment: {
+        inventoryId: "inv-1",
+        iccid: "8988247076000000319",
+        providerSubscriptionId: "sub-persisted",
+        verificationStatus: "PENDING",
+      },
+    });
+    const connectivity = {
+      provision: vi.fn(),
+      descriptor: vi.fn().mockReturnValue({ provider: "TRANSATEL" }),
+    };
+    const inventory = {
+      customerIdForOrder: vi.fn().mockResolvedValue("cust-1"),
+      assign: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+      }),
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const queue = { add: vi.fn().mockResolvedValue({}) };
+    const orders = ordersService(
+      [order],
+      connectivity,
+      inventory,
+      { enabled: false },
+      notifications,
+      undefined,
+      {},
+      queue,
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.processProvisioning(order.id, 2, false);
+    await orders.processProvisioning(order.id, 2, false);
+
+    expect(connectivity.provision).not.toHaveBeenCalled();
+    expect(inventory.assign).toHaveBeenCalledOnce();
+    expect(orders.get(order.id).status).toBe(OrderStatus.QR_READY);
+    expect(
+      orders
+        .get(order.id)
+        .timeline.filter((event) => event.to === OrderStatus.QR_READY),
+    ).toHaveLength(1);
+    expect(notifications.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("recovers immediately when the final QR-ready save loses a version race", async () => {
+    const persisted = readyOrder({
+      id: "p-conflict",
+      status: OrderStatus.PROVISIONING,
+      traveler: customerTraveler(),
+    });
+    delete persisted.qrPayload;
+    delete persisted.providerSubscriptionId;
+    delete persisted.providerStatus;
+    delete persisted.qrDeliveredAt;
+    const load = vi.fn(async () => [structuredClone(persisted)]);
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ConflictException(
+          "Order was changed by another request; reload and retry",
+        ),
+      )
+      .mockImplementation(async (value: DemoOrder) => {
+        Object.assign(persisted, structuredClone(value));
+      });
+    const connectivity = {
+      provision: vi.fn().mockResolvedValue({
+        providerSubscriptionId: "sub-conflict",
+        status: "READY",
+        qrPayload: "LPA:1$conflict",
+      }),
+      descriptor: vi.fn().mockReturnValue({ provider: "TRANSATEL" }),
+    };
+    const inventory = {
+      profileForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        eid: "eid-1",
+        iccid: "8988247076000000319",
+      }),
+      customerIdForOrder: vi.fn().mockResolvedValue("cust-1"),
+      assign: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+      }),
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const provisioningAttempt = vi.fn().mockResolvedValue(undefined);
+    const orders = ordersService(
+      [persisted],
+      connectivity,
+      inventory,
+      { enabled: false },
+      notifications,
+      undefined,
+      { load, save, provisioningAttempt },
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.processProvisioning(persisted.id, 1, false);
+
+    expect(connectivity.provision).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(provisioningAttempt).toHaveBeenCalledOnce();
+    expect(orders.get(persisted.id).status).toBe(OrderStatus.QR_READY);
+    expect(notifications.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("adds a top-up to the existing eSIM without sending an installation QR", async () => {
+    const order = readyOrder({
+      id: "topup-1",
+      status: OrderStatus.PROVISIONING,
+      purchaseType: "TOPUP",
+      pricingSnapshot: { targetEsimId: "customer-esim-1" },
+      traveler: customerTraveler(),
+    });
+    delete order.qrPayload;
+    delete order.qrDeliveredAt;
+    delete order.providerSubscriptionId;
+    const connectivity = {
+      provision: vi.fn().mockResolvedValue({
+        providerSubscriptionId: "topup-sub-1",
+        status: "READY",
+        qrPayload: "LPA:1$existing-profile",
+      }),
+      descriptor: vi.fn().mockReturnValue({ provider: "TRANSATEL" }),
+    };
+    const inventory = {
+      customerIdForOrder: vi.fn().mockResolvedValue("customer-1"),
+      assignTopup: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inventory-1",
+        iccid: "8988247076000000319",
+        msisdn: "33612345678",
+      }),
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          eid: "eid-existing",
+          iccid: "8988247076000000319",
+          msisdn: "33612345678",
+          customerEsims: [{ order: { traveler: customerTraveler() } }],
+        }),
+      },
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const queue = { add: vi.fn().mockResolvedValue({}) };
+    const orders = ordersService(
+      [order],
+      connectivity,
+      inventory,
+      prisma,
+      notifications,
+      undefined,
+      {},
+      queue,
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.processProvisioning(order.id, 1, false);
+
+    expect(connectivity.provision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderId: order.id,
+        eid: "eid-existing",
+        purchaseType: "TOPUP",
+      }),
+    );
+    expect(inventory.assignTopup).toHaveBeenCalledWith(
+      order.id,
+      "customer-1",
+      "8988247076000000319",
+      "LPA:1$existing-profile",
+      expect.objectContaining({ providerSubscriptionId: "topup-sub-1" }),
+    );
+    expect(orders.get(order.id)).toMatchObject({
+      status: OrderStatus.COMPLETED,
+      providerSubscriptionId: "topup-sub-1",
+    });
+    expect(inventory.assignTopup.mock.calls[0]![4]).not.toHaveProperty(
+      "expiresAt",
+    );
+    expect(orders.get(order.id).qrDeliveredAt).toBeUndefined();
+    expect(orders.get(order.id).timeline.at(-1)?.reason).toContain(
+      "package added to existing eSIM",
+    );
+    expect(notifications.enqueue).not.toHaveBeenCalled();
+    expect(queue.add).toHaveBeenCalledWith(
+      "reconciliation",
+      "reconcile-usage",
+      { id: "inventory-1", kind: "esim-usage" },
+      `topup-usage-${order.id}`,
+      expect.objectContaining({ attempts: 5 }),
+    );
+  });
+
+  it("retries QR-ready recovery from fresh state after bounded version conflicts", async () => {
+    const persisted = readyOrder({
+      id: "p-recovery-race",
+      status: OrderStatus.PROVISIONING,
+      traveler: customerTraveler(),
+    });
+    delete persisted.qrPayload;
+    delete persisted.qrDeliveredAt;
+    const load = vi.fn(async () => [structuredClone(persisted)]);
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ConflictException(
+          "Order was changed by another request; reload and retry",
+        ),
+      )
+      .mockRejectedValueOnce(
+        new ConflictException(
+          "Order was changed by another request; reload and retry",
+        ),
+      )
+      .mockImplementation(async (value: DemoOrder) => {
+        Object.assign(persisted, structuredClone(value));
+      });
+    const inventory = {
+      customerIdForOrder: vi.fn().mockResolvedValue("cust-1"),
+      assign: vi.fn().mockResolvedValue(undefined),
+      inventoryForOrder: vi.fn().mockResolvedValue({
+        id: "inv-1",
+        iccid: "8988247076000000319",
+      }),
+    };
+    const notifications = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const orders = ordersService(
+      [persisted],
+      { descriptor: vi.fn().mockReturnValue({ provider: "TRANSATEL" }) },
+      inventory,
+      { enabled: false },
+      notifications,
+      undefined,
+      { load, save },
+    );
+    await orders.refreshFromPersistence();
+
+    await orders.recoverProvisioningQrReady(persisted.id, {
+      qrPayload: "LPA:1$race",
+      providerSubscriptionId: "sub-race",
+      iccid: "8988247076000000319",
+    });
+
+    expect(save).toHaveBeenCalledTimes(3);
+    expect(inventory.assign).toHaveBeenCalledTimes(3);
+    expect(orders.get(persisted.id).status).toBe(OrderStatus.QR_READY);
+    expect(notifications.enqueue).toHaveBeenCalledOnce();
+  });
+
   it("keeps an accepted delayed preload in PROVISIONING without retrying or releasing inventory", async () => {
     const order = readyOrder({
       id: "p-1",
@@ -459,7 +1384,7 @@ describe("OrdersService.reconcileStaleActivationOrders", () => {
     expect(inventory.applyLifecycle).toHaveBeenCalled();
   });
 
-  it("routes the order to activation attention once the re-fetch budget is exhausted", async () => {
+  it("keeps an uninstalled order QR_READY after the observation budget", async () => {
     vi.stubEnv("ACTIVATION_REFETCH_ATTEMPTS", "1");
     const connectivity = {
       descriptor: () => ({
@@ -480,8 +1405,8 @@ describe("OrdersService.reconcileStaleActivationOrders", () => {
     expect(orders.get("q-2").status).toBe(OrderStatus.QR_READY);
 
     const result = await orders.reconcileStaleActivationOrders();
-    expect(result.failed).toEqual(["q-2"]);
-    expect(orders.get("q-2").status).toBe(OrderStatus.ACTIVATION_ATTENTION);
+    expect(result.failed).toEqual([]);
+    expect(orders.get("q-2").status).toBe(OrderStatus.QR_READY);
   });
 
   it("ignores non-stale QR_READY orders", async () => {
@@ -496,7 +1421,12 @@ describe("OrdersService.reconcileStaleActivationOrders", () => {
         .mockResolvedValue({ subscriptionId: "sub-1", qrPayload: "LPA:1$x" }),
     } as unknown as ConnectivityService;
     const orders = ordersService(
-      [readyOrder({ qrDeliveredAt: new Date().toISOString() })],
+      [
+        readyOrder({
+          qrDeliveredAt: new Date().toISOString(),
+          lastProvisioningRecoveryAt: new Date().toISOString(),
+        }),
+      ],
       connectivity,
     );
     await orders.refreshFromPersistence();
@@ -536,6 +1466,7 @@ describe("PaymentsService.reconcilePendingPayments", () => {
 
   it("recovers a payment that completed server-side but whose callback was dropped", async () => {
     vi.stubEnv("PAYMENT_VERIFY_ATTEMPTS", "3");
+    vi.stubEnv("PAYMENT_MODE", "simulator");
     const gateway = new PaymentSimulatorGateway();
     const initiation = await gateway.initiate({
       orderId: "order-1",
@@ -587,5 +1518,1004 @@ describe("PaymentsService.reconcilePendingPayments", () => {
       expect.any(String),
     );
     expect(orders.resolvePaymentFailure).not.toHaveBeenCalled();
+  });
+});
+
+it("starts OCR after confirming only a replacement passport with a saved ticket", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "passport-only",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: customerTraveler(),
+        documentReviewStatus: "NOT_STARTED",
+        documents: [
+          {
+            id: "new-passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "new-passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: false,
+          },
+          {
+            id: "saved-ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "saved-ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+    { verifyDocument: vi.fn().mockResolvedValue({}) },
+  );
+  await instance.refreshFromPersistence();
+  await instance.confirmDocument("passport-only", "new-passport", "customer-1");
+  await vi.waitFor(() =>
+    expect(add).toHaveBeenCalledWith(
+      expect.any(String),
+      "verify-order-passport",
+      expect.objectContaining({
+        documentId: "new-passport",
+        privateAssetId: "new-passport-asset-finalized",
+      }),
+      expect.stringContaining("order-passport-passport-only-new-passport-"),
+      expect.any(Object),
+    ),
+  );
+  expect(add.mock.calls[0]![3]).not.toBe(
+    orderPassportOcrJobId(
+      "passport-only",
+      "new-passport",
+      "new-passport-asset-finalized",
+    ),
+  );
+  expect(instance.get("passport-only", "customer-1").documentReviewStatus).toBe(
+    "OCR_PENDING",
+  );
+});
+
+it("restarts validation after confirming only a replacement ticket with a verified passport", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "ticket-only",
+        ownerId: "customer-1",
+        status: OrderStatus.AWAITING_CUSTOMER,
+        traveler: customerTraveler(),
+        documentReviewPolicy: "AUTO_OCR",
+        documentReviewStatus: "REUPLOAD_REQUIRED",
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.APPROVED,
+            uploadVerified: true,
+          },
+          {
+            id: "replacement-ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "replacement-ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: false,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+    { verifyDocument: vi.fn().mockResolvedValue({}) },
+  );
+  await instance.refreshFromPersistence();
+  await instance.confirmDocument(
+    "ticket-only",
+    "replacement-ticket",
+    "customer-1",
+  );
+  expect(add).toHaveBeenCalledTimes(1);
+  expect(add.mock.calls[0]![1]).toBe("verify-order-passport");
+  expect(add.mock.calls[0]![2]).toMatchObject({
+    documentId: "passport",
+    privateAssetId: "passport-asset",
+  });
+  expect(add.mock.calls[0]![3]).toBe(
+    orderPassportOcrJobId(
+      "ticket-only",
+      "passport",
+      "passport-asset",
+      "replacement:replacement-ticket:replacement-ticket-asset-finalized",
+    ),
+  );
+  const restarted = instance.get("ticket-only", "customer-1");
+  expect(restarted.documentReviewStatus).toBe("OCR_PENDING");
+  expect(restarted.status).toBe(OrderStatus.REVIEW_PENDING);
+});
+
+it("waits for every rejected document before restarting review", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "both-replacements",
+        ownerId: "customer-1",
+        status: OrderStatus.AWAITING_CUSTOMER,
+        traveler: customerTraveler(),
+        documentReviewPolicy: "AUTO_OCR",
+        documentReviewStatus: "NOT_STARTED",
+        documents: [
+          {
+            id: "new-passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "new-passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: false,
+          },
+          {
+            id: "old-ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "old-ticket-asset",
+            status: DocumentStatus.REUPLOAD_REQUIRED,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+    { verifyDocument: vi.fn().mockResolvedValue({}) },
+  );
+  await instance.refreshFromPersistence();
+  await instance.confirmDocument("both-replacements", "new-passport", "customer-1");
+  const waiting = instance.get("both-replacements", "customer-1");
+  expect(waiting.documentReviewStatus).toBe("REUPLOAD_REQUIRED");
+  expect(waiting.status).toBe(OrderStatus.AWAITING_CUSTOMER);
+  expect(add).not.toHaveBeenCalled();
+  const ticket = waiting.documents.find((document) => document.type === DocumentType.TICKET)!;
+  ticket.privateAssetId = "new-ticket-asset";
+  ticket.status = DocumentStatus.PENDING;
+  ticket.uploadVerified = false;
+  await instance.confirmDocument("both-replacements", "old-ticket", "customer-1");
+  const restarted = instance.get("both-replacements", "customer-1");
+  expect(restarted.documentReviewStatus).toBe("OCR_PENDING");
+  expect(restarted.status).toBe(OrderStatus.REVIEW_PENDING);
+  expect(add).toHaveBeenCalledTimes(1);
+});
+
+it("does not persist an unchanged verified traveller and preserves verification for contact edits", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  const instance = ordersService(
+    [readyOrder({
+      id: "verified-edit", ownerId: "customer-1", status: OrderStatus.DRAFT,
+      traveler: customerTraveler(), documentReviewStatus: "VERIFIED",
+      passportVerification: {
+        status: "VERIFIED", matchedFields: [], checkedAt: new Date().toISOString(), method: "tesseract-ocr",
+      },
+    })], {}, undefined, { enabled: false }, undefined, undefined, { save },
+  );
+  await instance.refreshFromPersistence();
+
+  const unchanged = await instance.setTraveler("verified-edit", "customer-1", customerTraveler());
+  expect(unchanged.documentReviewStatus).toBe("VERIFIED");
+  expect(save).not.toHaveBeenCalled();
+
+  const contact = await instance.setTraveler("verified-edit", "customer-1", {
+    ...customerTraveler(), mobile: "9800000001",
+  });
+  expect(contact.documentReviewStatus).toBe("VERIFIED");
+  expect(contact.passportVerification?.status).toBe("VERIFIED");
+  expect(save).toHaveBeenCalledTimes(1);
+});
+
+it("rejects a new first purchase when its Nepal contact belongs to another active eSIM", async () => {
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "existing-esim",
+        ownerId: "other-customer",
+        traveler: customerTraveler(),
+        assignment: { inventoryId: "inventory-1", iccid: "iccid-1" },
+      }),
+      readyOrder({
+        id: "new-order",
+        ownerId: "new-customer",
+        status: OrderStatus.DRAFT,
+        createdAt: new Date().toISOString(),
+      }),
+    ],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  await expect(
+    instance.setTraveler("new-order", "new-customer", {
+      ...customerTraveler(),
+      mobile: "9800000000",
+    }),
+  ).rejects.toThrow(/already has an active eSIM/i);
+});
+
+it("accepts a 10-digit mobile without requiring a 98 prefix", async () => {
+  const instance = ordersService(
+    [readyOrder({
+      id: "ten-digit-order",
+      ownerId: "ten-digit-customer",
+      status: OrderStatus.DRAFT,
+      createdAt: new Date().toISOString(),
+    })],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  const updated = await instance.setTraveler("ten-digit-order", "ten-digit-customer", {
+    ...customerTraveler(), mobile: "1234567890",
+  });
+  expect(updated.traveler?.mobile).toBe("1234567890");
+});
+
+it("rejects a country prefix in the new traveller mobile field", async () => {
+  const instance = ordersService(
+    [readyOrder({
+      id: "prefixed-order",
+      ownerId: "prefixed-customer",
+      status: OrderStatus.DRAFT,
+      createdAt: new Date().toISOString(),
+    })],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  await expect(instance.setTraveler("prefixed-order", "prefixed-customer", {
+    ...customerTraveler(), mobile: "+9779800000000",
+  })).rejects.toThrow(/exactly 10 digits/i);
+});
+
+it("rejects a second eSIM for the same signed-in customer even with a different contact", async () => {
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "owned-esim",
+        ownerId: "same-customer",
+        traveler: customerTraveler(),
+        assignment: { inventoryId: "inventory-1", iccid: "iccid-1" },
+      }),
+      readyOrder({
+        id: "second-order",
+        ownerId: "same-customer",
+        status: OrderStatus.DRAFT,
+        createdAt: new Date().toISOString(),
+      }),
+    ],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  await expect(
+    instance.setTraveler("second-order", "same-customer", {
+      ...customerTraveler(),
+      mobile: "9800000001",
+    }),
+  ).rejects.toThrow(/account already has an active eSIM/i);
+});
+
+it("atomically claims a new contact and signed-in account before payment", async () => {
+  const createClaim = vi.fn().mockResolvedValue({});
+  const transaction = vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
+    callback({
+      order: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          customerId: "customer-1",
+          customer: { user: { clerkId: "user-1" } },
+        }),
+      },
+      esimContactClaim: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: createClaim,
+      },
+    }),
+  );
+  const instance = ordersService(
+    [],
+    {},
+    undefined,
+    { enabled: true, $transaction: transaction },
+  );
+  const claim = instance as unknown as {
+    claimNewEsimContact(order: DemoOrder): Promise<void>;
+  };
+  await claim.claimNewEsimContact(
+    readyOrder({
+      id: "new-order",
+      ownerId: "user-1",
+      traveler: customerTraveler(),
+      createdAt: new Date().toISOString(),
+    }),
+  );
+  expect(createClaim).toHaveBeenCalledWith({
+    data: {
+      contactNumber: "9779800000000",
+      customerId: "customer-1",
+      orderId: "new-order",
+    },
+  });
+});
+
+it("grandfathers a legacy order when its unchanged contact is not a Nepal number", async () => {
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "legacy-order",
+        ownerId: "legacy-customer",
+        status: OrderStatus.DRAFT,
+        contactRuleVersion: 0,
+        traveler: { ...customerTraveler(), mobile: "+33123456789" },
+        documentReviewStatus: "VERIFIED",
+      }),
+    ],
+    {},
+  );
+  await instance.refreshFromPersistence();
+  const unchanged = await instance.setTraveler("legacy-order", "legacy-customer", {
+    ...customerTraveler(),
+    mobile: "+33123456789",
+  });
+  expect(unchanged.documentReviewStatus).toBe("VERIFIED");
+});
+
+it("finds a third-person recharge by contact or ICCID but returns the eSIM MSISDN", async () => {
+  const findMany = vi.fn().mockResolvedValue([
+    {
+      id: "original-order",
+      customerId: "customer-1",
+      plan: { country: { isoCode: "FR" } },
+      traveler: {
+        firstName: "Jane",
+        surname: "Doe",
+        email: "original@example.com",
+        mobile: "+9779800000000",
+        city: "Kathmandu",
+        countryOfResidence: "NP",
+      },
+      customerEsim: {
+        inventory: {
+          id: "inventory-1",
+          eid: "eid-1",
+          iccid: "8944000000009876",
+          msisdn: "+33612345678",
+        },
+      },
+    },
+  ]);
+  const instance = ordersService([], {}, undefined, {
+    enabled: true,
+    esimContactClaim: {
+      findUnique: vi.fn().mockResolvedValue({ orderId: "original-order" }),
+    },
+    order: { findMany },
+  });
+  vi.spyOn(instance, "resolveSubscriber").mockResolvedValue(null);
+  const result = await instance.resolveSubscriberForRechargeLookup(
+    "9800000000",
+  );
+  expect(result?.inventory?.msisdn).toBe("+33612345678");
+  const byIccid = await instance.resolveSubscriberForRechargeLookup(
+    "8944000000009876",
+  );
+  expect(byIccid?.inventory?.msisdn).toBe("+33612345678");
+  expect(findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        id: "original-order",
+        OR: expect.arrayContaining([
+          { traveler: { is: { contactNumberNormalized: "9779800000000" } } },
+        ]),
+      }),
+    }),
+  );
+});
+
+it("invalidates an in-flight OCR generation when traveller identity changes", async () => {
+  const instance = ordersService(
+    [readyOrder({
+      id: "pending-identity-edit",
+      ownerId: "customer-1",
+      status: OrderStatus.DRAFT,
+      traveler: customerTraveler(),
+      documentReviewStatus: "OCR_PENDING",
+      documentReviewStartedAt: new Date().toISOString(),
+      passportVerification: {
+        status: "NOT_READY",
+        matchedFields: [],
+        checkedAt: new Date().toISOString(),
+        method: "ocr-error",
+      },
+      documents: [
+        {
+          id: "passport",
+          type: DocumentType.PASSPORT,
+          fileName: "passport.png",
+          privateAssetId: "passport-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+        {
+          id: "ticket",
+          type: DocumentType.TICKET,
+          fileName: "ticket.pdf",
+          privateAssetId: "ticket-asset",
+          status: DocumentStatus.PENDING,
+          uploadVerified: true,
+        },
+      ],
+    })],
+    {},
+  );
+  await instance.refreshFromPersistence();
+
+  const updated = await instance.setTraveler(
+    "pending-identity-edit",
+    "customer-1",
+    { ...customerTraveler(), passportNumber: "P7654321" },
+  );
+
+  expect(updated.documentReviewStatus).toBe("NOT_STARTED");
+  expect(updated.documentReviewStartedAt).toBeUndefined();
+  expect(updated.passportVerification).toBeUndefined();
+});
+
+it.each([
+  ["matching", customerTraveler(), "VERIFIED", 0],
+  [
+    "customer-corrected mismatch",
+    { ...customerTraveler(), passportNumber: "P7654321" },
+    "CORRECTION_REQUIRED",
+    0,
+  ],
+  [
+    "third customer-corrected mismatch",
+    { ...customerTraveler(), passportNumber: "P7654321" },
+    "MANUAL_REVIEW",
+    2,
+  ],
+] as const)(
+  "compares ready stored extraction immediately for %s traveller data",
+  async (_case, traveler, expectedStatus, correctionAttempts) => {
+    const add = vi.fn().mockResolvedValue({});
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: "stored-extraction",
+          ownerId: "customer-1",
+          status: OrderStatus.DRAFT,
+          traveler,
+          documentReviewStatus: "NOT_STARTED",
+          passportExtraction: {
+            status: "READY",
+            fields: {
+              firstName: "Jane",
+              surname: "Doe",
+              dateOfBirth: "1990-01-01",
+              nationality: "NP",
+              passportNumber: "P1234567",
+              passportExpiryDate: "2030-01-01",
+            },
+            fieldsRequiringInput: [],
+            passportAssetId: "passport-asset",
+            confidence: 96,
+            correctionAttempts,
+          },
+          documents: [
+            {
+              id: "passport",
+              type: DocumentType.PASSPORT,
+              fileName: "passport.png",
+              privateAssetId: "passport-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+            {
+              id: "ticket",
+              type: DocumentType.TICKET,
+              fileName: "ticket.pdf",
+              privateAssetId: "ticket-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      { add },
+    );
+    await instance.refreshFromPersistence();
+
+    const result = await instance.verifyPassport(
+      "stored-extraction",
+      "customer-1",
+    );
+
+    expect(result.documentReviewStatus).toBe(expectedStatus);
+    expect(result.passportVerification?.method).toBe("stored-extraction");
+    expect(add).not.toHaveBeenCalled();
+  },
+);
+
+it("routes an explicitly confirmed unchanged mismatch to manual review", async () => {
+  const entered = { ...customerTraveler(), passportNumber: "P7654321" };
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(canonicalIdentity(entered)))
+    .digest("hex");
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "confirmed-mismatch",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: entered,
+        documentReviewStatus: "CORRECTION_REQUIRED",
+        passportVerification: {
+          status: "PARTIAL",
+          matchedFields: ["givenNames", "surname"],
+          mismatchedFields: ["passportNumber"],
+          checkedAt: new Date().toISOString(),
+          method: "stored-extraction",
+        },
+        passportExtraction: {
+          status: "READY",
+          fields: {
+            firstName: "Jane",
+            surname: "Doe",
+            dateOfBirth: "1990-01-01",
+            nationality: "NP",
+            passportNumber: "P1234567",
+            passportExpiryDate: "2030-01-01",
+          },
+          fieldsRequiringInput: [],
+          passportAssetId: "passport-asset",
+          confidence: 96,
+          correctionAttempts: 1,
+          lastMismatchFingerprint: fingerprint,
+          lastMismatchFields: ["passportNumber"],
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.confirmPassportDetails(
+    "confirmed-mismatch",
+    "customer-1",
+  );
+
+  expect(result.documentReviewStatus).toBe("MANUAL_REVIEW");
+  expect(result.passportExtraction?.correctionAttempts).toBe(1);
+});
+
+it("reuses a completed passport extraction when re-checked before traveller details", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "extract-before-traveler",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "READY",
+          fields: { firstName: "ANNA", surname: "ERIKSSON" },
+          fieldsRequiringInput: [],
+          passportAssetId: "passport-asset",
+          confidence: 96,
+          correctionAttempts: 0,
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    { enabled: false },
+    undefined,
+    undefined,
+    {},
+    { add },
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "extract-before-traveler",
+    "customer-1",
+  );
+
+  expect(result.passportExtraction?.status).toBe("READY");
+  expect(result.passportExtraction?.fields).toMatchObject({
+    firstName: "ANNA",
+    surname: "ERIKSSON",
+  });
+  expect(add).not.toHaveBeenCalled();
+});
+
+it("routes a partial extraction with no readable name to manual review", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "missing-ocr-name",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: customerTraveler(),
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "PARTIAL",
+          fields: {
+            dateOfBirth: "1990-01-01",
+            nationality: "NP",
+            passportNumber: "P1234567",
+            passportExpiryDate: "2030-01-01",
+          },
+          fieldsRequiringInput: ["firstName", "surname"],
+          passportAssetId: "passport-asset",
+          confidence: 48,
+          correctionAttempts: 0,
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "missing-ocr-name",
+    "customer-1",
+  );
+
+  expect(result.documentReviewStatus).toBe("MANUAL_REVIEW");
+  expect(result.passportVerification?.status).toBe("PARTIAL");
+  expect(add).not.toHaveBeenCalled();
+});
+
+it("routes customer-entered details directly to manual review when OCR produced no evidence", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "ocr-unavailable-manual-entry",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: customerTraveler(),
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: {},
+          fieldsRequiringInput: [
+            "firstName",
+            "surname",
+            "dateOfBirth",
+            "passportNumber",
+            "passportExpiryDate",
+            "nationality",
+          ],
+          passportAssetId: "passport-asset",
+          correctionAttempts: 0,
+          failureCode: "OCR_UNAVAILABLE",
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.pdf",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "ocr-unavailable-manual-entry",
+    "customer-1",
+  );
+
+  expect(result.documentReviewStatus).toBe("MANUAL_REVIEW");
+  expect(result.passportVerification).toMatchObject({
+    status: "NOT_READY",
+    method: "ocr-error",
+  });
+  expect(add).not.toHaveBeenCalled();
+});
+
+it("accepts entered nationality when OCR omitted it and all extracted identity fields match", async () => {
+  const add = vi.fn().mockResolvedValue({});
+  const instance = ordersService(
+    [
+      readyOrder({
+        id: "missing-ocr-nationality",
+        ownerId: "customer-1",
+        status: OrderStatus.DRAFT,
+        traveler: customerTraveler(),
+        documentReviewStatus: "NOT_STARTED",
+        passportExtraction: {
+          status: "PARTIAL",
+          fields: {
+            firstName: "Jane",
+            surname: "Doe",
+            dateOfBirth: "1990-01-01",
+            passportNumber: "P1234567",
+            passportExpiryDate: "2030-01-01",
+          },
+          fieldsRequiringInput: ["nationality"],
+          passportAssetId: "passport-asset",
+          confidence: 68,
+          correctionAttempts: 0,
+        },
+        documents: [
+          {
+            id: "passport",
+            type: DocumentType.PASSPORT,
+            fileName: "passport.png",
+            privateAssetId: "passport-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+          {
+            id: "ticket",
+            type: DocumentType.TICKET,
+            fileName: "ticket.pdf",
+            privateAssetId: "ticket-asset",
+            status: DocumentStatus.PENDING,
+            uploadVerified: true,
+          },
+        ],
+      }),
+    ],
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    { add },
+  );
+  await instance.refreshFromPersistence();
+
+  const result = await instance.verifyPassport(
+    "missing-ocr-nationality",
+    "customer-1",
+  );
+
+  expect(result.documentReviewStatus).toBe("VERIFIED");
+  expect(result.passportVerification?.status).toBe("VERIFIED");
+  expect(result.passportVerification?.mismatchedFields).toBeUndefined();
+  expect(result.passportExtraction?.correctionAttempts).toBe(0);
+  expect(add).not.toHaveBeenCalled();
+});
+
+describe("OrdersService cancellation attribution", () => {
+  it("records the acting staff on an operations cancellation and hides it from customers", async () => {
+    const order = readyOrder({
+      id: "cancel-attribution",
+      status: OrderStatus.PAYMENT_PENDING,
+      ownerId: null,
+    });
+    const save = vi.fn().mockResolvedValue(undefined);
+    const instance = ordersService(
+      [order],
+      {},
+      undefined,
+      { enabled: false },
+      {},
+      undefined,
+      { save },
+    );
+    await instance.refreshFromPersistence();
+    const view = await instance.cancel(
+      order.id,
+      null,
+      "Cancelled by operations",
+      "staff-clerk-9",
+    );
+    const persisted = save.mock.calls[0]![0] as DemoOrder;
+    const cancelled = persisted.timeline.at(-1)!;
+    expect(cancelled.to).toBe(OrderStatus.CANCELLED);
+    expect(cancelled.reason).toBe("Cancelled by operations");
+    expect(cancelled.actorId).toBe("staff-clerk-9");
+    expect(
+      (view.timeline as { actorId?: string }[]).some(
+        (event) => event.actorId !== undefined,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("OrdersService exclusive-operation cleanup", () => {
+  it("releases a failed operation without creating an unhandled rejection", async () => {
+    const instance = ordersService([], {});
+    const runExclusive = (
+      instance as unknown as {
+        runExclusive<T>(key: string, task: () => Promise<T>): Promise<T>;
+      }
+    ).runExclusive.bind(instance);
+
+    await expect(
+      runExclusive("document-confirmation", async () => {
+        throw new Error("transient confirmation failure");
+      }),
+    ).rejects.toThrow("transient confirmation failure");
+    await expect(
+      runExclusive("document-confirmation", async () => "recovered"),
+    ).resolves.toBe("recovered");
+  });
+});
+
+describe("OrdersService document-review configuration resilience", () => {
+  it("queues passport extraction from the order policy when global configuration is unavailable", async () => {
+    const add = vi.fn().mockResolvedValue({});
+    const instance = ordersService(
+      [
+        readyOrder({
+          id: "configuration-fallback",
+          ownerId: "customer-1",
+          status: OrderStatus.DRAFT,
+          documentReviewPolicy: "AUTO_OCR",
+          documentReviewStatus: "NOT_STARTED",
+          documents: [
+            {
+              id: "passport",
+              type: DocumentType.PASSPORT,
+              fileName: "passport.png",
+              privateAssetId: "passport-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+            {
+              id: "ticket",
+              type: DocumentType.TICKET,
+              fileName: "ticket.pdf",
+              privateAssetId: "ticket-asset",
+              status: DocumentStatus.PENDING,
+              uploadVerified: true,
+            },
+          ],
+        }),
+      ],
+      {},
+      undefined,
+      {
+        enabled: true,
+        platformConfiguration: {
+          findUnique: vi
+            .fn()
+            .mockRejectedValue(new Error("config unavailable")),
+        },
+      },
+      undefined,
+      undefined,
+      {},
+      { add },
+    );
+    await instance.refreshFromPersistence();
+
+    const result = await instance.verifyPassport(
+      "configuration-fallback",
+      "customer-1",
+    );
+
+    expect(result.documentReviewStatus).toBe("OCR_PENDING");
+    expect(result.passportExtraction?.status).toBe("PROCESSING");
+    expect(add).toHaveBeenCalledWith(
+      expect.any(String),
+      "extract-order-passport",
+      expect.objectContaining({
+        orderId: "configuration-fallback",
+        documentId: "passport",
+        privateAssetId: "passport-asset",
+      }),
+      expect.stringContaining("passport-extraction-configuration-fallback"),
+      expect.any(Object),
+    );
   });
 });

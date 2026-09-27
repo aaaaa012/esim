@@ -133,13 +133,13 @@ describe("ApiExceptionFilter", () => {
 });
 
 describe("RateLimitGuard", () => {
-  it("allows requests within the window and rejects beyond it", async () => {
+  it("keeps public authentication routes in the strict auth bucket", async () => {
     vi.stubEnv("AUTH_RATE_LIMIT_PER_MINUTE", "2");
     const guard = new RateLimitGuard();
     const request = {
       ip: "1.2.3.4",
       method: "GET",
-      path: "/api/v1/auth/me",
+      path: "/api/v1/auth/bootstrap",
       headers: {},
     };
     const context = {
@@ -153,6 +153,21 @@ describe("RateLimitGuard", () => {
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
       HttpException,
     );
+    vi.unstubAllEnvs();
+  });
+
+  it("gives GET /auth/me a separate high pre-authentication IP ceiling", async () => {
+    vi.stubEnv("AUTH_RATE_LIMIT_PER_MINUTE", "1");
+    vi.stubEnv("AUTH_ME_IP_RATE_LIMIT_PER_MINUTE", "10");
+    const guard = new RateLimitGuard();
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => ({ ip: "1.2.3.4", method: "GET", path: "/api/v1/auth/me", headers: {} }),
+        getResponse: () => ({ setHeader() {} }),
+      }),
+    } as never;
+    for (let index = 0; index < 10; index += 1) await expect(guard.canActivate(context)).resolves.toBe(true);
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(HttpException);
     vi.unstubAllEnvs();
   });
 

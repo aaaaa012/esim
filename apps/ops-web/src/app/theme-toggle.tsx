@@ -4,10 +4,7 @@ import { Moon, Sun } from "lucide-react";
 export default function ThemeToggle() {
   const [dark, setDark] = useState(false);
   useEffect(() => {
-    const value =
-      localStorage.getItem("vc-ops-theme") === "dark" ||
-      (!localStorage.getItem("vc-ops-theme") &&
-        matchMedia("(prefers-color-scheme: dark)").matches);
+    const value = localStorage.getItem("vc-ops-theme") === "dark";
     setDark(value);
     document.documentElement.dataset.theme = value ? "dark" : "light";
   }, []);

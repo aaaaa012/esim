@@ -1,0 +1,62 @@
+{
+  "info": {
+    "_postman_id": "ce554fad-bc2f-4e38-994b-9e5ed77e4cbf",
+    "name": "Visa Compass Partner API v1",
+    "description": "Partner-facing server-to-server API. Select the accompanying environment, set baseUrl and partnerApiKey, then run requests in flow order. All mutation requests create a fresh Idempotency-Key automatically. To retry the exact same mutation, set reuseIdempotencyKey to true before sending it, then set it back to false afterwards. Direct signed file upload is deliberately excluded because it is object storage, not a Partner API endpoint; upload the returned signed URLs outside this collection before confirmation.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "apiPrefix", "value": "/partners" }
+  ],
+  "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{partnerApiKey}}", "type": "string" }] },
+  "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["if (pm.request.method !== 'GET' && pm.environment.get('reuseIdempotencyKey') !== 'true') {", "  pm.environment.set('idempotencyKey', 'pm-' + Date.now() + '-' + pm.variables.replaceIn('{{$randomUUID}}'));", "}"] } }],
+  "item": [
+    {
+      "name": "1. Catalogue",
+      "item": [
+        { "name": "Capabilities", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/capabilities" } },
+        { "name": "List plans", "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const body = pm.response.json();", "if (body.data && body.data.length) pm.environment.set('planId', body.data[0].id);"] } }], "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/plans?country={{country}}" } }
+      ]
+    },
+    {
+      "name": "2. Initial purchase — documents",
+      "item": [
+        { "name": "Create document-upload session", "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const data = pm.response.json().data;", "if (data) {", "  pm.environment.set('verificationId', data.verificationId);", "  const passport = data.documents.find(d => d.type === 'PASSPORT');", "  const ticket = data.documents.find(d => d.type === 'TICKET');", "  if (passport) pm.environment.set('passportDocumentId', passport.id);", "  if (ticket) pm.environment.set('ticketDocumentId', ticket.id);", "}"] } }], "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "body": { "mode": "raw", "raw": "{\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"traveler\": {\n    \"title\": \"MS\",\n    \"firstName\": \"Asha\",\n    \"surname\": \"Shrestha\",\n    \"dateOfBirth\": \"1990-05-14\",\n    \"nationality\": \"NP\",\n    \"city\": \"Kathmandu\",\n    \"countryOfResidence\": \"NP\",\n    \"email\": \"asha@example.com\",\n    \"mobile\": \"+9779812345678\",\n    \"passportNumber\": \"PA1234567\",\n    \"passportExpiryDate\": \"2030-05-14\"\n  },\n  \"documents\": [\n    { \"type\": \"PASSPORT\", \"fileName\": \"passport.pdf\", \"contentType\": \"application/pdf\", \"sizeBytes\": 483120 },\n    { \"type\": \"TICKET\", \"fileName\": \"ticket.jpg\", \"contentType\": \"image/jpeg\", \"sizeBytes\": 342991 }\n  ]\n}" }, "url": "{{baseUrl}}{{apiPrefix}}/document-upload-sessions" } },
+        { "name": "Confirm passport upload", "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "url": "{{baseUrl}}{{apiPrefix}}/document-verifications/{{verificationId}}/documents/{{passportDocumentId}}/confirm" } },
+        { "name": "Confirm ticket upload", "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "url": "{{baseUrl}}{{apiPrefix}}/document-verifications/{{verificationId}}/documents/{{ticketDocumentId}}/confirm" } },
+        { "name": "Get verification status", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/document-verifications/{{verificationId}}" } }
+      ]
+    },
+    {
+      "name": "3. Orders",
+      "item": [
+        { "name": "Create initial purchase", "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const data = pm.response.json().data;", "if (data && data.id) pm.environment.set('orderId', data.id);"] } }], "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "body": { "mode": "raw", "raw": "{\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"externalCustomerId\": \"{{externalCustomerId}}\",\n  \"planId\": \"{{planId}}\",\n  \"settlement\": { \"method\": \"PARTNER_ACCOUNT\" },\n  \"documentVerificationId\": \"{{verificationId}}\",\n  \"consent\": {\n    \"compatibilityAccepted\": true,\n    \"termsAccepted\": true,\n    \"privacyAccepted\": true,\n    \"acceptedAt\": \"{{$isoTimestamp}}\"\n  },\n  \"metadata\": { \"branch\": \"KTM-01\" }\n}" }, "url": "{{baseUrl}}{{apiPrefix}}/orders" } },
+        { "name": "Finalize verified initial purchase", "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/finalize" } },
+        { "name": "Create document replacement", "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const data = pm.response.json().data;", "if (data && data.documentId) pm.environment.set('replacementDocumentId', data.documentId);"] } }], "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "body": { "mode": "raw", "raw": "{ \"type\": \"PASSPORT\", \"fileName\": \"passport-corrected.pdf\", \"contentType\": \"application/pdf\", \"sizeBytes\": 483120 }" }, "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/document-replacements" } },
+        { "name": "Confirm document replacement", "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/document-replacements/{{replacementDocumentId}}/confirm" } },
+        { "name": "Create top-up purchase", "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const data = pm.response.json().data;", "if (data && data.id) pm.environment.set('orderId', data.id);"] } }], "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "body": { "mode": "raw", "raw": "{\n  \"externalOrderId\": \"{{topupExternalOrderId}}\",\n  \"externalCustomerId\": \"{{externalCustomerId}}\",\n  \"planId\": \"{{planId}}\",\n  \"purchaseType\": \"TOPUP\",\n  \"topUpMobile\": \"{{topUpMobile}}\",\n  \"consent\": {\n    \"compatibilityAccepted\": true,\n    \"termsAccepted\": true,\n    \"privacyAccepted\": true,\n    \"acceptedAt\": \"{{$isoTimestamp}}\"\n  }\n}" }, "url": "{{baseUrl}}{{apiPrefix}}/orders" } }
+      ]
+    },
+    {
+      "name": "4. Read and reconcile",
+      "item": [
+        { "name": "List orders", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/orders?status=QR_READY&limit=25" } },
+        { "name": "Get order by ID", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}" } },
+        { "name": "Get order by external ID", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/orders/by-external-id/{{externalOrderId}}" } },
+        { "name": "Get eSIM activation details", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/esim" } },
+        { "name": "Get order events", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/events" } },
+        { "name": "Get usage", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/usage" } },
+        { "name": "Get partner account", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/account" } },
+        { "name": "Get ledger", "request": { "method": "GET", "header": [{ "key": "Accept", "value": "application/json" }], "url": "{{baseUrl}}{{apiPrefix}}/ledger?externalOrderId={{externalOrderId}}&limit=25" } }
+      ]
+    },
+    {
+      "name": "5. Order actions",
+      "item": [
+        { "name": "Cancel eligible order", "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "body": { "mode": "raw", "raw": "{ \"reason\": \"Customer cancelled before provisioning\" }" }, "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/cancel" } },
+        { "name": "Request refund", "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "body": { "mode": "raw", "raw": "{ \"reason\": \"Provisioning was unsuccessful\" }" }, "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/refund-requests" } },
+        { "name": "Queue traveler notification", "request": { "method": "POST", "header": [{ "key": "Accept", "value": "application/json" }, { "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }], "body": { "mode": "raw", "raw": "{ \"channel\": \"EMAIL\", \"template\": \"QR_READY\" }" }, "url": "{{baseUrl}}{{apiPrefix}}/orders/{{orderId}}/notifications" } }
+      ]
+    }
+  ]
+}

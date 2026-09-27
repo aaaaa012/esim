@@ -23,9 +23,10 @@ import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
 import { SearchInput } from "@/components/search-input";
 import { cn } from "@/lib/utils";
+import { PaginationBar } from "@/components/pagination-bar";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 50;
 
 type OpsOrder = {
   id: string;
@@ -36,6 +37,7 @@ type OpsOrder = {
   plan: { name: string; countryCode: string };
   traveler?: { firstName: string; surname: string; email: string };
   partner?: { code: string; name: string } | null;
+  documentReviewStatus?: string;
 };
 
 type SectionDef = {
@@ -44,16 +46,36 @@ type SectionDef = {
   icon: typeof ClipboardList;
   tone: string;
   statuses: string[];
+  description?: string;
+  matches?: (order: OpsOrder) => boolean;
   todayOnly?: boolean;
 };
 
 const SECTIONS: SectionDef[] = [
+  {
+    key: "partner_finalization",
+    label: "Partner finalization",
+    icon: Clock,
+    tone: "sky",
+    statuses: ["REVIEW_PENDING", "DRAFT"],
+    description: "verified orders waiting for the partner to finalize",
+    matches: (order) =>
+      Boolean(order.partner) &&
+      ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        order.documentReviewStatus ?? "",
+      ),
+  },
   {
     key: "review",
     label: "Pending review",
     icon: ClipboardList,
     tone: "amber",
     statuses: ["REVIEW_PENDING"],
+    matches: (order) =>
+      !Boolean(order.partner) ||
+      !["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
+        order.documentReviewStatus ?? "",
+      ),
   },
   {
     key: "awaiting",
@@ -70,11 +92,19 @@ const SECTIONS: SectionDef[] = [
     statuses: ["PROVISIONING_FAILED"],
   },
   {
+    key: "activation_attention",
+    label: "Activation attention",
+    icon: ShieldQuestion,
+    tone: "amber",
+    statuses: ["ACTIVATION_ATTENTION"],
+    description: "installed eSIMs whose activation needs investigation",
+  },
+  {
     key: "payment",
     label: "Payment verification",
     icon: CircleDollarSign,
     tone: "violet",
-    statuses: ["PAYMENT_PENDING", "PAYMENT_FAILED", "PAYMENT_CONFIRMED"],
+    statuses: ["PAYMENT_PENDING", "PAYMENT_FAILED", "PAYMENT_REVIEW_REQUIRED"],
   },
   {
     key: "refund",
@@ -108,29 +138,58 @@ export default function QueueClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<Record<string, boolean>>({ review: true });
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [resultTotal, setResultTotal] = useState(0);
+  const [open, setOpen] = useState<Record<string, boolean>>({
+    review: true,
+    partner_finalization: true,
+  });
 
   const statusParam = useSearchParams().get("status");
   const initialOpen = statusParam
     ? (SECTIONS.find((s) => s.statuses.includes(statusParam))?.key ?? "review")
     : "review";
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
   const load = () => {
     setLoading(true);
     setError("");
-    authFetch(`${API}/operations/orders?limit=${PAGE_SIZE}`, { headers: {} })
+    const params = new URLSearchParams({
+      queue: "true",
+      limit: String(PAGE_SIZE),
+      offset: String((page - 1) * PAGE_SIZE),
+    });
+    if (debouncedQuery) params.set("q", debouncedQuery);
+    if (statusParam) params.set("status", statusParam);
+    authFetch(`${API}/operations/orders?${params}`, { headers: {} })
       .then(async (r) => {
         const v = await r.json();
-        if (!r.ok) throw new Error(v?.error?.message ?? "Could not load the queue");
+        if (!r.ok)
+          throw new Error(v?.error?.message ?? "Could not load the queue");
         setOrders(v.data?.items ?? []);
+        setResultTotal(v.data?.total ?? 0);
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load the queue"))
+      .catch((e: unknown) =>
+        setError(e instanceof Error ? e.message : "Could not load the queue"),
+      )
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [page, debouncedQuery, statusParam]);
 
-  const today = new Date().toISOString().slice(0, 10);
-  const q = query.trim().toLowerCase();
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kathmandu",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const q = "";
 
   const grouped = useMemo(() => {
     const result: Record<string, OpsOrder[]> = {};
@@ -142,6 +201,7 @@ export default function QueueClient() {
       const matched = SECTIONS.find(
         (s) =>
           s.statuses.includes(o.status) &&
+          (!s.matches || s.matches(o)) &&
           (!s.todayOnly || o.createdAt.startsWith(today)),
       );
       if (matched) (seed[matched.key] ??= []).push(o);
@@ -241,9 +301,10 @@ export default function QueueClient() {
                     <div>
                       <div className="font-semibold">{section.label}</div>
                       <div className="text-xs text-muted-foreground">
-                        {section.todayOnly
-                          ? "orders completed today"
-                          : "orders that need your action"}
+                        {section.description ??
+                          (section.todayOnly
+                            ? "orders completed today"
+                            : "orders that need your action")}
                       </div>
                     </div>
                     <Badge variant="secondary" className="ml-1">
@@ -267,6 +328,7 @@ export default function QueueClient() {
                       list.map((o) => (
                         <li key={o.id}>
                           <Link
+                            prefetch={false}
                             href={`/orders/${o.id}`}
                             className="group flex items-center justify-between gap-4 p-4 hover:bg-accent/50"
                           >
@@ -293,7 +355,13 @@ export default function QueueClient() {
                                   {o.partner.name}
                                 </span>
                               )}
-                              <StatusBadge label={o.status} />
+                              <StatusBadge
+                                label={
+                                  section.key === "partner_finalization"
+                                    ? "AWAITING_PARTNER_FINALIZATION"
+                                    : o.status
+                                }
+                              />
                               <span className="text-sm font-medium tabular-nums">
                                 NPR {o.totalAmountNpr.toLocaleString()}
                               </span>
@@ -308,6 +376,12 @@ export default function QueueClient() {
               </Panel>
             );
           })}
+          <PaginationBar
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={resultTotal}
+            onPageChange={setPage}
+          />
         </div>
       )}
     </>

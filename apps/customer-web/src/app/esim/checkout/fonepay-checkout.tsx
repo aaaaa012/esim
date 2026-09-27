@@ -1,0 +1,277 @@
+"use client";
+
+import { ChevronLeft, ChevronRight, LoaderCircle, QrCode } from "lucide-react";
+import { useEffect, useState } from "react";
+import { FonepayBankPicker, type FonepayBank } from "./fonepay-bank-picker";
+import type { FonepayTelemetryPayload } from "./fonepay-telemetry";
+
+export function ActiveFonepayPaymentMethods({
+  canChangeProvider,
+  busy,
+  onResume,
+  onCheck,
+  onChooseKhalti,
+}: {
+  canChangeProvider: boolean;
+  busy: boolean;
+  onResume: () => void;
+  onCheck: () => void;
+  onChooseKhalti: () => void;
+}) {
+  return (
+    <section
+      className="active-payment-methods"
+      aria-labelledby="active-payment-title"
+    >
+      <div className="active-payment-heading">
+        <h2 id="active-payment-title">Choose payment method</h2>
+        <p role="status">
+          {canChangeProvider
+            ? "Your earlier Fonepay attempt has ended. You can resume Fonepay or choose Khalti."
+            : "Fonepay is still awaiting confirmation. Resume it or check its status before choosing another payment method."}
+        </p>
+      </div>
+      <div className="gateway-grid payment-gateway-grid">
+        <button
+          type="button"
+          className="fonepay-provider selected"
+          onClick={onResume}
+        >
+          <img src="/brand/fonepay-logo.png" alt="Checkout by Fonepay" />
+          <span className="gateway-copy">
+            <b>Resume mobile banking</b>
+            <small>Return to your active bank-list or QR payment.</small>
+          </span>
+        </button>
+        <button
+          type="button"
+          className="khalti-provider"
+          disabled={!canChangeProvider || busy}
+          onClick={onChooseKhalti}
+        >
+          <img src="/brand/khalti-logo.png" alt="Khalti" />
+          <span className="gateway-copy">
+            <b>Khalti wallet</b>
+            <small>
+              {canChangeProvider
+                ? "Pay from your Khalti balance."
+                : "Available after the active payment is resolved."}
+            </small>
+          </span>
+        </button>
+      </div>
+      {!canChangeProvider ? (
+        <button
+          type="button"
+          className="button secondary"
+          disabled={busy}
+          onClick={onCheck}
+        >
+          {busy ? <LoaderCircle className="spin" size={18} /> : null}
+          Check Fonepay status
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+function PaymentExpiryCountdown({ expiresAt }: { expiresAt: string }) {
+  const expiry = new Date(expiresAt).getTime();
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!Number.isFinite(expiry) || expiry <= Date.now()) return;
+    const interval = window.setInterval(() => {
+      const next = Date.now();
+      setNow(next);
+      if (next >= expiry) window.clearInterval(interval);
+    }, 1_000);
+    return () => window.clearInterval(interval);
+  }, [expiry]);
+
+  if (!Number.isFinite(expiry)) return null;
+  const remainingSeconds = Math.max(0, Math.ceil((expiry - now) / 1_000));
+  if (remainingSeconds === 0)
+    return (
+      <div className="fonepay-qr-expiry is-expired" role="status">
+        <b>This QR has expired</b>
+        <span>Check payment status before requesting a new QR.</span>
+      </div>
+    );
+
+  const hours = Math.floor(remainingSeconds / 3_600);
+  const minutes = Math.floor((remainingSeconds % 3_600) / 60);
+  const seconds = remainingSeconds % 60;
+  const timer = hours
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+
+  return (
+    <div className="fonepay-qr-expiry">
+      <span>Pay within</span>
+      <b role="timer" aria-label={`${remainingSeconds} seconds remaining`}>
+        {timer}
+      </b>
+      <small>
+        Payment status is checked automatically when the timer ends.
+      </small>
+    </div>
+  );
+}
+
+export function FonepayCheckout({
+  titleId,
+  banks,
+  qrPayload,
+  qrDataUrl,
+  expiresAt,
+  socketReady,
+  onError,
+  onTelemetry,
+  hint,
+  busy,
+  disabled,
+  checkLabel,
+  onCheck,
+  onBackToMethods,
+}: {
+  titleId: string;
+  banks?: FonepayBank[] | undefined;
+  qrPayload?: string | undefined;
+  qrDataUrl?: string | undefined;
+  expiresAt?: string;
+  socketReady: boolean;
+  onError: (message: string) => void;
+  onTelemetry: (event: FonepayTelemetryPayload) => void;
+  hint: string;
+  busy: boolean;
+  disabled?: boolean;
+  checkLabel: string;
+  onCheck: () => void;
+  onBackToMethods: () => void;
+}) {
+  const [showQr, setShowQr] = useState(false);
+  const hasBanks = Boolean(banks?.length);
+  const qrView = !hasBanks || showQr;
+
+  return (
+    <section className="fonepay-checkout" aria-labelledby={titleId}>
+      <button
+        type="button"
+        className="fonepay-methods-back"
+        onClick={onBackToMethods}
+      >
+        <ChevronLeft size={16} aria-hidden="true" />
+        Back to payment methods
+      </button>
+      {expiresAt ? <PaymentExpiryCountdown expiresAt={expiresAt} /> : null}
+      {qrView ? (
+        <div className="fonepay-qr-view">
+          <div className="fonepay-qr-card">
+            <img
+              className="fonepay-checkout-logo"
+              src="/brand/fonepay-logo.png"
+              alt="Checkout by Fonepay"
+            />
+            {qrDataUrl ? (
+              <img
+                className="fonepay-qr"
+                src={qrDataUrl}
+                alt="Fonepay payment QR code"
+              />
+            ) : (
+              <div className="fonepay-qr-fallback-box" role="status">
+                <b>Scan code saved in your banking app</b>
+                <span>
+                  The QR image is not available yet. Open a Fonepay-supported
+                  banking app, choose the saved code for this store under
+                  &ldquo;Scan QR&rdquo;, and approve the payment.
+                </span>
+              </div>
+            )}
+            <p className="fonepay-terminal-name">Visa Compass Services</p>
+          </div>
+          <h2 id={titleId} className="fonepay-checkout-title">
+            Scan to pay with any banking app
+          </h2>
+          <ol className="fonepay-qr-steps">
+            <li>Open a Fonepay-supported banking app on your phone.</li>
+            <li>
+              Choose &ldquo;Scan QR&rdquo; inside the app and scan this code.
+            </li>
+            <li>Approve the payment to confirm your order.</li>
+          </ol>
+          {hasBanks ? (
+            <button
+              type="button"
+              className="fonepay-qr-back"
+              onClick={() => setShowQr(false)}
+            >
+              <ChevronLeft size={16} aria-hidden="true" />
+              Back to banking apps
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <>
+          <img
+            className="fonepay-checkout-logo"
+            src="/brand/fonepay-logo.png"
+            alt="Checkout by Fonepay"
+          />
+          <h2 id={titleId} className="fonepay-checkout-title">
+            Pay with your banking app
+          </h2>
+          {hasBanks ? (
+            <button
+              type="button"
+              className="fonepay-qr-prompt"
+              onClick={() => setShowQr(true)}
+            >
+              <QrCode size={18} aria-hidden="true" />
+              <span>Scan the QR code with any banking app</span>
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          ) : null}
+          {hasBanks ? (
+            <div className="fonepay-bank-card">
+              <FonepayBankPicker
+                banks={banks ?? []}
+                qrPayload={qrPayload}
+                socketReady={socketReady}
+                onError={onError}
+                onTelemetry={(event) => onTelemetry(event)}
+              />
+            </div>
+          ) : null}
+          {hint ? (
+            <p className="fonepay-bank-hint" role="status">
+              {hint}
+            </p>
+          ) : null}
+        </>
+      )}
+      <button
+        type="button"
+        className="button wide"
+        disabled={busy || disabled}
+        onClick={onCheck}
+      >
+        {busy ? (
+          <>
+            <LoaderCircle className="spin" size={18} />
+            {checkLabel}
+          </>
+        ) : (
+          <>
+            {checkLabel}
+            <ChevronRight size={18} />
+          </>
+        )}
+      </button>
+      <small className="fonepay-security-note">
+        Your order is completed only after Fonepay confirms the payment.
+      </small>
+    </section>
+  );
+}

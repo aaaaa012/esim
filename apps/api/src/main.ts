@@ -14,6 +14,8 @@ import { RateLimitGuard } from "./common/rate-limit.guard.js";
 import { MetricsService } from "./observability/metrics.service.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
 import { webhookIngressMiddleware } from "./common/webhook-ingress.middleware.js";
+import { requireProcessRole } from "./common/process-role.js";
+import { trustProxySetting } from "./common/trust-proxy.js";
 
 const BOOT_DB_RETRIES = Number(process.env.BOOT_DB_RETRIES ?? 12);
 const BOOT_DB_RETRY_BASE_MS = Number(process.env.BOOT_DB_RETRY_BASE_MS ?? 1500);
@@ -33,6 +35,7 @@ function isDbUnreachable(err: unknown): boolean {
 }
 
 async function bootstrap() {
+  requireProcessRole("api");
   let attempt = 0;
   for (;;) {
     try {
@@ -132,22 +135,6 @@ async function bootOnce() {
   await app.listen(Number(process.env.PORT ?? 4000));
 }
 
-/**
- * Express `trust proxy` value. The app must only trust the IP hops it actually
- * sits behind (e.g. `1` for a single reverse proxy, or a comma-separated list
- * of proxy addresses). Leaving it unset disables proxy IP trust so clients
- * cannot spoof their address via `X-Forwarded-For`; set it when deploying
- * behind a reverse proxy or load balancer, otherwise rate limiting collapses
- * every client onto the proxy address.
- */
-function trustProxySetting(): boolean | string | number {
-  const value = process.env.TRUST_PROXY?.trim();
-  if (!value || value === "" || value === "false") return false;
-  if (value === "true") return true;
-  if (/^\d+$/.test(value)) return Number(value);
-  return value;
-}
-
 if (!process.env.NODE_ENV) {
   // Do not silently activate development defaults against a shared/live DB.
   // Every deployed process must declare its environment explicitly.
@@ -156,16 +143,22 @@ if (!process.env.NODE_ENV) {
   );
 }
 
-// Last-gasp logging for crashes that bypass the framework (async gaps,
-// queue callbacks). Node still exits on unhandled rejections / uncaught
-// exceptions; these hooks guarantee the reason reaches container logs first.
-process.on('unhandledRejection', (reason) => {
+// Last-gasp logging for crashes that bypass the framework. A process that has
+// observed either condition is unsafe to keep serving traffic.
+let fatalExitStarted = false;
+const terminateAfterFatalError = (label: string, reason: unknown) => {
   // eslint-disable-next-line no-console
-  console.error('[fatal] Unhandled promise rejection:', reason);
-});
-process.on('uncaughtException', (err) => {
-  // eslint-disable-next-line no-console
-  console.error('[fatal] Uncaught exception:', err);
-});
+  console.error(`[fatal] ${label}:`, reason);
+  if (fatalExitStarted) return;
+  fatalExitStarted = true;
+  process.exitCode = 1;
+  setImmediate(() => process.exit(1));
+};
+process.on("unhandledRejection", (reason) =>
+  terminateAfterFatalError("Unhandled promise rejection", reason),
+);
+process.on("uncaughtException", (error) =>
+  terminateAfterFatalError("Uncaught exception", error),
+);
 
 void bootstrap();

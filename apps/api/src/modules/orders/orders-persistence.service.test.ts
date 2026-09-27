@@ -17,6 +17,10 @@ function serviceFor(payment: {
     },
     order: { updateMany: orderUpdateMany },
     orderEvent: { create: eventCreate },
+    paymentEvent: {
+      createMany: vi.fn(async () => ({ count: 1 })),
+      create: vi.fn(async () => ({})),
+    },
   };
   const prisma = {
     enabled: true,
@@ -121,5 +125,98 @@ describe("OrdersPersistenceService.confirmPaymentAtomically", () => {
       }),
     );
     expect(orderUpdateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("recharge creation transaction", () => {
+  it("stores beneficiary, recovery credential and notification together without creating a guest identity", async () => {
+    const tx = {
+      customer: {
+        findUniqueOrThrow: vi.fn(async () => ({
+          id: "beneficiary",
+          userId: null,
+        })),
+      },
+      user: { upsert: vi.fn() },
+      country: { upsert: vi.fn(async () => ({ id: "country" })) },
+      plan: { upsert: vi.fn() },
+      order: {
+        findMany: vi.fn(async () => [{ customerId: "beneficiary" }]),
+        findUnique: vi.fn(async () => null),
+        create: vi.fn(),
+      },
+      guestOrderAccessToken: { create: vi.fn() },
+      notification: { create: vi.fn() },
+      travelerDocument: { deleteMany: vi.fn() },
+      passportExtraction: { deleteMany: vi.fn(), upsert: vi.fn() },
+      orderEvent: { createMany: vi.fn(), findMany: vi.fn(async () => []) },
+    };
+    const prisma = {
+      enabled: true,
+      $transaction: vi.fn(async (fn: any) => fn(tx)),
+    };
+    const service = new OrdersPersistenceService(prisma as never, {} as never);
+    const order: any = {
+      id: "recharge",
+      ownerId: null,
+      beneficiaryCustomerId: "beneficiary",
+      targetInventoryId: "inventory",
+      purchasedByUserId: "payer",
+      checkoutAttemptKey: "attempt",
+      checkoutRequestHash: "hash",
+      purchaseType: "TOPUP",
+      orderNumber: "VC-TEST",
+      status: "DRAFT",
+      version: 0,
+      plan: {
+        id: "plan",
+        countryCode: "IN",
+        countryName: "India",
+        name: "Package",
+        dataAllowance: "1GB",
+        validityDays: 1,
+        sellingPriceNpr: 100,
+      },
+      totalAmountNpr: 100,
+      pricingSnapshot: {},
+      documents: [],
+      timeline: [],
+      compatibilityAcceptedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+    await service.save(order, {
+      recipient: "owner@example.com",
+      recipientHash: "recipient-hash",
+      tokenHash: "token-hash",
+      expiresAt: "2027-01-01",
+      recoveryUrlEncrypted: "encrypted-link",
+    });
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+    expect(tx.user.upsert).not.toHaveBeenCalled();
+    expect(tx.order.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          customerId: "beneficiary",
+          purchasedByUserId: "payer",
+          targetInventoryId: "inventory",
+        }),
+      }),
+    );
+    expect(tx.guestOrderAccessToken.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderId: "recharge",
+        tokenHash: "token-hash",
+      }),
+    });
+    expect(tx.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderId: "recharge",
+        status: "QUEUED",
+        recoveryUrlEncrypted: "encrypted-link",
+      }),
+    });
+    expect(tx.passportExtraction.deleteMany).toHaveBeenCalledWith({
+      where: { orderId: "recharge" },
+    });
   });
 });

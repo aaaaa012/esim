@@ -22,7 +22,7 @@ export default function ErrorDialog({
     <Dialog open={Boolean(error)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         showCloseButton
-        className="w-fit min-w-[320px] max-w-[min(92vw,480px)] border-destructive/40"
+        className="w-[calc(100vw-2rem)] min-w-0 max-w-[480px] border-destructive/40"
       >
         <DialogHeader className="flex-row items-center gap-3 text-left">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive">

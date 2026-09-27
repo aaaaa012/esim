@@ -44,86 +44,103 @@ const legacyCreateSchema = z.object({
   compatibilityAccepted: z.literal(true),
   metadata: z.record(z.string(), z.string().max(500)).optional(),
 });
-export const uploadSessionSchema = z.object({
-  externalOrderId: z.string().trim().min(1).max(120),
-  traveler: travelerSchema,
-  documents: z
-    .array(
-      z.object({
-        type: z.enum(DocumentType),
-        fileName: z.string().trim().min(1).max(180),
-        contentType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
-        sizeBytes: z
-          .number()
-          .int()
-          .min(1)
-          .max(10 * 1024 * 1024),
-      }),
-    )
-    .min(2)
-    .max(3)
-    .refine(
-      (documents) =>
-        new Set(documents.map((item) => item.type)).size === documents.length,
-      "Document types must be unique",
-    )
-    .refine(
-      (documents) =>
-        [DocumentType.PASSPORT, DocumentType.TICKET].every((type) =>
-          documents.some((document) => document.type === type),
-        ),
-      "Passport and ticket are required",
-    ),
-});
-export const completeCreateSchema = z.object({
-  externalOrderId: z.string().trim().min(1).max(120),
-  externalCustomerId: z.string().trim().min(1).max(120),
-  planId: z.string().uuid(),
-  purchaseType: z.enum(["INITIAL_PURCHASE", "TOPUP"]).optional(),
-  settlement: z
-    .discriminatedUnion("method", [
-      z.object({ method: z.literal("PARTNER_ACCOUNT") }),
-      z.object({
-        method: z.literal("HOSTED_PAYMENT"),
-        provider: z.enum(PaymentProvider),
-        redirectUrl: z.url(),
-      }),
-    ])
-    .optional(),
-  documentVerificationId: z.string().uuid().optional(),
-  topUpMobile: z
-    .string()
-    .trim()
-    .min(1)
-    .max(20)
-    .optional()
-    .describe("Mobile number of the existing eSIM to top up"),
-  consent: z.object({
-    compatibilityAccepted: z.literal(true),
-    termsAccepted: z.literal(true),
-    privacyAccepted: z.literal(true),
-    acceptedAt: z.iso.datetime(),
-  }),
-  metadata: z.record(z.string(), z.string().max(500)).optional(),
-}).superRefine((value, context) => {
-  const purchaseType = value.purchaseType ?? (value.topUpMobile ? "TOPUP" : "INITIAL_PURCHASE");
-  if (purchaseType === "TOPUP" && !value.topUpMobile)
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["topUpMobile"], message: "topUpMobile is required for a top-up" });
-  if (purchaseType === "INITIAL_PURCHASE" && !value.documentVerificationId)
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["documentVerificationId"],
-      message: "Document verification is required for an initial purchase",
-    });
-  if (purchaseType === "TOPUP" && value.documentVerificationId)
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["documentVerificationId"],
-      message: "Document verification must not be supplied for a top-up",
-    });
-  if (purchaseType === "INITIAL_PURCHASE" && value.topUpMobile)
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["topUpMobile"], message: "topUpMobile must not be supplied for an initial purchase" });
-});
+const uploadDocumentsSchema = z
+  .array(
+    z.object({
+      type: z.enum(DocumentType),
+      fileName: z.string().trim().min(1).max(180),
+      contentType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
+      sizeBytes: z
+        .number()
+        .int()
+        .min(1)
+        .max(10 * 1024 * 1024),
+    }),
+  )
+  .min(2)
+  .max(3)
+  .refine(
+    (documents) =>
+      new Set(documents.map((item) => item.type)).size === documents.length,
+    "Document types must be unique",
+  )
+  .refine(
+    (documents) =>
+      [DocumentType.PASSPORT, DocumentType.TICKET].every((type) =>
+        documents.some((document) => document.type === type),
+      ),
+    "Passport and ticket are required",
+  );
+
+export const uploadSessionSchema = z
+  .object({
+    mode: z.literal("EXTRACT_FIRST"),
+    externalOrderId: z.string().trim().min(1).max(120),
+    documents: uploadDocumentsSchema,
+  })
+  .strict();
+
+export const confirmExtractedTravelerSchema = travelerSchema;
+export const correctExtractedTravelerSchema = z
+  .object({
+    traveler: travelerSchema,
+    reason: z.string().trim().min(10).max(500),
+  })
+  .strict();
+export const completeCreateSchema = z
+  .object({
+    externalOrderId: z.string().trim().min(1).max(120),
+    externalCustomerId: z.string().trim().min(1).max(120),
+    planId: z.string().uuid(),
+    purchaseType: z.enum(["INITIAL_PURCHASE", "TOPUP"]).optional(),
+    settlement: z
+      .object({ method: z.literal("PARTNER_ACCOUNT") })
+      .strict()
+      .optional(),
+    documentVerificationId: z.string().uuid().optional(),
+    topUpMobile: z
+      .string()
+      .trim()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe("MSISDN assigned to the existing eSIM to top up"),
+    consent: z.object({
+      compatibilityAccepted: z.literal(true),
+      termsAccepted: z.literal(true),
+      privacyAccepted: z.literal(true),
+      acceptedAt: z.iso.datetime(),
+    }),
+    metadata: z.record(z.string(), z.string().max(500)).optional(),
+  })
+  .superRefine((value, context) => {
+    const purchaseType =
+      value.purchaseType ?? (value.topUpMobile ? "TOPUP" : "INITIAL_PURCHASE");
+    if (purchaseType === "TOPUP" && !value.topUpMobile)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["topUpMobile"],
+        message: "topUpMobile is required for a top-up",
+      });
+    if (purchaseType === "INITIAL_PURCHASE" && !value.documentVerificationId)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["documentVerificationId"],
+        message: "Document verification is required for an initial purchase",
+      });
+    if (purchaseType === "TOPUP" && value.documentVerificationId)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["documentVerificationId"],
+        message: "Document verification must not be supplied for a top-up",
+      });
+    if (purchaseType === "INITIAL_PURCHASE" && value.topUpMobile)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["topUpMobile"],
+        message: "topUpMobile must not be supplied for an initial purchase",
+      });
+  });
 const createSchema = z.union([completeCreateSchema, legacyCreateSchema]);
 export const hostedCheckoutSessionSchema = z.object({
   planId: z.string().uuid(),
@@ -135,33 +152,57 @@ export const hostedCheckoutSessionSchema = z.object({
     .min(1)
     .max(20)
     .optional()
-    .describe("Mobile number of an existing subscriber to attach a top-up to"),
+    .describe("MSISDN assigned to the existing eSIM receiving the top-up"),
   allowInitialPurchaseFallback: z
     .literal(true)
     .optional()
     .describe(
-      "Explicit customer-approved fallback when the supplied mobile cannot be used for a top-up",
+      "Explicit customer-approved fallback when the supplied eSIM MSISDN cannot be used for a top-up",
     ),
 });
-const listSchema = z.object({
-  cursor: z.string().uuid().optional(),
+export const listSchema = z.object({
+  cursor: z.string().trim().min(1).max(256).optional(),
   status: z.enum(OrderStatus).optional(),
   externalOrderId: z.string().max(120).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
+export const eventListSchema = z.object({
+  cursor: z.string().trim().min(1).max(256).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
 const reasonSchema = z.object({ reason: z.string().trim().min(3).max(1000) });
+const replacementDocumentSchema = z.object({
+  type: z.enum([DocumentType.PASSPORT, DocumentType.TICKET]),
+  fileName: z.string().trim().min(1).max(180),
+  contentType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
+  sizeBytes: z
+    .number()
+    .int()
+    .min(1)
+    .max(10 * 1024 * 1024),
+});
 const notificationSchema = z.object({
   channel: z.enum(["EMAIL", "WHATSAPP"]),
   template: z.enum(["ORDER_STATUS", "QR_READY", "DOCUMENT_REUPLOAD"]),
 });
-const ledgerSchema = z.object({
-  cursor: z.string().uuid().optional(),
+export const ledgerSchema = z.object({
+  cursor: z.string().trim().min(1).max(256).optional(),
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),
   externalOrderId: z.string().max(120).optional(),
   orderNumber: z.string().max(40).optional(),
   reference: z.string().max(120).optional(),
-  type: z.enum(["CREDIT", "DEBIT", "REFUND", "ADJUSTMENT"]).optional(),
+  type: z
+    .enum([
+      "CREDIT",
+      "DEBIT",
+      "RESERVATION",
+      "CAPTURE",
+      "RELEASE",
+      "REFUND",
+      "ADJUSTMENT",
+    ])
+    .optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
@@ -237,17 +278,18 @@ export class PartnersController {
   @ApiBody({
     schema: {
       type: "object",
-      required: ["externalOrderId", "traveler", "documents"],
+      required: ["mode", "externalOrderId", "documents"],
       properties: {
-        externalOrderId: { type: "string", example: "agency-order-1042" },
-        traveler: {
-          type: "object",
+        mode: {
+          type: "string",
+          enum: ["EXTRACT_FIRST"],
           description:
-            "Traveller identity used for automatic passport OCR matching",
+            "Passport extraction must precede traveller confirmation.",
         },
+        externalOrderId: { type: "string", example: "agency-order-1042" },
         documents: {
           type: "array",
-          minItems: 1,
+          minItems: 2,
           maxItems: 3,
           items: {
             type: "object",
@@ -300,6 +342,45 @@ export class PartnersController {
     );
   }
 
+  @Post("document-verifications/:verificationId/traveler")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  @ApiOperation({
+    summary: "Confirm the traveler after passport extraction",
+    description:
+      "Required for EXTRACT_FIRST sessions after all documents have been uploaded and passport extraction has completed.",
+  })
+  confirmExtractedTraveler(
+    @Param("verificationId") verificationId: string,
+    @Body() body: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.confirmExtractedTraveler(
+      request.partner!.id,
+      verificationId,
+      confirmExtractedTravelerSchema.parse(body),
+    );
+  }
+
+  @Post("document-verifications/:verificationId/traveler-corrections")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  @ApiOperation({ summary: "Submit an audited traveller-data correction" })
+  correctExtractedTraveler(
+    @Param("verificationId") verificationId: string,
+    @Headers() headers: Record<string, string | undefined>,
+    @Body() body: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    const input = correctExtractedTravelerSchema.parse(body);
+    return this.partners.correctExtractedTraveler(
+      request.partner!.id,
+      verificationId,
+      input,
+      headers["idempotency-key"] ?? headers["x-idempotency-key"] ?? "",
+    );
+  }
+
   @Post("orders")
   @PartnerScopes("orders:write")
   @PartnerMutation()
@@ -313,15 +394,31 @@ export class PartnersController {
             "externalOrderId",
             "externalCustomerId",
             "planId",
-            "documentVerificationId",
             "consent",
           ],
           properties: {
             externalOrderId: { type: "string", example: "agency-order-1042" },
             externalCustomerId: { type: "string", example: "customer-91" },
             planId: { type: "string", format: "uuid" },
+            purchaseType: {
+              type: "string",
+              enum: ["INITIAL_PURCHASE", "TOPUP"],
+              description:
+                "Defaults to TOPUP when topUpMobile is supplied; otherwise INITIAL_PURCHASE",
+            },
             settlement: { type: "object" },
-            documentVerificationId: { type: "string", format: "uuid" },
+            documentVerificationId: {
+              type: "string",
+              format: "uuid",
+              description:
+                "Required only for INITIAL_PURCHASE and forbidden for TOPUP",
+            },
+            topUpMobile: {
+              type: "string",
+              description:
+                "Required only for TOPUP and forbidden for INITIAL_PURCHASE",
+              example: "+9779800000000",
+            },
             consent: { type: "object" },
             metadata: {
               type: "object",
@@ -420,6 +517,46 @@ export class PartnersController {
   @PartnerScopes("orders:read")
   status(@Param("id") id: string, @Req() request: PartnerRequest) {
     return this.partners.order(request.partner!.id, id);
+  }
+
+  @Post("orders/:id/finalize")
+  @PartnerScopes("orders:write")
+  @PartnerMutation()
+  @ApiOperation({
+    summary: "Debit and provision a document-verified pending order",
+  })
+  finalize(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.finalizeOrder(request.partner!.id, id);
+  }
+
+  @Post("orders/:id/document-replacements")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  declareReplacement(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.declareDocumentReplacement(
+      request.partner!.id,
+      id,
+      replacementDocumentSchema.parse(body),
+    );
+  }
+
+  @Post("orders/:id/document-replacements/:documentId/confirm")
+  @PartnerScopes("documents:write")
+  @PartnerMutation()
+  confirmReplacement(
+    @Param("id") id: string,
+    @Param("documentId") documentId: string,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.confirmDocumentReplacement(
+      request.partner!.id,
+      id,
+      documentId,
+    );
   }
 
   @Get("orders/:id/esim")
@@ -533,10 +670,47 @@ export class PartnersController {
     return this.partners.usage(request.partner!.id, id);
   }
 
+  @Get("esims/:id/usage")
+  @PartnerScopes("usage:read")
+  esimUsage(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.usageByEsim(request.partner!.id, id);
+  }
+
+  @Get("customers/:externalCustomerId/usage")
+  @PartnerScopes("usage:read")
+  customerUsage(
+    @Param("externalCustomerId") externalCustomerId: string,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.customerUsage(request.partner!.id, externalCustomerId);
+  }
+
+  @Post("orders/:id/usage/refresh")
+  @PartnerScopes("usage:read")
+  @PartnerMutation()
+  refreshOrderUsage(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.refreshOrderUsage(request.partner!.id, id);
+  }
+
+  @Post("esims/:id/usage/refresh")
+  @PartnerScopes("usage:read")
+  @PartnerMutation()
+  refreshEsimUsage(@Param("id") id: string, @Req() request: PartnerRequest) {
+    return this.partners.refreshEsimUsage(request.partner!.id, id);
+  }
+
   @Get("orders/:id/events")
   @PartnerScopes("orders:read")
-  events(@Param("id") id: string, @Req() request: PartnerRequest) {
-    return this.partners.events(request.partner!.id, id);
+  events(
+    @Param("id") id: string,
+    @Query() query: unknown,
+    @Req() request: PartnerRequest,
+  ) {
+    return this.partners.events(
+      request.partner!.id,
+      id,
+      eventListSchema.parse(query),
+    );
   }
 
   @Post("orders/:id/notifications")

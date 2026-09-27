@@ -64,7 +64,13 @@ export class AdminController {
   @Post("plans/import-csv")
   @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
   importPlansCsv(
-    @Body() body: { csv?: string; content?: string; fileName?: string },
+    @Body()
+    body: {
+      csv?: string;
+      content?: string;
+      fileName?: string;
+      mode?: "UPDATE_LISTED" | "FULL_CATALOG";
+    },
     @Req() req: AuthenticatedRequest,
   ) {
     const content =
@@ -78,7 +84,30 @@ export class AdminController {
       content,
       body.fileName,
       req.user!.id,
+      body.mode,
     );
+  }
+  @Get("plans/import-batches")
+  @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  catalogImportBatches(@Query("limit") limit?: string) {
+    return this.admin.catalogImportBatches(Number(limit) || 24);
+  }
+  @Get("plans/import-batches/:id")
+  @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  catalogImportBatch(
+    @Param("id") id: string,
+    @Query("change") change?: string,
+  ) {
+    return this.admin.catalogImportBatch(id, change);
+  }
+  @Post("plans/import-batches/:batchId/rows/:rowId/disable")
+  @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  disableMissingCatalogPlan(
+    @Param("batchId") batchId: string,
+    @Param("rowId") rowId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.admin.disableMissingCatalogPlan(batchId, rowId, req.user!.id);
   }
   @Post("plans/:id/approve")
   approvePlan(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
@@ -118,13 +147,26 @@ export class AdminController {
   exportCatalog(@Body() body: { cos?: string }) {
     return this.admin.exportTransatelCatalog(body?.cos);
   }
-  @Post("integrations/transatel/ensure-webhook")
-  ensureWebhook() {
-    return this.admin.ensureTransatelWebhook();
+  @Post("plans/export")
+  @AccountTypes(UserRoleName.OPERATIONS, UserRoleName.SUPER_ADMIN)
+  exportOperatingCatalog() {
+    return this.admin.exportOperatingCatalog();
   }
   @Post("integrations/transatel/eligibility")
   eligibility(@Body() body: { planId: string; msisdn: string }) {
     return this.admin.transatelEligibility(body.planId, body.msisdn);
+  }
+@Get("integrations/fonepay/banks")
+  fonepayBanks() {
+    return this.admin.fonepayBanks();
+  }
+  @Post("integrations/fonepay/banks/sync")
+  syncFonepayBanks() {
+    return this.admin.syncFonepayBanks();
+  }
+  @Get("integrations/payment-gateways")
+  paymentGateways() {
+    return this.admin.paymentProviderCapabilities();
   }
   @Get("users") users(
     @Query("q") q?: string,

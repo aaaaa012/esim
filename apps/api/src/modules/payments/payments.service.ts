@@ -1,9 +1,15 @@
-import { BadRequestException, Injectable, Logger, Optional } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  Optional,
+} from "@nestjs/common";
 import {
   ApiErrorCode,
   OrderStatus,
   PaymentProvider,
   PaymentStatus,
+  declarePaymentRetry,
 } from "@visa-compass/shared";
 import { ApiException } from "../../common/api-error.js";
 import { OrdersService, type DemoOrder } from "../orders/orders.service.js";
@@ -14,7 +20,54 @@ import { MetricsService } from "../../observability/metrics.service.js";
 import { ProductionResilienceService } from "../../jobs/production-resilience.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { PaymentInitiationStatus, Prisma } from "@prisma/client";
+import { PaymentInitiationError } from "./payment-gateway.js";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
+
+/** Masks the payment credential inside a deep link so server-side logs never
+ * persist a live qrPayload, regardless of what a client sends. */
+function redactFonepayLaunchUrl(value: string): string {
+  return value.replace(/qrPayload=[^&#]*/i, "qrPayload=<redacted>");
+}
+
+export const fonepayClientTelemetrySchema = z.object({
+  reference: z.string().min(1).max(64),
+  event: z.enum([
+    "QR_RENDERED",
+    "SOCKET_CONNECTED",
+    "SOCKET_ERROR",
+    "SOCKET_CLOSED",
+    "SOCKET_RECONNECTING",
+    "QR_VERIFIED_SIGNAL",
+    "PAYMENT_RESULT_SIGNAL",
+    "BANK_LAUNCH_ATTEMPTED",
+    "BANK_LAUNCH_BLOCKED",
+    "BANK_APP_NAVIGATION_OBSERVED",
+  ]),
+  platform: z.enum(["ANDROID", "IOS", "DESKTOP", "UNKNOWN"]),
+  bankCode: z.string().trim().min(1).max(64).optional(),
+  bankName: z.string().trim().min(1).max(160).optional(),
+  launchMethod: z
+    .enum(["ANDROID_PACKAGE_INTENT", "CUSTOM_SCHEME", "QR_SCAN", "NONE"])
+    .optional(),
+  reason: z
+    .enum([
+      "NON_MOBILE_DEVICE",
+      "SOCKET_NOT_READY",
+      "PAYLOAD_UNAVAILABLE",
+      "APP_NOT_OBSERVED",
+      "SOCKET_TRANSPORT_ERROR",
+      "SOCKET_REMOTE_CLOSE",
+      "SOCKET_LOCAL_CLOSE",
+    ])
+    .optional(),
+  attempt: z.number().int().positive().optional(),
+  scheme: z.string().trim().min(1).max(64).optional(),
+  launchUrl: z.string().trim().min(1).max(512).optional(),
+});
+export type FonepayClientTelemetry = z.infer<
+  typeof fonepayClientTelemetrySchema
+>;
 
 type InitiationResult = {
   reference: string;
@@ -42,6 +95,11 @@ type LookupVerdict =
   | {
       outcome: "TERMINAL";
       resolve: boolean;
+      // True when the provider reports a terminal non-success that is still
+      // ambiguous against a charge: a transaction record exists at the provider
+      // (or money has moved), so automatically allowing a retry could double
+      // charge the customer. Escalate to operational review instead.
+      retryUnsafe?: boolean;
       paymentStatus: PaymentStatus;
       code: string;
       message: string;
@@ -56,6 +114,20 @@ export class PaymentsService {
     const parsed = Number(process.env.PAYMENT_VERIFY_ATTEMPTS);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
   })();
+  // Backoff for the fast reconciliation sweep. An order that has been looked
+  // up and is still pending (no transaction found yet, or still being paid)
+  // is not queried again until this interval has passed, so an unpaid QR does
+  // not cause the provider to be hammered every sweep for the whole window.
+  private readonly recentReconcileState = new Map<
+    string,
+    {
+      lastCheckedAt: number;
+      consecutivePending: number;
+      /** True once an expired session has been settled or handed to the
+       * expiry-phase reconcile; the fast sweep never queries it again. */
+      expiryEvaluated?: boolean;
+    }
+  >();
   constructor(
     private orders: OrdersService,
     private khalti: KhaltiGateway,
@@ -75,10 +147,144 @@ export class PaymentsService {
       process.env.FONEPAY_USERNAME &&
       process.env.FONEPAY_PASSWORD &&
       process.env.FONEPAY_TERMINAL_ID &&
-      process.env.FONEPAY_PRIVATE_KEY_BASE64
+      (process.env.FONEPAY_PRIVATE_KEY_PATH ||
+        process.env.FONEPAY_PRIVATE_KEY_BASE64)
     )
       providers.push(PaymentProvider.FONEPAY);
     return { providers, simulator };
+  }
+
+  async recordFonepayClientTelemetry(
+    orderId: string,
+    ownerId: string | null,
+    raw: unknown,
+  ) {
+    const input = fonepayClientTelemetrySchema.parse(raw);
+    const order = this.orders.get(orderId, ownerId ?? undefined);
+    if (
+      order.payment?.provider !== PaymentProvider.FONEPAY ||
+      order.payment.reference !== input.reference
+    )
+      throw new BadRequestException(
+        "Telemetry does not match the active Fonepay payment",
+      );
+    if (!this.prisma?.enabled) return { recorded: false };
+    await this.prisma.integrationLog.create({
+      data: {
+        operation: `fonepay-client-${input.event.toLowerCase().replaceAll("_", "-")}`,
+        method: "CLIENT",
+        endpoint: "customer-checkout",
+        status: 200,
+        correlationId: orderId,
+        requestBody: {
+          reference: input.reference,
+          event: input.event,
+          platform: input.platform,
+          ...(input.bankCode ? { bankCode: input.bankCode } : {}),
+          ...(input.bankName ? { bankName: input.bankName } : {}),
+          ...(input.launchMethod ? { launchMethod: input.launchMethod } : {}),
+          ...(input.reason ? { reason: input.reason } : {}),
+          ...(input.scheme ? { scheme: input.scheme } : {}),
+          ...(input.launchUrl
+            ? { launchUrl: redactFonepayLaunchUrl(input.launchUrl) }
+            : {}),
+        },
+      },
+    });
+    return { recorded: true };
+  }
+
+  /**
+   * Server-side retry/change-provider safety gate. A new payment session is
+   * only permitted when the server can prove no charge is uncertain. Orders
+   * under PAYMENT_REVIEW_REQUIRED or with an expired-but-unresolved pending
+   * payment are blocked with PAYMENT_RETRY_NOT_SAFE / a reconcile-first error;
+   * the checkout UI reads the same declaration before it even renders actions.
+   */
+  private assertSafeToInitiate(
+    order: DemoOrder,
+    requestedProvider: PaymentProvider,
+  ): void {
+    // A COMPLETED payment is the strongest form of double-charge protection:
+    // the order may never be handed a second payment session regardless of how
+    // the order's own status drifted (e.g. a split-state after a partial boot
+    // recovery). beginPayment() enforces the same invariant at the boundary.
+    if (order.payment?.status === PaymentStatus.COMPLETED)
+      throw new BadRequestException(
+        "This order has already been paid and cannot collect another payment",
+      );
+    const declaration = declarePaymentRetry({
+      status: order.status,
+      payment: order.payment,
+      now: Date.now(),
+    });
+    if (
+      order.status === OrderStatus.PAYMENT_REVIEW_REQUIRED ||
+      order.payment?.status === PaymentStatus.REVIEW_REQUIRED
+    )
+      throw new ApiException({
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "A new payment cannot start until the previous one is reconciled.",
+        status: 409,
+        details:
+          declaration.blockedReason ??
+          "Payment confirmation is under operational review.",
+      });
+    if (
+      ![
+        OrderStatus.DRAFT,
+        OrderStatus.PAYMENT_PENDING,
+        OrderStatus.PAYMENT_FAILED,
+      ].includes(order.status)
+    )
+      throw new BadRequestException(
+        "This order cannot collect another payment",
+      );
+    if (
+      order.payment?.status === PaymentStatus.PENDING &&
+      (!order.payment.expiresAt ||
+        new Date(order.payment.expiresAt).getTime() <= Date.now())
+    )
+      throw new BadRequestException(
+        "Reconcile the pending payment before another attempt",
+      );
+    if (
+      order.payment?.status === PaymentStatus.PENDING &&
+      order.payment.provider !== requestedProvider
+    )
+      throw new ApiException({
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "The active payment must be resolved before choosing another provider.",
+        status: 409,
+      });
+  }
+
+  private async assertNoUnresolvedRemoteInitiation(orderId: string) {
+    if (!this.prisma?.enabled || !this.prisma.paymentInitiation?.findFirst)
+      return;
+    const unresolved = await this.prisma.paymentInitiation.findFirst({
+      where: {
+        orderId,
+        status: {
+          in: [
+            PaymentInitiationStatus.RECONCILIATION_REQUIRED,
+            PaymentInitiationStatus.REMOTE_CREATED,
+            PaymentInitiationStatus.COMPLETED,
+          ],
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true },
+    });
+    if (unresolved)
+      throw new ApiException({
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "The previous payment request is still being reconciled. Do not start another payment yet.",
+        status: 409,
+      });
   }
 
   async initiate(
@@ -89,8 +295,14 @@ export class PaymentsService {
   ) {
     await this.orders.refreshOne?.(orderId, true);
     const order = this.orders.get(orderId, ownerId ?? undefined);
+    // Fail locally before creating a remote payment intent. The order service
+    // repeats this check in beginPayment after the provider responds to guard
+    // against document state changing while the request is in flight.
+    await this.orders.assertPaymentPrerequisites?.(orderId, ownerId);
     if (order.purchaseType !== "TOPUP")
       await this.orders.assertInventoryAvailableForNewOrder();
+    this.assertSafeToInitiate(order, provider);
+    await this.assertNoUnresolvedRemoteInitiation(orderId);
     const existing = order.payment;
     if (
       existing &&
@@ -126,6 +338,25 @@ export class PaymentsService {
       ...result,
       returnUrl,
     });
+    if (this.prisma?.enabled)
+      await this.prisma.paymentInitiation.updateMany({
+        where: {
+          orderId,
+          provider,
+          paymentReference: result.reference,
+          status: {
+            in: [
+              PaymentInitiationStatus.REMOTE_CREATED,
+              PaymentInitiationStatus.COMPLETED,
+            ],
+          },
+        },
+        data: {
+          status: PaymentInitiationStatus.ATTACHED,
+          attachedAt: new Date(),
+          errorCode: null,
+        },
+      });
     return result;
   }
 
@@ -148,6 +379,17 @@ export class PaymentsService {
           leaseExpiresAt,
         },
       });
+      await prisma.paymentEvent?.create({
+        data: {
+          orderId: order.id,
+          provider: provider as never,
+          eventType: "PAYMENT_INITIATION_CLAIMED",
+          source: "CHECKOUT",
+          amount: order.totalAmountNpr,
+          currency: "NPR",
+          dedupeKey: `payment-initiation:${claimToken}`,
+        },
+      });
       owned = true;
     } catch (error) {
       if ((error as { code?: string }).code !== "P2002") throw error;
@@ -155,15 +397,26 @@ export class PaymentsService {
 
     const deadline = Date.now() + 15_000;
     while (!owned && Date.now() < deadline) {
-      const record = await prisma.paymentInitiation.findUnique({ where: { orderId: order.id } });
+      const record = await prisma.paymentInitiation.findUnique({
+        where: { orderId: order.id },
+      });
       if (!record) continue;
       if (record.amountNpr !== order.totalAmountNpr)
-        throw new BadRequestException("Payment initiation conflicts with the current order amount");
+        throw new BadRequestException(
+          "Payment initiation conflicts with the current order amount",
+        );
       const stored = record.result as InitiationResult | null;
+      const attachedStatuses = new Set<PaymentInitiationStatus>([
+        PaymentInitiationStatus.COMPLETED,
+        PaymentInitiationStatus.REMOTE_CREATED,
+        PaymentInitiationStatus.ATTACHED,
+      ]);
       const storedActive =
-        record.status === PaymentInitiationStatus.COMPLETED &&
+        attachedStatuses.has(record.status) &&
+        order.status !== OrderStatus.PAYMENT_FAILED &&
         stored &&
-        (!stored.expiresAt || new Date(stored.expiresAt).getTime() > Date.now());
+        (!stored.expiresAt ||
+          new Date(stored.expiresAt).getTime() > Date.now());
       if (storedActive) {
         if (record.provider !== provider)
           throw new ApiException({
@@ -171,20 +424,51 @@ export class PaymentsService {
             message: "Another payment provider session is still active",
             status: 409,
           });
+        if (
+          provider === PaymentProvider.FONEPAY &&
+          this.fonepay &&
+          !stored.banks?.length &&
+          stored.qrPayload
+        ) {
+          const banks = await this.fonepay.checkoutBanks(order.id);
+          if (banks.length) {
+            const restored = { ...stored, banks };
+            await prisma.paymentInitiation.updateMany({
+              where: {
+                id: record.id,
+                status: {
+                  in: [
+                    PaymentInitiationStatus.COMPLETED,
+                    PaymentInitiationStatus.REMOTE_CREATED,
+                    PaymentInitiationStatus.ATTACHED,
+                  ],
+                },
+              },
+              data: { result: restored as Prisma.InputJsonValue },
+            });
+            return restored;
+          }
+        }
         return stored;
       }
       if (
         record.status === PaymentInitiationStatus.FAILED ||
         record.leaseExpiresAt.getTime() <= Date.now() ||
-        (record.status === PaymentInitiationStatus.COMPLETED && !storedActive)
+        (attachedStatuses.has(record.status) && !storedActive)
       ) {
         const reclaimed = await prisma.paymentInitiation.updateMany({
           where: {
             id: record.id,
+            claimToken: record.claimToken,
             OR: [
               { status: PaymentInitiationStatus.FAILED },
-              { status: PaymentInitiationStatus.PROCESSING, leaseExpiresAt: { lte: new Date() } },
+              {
+                status: PaymentInitiationStatus.PROCESSING,
+                leaseExpiresAt: { lte: new Date() },
+              },
               { status: PaymentInitiationStatus.COMPLETED },
+              { status: PaymentInitiationStatus.REMOTE_CREATED },
+              { status: PaymentInitiationStatus.ATTACHED },
             ],
           },
           data: {
@@ -226,26 +510,100 @@ export class PaymentsService {
         returnUrl,
       });
       const saved = await prisma.paymentInitiation.updateMany({
-        where: { orderId: order.id, claimToken, status: PaymentInitiationStatus.PROCESSING },
+        where: {
+          orderId: order.id,
+          claimToken,
+          status: PaymentInitiationStatus.PROCESSING,
+        },
         data: {
-          status: PaymentInitiationStatus.COMPLETED,
+          status: PaymentInitiationStatus.REMOTE_CREATED,
           result: result as Prisma.InputJsonValue,
+          paymentReference: result.reference,
+          providerCorrelationId:
+            "correlationId" in result ? (result.correlationId ?? null) : null,
+          remoteCreatedAt: new Date(),
           leaseExpiresAt: new Date(),
         },
       });
       if (saved.count !== 1)
-        throw new Error("Payment initiation ownership was lost before persistence");
-      return result;
-    } catch (error) {
-      await prisma.paymentInitiation.updateMany({
-        where: { orderId: order.id, claimToken, status: PaymentInitiationStatus.PROCESSING },
+        throw new Error(
+          "Payment initiation ownership was lost before persistence",
+        );
+      await prisma.paymentEvent?.create({
         data: {
-          status: PaymentInitiationStatus.FAILED,
-          errorCode: "PROVIDER_INITIATION_FAILED",
-          leaseExpiresAt: new Date(),
+          orderId: order.id,
+          provider: provider as never,
+          eventType: "PAYMENT_INITIATED",
+          source: "CHECKOUT",
+          paymentReference: result.reference,
+          toStatus: PaymentStatus.PENDING as never,
+          amount: order.totalAmountNpr,
+          currency: "NPR",
+          evidence: {
+            expiresAt: result.expiresAt ?? null,
+            correlationId:
+              "correlationId" in result ? (result.correlationId ?? null) : null,
+          },
+          dedupeKey: `payment-initiated:${result.reference}`,
         },
       });
-      throw error;
+      return result;
+    } catch (error) {
+      const definitelyNotCreated =
+        error instanceof PaymentInitiationError &&
+        error.certainty === "NO_REMOTE_INTENT";
+      await prisma.paymentInitiation.updateMany({
+        where: {
+          orderId: order.id,
+          claimToken,
+          status: PaymentInitiationStatus.PROCESSING,
+        },
+        data: {
+          status: definitelyNotCreated
+            ? PaymentInitiationStatus.FAILED
+            : PaymentInitiationStatus.RECONCILIATION_REQUIRED,
+          errorCode: definitelyNotCreated
+            ? "REMOTE_INTENT_NOT_CREATED"
+            : "PROVIDER_OUTCOME_UNKNOWN",
+          leaseExpiresAt: definitelyNotCreated
+            ? new Date()
+            : new Date(Date.now() + 5 * 60_000),
+        },
+      });
+      await prisma.paymentEvent?.createMany({
+        data: [
+          {
+            orderId: order.id,
+            provider: provider as never,
+            eventType: definitelyNotCreated
+              ? "PAYMENT_INITIATION_FAILED_SAFE_TO_RETRY"
+              : "PAYMENT_INITIATION_RECONCILIATION_REQUIRED",
+            source: "CHECKOUT",
+            amount: order.totalAmountNpr,
+            currency: "NPR",
+            providerMessage: (error instanceof Error
+              ? error.message
+              : String(error)
+            ).slice(0, 500),
+            dedupeKey: definitelyNotCreated
+              ? `payment-initiation-failed:${claimToken}`
+              : `payment-initiation-uncertain:${claimToken}`,
+          },
+        ],
+        skipDuplicates: true,
+      });
+      if (!definitelyNotCreated)
+        void this.resilience?.attention({
+          dedupeKey: `payment-initiation-uncertain:${order.id}`,
+          category: "PAYMENT",
+          entityType: "PaymentInitiation",
+          entityId: order.id,
+          orderId: order.id,
+          severity: "WARNING",
+          summary: `Payment initiation outcome requires reconciliation for ${order.orderNumber}`,
+          failureCategory: "PAYMENT_PROVIDER_OUTCOME_UNKNOWN",
+        });
+      throw error instanceof PaymentInitiationError ? error.cause : error;
     }
   }
 
@@ -258,6 +616,11 @@ export class PaymentsService {
    * - Expired / user canceled -> order moved to PAYMENT_FAILED (retryable, a
    *   fresh Khalti session can be created) and a stable error code returned.
    * - Amount/reference mismatch -> security error; the order stays pending.
+   *
+   * Replay-proof short-circuit: once a session is settled on disk (paid,
+   * failed, cancelled, or under review) the stored verdict is returned or
+   * rethrown without a provider round-trip, so a paid QR is never re-scanned
+   * into a second charge and a dead session can never be revived.
    */
   async verify(orderId: string, ownerId: string | null, reference: string) {
     await this.orders.refreshOne?.(orderId, true);
@@ -269,29 +632,68 @@ export class PaymentsService {
       );
       throw new BadRequestException("Payment reference mismatch");
     }
+    if (order.payment?.status === PaymentStatus.COMPLETED)
+      return this.orders.view(orderId, ownerId ?? undefined);
+    const stored = this.storedSettlementError(order);
+    if (stored) throw stored;
     const verdict = await this.lookup(order, reference, "verify");
     return this.applyVerdict(orderId, ownerId, reference, verdict);
   }
 
-  /** Same verdict semantics for the callback/job path (server initiated). */
+  /**
+   * Stable, customer-safe error for a payment session that is already settled
+   * on this order. Only terminal states produce a verdict — a PENDING session
+   * returns null and is still consulted with the gateway.
+   */
+  private storedSettlementError(order: DemoOrder): ApiException | null {
+    switch (order.payment?.status) {
+      case PaymentStatus.CANCELLED:
+        return new ApiException({
+          code: ApiErrorCode.PAYMENT_NOT_CONFIRMED,
+          message:
+            "We could not confirm your payment. Please verify with your wallet or retry.",
+          status: 400,
+          details: "Customer cancelled the payment at the wallet",
+        });
+      case PaymentStatus.FAILED:
+        return new ApiException({
+          code: ApiErrorCode.PAYMENT_EXPIRED,
+          message: "This payment attempt has expired. Please start a new one.",
+          status: 400,
+          details:
+            "Payment completion could not be confirmed on the previous attempt",
+        });
+      case PaymentStatus.REVIEW_REQUIRED:
+        return new ApiException({
+          code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+          message:
+            "Your payment could not be confirmed automatically. Our team must check it before a new attempt is safe.",
+          status: 409,
+          details: "Payment confirmation is under operational review",
+        });
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Same verdict semantics for the callback/job path (server initiated).
+   * Replay-safe: a settled session (paid, failed, cancelled, or under review)
+   * returns the stored view without a gateway round-trip.
+   */
   async verifyCallback(orderId: string, reference: string) {
     await this.orders.refreshOne?.(orderId, true);
     const order = this.orders.get(orderId);
-    if (order.payment?.status === PaymentStatus.COMPLETED)
+    const payment = order.payment;
+    if (payment?.reference && payment.reference !== reference)
+      throw new BadRequestException("Payment reference mismatch");
+    if (payment?.status && payment.status !== PaymentStatus.PENDING)
       return this.orders.view(orderId);
     const verdict = await this.lookup(order, reference, "callback");
     return this.applyVerdict(orderId, null, reference, verdict);
   }
 
-  /**
-   * Fast reconciliation sweep for orders still inside their payment window.
-   * Runs on its own short timer (PAYMENT_RECONCILE_INTERVAL_SECONDS); it only
-   * confirms a Completed lookup and leaves Pending orders pending — it never
-   * fails them, so a normal pending result is not confused with a provider
-   * failure. Provider errors are deferred. Expiry enforcement stays with
-   * reconcilePendingPayments().
-   */
-  async reconcileRecentPendingPayments(): Promise<{
+  private async reconcileRecentPendingPaymentsInner(): Promise<{
     confirmed: string[];
     stillPending: string[];
     terminal: string[];
@@ -302,34 +704,147 @@ export class PaymentsService {
     const terminal: string[] = [];
     const errored: string[] = [];
     const now = Date.now();
+    const sweepBaseMs = Math.max(
+      (Number(process.env.PAYMENT_RECONCILE_INTERVAL_SECONDS) || 45) * 1000,
+      1000,
+    );
+    const maxBackoffMs = Math.max(
+      (Number(process.env.PAYMENT_RECONCILE_MAX_BACKOFF_SECONDS) || 300) * 1000,
+      1000,
+    );
+    // Consecutive "no transaction yet" results grow the poll interval so an
+    // unpaid QR is not re-queried every sweep for the whole payment window.
+    const backoffMs = (consecutivePending: number) => {
+      if (consecutivePending <= 1) return sweepBaseMs;
+      const exponent = Math.min(consecutivePending - 1, 4);
+      return Math.min(sweepBaseMs * 2 ** exponent, maxBackoffMs);
+    };
     for (const order of this.orders.list()) {
       if (
         order.status !== OrderStatus.PAYMENT_PENDING ||
         !order.payment ||
         order.payment.status !== PaymentStatus.PENDING ||
         !order.payment.reference
-      )
+      ) {
+        // Backoff state is only meaningful while the order is a candidate for
+        // this sweep. Drop it as soon as the order moves out of the candidate
+        // shape so the map cannot grow without bound.
+        this.recentReconcileState.delete(order.id);
         continue;
+      }
       const reference = order.payment.reference;
       const expiry =
         order.payment.expiresAt ??
         new Date(
           new Date(order.createdAt).getTime() + 30 * 60_000,
         ).toISOString();
-      if (now >= new Date(expiry).getTime()) continue; // hand-off to the expiry-phase reconcile
-      try {
-        const verdict = await this.lookup(order, reference, "recent-reconcile");
-        if (verdict.outcome === "CONFIRMED") {
-          await this.orders.confirmPayment(order.id, reference);
-          confirmed.push(order.id);
-        } else if (verdict.outcome === "TERMINAL") {
-          if (verdict.resolve)
+      const state = this.recentReconcileState.get(order.id);
+      if (now >= new Date(expiry).getTime()) {
+        // The payment window is closed: settle the attempt now. Exactly one
+        // terminal lookup confirms a charge, fails a definitive miss, or flags
+        // a mismatch to review. Uncertain outcomes (still pending, provider
+        // unreachable) are handed to reconcilePendingPayments(), the single
+        // owner of bounded expiry verification. After that one lookup an
+        // expired session is never re-queried by this sweep — a dead QR must
+        // not keep being polled.
+        if (state?.expiryEvaluated) continue;
+        try {
+          const verdict = await this.lookup(
+            order,
+            reference,
+            "recent-reconcile",
+          );
+          if (verdict.outcome === "CONFIRMED") {
+            this.recentReconcileState.delete(order.id);
+            await this.orders.confirmPayment(
+              order.id,
+              reference,
+              verdict.transactionId,
+            );
+            confirmed.push(order.id);
+          } else if (verdict.outcome === "TERMINAL" && verdict.resolve) {
+            this.recentReconcileState.delete(order.id);
             await this.orders.resolvePaymentFailure(
               order.id,
               null,
               verdict.reason,
               verdict.paymentStatus,
             );
+            terminal.push(order.id);
+          } else if (
+            verdict.outcome === "TERMINAL" &&
+            (verdict.code === ApiErrorCode.PAYMENT_REFERENCE_MISMATCH ||
+              verdict.reason.toLowerCase().includes("mismatch"))
+          ) {
+            // The gateway reports the payment completed against different
+            // order/amount/currency evidence — a security event, never a
+            // failure. Escalate to review so an operator settles the truth.
+            await this.flagPaymentMismatch(order, verdict.reason);
+            await this.markReviewRequired(
+              order,
+              `Payment completed for a different order/amount after the payment window`,
+            );
+            this.recentReconcileState.delete(order.id);
+            terminal.push(order.id);
+          } else {
+            // No transaction found yet at window close. Do not fail the order
+            // — the expiry-phase reconcile runs bounded verification attempts
+            // before raising review.
+            this.recentReconcileState.set(order.id, {
+              lastCheckedAt: Date.now(),
+              consecutivePending: 0,
+              expiryEvaluated: true,
+            });
+          }
+        } catch (error) {
+          this.recentReconcileState.set(order.id, {
+            lastCheckedAt: Date.now(),
+            consecutivePending: 0,
+            expiryEvaluated: true,
+          });
+          errored.push(order.id);
+          this.logger.warn(
+            JSON.stringify({
+              event: "payment_expiry_deferred",
+              orderId: order.id,
+              source: "recent-reconcile",
+              error: error instanceof Error ? error.message : "unknown",
+            }),
+          );
+        }
+        continue;
+      }
+      const lastCheckedAt = state?.lastCheckedAt ?? 0;
+      if (now - lastCheckedAt < backoffMs(state?.consecutivePending ?? 0))
+        continue; // not due yet; skip without a provider call
+      try {
+        const verdict = await this.lookup(order, reference, "recent-reconcile");
+        if (verdict.outcome === "CONFIRMED") {
+          this.recentReconcileState.delete(order.id);
+          await this.orders.confirmPayment(order.id, reference);
+          confirmed.push(order.id);
+        } else if (verdict.outcome === "TERMINAL") {
+          this.recentReconcileState.delete(order.id);
+          if (verdict.resolve) {
+            await this.orders.resolvePaymentFailure(
+              order.id,
+              null,
+              verdict.reason,
+              verdict.paymentStatus,
+            );
+          } else {
+            // A provider-reported COMPLETED that does not match this order
+            // (amount/order/currency) must not keep polling forever — the
+            // customer may have been charged. Flag it and move the order to
+            // operational review so an operator or the expiry sweep can
+            // settle the truth instead of re-querying every sweep.
+            if (
+              verdict.code === ApiErrorCode.PAYMENT_REFERENCE_MISMATCH ||
+              verdict.reason.toLowerCase().includes("mismatch")
+            )
+              await this.flagPaymentMismatch(order, verdict.reason);
+            await this.markReviewRequired(order, verdict.reason);
+          }
           if (verdict.code === ApiErrorCode.PAYMENT_REFERENCE_MISMATCH)
             this.logger.warn(
               JSON.stringify({
@@ -340,9 +855,20 @@ export class PaymentsService {
             );
           terminal.push(order.id);
         } else {
+          this.recentReconcileState.set(order.id, {
+            lastCheckedAt: Date.now(),
+            consecutivePending: (state?.consecutivePending ?? 0) + 1,
+          });
           stillPending.push(order.id);
         }
       } catch (error) {
+        // Preserve the growing backoff on provider errors: a provider outage
+        // is exactly when you do NOT want to re-query every sweep. Each
+        // consecutive failure still counts toward the exponential interval.
+        this.recentReconcileState.set(order.id, {
+          lastCheckedAt: Date.now(),
+          consecutivePending: (state?.consecutivePending ?? 0) + 1,
+        });
         errored.push(order.id);
         this.logger.warn(
           JSON.stringify({
@@ -355,6 +881,47 @@ export class PaymentsService {
       }
     }
     return { confirmed, stillPending, terminal, errored };
+  }
+
+  /**
+   * Fast reconciliation sweep for orders still inside their payment window.
+   * Runs on its own short timer (PAYMENT_RECONCILE_INTERVAL_SECONDS); it only
+   * confirms a Completed lookup and leaves Pending orders pending — it never
+   * fails them, so a normal pending result is not confused with a provider
+   * failure. Provider errors are deferred. Expiry enforcement stays with
+   * reconcilePendingPayments().
+   *
+   * With persistence enabled the candidate set is read from the canonical
+   * store (Payment rows in PENDING under a PAYMENT_PENDING order) so every
+   * replica reconciles the same set regardless of its in-memory cache.
+   *
+   * Individual orders are polled with a backoff that grows while repeated
+   * lookups keep returning pending (no transaction found yet), so an unpaid QR
+   * is not re-queried on every sweep. The FonePay WebSocket is the primary
+   * "the customer paid" signal; this sweep is only a bounded backstop.
+   */
+  async reconcileRecentPendingPayments(): Promise<{
+    confirmed: string[];
+    stillPending: string[];
+    terminal: string[];
+    errored: string[];
+  }> {
+    if (this.prisma?.enabled) {
+      const rows = await this.prisma.payment.findMany({
+        where: {
+          status: PaymentStatus.PENDING,
+          order: { status: OrderStatus.PAYMENT_PENDING },
+        },
+        select: { orderId: true },
+        orderBy: { updatedAt: "asc" },
+        take: Number(process.env.PAYMENT_RECONCILE_BATCH ?? 200),
+      });
+      const orderIds = [...new Set(rows.map((row) => row.orderId))];
+      await Promise.all(
+        orderIds.map((orderId) => this.orders.refreshOne?.(orderId, true)),
+      );
+    }
+    return this.reconcileRecentPendingPaymentsInner();
   }
 
   private async applyVerdict(
@@ -378,6 +945,12 @@ export class PaymentsService {
         verdict.reason,
         verdict.paymentStatus,
       );
+    else if (verdict.retryUnsafe)
+      // A terminal non-success backed by a provider transaction record is
+      // ambiguous against a charge. Never auto-close it as a retryable
+      // failure and never revoke the retry the customer already earned — put
+      // it in front of an operator and block fresh attempts until reconciled.
+      await this.orders.requirePaymentReview?.(orderId, verdict.reason);
     else
       await this.flagPaymentMismatch(
         this.orders.get(orderId, ownerId ?? undefined),
@@ -386,7 +959,7 @@ export class PaymentsService {
     throw new ApiException({
       code: verdict.code,
       message: verdict.message,
-      status: 400,
+      status: verdict.retryUnsafe ? 409 : 400,
       details: verdict.reason,
     });
   }
@@ -398,10 +971,49 @@ export class PaymentsService {
     source: VerifySource,
   ): Promise<LookupVerdict> {
     const context = this.context(order, reference);
-    const result = await this.gateway(order.payment?.provider).verify(
-      reference,
-      context,
-    );
+    let result: import("./payment-gateway.js").PaymentVerification;
+    try {
+      result = await this.gateway(order.payment?.provider).verify(
+        reference,
+        context,
+      );
+    } catch (error) {
+      await this.recordVerificationUnavailable(order, reference, source, error);
+      throw error;
+    }
+    if (this.prisma?.enabled) {
+      try {
+        const payment = await this.prisma.payment.findUnique({
+          where: { paymentReference: reference },
+          select: { id: true, provider: true, status: true },
+        });
+        if (payment)
+          await this.prisma.paymentEvent.create({
+            data: {
+              orderId: order.id,
+              paymentId: payment.id,
+              provider: payment.provider,
+              eventType: "PAYMENT_STATUS_CHECKED",
+              source: source.toUpperCase(),
+              paymentReference: reference,
+              fromStatus: payment.status,
+              toStatus: result.status as never,
+              amount: result.amountNpr,
+              currency: result.currency ?? "NPR",
+              providerTransactionId: result.providerTransactionId ?? null,
+              evidence: {
+                providerOrderId: result.orderId,
+                matchedOrder: result.orderId === order.id,
+                matchedAmount: result.amountNpr === order.totalAmountNpr,
+              },
+            },
+          });
+      } catch (error) {
+        this.logger.error(
+          `Could not persist payment lookup evidence for ${order.id}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
     this.logger.debug({
       event: "payment_lookup",
       orderId: order.id,
@@ -431,8 +1043,29 @@ export class PaymentsService {
         reason: `Payment verification mismatch (order/amount/currency) for order ${order.id}`,
       };
     }
-    if (result.status === PaymentStatus.PENDING) return { outcome: "PENDING" };
+    // INITIATED never proves a failed payment: a wallet that is still
+    // authenticating (or a transaction the provider has not finished indexing)
+    // must be held pending, exactly like PENDING.
+    if (
+      result.status === PaymentStatus.PENDING ||
+      result.status === PaymentStatus.INITIATED
+    )
+      return { outcome: "PENDING" };
     if (result.status === PaymentStatus.CANCELLED) {
+      // A provider transaction id proves a record was created at the wallet,
+      // so a "cancelled" status no longer proves nothing was charged — the
+      // payment is ambiguous and must not be blindly retried.
+      if (result.providerTransactionId)
+        return {
+          outcome: "TERMINAL",
+          resolve: false,
+          retryUnsafe: true,
+          paymentStatus: PaymentStatus.CANCELLED,
+          code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+          message:
+            "Your payment could not be confirmed automatically. Our team must check it before a new attempt is safe.",
+          reason: `Customer cancelled at the wallet but a provider transaction record exists (${result.providerTransactionId})`,
+        };
       return {
         outcome: "TERMINAL",
         resolve: true,
@@ -443,6 +1076,31 @@ export class PaymentsService {
         reason: "Customer cancelled the payment at the wallet",
       };
     }
+    if (result.status === PaymentStatus.REFUNDED) {
+      // Money moved for this session and was returned. A retry is never a
+      // replay of a refunded charge; the order belongs with an operator.
+      return {
+        outcome: "TERMINAL",
+        resolve: false,
+        retryUnsafe: true,
+        paymentStatus: PaymentStatus.REFUNDED,
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "Your payment could not be confirmed automatically. Our team must check it before a new attempt is safe.",
+        reason: `Provider reports this session refunded (transaction ${result.providerTransactionId ?? "unknown"})`,
+      };
+    }
+    if (result.providerTransactionId)
+      return {
+        outcome: "TERMINAL",
+        resolve: false,
+        retryUnsafe: true,
+        paymentStatus: PaymentStatus.FAILED,
+        code: ApiErrorCode.PAYMENT_RETRY_NOT_SAFE,
+        message:
+          "Your payment could not be confirmed automatically. Our team must check it before a new attempt is safe.",
+        reason: `Provider status ${result.status ?? "unknown"} with an existing transaction record (${result.providerTransactionId})`,
+      };
     return {
       outcome: "TERMINAL",
       resolve: true,
@@ -468,6 +1126,7 @@ export class PaymentsService {
     deferred: string[];
     reviewRequired: string[];
   }> {
+    await this.reconcileUnattachedInitiations();
     const now = Date.now();
     const verified: string[] = [];
     const failed: string[] = [];
@@ -511,7 +1170,9 @@ export class PaymentsService {
         } else {
           await this.markReviewRequired(
             order,
-            `Payment completion remains ${verdict.outcome === "PENDING" ? "pending" : "mismatched"} after the payment window`,
+            verdict.outcome === "TERMINAL"
+              ? verdict.reason
+              : `Payment completion remains pending after the payment window`,
           );
           await this.clearVerifyAttempts(order);
           reviewRequired.push(order.id);
@@ -533,6 +1194,70 @@ export class PaymentsService {
       }
     }
     return { verified, failed, deferred, reviewRequired };
+  }
+
+  private async reconcileUnattachedInitiations() {
+    if (!this.prisma?.enabled || !this.prisma.paymentInitiation?.findMany)
+      return;
+    const attempts = await this.prisma.paymentInitiation.findMany({
+      where: {
+        status: {
+          in: [
+            PaymentInitiationStatus.REMOTE_CREATED,
+            PaymentInitiationStatus.COMPLETED,
+          ],
+        },
+        result: { not: Prisma.JsonNull },
+      },
+      take: 100,
+      orderBy: { updatedAt: "asc" },
+    });
+    for (const attempt of attempts) {
+      const result = attempt.result as InitiationResult | null;
+      if (!result?.reference) continue;
+      try {
+        const order = this.orders.get(attempt.orderId);
+        await this.orders.assertPaymentPrerequisites?.(attempt.orderId, null);
+        await this.orders.beginPayment(
+          attempt.orderId,
+          null,
+          attempt.provider as PaymentProvider,
+          {
+            ...result,
+            returnUrl: `${process.env.CUSTOMER_WEB_URL ?? "http://localhost:3000"}/esim/checkout?order=${attempt.orderId}`,
+          },
+        );
+        await this.prisma.paymentInitiation.updateMany({
+          where: {
+            id: attempt.id,
+            status: attempt.status,
+            paymentReference: result.reference,
+          },
+          data: {
+            status: PaymentInitiationStatus.ATTACHED,
+            attachedAt: new Date(),
+            lastReconciledAt: new Date(),
+            errorCode: null,
+          },
+        });
+        await this.resilience?.resolve(
+          `payment-initiation-uncertain:${order.id}`,
+          null,
+          "Remote payment session attached during reconciliation",
+        );
+      } catch (error) {
+        await this.prisma.paymentInitiation.update({
+          where: { id: attempt.id },
+          data: {
+            lastReconciledAt: new Date(),
+            errorCode: "LOCAL_ATTACHMENT_PENDING",
+          },
+        });
+        this.logger.warn(
+          `Payment initiation ${attempt.id} remains unattached: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+    }
   }
 
   private async nextVerifyAttempt(order: DemoOrder): Promise<number> {
@@ -598,6 +1323,45 @@ export class PaymentsService {
       availableActions: ["RECHECK_PAYMENT"],
     });
   }
+
+  /**
+   * Append-only evidence that a status lookup was attempted but the provider
+   * could not be reached. The order is never moved on this path — provider
+   * unavailability is not treated as a failed payment — but Operations can see
+   * the outage in the provider-neutral payment history.
+   */
+  private async recordVerificationUnavailable(
+    order: DemoOrder,
+    reference: string,
+    source: VerifySource,
+    error: unknown,
+  ) {
+    if (!this.prisma?.enabled) return;
+    try {
+      await this.prisma.paymentEvent.create({
+        data: {
+          orderId: order.id,
+          provider: (order.payment?.provider ??
+            PaymentProvider.KHALTI) as never,
+          eventType: "PAYMENT_VERIFICATION_UNAVAILABLE",
+          source: source.toUpperCase(),
+          paymentReference: reference,
+          toStatus: order.payment?.status as never,
+          amount: order.totalAmountNpr,
+          currency: "NPR",
+          providerMessage: (error instanceof Error
+            ? error.message
+            : String(error)
+          ).slice(0, 500),
+          dedupeKey: `payment-verification-unavailable:${reference}:${new Date().getTime()}`,
+        },
+      });
+    } catch (persistError) {
+      this.logger.error(
+        `Could not persist verification-unavailable evidence for ${order.id}: ${persistError instanceof Error ? persistError.message : "unknown"}`,
+      );
+    }
+  }
   async simulate(
     orderId: string,
     ownerId: string | null,
@@ -642,12 +1406,16 @@ export class PaymentsService {
       ...(order.payment.correlationId
         ? { correlationId: order.payment.correlationId }
         : {}),
+      ...(order.payment.expiresAt
+        ? { expiresAt: order.payment.expiresAt }
+        : {}),
     };
   }
   private gateway(provider?: PaymentProvider) {
     if (process.env.PAYMENT_MODE === "simulator") return this.simulator;
     if (provider === PaymentProvider.FONEPAY) {
-      if (!this.fonepay) throw new BadRequestException("Fonepay is unavailable");
+      if (!this.fonepay)
+        throw new BadRequestException("Fonepay is unavailable");
       return this.fonepay;
     }
     if (

@@ -1,0 +1,23 @@
+[Unit]
+Description=Visa Compass Workflow and Reconciliation Worker
+After=network-online.target visacompass-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/visaCompass/esim2.2
+EnvironmentFile=-/etc/visa-compass/deploy.env
+Environment=PROCESS_ROLE=workflow-worker
+ExecStart=/usr/bin/node --env-file-if-exists=/home/ec2-user/visaCompass/esim2.2/.env /home/ec2-user/visaCompass/esim2.2/apps/api/dist/src/workflow-worker.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

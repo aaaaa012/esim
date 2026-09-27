@@ -2,7 +2,15 @@
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, RefreshCcw, UserRound } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Circle,
+  Mail,
+  RefreshCcw,
+  UserRound,
+} from "lucide-react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
 import { StatusBadge, humane } from "@/components/status-badge";
@@ -23,6 +31,7 @@ import { LifecycleActions } from "../../transatel/lifecycle-actions";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = { "content-type": "application/json" };
 type Esim = {
+  id: string;
   iccid: string;
   status: string;
   providerStatus?: string | null;
@@ -41,6 +50,9 @@ type Order = {
   status: string;
   createdAt: string;
   totalAmountNpr: number;
+  purchaseType: "INITIAL_PURCHASE" | "TOPUP";
+  channel: string;
+  topUpMobile?: string | null;
   plan: {
     id: string;
     name: string;
@@ -63,6 +75,61 @@ type Profile = {
   email?: string;
   name?: string;
   orders: Order[];
+  esimGroups?: Array<{
+    esim: { id: string; iccid: string; msisdn: string | null; status: string };
+    completeness: string;
+    freshness: string;
+    summary: {
+      remainingMb: number;
+      confirmedPackageCount: number;
+      unconfirmedPackageCount: number;
+      packageCount: number;
+    };
+    packages: Array<{
+      id: string;
+      orderId: string;
+      orderNumber: string;
+      purchaseType: string;
+      channel: string;
+      status: string;
+      balanceStatus: string;
+      remainingMb: number;
+      providerSubscriptionId: string;
+      plan: { name: string; dataAllowance: string; countryCode: string };
+    }>;
+  }>;
+  identity?: {
+    customer: {
+      id: string;
+      customerCode: string;
+      email: string;
+      phone?: string | null;
+      orderContact?: string | null;
+      source: string;
+      status: string;
+      createdAt: string;
+    };
+    loginAccount?: {
+      id: string;
+      email: string;
+      status: string;
+      accountType: string;
+      createdAt: string;
+    } | null;
+    partnerCustomer?: {
+      id: string;
+      externalCustomerId: string;
+      partner: { id: string; code: string; name: string };
+    } | null;
+  };
+  profileUpdates?: Array<{
+    id: string;
+    action: string;
+    previousValue?: { email?: string } | null;
+    newValue?: { email?: string; reason?: string } | null;
+    performedBy: string;
+    createdAt: string;
+  }>;
 };
 
 const usageTone = (used?: number, total?: number) =>
@@ -74,6 +141,9 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [canTerminate, setCanTerminate] = useState(false);
+  const [email, setEmail] = useState("");
+  const [emailReason, setEmailReason] = useState("");
+  const [emailConfirmation, setEmailConfirmation] = useState("");
   const load = useCallback(() => {
     setError("");
     return authFetch(`${API}/operations/customers/${ownerId}`, { headers })
@@ -84,6 +154,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
             value.error?.message ?? "Profile could not be loaded",
           );
         setProfile(value.data);
+        setEmail(value.data.identity?.customer.email ?? value.data.email ?? "");
       })
       .catch((cause) =>
         setError(cause instanceof Error ? cause.message : "Load failed"),
@@ -103,33 +174,110 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
     try {
       const response = await authFetch(
         `${API}/operations/orders/${orderId}/usage/refresh`,
-        { method: "POST", headers },
+        {
+          method: "POST",
+          headers: { ...headers, "x-idempotency-key": crypto.randomUUID() },
+        },
       );
       const value = await response.json();
       if (!response.ok)
         throw new Error(value.error?.message ?? "Usage could not be refreshed");
-      setProfile((previous) =>
-        previous
-          ? {
-              ...previous,
-              orders: previous.orders.map((order) =>
-                order.id === orderId && order.esim
-                  ? { ...order, esim: { ...order.esim, usage: value.data } }
-                  : order,
-              ),
-            }
-          : previous,
-      );
+      await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     } finally {
       setBusy("");
     }
   };
-  const completed = useMemo(
-    () => profile?.orders.filter((order) => order.status === "COMPLETED") ?? [],
-    [profile],
-  );
+  const correctEmail = async () => {
+    setBusy("email");
+    setError("");
+    try {
+      const response = await authFetch(
+        `${API}/operations/customers/${ownerId}/email`,
+        {
+          method: "PATCH",
+          headers: { ...headers, "x-idempotency-key": crypto.randomUUID() },
+          body: JSON.stringify({
+            email,
+            reason: emailReason,
+            confirmation: normalizedEmailConfirmation,
+          }),
+        },
+      );
+      const value = (await response.json()) as {
+        data?: {
+          changed?: boolean;
+          sessionsRevoked?: number;
+          sessionsFound?: number;
+        };
+        error?: { message?: string };
+      };
+      if (!response.ok)
+        throw new Error(value.error?.message ?? "Email could not be updated");
+      const sessionsFound = value.data?.sessionsFound ?? 0;
+      const sessionsRevoked = value.data?.sessionsRevoked ?? 0;
+      if (!value.data?.changed) {
+        toast.info("This is already the customer's sign-in email.");
+      } else if (sessionsRevoked === sessionsFound) {
+        toast.success(
+          `Sign-in email updated. ${sessionsRevoked} active session${sessionsRevoked === 1 ? "" : "s"} ended.`,
+        );
+      } else {
+        toast.warning(
+          `Email updated, but ${sessionsFound - sessionsRevoked} active session${sessionsFound - sessionsRevoked === 1 ? "" : "s"} could not be ended. Check identity-service logs.`,
+        );
+      }
+      setEmailReason("");
+      setEmailConfirmation("");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Email update failed");
+    } finally {
+      setBusy("");
+    }
+  };
+  const orderSummary = useMemo(() => {
+    const orders = profile?.orders ?? [];
+    return {
+      firstPurchases: new Set(
+        (profile?.esimGroups ?? []).map((group) => group.esim.id),
+      ).size,
+      topUps: orders.filter((order) => order.purchaseType === "TOPUP").length,
+    };
+  }, [profile]);
+  const normalizedEmailConfirmation = emailConfirmation
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+  const originalEmail = (
+    profile?.identity?.customer.email ??
+    profile?.email ??
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  const normalizedEmail = email.trim().toLowerCase();
+  const emailIsValid = /^\S+@\S+\.\S+$/.test(normalizedEmail);
+  const emailUpdateReady =
+    emailIsValid &&
+    normalizedEmail !== originalEmail &&
+    emailReason.trim().length >= 10 &&
+    normalizedEmailConfirmation === "CHANGE EMAIL";
+  const emailRequirements = [
+    {
+      met: emailIsValid && normalizedEmail !== originalEmail,
+      label: "A valid new email, different from the current address",
+    },
+    {
+      met: emailReason.trim().length >= 10,
+      label: "A verification reason of at least 10 characters",
+    },
+    {
+      met: normalizedEmailConfirmation === "CHANGE EMAIL",
+      label: "The confirmation words “CHANGE EMAIL”",
+    },
+  ];
 
   return (
     <>
@@ -143,9 +291,10 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         badge={
           <span className="inline-flex items-center gap-2 rounded-full bg-success-soft px-3 py-1 text-xs font-semibold text-success-foreground">
             <UserRound className="size-3.5" />
-            {profile?.orders?.length ?? "—"} orders · {completed.length}{" "}
-            completed eSIM
-            {completed.length === 1 ? "" : "s"}
+            {profile?.orders?.length ?? "—"} orders ·{" "}
+            {orderSummary.firstPurchases} eSIM
+            {orderSummary.firstPurchases === 1 ? "" : "s"} ·{" "}
+            {orderSummary.topUps} top-up{orderSummary.topUps === 1 ? "" : "s"}
           </span>
         }
         actions={
@@ -161,6 +310,279 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
         <div className="flex h-40 items-center justify-center">
           <Spinner />
         </div>
+      ) : null}
+      {profile ? (
+        <Panel
+          title="Physical eSIM usage"
+          description="Confirmed aggregate balances with every initial package and top-up"
+        >
+          {profile.esimGroups?.length ? (
+            <div className="space-y-3">
+              {profile.esimGroups.map((group) => (
+                <details
+                  key={group.esim.id}
+                  className="rounded-lg border bg-card"
+                  open={profile.esimGroups?.length === 1}
+                >
+                  <summary className="flex cursor-pointer items-center justify-between gap-4 p-4">
+                    <span>
+                      <span className="block font-medium">
+                        ICCID / SIM serial: {group.esim.iccid}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        MSISDN: {group.esim.msisdn ?? "Not assigned"} ·{" "}
+                        {group.summary.confirmedPackageCount} of{" "}
+                        {group.summary.packageCount} packages confirmed ·{" "}
+                        {humane(group.freshness)}
+                      </span>
+                    </span>
+                    <span className="font-semibold tabular-nums">
+                      {group.summary.remainingMb.toLocaleString()} MB available
+                    </span>
+                  </summary>
+                  <div className="border-t px-4 py-2">
+                    {group.packages.map((item) => (
+                      <div
+                        key={item.id}
+                        className="grid gap-2 border-b py-3 last:border-0 sm:grid-cols-[1fr_auto_auto]"
+                      >
+                        <div>
+                          <Link
+                            href={`/orders/${item.orderId}`}
+                            className="font-medium text-primary hover:underline"
+                          >
+                            {item.orderNumber} · {item.plan.name}
+                          </Link>
+                          <p className="text-xs text-muted-foreground">
+                            {humane(item.purchaseType)} · {humane(item.channel)}{" "}
+                            · Subscription ID: {item.providerSubscriptionId}
+                          </p>
+                        </div>
+                        <StatusBadge label={item.balanceStatus} />
+                        <span className="text-sm font-medium tabular-nums">
+                          {item.balanceStatus === "WAITING_FOR_FIRST_USE"
+                            ? "Awaiting activation"
+                            : item.balanceStatus === "UNAVAILABLE"
+                              ? "Balance unavailable"
+                              : `${item.remainingMb.toLocaleString()} MB remaining`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No provisioned eSIM"
+              description="Usage appears after an eSIM package is provisioned."
+            />
+          )}
+        </Panel>
+      ) : null}
+      {profile ? (
+        <Panel
+          title="Customer identity"
+          description="Customer, login account, and partner relationship"
+        >
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <p className="text-xs text-muted-foreground">Customer</p>
+              <p className="font-medium">
+                {profile.identity?.customer.customerCode ??
+                  profile.customerCode}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {profile.identity?.customer.email ?? profile.email}
+              </p>
+              <p className="mt-1 text-sm">
+                <span className="text-muted-foreground">Order contact: </span>
+                {profile.identity?.customer.orderContact ?? "Not provided"}
+              </p>
+              {profile.identity?.customer.phone &&
+              profile.identity.customer.phone !== profile.identity.customer.orderContact ? (
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Account phone: </span>
+                  {profile.identity.customer.phone}
+                </p>
+              ) : null}
+              {profile.identity?.loginAccount ? (
+                <Button asChild variant="outline" size="sm" className="mt-2">
+                  <Link href={`/users/${profile.identity.loginAccount.id}`}>
+                    View login account
+                  </Link>
+                </Button>
+              ) : null}
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Login account</p>
+              <p className="font-medium">
+                {profile.identity?.loginAccount
+                  ? profile.identity.loginAccount.email
+                  : "Guest / no login account"}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {profile.identity?.loginAccount
+                  ? `${humane(profile.identity.loginAccount.accountType)} · ${humane(profile.identity.loginAccount.status)}`
+                  : "No signed-in user is linked"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Partner</p>
+              {profile.identity?.partnerCustomer ? (
+                <>
+                  <Link
+                    href={`/admin/partners/${profile.identity.partnerCustomer.partner.id}`}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    {profile.identity.partnerCustomer.partner.name}
+                  </Link>
+                  <p className="text-sm text-muted-foreground">
+                    External customer:{" "}
+                    {profile.identity.partnerCustomer.externalCustomerId}
+                  </p>
+                </>
+              ) : (
+                <p className="font-medium">Direct customer</p>
+              )}
+            </div>
+          </div>
+        </Panel>
+      ) : null}
+      {profile ? (
+        <Panel
+          title="Personal detail updates"
+          description="Auditable corrections to customer identity data. Order and traveller records remain unchanged."
+        >
+          {canTerminate && profile.identity?.loginAccount ? (
+            <section className="mb-6 rounded-lg border bg-muted/20 p-4">
+              <div className="flex items-start gap-3">
+                <Mail className="mt-0.5 size-4 text-primary" />
+                <div className="w-full max-w-2xl space-y-4">
+                  <div>
+                    <h3 className="font-medium">Correct sign-in email</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Super Admin only. This updates Clerk and the customer
+                      record, notifies the customer, signs out existing
+                      sessions, and records the reason below.
+                    </p>
+                  </div>
+                  <label className="block text-sm font-medium">
+                    New email
+                    <input
+                      className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal"
+                      type="email"
+                      autoComplete="off"
+                      value={email}
+                      onChange={(event) => {
+                        setEmail(event.target.value);
+                      }}
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Must be a valid address different from the current email.
+                    </span>
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Reason for correction
+                    <textarea
+                      className="mt-1 min-h-24 w-full rounded-md border bg-background px-3 py-2 font-normal"
+                      maxLength={500}
+                      value={emailReason}
+                      onChange={(event) => {
+                        setEmailReason(event.target.value);
+                      }}
+                      placeholder="Describe how the corrected email was verified."
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {emailReason.trim().length}/500 characters. Minimum 10.
+                    </span>
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Type CHANGE EMAIL to confirm
+                    <input
+                      className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal"
+                      value={emailConfirmation}
+                      onChange={(event) => {
+                        setEmailConfirmation(event.target.value);
+                      }}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="CHANGE EMAIL"
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Capitalization and extra spaces are accepted.
+                    </span>
+                  </label>
+                  <div
+                    className="rounded-md border bg-background/70 p-3"
+                    role="status"
+                  >
+                    <p className="mb-2 text-xs font-medium">
+                      Before the button is enabled:
+                    </p>
+                    <ul className="space-y-1.5">
+                      {emailRequirements.map((requirement) => (
+                        <li
+                          key={requirement.label}
+                          className={`flex items-start gap-2 text-xs ${requirement.met ? "text-emerald-700" : "text-muted-foreground"}`}
+                        >
+                          {requirement.met ? (
+                            <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
+                          ) : (
+                            <Circle className="mt-0.5 size-3.5 shrink-0" />
+                          )}
+                          {requirement.label}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <Button
+                    type="button"
+                    disabled={busy === "email" || !emailUpdateReady}
+                    title={
+                      emailUpdateReady
+                        ? "Update the login email and sign the customer out everywhere"
+                        : "Complete the three requirements shown above"
+                    }
+                    onClick={() => void correctEmail()}
+                  >
+                    {busy === "email" ? <Spinner /> : null}
+                    Update email and end active sessions
+                  </Button>
+                </div>
+              </div>
+            </section>
+          ) : null}
+          {profile.profileUpdates?.length ? (
+            <div className="space-y-3">
+              {profile.profileUpdates.map((update) => (
+                <article key={update.id} className="rounded-lg border p-4">
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <strong className="text-sm">Sign-in email corrected</strong>
+                    <time className="text-xs text-muted-foreground">
+                      {new Date(update.createdAt).toLocaleString()}
+                    </time>
+                  </div>
+                  <p className="mt-2 text-sm">
+                    {update.previousValue?.email ??
+                      "Previous email unavailable"}
+                    {" -> "}
+                    {update.newValue?.email ?? "Updated email unavailable"}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {update.newValue?.reason ?? "No reason recorded"} |
+                    Performed by {update.performedBy}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No personal detail changes"
+              description="Verified changes to customer details will appear here."
+            />
+          )}
+        </Panel>
       ) : null}
       {profile ? (
         <Panel
@@ -200,9 +622,25 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                         >
                           {order.orderNumber}
                         </Link>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          <StatusBadge
+                            label={order.purchaseType}
+                            tone={
+                              order.purchaseType === "TOPUP"
+                                ? "info"
+                                : "default"
+                            }
+                          />
+                          <StatusBadge label={order.channel} />
+                        </div>
                         <p className="text-xs text-muted-foreground">
-                          {new Date(order.createdAt).toLocaleDateString()}
+                          {new Date(order.createdAt).toLocaleString()}
                         </p>
+                        {order.purchaseType === "TOPUP" && order.topUpMobile ? (
+                          <p className="text-xs text-muted-foreground">
+                            Top-up for {order.topUpMobile}
+                          </p>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         <span className="font-medium">
@@ -284,7 +722,7 @@ export default function CustomerProfile({ ownerId }: { ownerId: string }) {
                           ) : null}
                           {order.esim ? (
                             <LifecycleActions
-                              orderId={order.id}
+                              inventoryId={order.esim.id}
                               iccid={order.esim.iccid}
                               providerStatus={
                                 order.esim.providerStatus ?? order.esim.status

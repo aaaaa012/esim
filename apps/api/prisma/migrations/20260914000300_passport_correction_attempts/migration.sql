@@ -1,0 +1,4 @@
+ALTER TYPE "DocumentReviewStatus" ADD VALUE IF NOT EXISTS 'CORRECTION_REQUIRED';
+
+ALTER TABLE "PassportExtraction"
+ADD COLUMN "correctionAttempts" INTEGER NOT NULL DEFAULT 0;

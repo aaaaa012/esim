@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import { Button } from "@/components/ui/button";
+import ErrorDialog from "@/components/error-dialog";
 import {
   Dialog,
   DialogContent,
@@ -33,10 +34,14 @@ const apiError = (value: unknown, fallback: string) => {
 
 export function ManualRefundCard({
   orderId,
-  paid,
+  hasPaymentAttempt,
+  alreadyRefunded = false,
+  paymentProvider,
 }: {
   orderId: string;
-  paid: boolean;
+  hasPaymentAttempt: boolean;
+  alreadyRefunded?: boolean;
+  paymentProvider?: string;
 }) {
   const authFetch = useAuthenticatedFetch();
   const [refund, setRefund] = useState<ManualRefund | null>(null);
@@ -47,17 +52,23 @@ export function ManualRefundCard({
   const [explanation, setExplanation] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
 
   const load = async () => {
-    const response = await authFetch(
-      `${API}/operations/manual-refunds?orderId=${orderId}`,
-    );
-    const value = await response.json();
-    if (!response.ok)
-      throw new Error(
-        apiError(value, "Manual refund status could not be loaded"),
+    setStatusLoading(true);
+    try {
+      const response = await authFetch(
+        `${API}/operations/manual-refunds?orderId=${orderId}`,
       );
-    setRefund(value.data?.items?.[0] ?? null);
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          apiError(value, "Manual refund status could not be loaded"),
+        );
+      setRefund(value.data?.items?.[0] ?? null);
+    } finally {
+      setStatusLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -69,6 +80,14 @@ export function ManualRefundCard({
       ),
     );
   }, [orderId]);
+
+  const activeRefund =
+    refund && ["REQUESTED", "APPROVED"].includes(refund.status);
+  const requestDisabled =
+    statusLoading ||
+    !hasPaymentAttempt ||
+    alreadyRefunded ||
+    Boolean(activeRefund);
 
   const submit = async () => {
     setBusy(true);
@@ -95,6 +114,7 @@ export function ManualRefundCard({
 
   return (
     <div className="space-y-2">
+      <ErrorDialog error={error} onClose={() => setError("")} />
       {refund ? (
         <div className="rounded-lg border p-3 text-sm">
           <div className="flex items-center justify-between">
@@ -106,29 +126,51 @@ export function ManualRefundCard({
           </p>
           {refund.status === "APPROVED" ? (
             <p className="mt-2 text-xs font-medium">
-              Do the refund in Khalti, then mark it done from Manual Refunds.
+              Complete the refund in{" "}
+              {paymentProvider === "FONEPAY" ? "Fonepay" : "Khalti"}, then mark
+              it done from Manual Refunds.
             </p>
           ) : null}
         </div>
-      ) : paid ? (
-        <Button
-          className="w-full"
-          variant="outline"
-          onClick={() => {
-            setError("");
-            setOpen(true);
-          }}
-        >
-          Request manual refund
-        </Button>
       ) : null}
+      <Button
+        className="w-full"
+        variant="outline"
+        disabled={requestDisabled}
+        onClick={() => {
+          setError("");
+          setOpen(true);
+        }}
+      >
+        Request manual refund
+      </Button>
+      {activeRefund ? (
+        <p className="text-xs text-muted-foreground">
+          This order already has a refund awaiting review or completion.
+        </p>
+      ) : !hasPaymentAttempt ? (
+        <p className="text-xs text-muted-foreground">
+          Available after at least one payment attempt has been created.
+        </p>
+      ) : alreadyRefunded ? (
+        <p className="text-xs text-muted-foreground">
+          This order has already been refunded.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Use this even when the customer paid but the gateway never confirmed
+          it. A Super Admin must review the evidence before completion.
+        </p>
+      )}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Request manual refund</DialogTitle>
             <DialogDescription>
               This records an exception for review. It does not send money or
-              change the order.
+              change the order. If payment was not confirmed in Visa Compass,
+              include the customer&apos;s bank or wallet evidence and
+              transaction reference below.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -159,7 +201,6 @@ export function ManualRefundCard({
                 autoComplete="off"
               />
             </div>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>

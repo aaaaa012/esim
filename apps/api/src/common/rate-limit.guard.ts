@@ -12,14 +12,14 @@ import { RedisRateLimitIncidentService } from "./redis-rate-limit-incident.servi
 type Bucket = { tokens: number; lastRefill: number };
 
 /**
- * In-memory token-bucket limiter keyed by IP + normalized route.
+ * Distributed fixed-window limiter keyed by IP + normalized route.
  *
  * Webhook endpoints are exempt (they are signature-verified provider
  * callbacks). Public and auth routes are throttled more aggressively to slow
  * scraping and brute force; everything else gets a generous default.
  *
- * NOTE: in-memory state is per process. For multi-instance deployments swap
- * this for a Redis-backed limiter.
+ * Redis is authoritative when queues are enabled. A deliberately stricter
+ * per-process token bucket keeps requests bounded during short Redis outages.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
@@ -27,6 +27,12 @@ export class RateLimitGuard implements CanActivate {
   private readonly limit = Number(process.env.RATE_LIMIT_PER_MINUTE ?? 300);
   private readonly authLimit = Number(
     process.env.AUTH_RATE_LIMIT_PER_MINUTE ?? 60,
+  );
+  private readonly authMeIpLimit = Number(
+    process.env.AUTH_ME_IP_RATE_LIMIT_PER_MINUTE ?? 600,
+  );
+  private readonly guestLimit = Number(
+    process.env.GUEST_RATE_LIMIT_PER_MINUTE ?? 30,
   );
   private readonly windowMs = 60_000;
   private redisCircuitOpenUntil = 0;
@@ -38,14 +44,12 @@ export class RateLimitGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context
-      .switchToHttp()
-      .getRequest<{
-        ip?: string;
-        socket?: { remoteAddress?: string };
-        path: string;
-        method: string;
-      }>();
+    const request = context.switchToHttp().getRequest<{
+      ip?: string;
+      socket?: { remoteAddress?: string };
+      path: string;
+      method: string;
+    }>();
     const ip = clientIp(request);
     const path = request.path ?? "";
 
@@ -56,16 +60,32 @@ export class RateLimitGuard implements CanActivate {
     )
       return true;
 
+    const authMe = request.method === "GET" && path === "/api/v1/auth/me";
     const sensitive =
-      path.startsWith("/api/v1/auth") || path.startsWith("/api/v1/public");
-    const configuredCapacity = sensitive ? this.authLimit : this.limit;
+      path.startsWith("/api/v1/auth") ||
+      path.startsWith("/api/v1/public") ||
+      path.startsWith("/api/v1/staff-activation");
+    const guestCheckout =
+      path.startsWith("/api/v1/guest/orders") ||
+      path.startsWith("/api/v1/recharges") ||
+      path.startsWith("/api/v1/partner-checkout");
+    const configuredCapacity = authMe
+      ? this.authMeIpLimit
+      : guestCheckout
+      ? this.guestLimit
+        : sensitive
+        ? this.authLimit
+        : this.limit;
     // UUIDs and numeric ids must not form attacker-controlled fresh buckets.
     const route = path
       .replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, ":id")
       // Hosted-checkout tokens are high entropy, but must still share one
       // per-IP bucket so a leaked link cannot be used to bypass throttling by
       // varying token-shaped path segments.
-      .replace(/\/partner-checkout\/[A-Za-z0-9_-]{32,100}(?=\/|$)/g, "/partner-checkout/:token")
+      .replace(
+        /\/partner-checkout\/[A-Za-z0-9_-]{32,100}(?=\/|$)/g,
+        "/partner-checkout/:token",
+      )
       .replace(/\/\d+(?=\/|$)/g, "/:id");
     const key = `${ip}:${request.method}:${route}`;
 

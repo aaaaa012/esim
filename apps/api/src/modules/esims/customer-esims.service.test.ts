@@ -15,6 +15,7 @@ const inventory = {
       order: {
         id: "order-1",
         orderNumber: "VC-1",
+        orderType: "INITIAL_PURCHASE",
         status: "COMPLETED",
         plan: {
           id: "plan-1",
@@ -52,6 +53,29 @@ describe("CustomerEsimsService", () => {
       {} as never,
     );
     const result = await service.list("user_1");
+    expect(prisma.esimInventory.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          customerEsims: {
+            some: {
+              order: {
+                orderType: "INITIAL_PURCHASE",
+                customerId: "customer-1",
+              },
+            },
+            none: {
+              order: {
+                orderType: "INITIAL_PURCHASE",
+                customerId: { not: "customer-1" },
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(
+      prisma.esimInventory.findMany.mock.calls[0]![0].include.customerEsims,
+    ).not.toHaveProperty("where");
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       id: inventory.id,
@@ -59,6 +83,35 @@ describe("CustomerEsimsService", () => {
       qrOrderId: "order-1",
     });
     expect(result[0]!.iccidMasked).not.toBe(inventory.iccid);
+  });
+
+  it("includes a historical recharge in owner history while keeping the original installation link", async () => {
+    const row = structuredClone(inventory);
+    row.customerEsims.unshift({
+      ...structuredClone(inventory.customerEsims[0]!),
+      order: {
+        ...inventory.customerEsims[0]!.order,
+        id: "historical-topup",
+        orderNumber: "VC-TOPUP",
+        orderType: "TOPUP",
+      },
+    });
+    const prisma = {
+      enabled: true,
+      customer: { findFirst: vi.fn().mockResolvedValue({ id: "owner" }) },
+      esimInventory: { findMany: vi.fn().mockResolvedValue([row]) },
+    };
+    const service = new CustomerEsimsService(
+      prisma as never,
+      {} as never,
+      {} as never,
+    );
+    const result = await service.list("owner-login");
+    expect(result[0]!.subscriptions).toHaveLength(2);
+    expect(
+      result[0]!.activity.map((item: { orderId: string }) => item.orderId),
+    ).toContain("historical-topup");
+    expect(result[0]!.qrOrderId).toBe("order-1");
   });
 
   it("does not return an eSIM not owned by the customer", async () => {
@@ -82,11 +135,9 @@ describe("CustomerEsimsService", () => {
       enabled: true,
       customer: { findFirst: vi.fn().mockResolvedValue({ id: "customer-1" }) },
       esimInventory: {
-        findFirst: vi
-          .fn()
-          .mockResolvedValue({
-            customerEsims: [{ qrPayloadEncrypted: "encrypted" }],
-          }),
+        findFirst: vi.fn().mockResolvedValue({
+          customerEsims: [{ qrPayloadEncrypted: "encrypted" }],
+        }),
       },
     };
     const crypto = {

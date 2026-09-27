@@ -106,26 +106,126 @@ export const correctMrzField = (
 const isMrzLine = (line: string) =>
   line.length === 44 && /^[A-Z0-9<]+$/.test(line);
 
+const line2ChecksumScore = (line: string): number => {
+  if (!isMrzLine(line) || !/^\d$/.test(line[9] ?? "")) return -1;
+  let score = 0;
+  if (mrzCheckDigit(line.slice(0, 9)) === Number(line[9])) score += 1;
+  if (
+    /^\d$/.test(line[19] ?? "") &&
+    mrzCheckDigit(line.slice(13, 19)) === Number(line[19])
+  )
+    score += 1;
+  if (
+    /^\d$/.test(line[27] ?? "") &&
+    mrzCheckDigit(line.slice(21, 27)) === Number(line[27])
+  )
+    score += 1;
+  const composite =
+    line.slice(0, 10) + line.slice(13, 20) + line.slice(21, 43);
+  if (
+    /^\d$/.test(line[43] ?? "") &&
+    mrzCheckDigit(composite) === Number(line[43])
+  )
+    score += 2;
+  return score;
+};
+
+/** OCR may prepend a label or retain a border glyph on an otherwise complete
+ * MRZ line. Recover a 44-column window only when at least two independent ICAO
+ * checks support it; arbitrary 44-character substrings remain rejected. */
+const recoverLine2Window = (line: string): string | undefined => {
+  if (line.length < 44) return undefined;
+  let best: { value: string; score: number } | undefined;
+  for (let offset = 0; offset <= line.length - 44; offset += 1) {
+    const value = line.slice(offset, offset + 44);
+    const score = line2ChecksumScore(value);
+    if (!best || score > best.score) best = { value, score };
+  }
+  return best && best.score >= 2 ? best.value : undefined;
+};
+
+/** Tries every strategy that can prove a name line is TD3 line 1 so the names
+ *  survive even when OCR tears it. Line 2 is anchored by its check-digit
+ *  fields, so the zones above it are free to be imperfect. */
+const recoverLine1 = (zone: string[]): string | undefined => {
+  const embeddedMrzAnchor = /P<[A-Z0-9]{3}[A-Z0-9<]{2,}<</;
+
+  const fromText = (text: string): string | undefined => {
+    if (isMrzLine(text)) return text;
+    const embedded = text.match(embeddedMrzAnchor);
+    if (embedded) {
+      const start = embedded.index ?? 0;
+      return text.slice(start, start + 44).padEnd(44, "<");
+    }
+    // OCR commonly drops a few trailing '<' fillers from line 1 even when its
+    // name zone is readable, and the second-pass rectangle sometimes crops the
+    // top of the line. Recover only an unmistakable TD3 passport line.
+    const short = text.replace(/<+$/g, "");
+    if (
+      short.length >= 12 &&
+      /^P[A-Z0-9<]/.test(short) &&
+      short.includes("<<")
+    )
+      return short.padEnd(44, "<");
+    return undefined;
+  };
+
+  for (const line of zone) {
+    const recovered = fromText(line);
+    if (recovered) return recovered;
+  }
+  // When Tesseract splits one line 1 across two text lines neither fragment
+  // matches alone (e.g. "P<UTOERIKSSON" + "<<ANNA<MARIA<..."). A name polluted
+  // by one stray voxel is still far better than a missing one: comparison uses
+  // edit-distance tolerance and would route a bad name to review, not to a
+  // false VERIFIED.
+  return fromText(zone.join(""));
+};
+
+/** Finds TD3 name lines independently of line 2. Separate OCR crops can
+ * recover the two MRZ lines in different passes. */
+export const extractMrzLine1Candidates = (ocrText: string): string[] => {
+  const lines = ocrText
+    .split(/\r?\n/)
+    .map((line) => line.toUpperCase().replace(/[^A-Z0-9<]/g, ""))
+    .filter(Boolean);
+  const candidates = new Set<string>();
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) continue;
+    const single = recoverLine1([line]);
+    if (single) candidates.add(single);
+    const next = lines[index + 1];
+    if (next) {
+      const joined = recoverLine1([line, next]);
+      if (joined) candidates.add(joined);
+    }
+  }
+  return [...candidates];
+};
+
 /** The TD3 line 2 is the one that carries the check digits we can validate.
  *  It is far more reliable than line 1, which OCR often mangles (the name
  *  zone's '<' filler gets read as stray letters). Returns the line 2 raw text
- *  plus the neighbouring line 1 when a clean one exists. */
+ *  plus a recovered line 1 when one exists anywhere in the lines above. */
 export const extractMrz = (
   ocrText: string,
 ): { line1?: string; line2: string } | null => {
   const lines = ocrText
     .split(/\r?\n/)
-    .map((line) => line.replace(/[^A-Z0-9<]/g, ""))
-    .filter(isMrzLine);
-  const index = lines.findIndex(
-    (line) => line[9] !== undefined && /^\d$/.test(line[9]),
+    .map((line) => line.toUpperCase().replace(/[^A-Z0-9<]/g, ""))
+    .filter(Boolean);
+  let index = lines.findIndex(
+    (line) => isMrzLine(line) && line[9] !== undefined && /^\d$/.test(line[9]),
   );
-  if (index < 0) return null;
-  const line2 = lines[index] as string;
-  const neighbour = lines[index - 1];
-  return neighbour && isMrzLine(neighbour)
-    ? { line1: neighbour, line2 }
-    : { line2 };
+  let line2 = index >= 0 ? lines[index] : undefined;
+  if (!line2) {
+    index = lines.findIndex((line) => Boolean(recoverLine2Window(line)));
+    if (index >= 0) line2 = recoverLine2Window(lines[index] as string);
+  }
+  if (index < 0 || !line2) return null;
+  const line1 = recoverLine1(lines.slice(Math.max(0, index - 3), index));
+  return { ...(line1 ? { line1 } : {}), line2 };
 };
 
 /** Parses a TD3 passport MRZ. Returns null when no line 2 is present. Names
@@ -163,7 +263,8 @@ export const parseMrz = (ocrText: string): ParsedMrz | null => {
 
   const splitName = (zone: string): { surname: string; givenNames: string } => {
     const separator = zone.indexOf("<<");
-    if (separator < 0) return { surname: zone.replace(/<+$/g, "").trim(), givenNames: "" };
+    if (separator < 0)
+      return { surname: zone.replace(/<+$/g, "").trim(), givenNames: "" };
     // ICAO fillers between name components stand for spaces; trailing fillers
     // are padding only.
     const clean = (value: string) => value.replace(/<+/g, " ").trim();

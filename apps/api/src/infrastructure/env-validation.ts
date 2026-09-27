@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { decodeAes256Key } from "./encryption-key.js";
 
 /**
  * Fail-fast validation of the environment. Required production secrets must be
@@ -22,12 +23,15 @@ const baseSchema = z.object({
   PERSISTENCE_MODE: z.enum(["prisma", "memory"]).optional(),
   REDIS_URL: z.string().min(1).optional(),
   APP_ENCRYPTION_KEY_BASE64: z.string().min(16).optional(),
-  PAYMENT_MODE: z.enum(["khalti", "fonepay", "sandbox", "simulator"]).optional(),
+  PAYMENT_MODE: z
+    .enum(["khalti", "fonepay", "sandbox", "simulator"])
+    .optional(),
   FONEPAY_ENABLED: z.enum(["true", "false"]).optional(),
   FONEPAY_BASE_URL: z.string().url().optional(),
   FONEPAY_USERNAME: z.string().min(1).optional(),
   FONEPAY_PASSWORD: z.string().min(1).optional(),
   FONEPAY_TERMINAL_ID: z.string().min(1).max(16).optional(),
+  FONEPAY_PRIVATE_KEY_PATH: z.string().min(1).optional(),
   FONEPAY_PRIVATE_KEY_BASE64: z.string().min(1).optional(),
   CONNECTIVITY_PROVIDER: z.enum(["transatel", "auriga-mock"]).optional(),
   GUEST_ORDER_SECRET: z.string().min(32).optional(),
@@ -42,16 +46,132 @@ const baseSchema = z.object({
   EMAIL_FROM_NAME: z.string().min(1).optional(),
   EMAIL_REPLY_TO: z.string().email().optional(),
   KHALTI_SECRET_KEY: z.string().min(1).optional(),
+  KHALTI_BASE_URL: z.string().url().optional(),
+  KHALTI_REQUEST_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .optional(),
+  FONEPAY_REQUEST_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .optional(),
+  FONEPAY_BANK_CACHE_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(300)
+    .max(604_800)
+    .optional(),
+  FONEPAY_BANK_MAX_STALE_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(300)
+    .max(2_592_000)
+    .optional(),
+  PASSPORT_OCR_MAX_PAGES: z.coerce.number().int().min(1).max(16).optional(),
+  PASSPORT_OCR_MODE: z.enum(["local", "hybrid", "textract"]).optional(),
+  PASSPORT_OCR_LOCAL_WAITING_LIMIT: z.coerce.number().int().min(1).optional(),
+  PASSPORT_OCR_LOCAL_MAX_AGE_MS: z.coerce.number().int().positive().optional(),
+  PASSPORT_OCR_HEARTBEAT_MAX_AGE_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  PASSPORT_OCR_TEXTRACT_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional(),
+  PASSPORT_OCR_TEXTRACT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(5_000)
+    .optional(),
+  PASSPORT_OCR_FALLBACK_ENABLED: z.enum(["true", "false"]).optional(),
+  PARTNER_WEBHOOK_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .optional(),
+  TRANSATEL_REQUEST_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .optional(),
+  TRANSATEL_CIRCUIT_FAILURE_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .min(2)
+    .max(20)
+    .optional(),
+  TRANSATEL_CIRCUIT_RESET_MS: z.coerce
+    .number()
+    .int()
+    .min(5_000)
+    .max(300_000)
+    .optional(),
+  TRANSATEL_REACTIVATION_APPROVAL_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .max(1_440)
+    .optional(),
+  PARTNER_RATE_BUCKET_RETENTION_HOURS: z.coerce
+    .number()
+    .int()
+    .min(2)
+    .max(720)
+    .optional(),
+  DATA_RETENTION_ENABLED: z.enum(["true", "false"]).optional(),
+  DATA_RETENTION_BATCH_SIZE: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(1_000)
+    .optional(),
+  INTEGRATION_LOG_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(3_650)
+    .optional(),
+  WEBHOOK_EVENT_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(3_650)
+    .optional(),
+  NOTIFICATION_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(3_650)
+    .optional(),
+  AUDIT_LOG_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(365)
+    .max(3_650)
+    .optional(),
   TRANSATEL_BASE_URL: z.string().url().optional(),
   TRANSATEL_CLIENT_ID: z.string().min(1).optional(),
   TRANSATEL_CLIENT_SECRET: z.string().min(1).optional(),
   TRANSATEL_MVNO_REF: z.string().min(1).optional(),
   TRANSATEL_WEBHOOK_TARGET_URL: z.string().url().optional(),
   AWS_REGION: z.string().min(1).optional(),
+  AWS_TEXTRACT_REGION: z.string().min(1).optional(),
   AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
   AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   AWS_SESSION_TOKEN: z.string().min(1).optional(),
   AWS_S3_BUCKET: z.string().min(3).optional(),
+  AWS_MARKETING_ASSET_BUCKET: z.string().min(3).optional(),
+  PUBLIC_ASSET_BASE_URL: z.string().url().optional(),
   AWS_S3_ENDPOINT: z.string().url().optional(),
   AWS_S3_FORCE_PATH_STYLE: z.enum(["true", "false"]).optional(),
   AWS_SES_REGION: z.string().min(1).optional(),
@@ -59,6 +179,20 @@ const baseSchema = z.object({
   CLERK_PUBLISHABLE_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),
   CLERK_WEBHOOK_SECRET: z.string().optional(),
+  E2E_AUTH_ENABLED: z.enum(["true", "false"]).optional(),
+  E2E_AUTH_SECRET: z.string().min(32).optional(),
+  AUTH_ME_RATE_LIMIT_PER_MINUTE: z.coerce
+    .number()
+    .int()
+    .min(10)
+    .max(10_000)
+    .optional(),
+  AUTH_ME_IP_RATE_LIMIT_PER_MINUTE: z.coerce
+    .number()
+    .int()
+    .min(10)
+    .max(100_000)
+    .optional(),
   ORDER_WORKFLOW_MODE: z.enum(["single-instance", "database-first"]).optional(),
   PAYMENT_VERIFY_ATTEMPTS: z.coerce.number().int().positive().optional(),
   INVENTORY_PROVIDER_FRESHNESS_HOURS: z.coerce
@@ -138,14 +272,39 @@ export function validateEnv(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   if (config.NODE_ENV === "production") {
+    if (config.E2E_AUTH_ENABLED === "true" || config.E2E_AUTH_SECRET) {
+      throw new Error("Local E2E authentication is forbidden in production");
+    }
     const productionResult = productionSchema.safeParse(config);
     if (!productionResult.success) return failWith(productionResult);
+    const ocrMode = config.PASSPORT_OCR_MODE ?? "hybrid";
+    if (
+      (ocrMode === "hybrid" || ocrMode === "textract") &&
+      !config.AWS_TEXTRACT_REGION &&
+      !config.AWS_REGION
+    )
+      throw new Error(
+        "AWS_TEXTRACT_REGION or AWS_REGION is required for Textract OCR",
+      );
+    decodeAes256Key(config.APP_ENCRYPTION_KEY_BASE64);
     assertFonepayConfiguration(config);
     return config;
   }
   const result = baseSchema.safeParse(config);
   if (!result.success) return failWith(result);
   assertFonepayConfiguration(config);
+
+  if (config.E2E_AUTH_ENABLED === "true") {
+    if (config.NODE_ENV !== "test")
+      throw new Error("E2E_AUTH_ENABLED=true requires NODE_ENV=test");
+    if (
+      typeof config.E2E_AUTH_SECRET !== "string" ||
+      config.E2E_AUTH_SECRET.length < 32
+    )
+      throw new Error(
+        "E2E_AUTH_ENABLED=true requires E2E_AUTH_SECRET of at least 32 characters",
+      );
+  }
 
   // Even outside production, if an encryption key or persistence is configured
   // it must be valid; never silently degrade to development-only fallbacks.
@@ -169,8 +328,9 @@ function assertFonepayConfiguration(config: Record<string, unknown>) {
     "FONEPAY_USERNAME",
     "FONEPAY_PASSWORD",
     "FONEPAY_TERMINAL_ID",
-    "FONEPAY_PRIVATE_KEY_BASE64",
   ].filter((key) => !config[key]);
+  if (!config.FONEPAY_PRIVATE_KEY_PATH && !config.FONEPAY_PRIVATE_KEY_BASE64)
+    required.push("FONEPAY_PRIVATE_KEY_PATH or FONEPAY_PRIVATE_KEY_BASE64");
   if (required.length)
     throw new Error(
       `FONEPAY_ENABLED=true requires ${required.join(", ")}. Refusing to boot.`,

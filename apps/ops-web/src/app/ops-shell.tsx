@@ -17,7 +17,6 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
   const { signOut } = useClerk();
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  useEffect(() => setMobileNavOpen(false), [pathname]);
   useEffect(() => {
     if (!mobileNavOpen) return;
     const previous = document.body.style.overflow;
@@ -47,7 +46,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
         open={mobileNavOpen}
         onClose={() => setMobileNavOpen(false)}
       />
-      <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-0">
+      <div className="ops-main flex min-h-screen min-w-0 flex-1 flex-col">
         <header className="ops-header">
           <div className="flex min-w-0 items-center gap-2">
             <Button
@@ -88,6 +87,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
             <Button
               variant="ghost"
               size="sm"
+              aria-label="Sign out"
               onClick={() => void signOut()}
               className="text-muted-foreground"
             >

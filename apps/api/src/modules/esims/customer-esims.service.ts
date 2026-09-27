@@ -4,12 +4,20 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { OrderStatus } from "@prisma/client";
 import QRCode from "qrcode";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
+import {
+  type EsimUsageView,
+  type UsageInventory,
+  UsageService,
+  usageInventoryArgs,
+} from "./usage.service.js";
+import { QueueService } from "../../jobs/queue.service.js";
 
 @Injectable()
 export class CustomerEsimsService {
@@ -18,6 +26,8 @@ export class CustomerEsimsService {
     private readonly prisma: PrismaService,
     private readonly connectivity: ConnectivityService,
     private readonly crypto: CryptoService,
+    @Optional() private readonly usageService?: UsageService,
+    @Optional() private readonly queues?: QueueService,
   ) {}
 
   async list(ownerId: string) {
@@ -25,20 +35,18 @@ export class CustomerEsimsService {
     const customer = await this.customer(ownerId);
     if (!customer) return [];
     const rows = await this.prisma.esimInventory.findMany({
-      where: { customerEsims: { some: { customerId: customer.id } } },
+      where: { customerEsims: this.ownedAssignment(customer.id) },
       include: {
         customerEsims: {
-          where: { customerId: customer.id },
-          include: {
-            order: { include: { plan: { include: { country: true } } } },
-            subscriptions: true,
-          },
+          ...usageInventoryArgs.include.customerEsims,
           orderBy: { assignedAt: "desc" },
         },
       },
       orderBy: { updatedAt: "desc" },
     });
-    return rows.map((row) => this.toView(row));
+    return rows.map((row) =>
+      this.toView(row, this.usageService?.viewFromInventory(row)),
+    );
   }
 
   async get(ownerId: string, id: string) {
@@ -52,10 +60,9 @@ export class CustomerEsimsService {
     const customer = await this.customer(ownerId);
     if (!customer) throw new NotFoundException("eSIM not found");
     const row = await this.prisma.esimInventory.findFirst({
-      where: { id, customerEsims: { some: { customerId: customer.id } } },
+      where: { id, customerEsims: this.ownedAssignment(customer.id) },
       include: {
         customerEsims: {
-          where: { customerId: customer.id },
           include: { subscriptions: true },
         },
       },
@@ -67,12 +74,33 @@ export class CustomerEsimsService {
         "Usage was refreshed recently. Please wait before trying again.",
         HttpStatus.TOO_MANY_REQUESTS,
       );
+    if (this.queues?.enabled) {
+      try {
+        const shared = await this.queues.consumeRateLimit(
+          `customer-usage-refresh:${customer.id}:${id}`,
+          30_000,
+        );
+        if (shared.count > 1)
+          throw new HttpException(
+            "Usage was refreshed recently. Please wait before trying again.",
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+      } catch (error) {
+        if (error instanceof HttpException) throw error;
+        // The process-local guard remains available during a Redis incident.
+      }
+    }
     if (!row.iccid)
       throw new BadRequestException(
         "Usage is unavailable until the eSIM is provisioned",
       );
+    if (this.usageService) {
+      const refreshed = await this.usageService.refresh(row.id);
+      this.refreshedAt.set(`${customer.id}:${id}`, Date.now());
+      return refreshed;
+    }
     const usage = await this.connectivity.getUsage(row.iccid);
-    if (usage.usageAvailable === false)
+    if (usage.usageAvailable === false && !usage.subscriptions?.length)
       throw new BadRequestException(
         "Transatel found the subscription but has not published a usable data balance yet. Please retry shortly.",
       );
@@ -93,9 +121,13 @@ export class CustomerEsimsService {
           return this.prisma.subscription.update({
             where: { id: subscription.id },
             data: {
-              usedMb: balance.usedMb,
-              totalMb: balance.totalMb,
-              usageLastCheckedAt: checkedAt,
+              ...(balance.usageAvailable === false
+                ? {}
+                : {
+                    usedMb: balance.usedMb,
+                    totalMb: balance.totalMb,
+                    usageLastCheckedAt: checkedAt,
+                  }),
               providerLastSeenAt: checkedAt,
               assignmentVerificationStatus: "VERIFIED",
               assignmentVerifiedAt:
@@ -120,12 +152,13 @@ export class CustomerEsimsService {
     const customer = await this.customer(ownerId);
     if (!customer) throw new NotFoundException("eSIM not found");
     const row = await this.prisma.esimInventory.findFirst({
-      where: { id, customerEsims: { some: { customerId: customer.id } } },
+      where: { id, customerEsims: this.ownedAssignment(customer.id) },
       select: {
         customerEsims: {
           where: {
-            customerId: customer.id,
             order: {
+              customerId: customer.id,
+              orderType: "INITIAL_PURCHASE",
               status: { in: [OrderStatus.QR_READY, OrderStatus.COMPLETED] },
             },
           },
@@ -152,6 +185,18 @@ export class CustomerEsimsService {
     };
   }
 
+  private ownedAssignment(customerId: string) {
+    return {
+      some: { order: { orderType: "INITIAL_PURCHASE" as const, customerId } },
+      none: {
+        order: {
+          orderType: "INITIAL_PURCHASE" as const,
+          customerId: { not: customerId },
+        },
+      },
+    };
+  }
+
   private async customer(ownerId: string) {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(ownerId);
     return this.prisma.customer.findFirst({
@@ -165,9 +210,9 @@ export class CustomerEsimsService {
     });
   }
 
-  private toView(row: any) {
-    const subscriptions = row.customerEsims.flatMap((link: any) =>
-      link.subscriptions.map((subscription: any) => ({
+  private toView(row: UsageInventory, canonical?: EsimUsageView) {
+    const subscriptions = row.customerEsims.flatMap((link) =>
+      link.subscriptions.map((subscription) => ({
         id: subscription.id,
         orderId: link.order.id,
         orderNumber: link.order.orderNumber,
@@ -184,7 +229,9 @@ export class CustomerEsimsService {
         totalMb: subscription.totalMb,
         remainingMb: Math.max(0, subscription.totalMb - subscription.usedMb),
         activatedAt: subscription.activatedAt?.toISOString(),
-        expiresAt: subscription.expiresAt?.toISOString(),
+        expiresAt: subscription.activatedAt
+          ? subscription.expiresAt?.toISOString()
+          : undefined,
         lastCheckedAt: subscription.usageLastCheckedAt?.toISOString(),
         assignmentVerificationStatus: subscription.assignmentVerificationStatus,
         assignmentVerifiedAt: subscription.assignmentVerifiedAt?.toISOString(),
@@ -192,16 +239,16 @@ export class CustomerEsimsService {
       })),
     );
     const active = subscriptions.filter(
-      (item: any) => item.status === "ACTIVE" || item.status === "PENDING",
+      (item) => item.status === "ACTIVE" || item.status === "PENDING",
     );
-    const measured = active.filter((item: any) => item.lastCheckedAt);
+    const measured = active.filter((item) => item.lastCheckedAt);
     const lastCheckedAt = measured
-      .map((item: any) => item.lastCheckedAt)
+      .map((item) => item.lastCheckedAt)
       .sort()
       .at(-1);
     const usage = measured.length
       ? measured.reduce(
-          (sum: any, item: any) => ({
+          (sum, item) => ({
             usedMb: sum.usedMb + item.usedMb,
             totalMb: sum.totalMb + item.totalMb,
             remainingMb: sum.remainingMb + item.remainingMb,
@@ -210,15 +257,16 @@ export class CustomerEsimsService {
         )
       : null;
     const qrOrder = row.customerEsims.find(
-      (link: any) =>
-        link.order.status === "COMPLETED" || link.order.status === "QR_READY",
+      (link) =>
+        link.order.orderType === "INITIAL_PURCHASE" &&
+        (link.order.status === "COMPLETED" || link.order.status === "QR_READY"),
     );
     const mask = (value?: string | null) =>
       value ? `${value.slice(0, 4)}••••${value.slice(-4)}` : undefined;
     return {
       id: row.id,
       status:
-        subscriptions.some((item: any) => item.status === "SUSPENDED") &&
+        subscriptions.some((item) => item.status === "SUSPENDED") &&
         !active.length
           ? "SUSPENDED"
           : active.length
@@ -228,13 +276,29 @@ export class CustomerEsimsService {
       msisdnMasked: mask(row.msisdn),
       activatedAt: row.activatedAt?.toISOString(),
       expiresAt: row.expiresAt?.toISOString(),
-      usage: usage ? { ...usage, lastCheckedAt } : null,
-      subscriptions: subscriptions.sort((a: any, b: any) =>
+      usage: canonical
+        ? canonical.usageStatus === "AVAILABLE"
+          ? {
+              ...canonical.summary,
+              lastCheckedAt: canonical.lastConfirmedAt,
+              oldestConfirmedAt: canonical.oldestConfirmedAt,
+              completeness: canonical.completeness,
+              freshness: canonical.freshness,
+            }
+          : null
+        : usage
+          ? { ...usage, lastCheckedAt }
+          : null,
+      usageStatus: canonical?.usageStatus,
+      completeness: canonical?.completeness,
+      freshness: canonical?.freshness,
+      summary: canonical?.summary,
+      subscriptions: (canonical?.packages ?? subscriptions).sort((a, b) =>
         (b.activatedAt ?? "").localeCompare(a.activatedAt ?? ""),
       ),
       qrOrderId: qrOrder?.order.id,
       activity: row.customerEsims
-        .map((link: any) => ({
+        .map((link) => ({
           orderId: link.order.id,
           orderNumber: link.order.orderNumber,
           orderStatus: link.order.status,
@@ -246,7 +310,7 @@ export class CustomerEsimsService {
             link.assignedAt?.toISOString?.() ??
             new Date(0).toISOString(),
         }))
-        .sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt)),
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     };
   }
 }

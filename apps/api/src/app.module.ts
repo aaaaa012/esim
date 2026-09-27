@@ -1,3 +1,8 @@
+import { RechargesService } from "./modules/orders/recharges.service.js";
+import {
+  RechargesController,
+  OptionalRechargeAuthGuard,
+} from "./modules/orders/recharges.controller.js";
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { validateEnv } from "./infrastructure/env-validation.js";
@@ -14,6 +19,7 @@ import {
 } from "./modules/orders/orders.controller.js";
 import { OrdersService } from "./modules/orders/orders.service.js";
 import { GuestOrdersController } from "./modules/orders/guest-orders.controller.js";
+import { GuestOrderAccessService } from "./modules/orders/guest-order-access.service.js";
 import {
   PaymentProvidersController,
   PaymentsController,
@@ -32,12 +38,14 @@ import {
 } from "./modules/webhooks/webhooks.controller.js";
 import { PrismaService } from "./infrastructure/prisma.service.js";
 import { S3StorageService } from "./infrastructure/s3-storage.service.js";
+import { PublicAssetStorageService } from "./infrastructure/public-asset-storage.service.js";
 import { QueueService } from "./jobs/queue.service.js";
 import { ClerkSyncService } from "./modules/identity/clerk-sync.service.js";
 import { OrdersPersistenceService } from "./modules/orders/orders-persistence.service.js";
 import { InventoryController } from "./modules/inventory/inventory.controller.js";
 import { InventoryService } from "./modules/inventory/inventory.service.js";
 import { AdminController } from "./modules/admin/admin.controller.js";
+import { StaffActivationController } from "./modules/admin/staff-activation.controller.js";
 import { AdminService } from "./modules/admin/admin.service.js";
 import { ProvisioningProcessor } from "./jobs/provisioning.processor.js";
 import { PartnersController } from "./modules/partners/partners.controller.js";
@@ -63,9 +71,11 @@ import { AuthController } from "./modules/identity/auth.controller.js";
 import { AccountGuard } from "./common/auth.guard.js";
 import { PassportVerificationRateLimitGuard } from "./common/passport-verification.rate-limit.guard.js";
 import { RateLimitGuard } from "./common/rate-limit.guard.js";
+import { AuthMeRateLimitGuard } from "./common/auth-me-rate-limit.guard.js";
 import { RedisRateLimitIncidentService } from "./common/redis-rate-limit-incident.service.js";
 import { CustomerEsimsController } from "./modules/esims/customer-esims.controller.js";
 import { CustomerEsimsService } from "./modules/esims/customer-esims.service.js";
+import { UsageService } from "./modules/esims/usage.service.js";
 import { TransatelOperationsController } from "./modules/integration/transatel-operations.controller.js";
 import { TransatelOperationsService } from "./modules/integration/transatel-operations.service.js";
 import {
@@ -73,6 +83,14 @@ import {
   PartnerShowcasePublicController,
 } from "./modules/showcase/partner-showcase.controller.js";
 import { PartnerShowcaseService } from "./modules/showcase/partner-showcase.service.js";
+import {
+  HomepageCampaignAdminController,
+  HomepageMarketingAssetController,
+  HomepageCampaignPublicController,
+  HomepageFeaturedPlanAdminController,
+  HomepageFeaturedPlanPublicController,
+} from "./modules/showcase/homepage-campaign.controller.js";
+import { HomepageCampaignService } from "./modules/showcase/homepage-campaign.service.js";
 import { ManualRefundsController } from "./modules/payments/manual-refunds.controller.js";
 import { ManualRefundsService } from "./modules/payments/manual-refunds.service.js";
 import { PaymentDisputesController } from "./modules/payments/payment-disputes.controller.js";
@@ -96,8 +114,10 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     OrdersController,
     OperationsController,
     GuestOrdersController,
+    RechargesController,
     InventoryController,
     AdminController,
+    StaffActivationController,
     PaymentsController,
     PaymentProvidersController,
     WebhooksController,
@@ -113,6 +133,11 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     TransatelOperationsController,
     PartnerShowcaseAdminController,
     PartnerShowcasePublicController,
+    HomepageCampaignAdminController,
+    HomepageCampaignPublicController,
+    HomepageFeaturedPlanAdminController,
+    HomepageFeaturedPlanPublicController,
+    HomepageMarketingAssetController,
     ManualRefundsController,
     PaymentDisputesController,
     AttentionController,
@@ -120,11 +145,15 @@ import { AttentionController } from "./modules/operations/attention.controller.j
   providers: [
     AccountGuard,
     RateLimitGuard,
+    AuthMeRateLimitGuard,
     RedisRateLimitIncidentService,
     PassportVerificationRateLimitGuard,
     CatalogService,
     OrdersService,
     OrdersPersistenceService,
+    GuestOrderAccessService,
+    RechargesService,
+    OptionalRechargeAuthGuard,
     InventoryService,
     AdminService,
     PaymentsService,
@@ -140,6 +169,7 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     CryptoService,
     PrismaService,
     S3StorageService,
+    PublicAssetStorageService,
     QueueService,
     ProvisioningProcessor,
     IntegrationProcessor,
@@ -154,8 +184,10 @@ import { AttentionController } from "./modules/operations/attention.controller.j
     WhatsappChannel,
     QrPdfService,
     CustomerEsimsService,
+    UsageService,
     TransatelOperationsService,
     PartnerShowcaseService,
+    HomepageCampaignService,
     ManualRefundsService,
     PaymentDisputesService,
     ProductionResilienceService,

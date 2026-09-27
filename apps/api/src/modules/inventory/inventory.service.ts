@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { BatchStatus, InventoryStatus, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
@@ -20,6 +21,8 @@ import {
 import { ApiErrorCode } from "@visa-compass/shared";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
+import { UsageService } from "../esims/usage.service.js";
+import { withPostgresTransactionRetry } from "../../infrastructure/postgres-transaction-retry.js";
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
@@ -29,6 +32,7 @@ export class InventoryService implements OnModuleInit {
     private readonly connectivity: ConnectivityService,
     private readonly resilience?: ProductionResilienceService,
     private readonly queues?: QueueService,
+    private readonly usageService?: UsageService,
   ) {}
 
   async startProviderReconciliation(input: {
@@ -70,12 +74,7 @@ export class InventoryService implements OnModuleInit {
                     { providerStatus: null },
                     {
                       providerStatus: {
-                        notIn: [
-                          "available",
-                          "allocated",
-                          "AVAILABLE",
-                          "ALLOCATED",
-                        ],
+                        notIn: SELLABLE_PROVIDER_STATUSES,
                       },
                     },
                   ],
@@ -259,6 +258,7 @@ export class InventoryService implements OnModuleInit {
       Number(process.env.INVENTORY_PROVIDER_FRESHNESS_HOURS ?? 24),
     );
     const freshAfter = new Date(Date.now() - freshnessHours * 60 * 60_000);
+    let refreshedStaleStock = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       const candidate = await this.prisma.esimInventory.findFirst({
         where: {
@@ -274,6 +274,10 @@ export class InventoryService implements OnModuleInit {
         },
         orderBy: { createdAt: "asc" },
       });
+      if (!candidate && !refreshedStaleStock) {
+        refreshedStaleStock = true;
+        if (await this.refreshStaleSellableCandidate(freshAfter)) continue;
+      }
       if (!candidate)
         throw new ConflictException("No eSIM inventory is currently available");
       const claimed = await this.prisma.esimInventory.updateMany({
@@ -314,23 +318,76 @@ export class InventoryService implements OnModuleInit {
       1,
       Number(process.env.INVENTORY_PROVIDER_FRESHNESS_HOURS ?? 24),
     );
-    const available = await this.prisma.esimInventory.count({
-      where: {
-        status: InventoryStatus.AVAILABLE,
-        assignedOrderId: null,
-        providerSubscriptionId: null,
-        providerStatus: {
-          in: SELLABLE_PROVIDER_STATUSES,
+    const freshAfter = new Date(Date.now() - freshnessHours * 60 * 60_000);
+    const countAvailable = () =>
+      this.prisma.esimInventory.count({
+        where: {
+          status: InventoryStatus.AVAILABLE,
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          providerStatus: {
+            in: SELLABLE_PROVIDER_STATUSES,
+          },
+          lastProviderCheckedAt: { gte: freshAfter },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          batch: { status: BatchStatus.APPROVED },
         },
-        lastProviderCheckedAt: {
-          gte: new Date(Date.now() - freshnessHours * 60 * 60_000),
-        },
-        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-        batch: { status: BatchStatus.APPROVED },
-      },
-    });
+      });
+    let available = await countAvailable();
+    if (
+      available === 0 &&
+      (await this.refreshStaleSellableCandidate(freshAfter))
+    )
+      available = await countAvailable();
     if (available === 0)
       throw new ConflictException("No eSIM inventory is currently available");
+  }
+
+  /**
+   * Refreshes one otherwise-eligible stale profile on demand. Checkout never
+   * trusts the local AVAILABLE label by itself: reconcileProviderProfile must
+   * obtain fresh provider evidence and will quarantine an unsafe or failed
+   * profile before this method can return true.
+   */
+  private async refreshStaleSellableCandidate(freshAfter: Date) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const stale = await this.prisma.esimInventory.findFirst({
+        where: {
+          status: InventoryStatus.AVAILABLE,
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          providerStatus: { in: SELLABLE_PROVIDER_STATUSES },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          batch: { status: BatchStatus.APPROVED },
+          AND: [
+            {
+              OR: [
+                { lastProviderCheckedAt: null },
+                { lastProviderCheckedAt: { lt: freshAfter } },
+              ],
+            },
+          ],
+        },
+        orderBy: [
+          { lastProviderCheckedAt: { sort: "asc", nulls: "first" } },
+          { createdAt: "asc" },
+        ],
+        select: { id: true },
+      });
+      if (!stale) return false;
+      try {
+        const result = await this.reconcileProviderProfile(stale.id);
+        if (
+          result.localStatus === InventoryStatus.AVAILABLE &&
+          isSellableProviderStatus(result.providerStatus)
+        )
+          return true;
+      } catch {
+        // Reconciliation records/quarantines the failed profile. Try the next
+        // stale candidate without weakening the provider-evidence requirement.
+      }
+    }
+    return false;
   }
 
   async profileForOrder(orderId: string) {
@@ -360,7 +417,8 @@ export class InventoryService implements OnModuleInit {
         status: InventoryStatus.PENDING_PROVIDER_CHECK,
         assignedOrderId: null,
         lastProviderCheckedAt: null,
-        providerCheckError: "Provider recheck required after reservation release",
+        providerCheckError:
+          "Provider recheck required after reservation release",
         version: { increment: 1 },
       },
     });
@@ -385,7 +443,9 @@ export class InventoryService implements OnModuleInit {
         where: { assignedOrderId: orderId },
       });
       if (!rejected)
-        throw new ConflictException("The order has no reserved eSIM to replace");
+        throw new ConflictException(
+          "The order has no reserved eSIM to replace",
+        );
       if (rejected.providerSubscriptionId)
         throw new ConflictException(
           "The rejected eSIM is provider-bound and cannot be replaced automatically",
@@ -495,6 +555,11 @@ export class InventoryService implements OnModuleInit {
       eid: eidsInput?.[index]?.trim() ?? null,
       msisdn: msisdnsInput?.[index]?.trim() ?? null,
     }));
+    const missingMsisdn = rows.filter((row) => !row.msisdn);
+    if (missingMsisdn.length)
+      throw new BadRequestException(
+        "MSISDN is required for every eSIM profile",
+      );
     const invalid = rows.filter((row) => !/^\d{15,25}$/.test(row.iccid));
     if (invalid.length)
       throw new BadRequestException(
@@ -530,7 +595,7 @@ export class InventoryService implements OnModuleInit {
           eid:
             row.eid ??
             `SYNTH-${createHash("sha256").update(row.iccid).digest("hex").slice(0, 28).toUpperCase()}`,
-          ...(row.msisdn ? { msisdn: row.msisdn } : {}),
+          msisdn: row.msisdn!,
           status: InventoryStatus.IMPORTED,
         })),
       });
@@ -553,7 +618,7 @@ export class InventoryService implements OnModuleInit {
       throw new BadRequestException("Database persistence is required");
     const { records, errors } = await tabularToRecords(
       content,
-      ["iccid"],
+      ["iccid", "msisdn"],
       fileName ? { fileName, maxRows: 5000 } : { maxRows: 5000 },
     );
     if (errors.length) throw new BadRequestException(errors.join("; "));
@@ -579,8 +644,10 @@ export class InventoryService implements OnModuleInit {
         rowErrors.push(`Line ${line}: invalid EID '${eid}'`);
         continue;
       }
-      if (msisdn && !/^\+?\d{6,15}$/.test(msisdn)) {
-        rowErrors.push(`Line ${line}: invalid MSISDN '${msisdn}'`);
+      if (!msisdn || !/^\+?\d{6,15}$/.test(msisdn)) {
+        rowErrors.push(
+          `Line ${line}: ${msisdn ? `invalid MSISDN '${msisdn}'` : "MSISDN is required"}`,
+        );
         continue;
       }
       candidates.push({ line, iccid, eid, msisdn });
@@ -652,7 +719,7 @@ export class InventoryService implements OnModuleInit {
           eid:
             row.eid ??
             `SYNTH-${createHash("sha256").update(row.iccid).digest("hex").slice(0, 28).toUpperCase()}`,
-          ...(row.msisdn ? { msisdn: row.msisdn } : {}),
+          msisdn: row.msisdn!,
           status: InventoryStatus.IMPORTED,
         })),
       });
@@ -691,37 +758,46 @@ export class InventoryService implements OnModuleInit {
         `Batch is ${batch.status.toLowerCase()}; only pending batches can be approved`,
       );
     const actor = await this.localUser(actorClerkId);
-    await this.prisma.$transaction(async (tx) => {
-      await tx.inventoryBatch.update({
-        where: { id: batchId },
-        data: {
-          status: BatchStatus.APPROVED,
-          approvedById: actor?.id ?? null,
-          approvedAt: new Date(),
+    await withPostgresTransactionRetry(() =>
+      this.prisma.$transaction(
+        async (tx) => {
+          await tx.inventoryBatch.update({
+            where: { id: batchId },
+            data: {
+              status: BatchStatus.APPROVED,
+              approvedById: actor?.id ?? null,
+              approvedAt: new Date(),
+            },
+          });
+          await tx.esimInventory.updateMany({
+            where: { batchId, status: InventoryStatus.IMPORTED },
+            data: {
+              status: InventoryStatus.PENDING_PROVIDER_CHECK,
+              version: { increment: 1 },
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              module: "INVENTORY",
+              entity: "InventoryBatch",
+              entityId: batchId,
+              action: "BATCH_APPROVED",
+              ...(actor ? { performedById: actor.id } : {}),
+              previousValue: {
+                status: batch.status,
+                reference: batch.batchReference,
+              },
+              newValue: { status: BatchStatus.APPROVED },
+            },
+          });
         },
-      });
-      await tx.esimInventory.updateMany({
-        where: { batchId, status: InventoryStatus.IMPORTED },
-        data: {
-          status: InventoryStatus.PENDING_PROVIDER_CHECK,
-          version: { increment: 1 },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 15_000,
+          timeout: 45_000,
         },
-      });
-      await tx.auditLog.create({
-        data: {
-          module: "INVENTORY",
-          entity: "InventoryBatch",
-          entityId: batchId,
-          action: "BATCH_APPROVED",
-          ...(actor ? { performedById: actor.id } : {}),
-          previousValue: {
-            status: batch.status,
-            reference: batch.batchReference,
-          },
-          newValue: { status: BatchStatus.APPROVED },
-        },
-      });
-    });
+      ),
+    );
     const reconciliation = await this.startProviderReconciliation({
       trigger: "BATCH_APPROVAL",
       selection: "SELECTED",
@@ -753,34 +829,43 @@ export class InventoryService implements OnModuleInit {
         `Batch is ${batch.status.toLowerCase()}; only pending batches can be rejected`,
       );
     const actor = await this.localUser(actorClerkId);
-    await this.prisma.$transaction(async (tx) => {
-      await tx.inventoryBatch.update({
-        where: { id: batchId },
-        data: {
-          status: BatchStatus.REJECTED,
-          rejectedById: actor?.id ?? null,
-          rejectedAt: new Date(),
-          ...(reason?.trim() ? { rejectionReason: reason.trim() } : {}),
+    await withPostgresTransactionRetry(() =>
+      this.prisma.$transaction(
+        async (tx) => {
+          await tx.inventoryBatch.update({
+            where: { id: batchId },
+            data: {
+              status: BatchStatus.REJECTED,
+              rejectedById: actor?.id ?? null,
+              rejectedAt: new Date(),
+              ...(reason?.trim() ? { rejectionReason: reason.trim() } : {}),
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              module: "INVENTORY",
+              entity: "InventoryBatch",
+              entityId: batchId,
+              action: "BATCH_REJECTED",
+              ...(actor ? { performedById: actor.id } : {}),
+              previousValue: {
+                status: batch.status,
+                reference: batch.batchReference,
+              },
+              newValue: {
+                status: BatchStatus.REJECTED,
+                ...(reason?.trim() ? { reason: reason.trim() } : {}),
+              },
+            },
+          });
         },
-      });
-      await tx.auditLog.create({
-        data: {
-          module: "INVENTORY",
-          entity: "InventoryBatch",
-          entityId: batchId,
-          action: "BATCH_REJECTED",
-          ...(actor ? { performedById: actor.id } : {}),
-          previousValue: {
-            status: batch.status,
-            reference: batch.batchReference,
-          },
-          newValue: {
-            status: BatchStatus.REJECTED,
-            ...(reason?.trim() ? { reason: reason.trim() } : {}),
-          },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 15_000,
+          timeout: 45_000,
         },
-      });
-    });
+      ),
+    );
     return {
       id: batchId,
       status: BatchStatus.REJECTED,
@@ -812,50 +897,57 @@ export class InventoryService implements OnModuleInit {
     });
     if (!inventory)
       throw new NotFoundException("Reserved inventory was not found");
-    await this.prisma.$transaction(async (tx) => {
-      await tx.esimInventory.update({
-        where: { id: inventory.id },
-        data: {
-          status: InventoryStatus.ASSIGNED,
-          ...(providerInfo?.providerSubscriptionId
-            ? { providerSubscriptionId: providerInfo.providerSubscriptionId }
-            : {}),
-          version: { increment: 1 },
-        },
-      });
-      const customerEsim = await tx.customerEsim.upsert({
-        where: { orderId },
-        update: { qrPayloadEncrypted: this.crypto.encrypt(qrPayload) },
-        create: {
-          orderId,
-          inventoryId: inventory.id,
-          customerId,
-          qrPayloadEncrypted: this.crypto.encrypt(qrPayload),
-        },
-      });
-      if (providerInfo?.providerSubscriptionId) {
-        await tx.subscription.upsert({
-          where: {
-            providerSubscriptionId: providerInfo.providerSubscriptionId,
-          },
-          update: {
-            provider: providerInfo.provider,
-            ...(providerInfo.expiresAt
-              ? { expiresAt: new Date(providerInfo.expiresAt) }
+    await this.prisma.$transaction(
+      async (tx) => {
+        await tx.esimInventory.update({
+          where: { id: inventory.id },
+          data: {
+            status: InventoryStatus.ASSIGNED,
+            ...(providerInfo?.providerSubscriptionId
+              ? { providerSubscriptionId: providerInfo.providerSubscriptionId }
               : {}),
-          },
-          create: {
-            customerEsimId: customerEsim.id,
-            provider: providerInfo.provider,
-            providerSubscriptionId: providerInfo.providerSubscriptionId,
-            status: "PENDING",
-            ...(providerInfo.expiresAt
-              ? { expiresAt: new Date(providerInfo.expiresAt) }
-              : {}),
+            version: { increment: 1 },
           },
         });
-      }
-    });
+        const customerEsim = await tx.customerEsim.upsert({
+          where: { orderId },
+          update: { qrPayloadEncrypted: this.crypto.encrypt(qrPayload) },
+          create: {
+            orderId,
+            inventoryId: inventory.id,
+            customerId,
+            qrPayloadEncrypted: this.crypto.encrypt(qrPayload),
+          },
+        });
+        if (providerInfo?.providerSubscriptionId) {
+          await tx.subscription.upsert({
+            where: {
+              providerSubscriptionId: providerInfo.providerSubscriptionId,
+            },
+            update: {
+              provider: providerInfo.provider,
+              ...(providerInfo.expiresAt
+                ? { expiresAt: new Date(providerInfo.expiresAt) }
+                : {}),
+            },
+            create: {
+              customerEsimId: customerEsim.id,
+              provider: providerInfo.provider,
+              providerSubscriptionId: providerInfo.providerSubscriptionId,
+              status: "PENDING",
+              ...(providerInfo.expiresAt
+                ? { expiresAt: new Date(providerInfo.expiresAt) }
+                : {}),
+            },
+          });
+        }
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 15_000,
+        timeout: 45_000,
+      },
+    );
   }
 
   /**
@@ -868,7 +960,7 @@ export class InventoryService implements OnModuleInit {
     orderId: string,
     customerId: string,
     iccid: string,
-    qrPayload: string,
+    qrPayload: string | undefined,
     providerInfo?: {
       provider: string;
       providerSubscriptionId?: string;
@@ -880,15 +972,52 @@ export class InventoryService implements OnModuleInit {
       where: { iccid },
     });
     if (!inventory) throw new NotFoundException("Existing eSIM was not found");
+    const recharge = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    if (
+      recharge.targetInventoryId &&
+      (recharge.targetInventoryId !== inventory.id ||
+        recharge.customerId !== customerId)
+    )
+      throw new ConflictException(
+        "Recharge assignment does not match its beneficiary and target",
+      );
+    const encryptedQr = qrPayload
+      ? this.crypto.encrypt(qrPayload)
+      : (
+          await this.prisma.customerEsim.findFirst({
+            where: { inventoryId: inventory.id, orderId: { not: orderId } },
+            orderBy: { assignedAt: "desc" },
+            select: { qrPayloadEncrypted: true },
+          })
+        )?.qrPayloadEncrypted;
+    if (!encryptedQr)
+      throw new ConflictException(
+        "The existing eSIM activation record is unavailable for this top-up",
+      );
     await this.prisma.$transaction(async (tx) => {
+      if (recharge.targetInventoryId) {
+        const existing = await tx.customerEsim.findUnique({
+          where: { orderId },
+        });
+        if (
+          existing &&
+          (existing.customerId !== customerId ||
+            existing.inventoryId !== inventory.id)
+        )
+          throw new ConflictException(
+            "Existing recharge assignment needs operations review",
+          );
+      }
       const customerEsim = await tx.customerEsim.upsert({
         where: { orderId },
-        update: { qrPayloadEncrypted: this.crypto.encrypt(qrPayload) },
+        update: { qrPayloadEncrypted: encryptedQr },
         create: {
           orderId,
           inventoryId: inventory.id,
           customerId,
-          qrPayloadEncrypted: this.crypto.encrypt(qrPayload),
+          qrPayloadEncrypted: encryptedQr,
         },
       });
       if (providerInfo?.providerSubscriptionId) {
@@ -941,6 +1070,8 @@ export class InventoryService implements OnModuleInit {
     orderId: string,
     event: {
       provider: string;
+      eventType?: string;
+      statusScope?: "PRODUCT" | "SUBSCRIBER" | "PROFILE";
       status?:
         | "PRELOADED"
         | "ACTIVATED"
@@ -995,6 +1126,7 @@ export class InventoryService implements OnModuleInit {
     }
     if (
       event.subscriptionId &&
+      inventory.assignedOrderId === orderId &&
       inventory.providerSubscriptionId &&
       event.subscriptionId !== inventory.providerSubscriptionId
     ) {
@@ -1018,67 +1150,116 @@ export class InventoryService implements OnModuleInit {
       );
     }
 
-    const inventoryStatus = this.mapInventoryStatus(event.status);
-    const subscriptionStatus = this.mapSubscriptionStatus(event.status);
+    const subscriberEvent =
+      event.statusScope === "SUBSCRIBER" ||
+      event.eventType?.startsWith("CONNECTIVITY-MANAGEMENT/SUBSCRIBER/") ===
+        true;
+    const productEvent = !subscriberEvent;
+    const primaryProductEvent =
+      productEvent && inventory.assignedOrderId === orderId;
+    const inventoryStatus = subscriberEvent
+      ? event.status === "TERMINATED"
+        ? InventoryStatus.TERMINATED
+        : null
+      : primaryProductEvent && event.status === "ACTIVATED"
+        ? InventoryStatus.ACTIVATED
+        : null;
+    const subscriptionStatus = productEvent
+      ? this.mapSubscriptionStatus(event.status)
+      : null;
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.esimInventory.update({
-        where: { id: inventory.id },
-        data: {
-          ...(inventoryStatus ? { status: inventoryStatus } : {}),
-          ...(event.status ? { providerStatus: event.status } : {}),
-          ...(event.subscriptionId
-            ? { providerSubscriptionId: event.subscriptionId }
-            : {}),
-          ...(event.msisdn ? { msisdn: event.msisdn.replace(/\D/g, "") } : {}),
-          ...(event.activatedAt
-            ? { activatedAt: new Date(event.activatedAt) }
-            : {}),
-          ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
-          version: { increment: 1 },
+    await withPostgresTransactionRetry(() =>
+      this.prisma.$transaction(
+        async (tx) => {
+          await tx.esimInventory.update({
+            where: { id: inventory.id },
+            data: {
+              ...(inventoryStatus ? { status: inventoryStatus } : {}),
+              ...(subscriberEvent && event.status
+                ? { providerStatus: event.status }
+                : {}),
+              ...(primaryProductEvent && event.subscriptionId
+                ? { providerSubscriptionId: event.subscriptionId }
+                : {}),
+              ...(event.msisdn
+                ? { msisdn: event.msisdn.replace(/\D/g, "") }
+                : {}),
+              ...(primaryProductEvent && event.activatedAt
+                ? { activatedAt: new Date(event.activatedAt) }
+                : {}),
+              ...(primaryProductEvent && event.expiresAt
+                ? { expiresAt: new Date(event.expiresAt) }
+                : {}),
+              version: { increment: 1 },
+            },
+          });
+          const customerEsim = await tx.customerEsim.findUnique({
+            where: { orderId },
+          });
+          const providerSubscriptionId =
+            event.subscriptionId ?? inventory.providerSubscriptionId;
+          if (!productEvent || !customerEsim || !providerSubscriptionId) return;
+          if (event.status === "CANCELED") {
+            // Product cancellation stops future renewal but remains usable until
+            // the provider-supplied expiration date. Preserve the current local
+            // subscription state and wait for the later EXPIRED event.
+            await tx.subscription.updateMany({
+              where: { providerSubscriptionId },
+              data: {
+                providerLastSeenAt: new Date(),
+                ...(event.expiresAt
+                  ? { expiresAt: new Date(event.expiresAt) }
+                  : {}),
+              },
+            });
+            return;
+          }
+          await tx.subscription.upsert({
+            where: { providerSubscriptionId },
+            update: {
+              ...(subscriptionStatus ? { status: subscriptionStatus } : {}),
+              providerLastSeenAt: new Date(),
+              ...(event.status === "ACTIVATED"
+                ? {
+                    assignmentVerificationStatus: "VERIFIED" as const,
+                    assignmentVerifiedAt: new Date(),
+                  }
+                : {}),
+              ...(event.activatedAt
+                ? { activatedAt: new Date(event.activatedAt) }
+                : {}),
+              ...(event.expiresAt
+                ? { expiresAt: new Date(event.expiresAt) }
+                : {}),
+            },
+            create: {
+              customerEsimId: customerEsim.id,
+              provider: event.provider,
+              providerSubscriptionId,
+              status: subscriptionStatus ?? "PENDING",
+              providerLastSeenAt: new Date(),
+              ...(event.status === "ACTIVATED"
+                ? {
+                    assignmentVerificationStatus: "VERIFIED",
+                    assignmentVerifiedAt: new Date(),
+                  }
+                : {}),
+              ...(event.activatedAt
+                ? { activatedAt: new Date(event.activatedAt) }
+                : {}),
+              ...(event.expiresAt
+                ? { expiresAt: new Date(event.expiresAt) }
+                : {}),
+            },
+          });
         },
-      });
-      const customerEsim = await tx.customerEsim.findUnique({
-        where: { orderId },
-      });
-      const providerSubscriptionId =
-        event.subscriptionId ?? inventory.providerSubscriptionId;
-      if (!customerEsim || !providerSubscriptionId) return;
-      await tx.subscription.upsert({
-        where: { providerSubscriptionId },
-        update: {
-          ...(subscriptionStatus ? { status: subscriptionStatus } : {}),
-          providerLastSeenAt: new Date(),
-          ...(event.status === "ACTIVATED"
-            ? {
-                assignmentVerificationStatus: "VERIFIED" as const,
-                assignmentVerifiedAt: new Date(),
-              }
-            : {}),
-          ...(event.activatedAt
-            ? { activatedAt: new Date(event.activatedAt) }
-            : {}),
-          ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 15_000,
+          timeout: 45_000,
         },
-        create: {
-          customerEsimId: customerEsim.id,
-          provider: event.provider,
-          providerSubscriptionId,
-          status: subscriptionStatus ?? "PENDING",
-          providerLastSeenAt: new Date(),
-          ...(event.status === "ACTIVATED"
-            ? {
-                assignmentVerificationStatus: "VERIFIED",
-                assignmentVerifiedAt: new Date(),
-              }
-            : {}),
-          ...(event.activatedAt
-            ? { activatedAt: new Date(event.activatedAt) }
-            : {}),
-          ...(event.expiresAt ? { expiresAt: new Date(event.expiresAt) } : {}),
-        },
-      });
-    });
+      ),
+    );
   }
 
   private mapInventoryStatus(
@@ -1109,9 +1290,13 @@ export class InventoryService implements OnModuleInit {
   ) {
     if (status === "ACTIVATED") return "ACTIVE";
     if (status === "EXPIRED") return "EXPIRED";
-    if (status === "TERMINATED" || status === "CANCELED") return "TERMINATED";
+    if (status === "TERMINATED") return "TERMINATED";
     if (status === "SUSPENDED") return "SUSPENDED";
-    return "PENDING";
+    // PRELOADED/OTHER are useful provider observations, but they must not
+    // regress an existing ACTIVE, SUSPENDED, EXPIRED or TERMINATED row. New
+    // subscriptions still use the explicit PENDING fallback in the upsert's
+    // create branch.
+    return null;
   }
 
   async reconcileStaleReservations() {
@@ -1266,51 +1451,22 @@ export class InventoryService implements OnModuleInit {
       throw new NotFoundException(
         "No customer eSIM record exists for this order",
       );
-    const usage = await this.connectivity.getUsage(inventory.iccid);
-    if (usage.usageAvailable === false)
-      throw new BadRequestException(
-        "Transatel found the subscription but has not published a usable data balance yet. Please retry shortly.",
+    if (!this.usageService)
+      throw new ServiceUnavailableException(
+        "Canonical usage reconciliation is unavailable",
       );
-    const checkedAt = new Date();
-    if (usage.subscriptions?.length) {
-      const balances = new Map(
-        usage.subscriptions.map((item) => [item.providerSubscriptionId, item]),
-      );
-      const subscriptions = await this.prisma.subscription.findMany({
-        where: { customerEsimId: customerEsim.id },
-        select: { id: true, providerSubscriptionId: true },
-      });
-      await Promise.all(
-        subscriptions.map((subscription) => {
-          const balance = balances.get(subscription.providerSubscriptionId);
-          return balance
-            ? this.prisma.subscription.update({
-                where: { id: subscription.id },
-                data: {
-                  usedMb: balance.usedMb,
-                  totalMb: balance.totalMb,
-                  usageLastCheckedAt: checkedAt,
-                  providerLastSeenAt: checkedAt,
-                },
-              })
-            : Promise.resolve();
-        }),
-      );
-    } else {
-      await this.prisma.subscription.updateMany({
-        where: { customerEsimId: customerEsim.id },
-        data: {
-          usedMb: usage.usedMb,
-          totalMb: usage.totalMb,
-          usageLastCheckedAt: checkedAt,
-        },
-      });
-    }
+    const esimUsage = await this.usageService.refresh(inventory.id);
+    const packageUsage = this.usageService.packageForOrder(esimUsage, orderId);
+    if (!packageUsage)
+      throw new NotFoundException("No usage package exists for this order");
     return {
       orderId,
-      ...usage,
-      remainingMb: Math.max(0, usage.totalMb - usage.usedMb),
-      lastCheckedAt: checkedAt.toISOString(),
+      usedMb: packageUsage.usedMb,
+      totalMb: packageUsage.totalMb,
+      remainingMb: packageUsage.remainingMb,
+      lastCheckedAt: packageUsage.lastConfirmedAt,
+      balanceStatus: packageUsage.balanceStatus,
+      esimUsage,
     };
   }
 

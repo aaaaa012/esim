@@ -38,6 +38,7 @@ type NotificationJob = {
   recipient: string;
   orderNumber: string;
   reason?: string;
+  recoveryUrl?: string;
 };
 @Injectable()
 export class IntegrationProcessor implements OnModuleInit {
@@ -97,7 +98,7 @@ export class IntegrationProcessor implements OnModuleInit {
   private async complete(job: CallbackJob, error?: unknown, attempt = 1) {
     if (!this.prisma.enabled) return;
     const failed = Boolean(error);
-    const terminal = failed && attempt >= 3;
+    const terminal = failed && attempt >= 8;
     const event = await this.prisma.webhookEvent.update({
       where: { source_eventId: { source: job.provider, eventId: job.eventId } },
       data: {
@@ -109,7 +110,7 @@ export class IntegrationProcessor implements OnModuleInit {
           failed && !terminal
             ? new Date(
                 Date.now() +
-                  Math.min(60_000, 2_000 * 2 ** Math.max(0, attempt - 1)),
+                  Math.min(15 * 60_000, 30_000 * 2 ** Math.max(0, attempt - 1)),
               )
             : null,
         deadLetteredAt: terminal ? new Date() : null,
@@ -146,15 +147,12 @@ export class IntegrationProcessor implements OnModuleInit {
           this.prisma.enabled && job.data.orderId
             ? await this.inventory.inventoryForOrder(job.data.orderId)
             : null;
-        msisdn =
-          inventory?.msisdn ??
-          order.traveler?.mobile ??
-          order.topUpMobile ??
-          undefined;
+        msisdn = inventory?.msisdn ?? order.assignment?.msisdn ?? undefined;
       }
       const message = renderNotification(job.data.template, {
         orderNumber: job.data.orderNumber,
         ...(job.data.reason ? { reason: job.data.reason } : {}),
+        ...(job.data.recoveryUrl ? { recoveryUrl: job.data.recoveryUrl } : {}),
         ...(msisdn ? { msisdn } : {}),
       });
       let result;
@@ -185,7 +183,7 @@ export class IntegrationProcessor implements OnModuleInit {
       );
       return result;
     } catch (error) {
-      const terminal = job.attemptsMade + 1 >= Number(job.opts.attempts ?? 3);
+      const terminal = job.attemptsMade + 1 >= Number(job.opts.attempts ?? 6);
       await this.notifications.markFailure(
         job.data.notificationId,
         error,

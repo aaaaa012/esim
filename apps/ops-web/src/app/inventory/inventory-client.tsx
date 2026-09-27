@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Clock,
   FileUp,
+  Download,
   Globe2,
   Link2,
   PackageCheck,
@@ -39,6 +40,8 @@ import ErrorDialog from "@/components/error-dialog";
 import { PaginationBar } from "@/components/pagination-bar";
 import { SearchInput } from "@/components/search-input";
 import { cn } from "@/lib/utils";
+import { downloadCsv } from "@/lib/csv";
+import { useConfirmation } from "@/components/confirmation-provider";
 import { toast } from "sonner";
 import {
   Table,
@@ -89,9 +92,40 @@ type InventoryProfile = {
 };
 type ImportResult = {
   imported: number;
+  updated?: number;
+  unchanged?: number;
+  missing?: number;
+  returned?: number;
   skipped: number;
   errors?: string[];
   batch: string | null;
+  batchId?: string | null;
+};
+type CatalogChange =
+  "NEW" | "UPDATED" | "UNCHANGED" | "MISSING" | "RETURNED" | "INVALID";
+type CatalogBatch = {
+  id: string;
+  batchReference: string;
+  fileName?: string | null;
+  mode: "UPDATE_LISTED" | "FULL_CATALOG";
+  totalRows: number;
+  newCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+  missingCount: number;
+  returnedCount: number;
+  invalidCount: number;
+  createdAt: string;
+};
+type CatalogRow = {
+  id: string;
+  planId?: string | null;
+  countryIso2: string;
+  providerPlanId: string;
+  change: CatalogChange;
+  previousValue?: Record<string, unknown> | null;
+  proposedValue?: Record<string, unknown> | null;
+  error?: string | null;
 };
 type ReconciliationRun = {
   id: string;
@@ -196,6 +230,7 @@ function UploadResult({
 }
 
 export default function InventoryClient() {
+  const confirm = useConfirmation();
   const authFetch = useAuthenticatedFetch();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
@@ -225,6 +260,14 @@ export default function InventoryClient() {
 
   const [packageFile, setPackageFile] = useState<File | null>(null);
   const [packageBusy, setPackageBusy] = useState(false);
+  const [catalogBatches, setCatalogBatches] = useState<CatalogBatch[]>([]);
+  const [catalogBatch, setCatalogBatch] = useState<CatalogBatch | null>(null);
+  const [catalogRows, setCatalogRows] = useState<CatalogRow[]>([]);
+  const [catalogFilter, setCatalogFilter] = useState<CatalogChange | "ALL">(
+    "ALL",
+  );
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogAction, setCatalogAction] = useState("");
 
   const [draftPlans, setDraftPlans] = useState<Plan[]>([]);
   const [planDecision, setPlanDecision] = useState("");
@@ -242,7 +285,49 @@ export default function InventoryClient() {
   const refreshedReconciliationRun = useRef<string | null>(null);
   const PAGE_SIZE = 50;
 
-  const loadProfiles = () => {
+  const exportProfiles = () => {
+    downloadCsv(
+      `esim-profiles-${profilesStatus.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        "ICCID / SIM serial",
+        "MSISDN",
+        "Status",
+        "Provider status",
+        "eID",
+        "SM-DP+ address",
+        "Provider subscription ID",
+        "Order",
+        "Customer code",
+        "Customer email",
+        "Plan",
+        "Country",
+        "Batch",
+        "Batch status",
+        "Activated at",
+        "Expires at",
+      ],
+      profiles.map((profile) => [
+        profile.iccid,
+        profile.msisdn,
+        profile.status,
+        profile.providerStatus,
+        profile.eid.startsWith("SYNTH-") ? "Not provided" : profile.eid,
+        profile.smDpAddress,
+        profile.providerSubscriptionId,
+        profile.order?.orderNumber,
+        profile.order?.customerCode,
+        profile.order?.customerEmail,
+        profile.order?.planName,
+        profile.order?.planCountryCode,
+        profile.batchReference,
+        profile.batchStatus,
+        profile.activatedAt,
+        profile.expiresAt,
+      ]),
+    );
+  };
+
+  const loadProfiles = useCallback(() => {
     setProfilesLoading(true);
     const params = new URLSearchParams({
       limit: String(PAGE_SIZE),
@@ -259,12 +344,11 @@ export default function InventoryClient() {
       })
       .catch((e) => toast.error(e.message))
       .finally(() => setProfilesLoading(false));
-  };
+  }, [authFetch, profilesPage, profilesSearch, profilesStatus]);
   const inventoryReady = data !== null;
   useEffect(() => {
     if (inventoryReady) loadProfiles();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profilesPage, profilesStatus, profilesSearch, inventoryReady]);
+  }, [inventoryReady, loadProfiles]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setProfilesPage(1);
@@ -273,7 +357,7 @@ export default function InventoryClient() {
     return () => window.clearTimeout(timer);
   }, [profilesQuery]);
 
-  const load = () => {
+  const load = useCallback(() => {
     setError("");
     const liveParams = new URLSearchParams({
       limit: "100",
@@ -297,15 +381,14 @@ export default function InventoryClient() {
         setReconciliationProfiles(profilesValue.data.items);
       })
       .catch((e) => setError(e.message));
-  };
+  }, [authFetch, liveSearch]);
   useEffect(() => {
     const timer = window.setTimeout(() => setLiveSearch(liveQuery.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [liveQuery]);
   useEffect(() => {
-    if (data) load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveSearch]);
+    load();
+  }, [load]);
   const reconcileProfile = async (profile: InventoryProfile) => {
     setReconciling(profile.id);
     try {
@@ -351,8 +434,7 @@ export default function InventoryClient() {
   useEffect(() => {
     if (!reconciliationRun || reconciliationRun.status === "COMPLETED") return;
     const timer = window.setInterval(() => {
-      void loadReconciliationRun(reconciliationRun.id)
-        .catch(() => undefined);
+      void loadReconciliationRun(reconciliationRun.id).catch(() => undefined);
     }, 5_000);
     return () => window.clearInterval(timer);
   }, [loadReconciliationRun, reconciliationRun?.id, reconciliationRun?.status]);
@@ -365,10 +447,7 @@ export default function InventoryClient() {
       return;
     refreshedReconciliationRun.current = reconciliationRun.id;
     load();
-    // Refresh overview and visible reconciliation rows exactly once when a run
-    // finishes. `load` intentionally reads the current live-search value.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reconciliationRun?.id, reconciliationRun?.status]);
+  }, [load, reconciliationRun]);
   const startBulkReconciliation = async () => {
     setBulkReconciling(true);
     try {
@@ -435,9 +514,7 @@ export default function InventoryClient() {
         setIsSuperAdmin(caps.includes("admin:portal"));
       })
       .catch(() => undefined);
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authFetch]);
 
   const submitProfiles = async () => {
     if (!profileFile) {
@@ -459,10 +536,7 @@ export default function InventoryClient() {
       });
       const v = await r.json();
       if (!r.ok) {
-        const correlation = v.meta?.correlationId;
-        throw new Error(
-          `${v.error?.message ?? "CSV/Excel import failed"}${correlation ? ` (reference: ${correlation})` : ""}`,
-        );
+        throw new Error(v.error?.message ?? "CSV/Excel import failed");
       }
       const result = v.data as ImportResult;
       const errors = result.errors ?? [];
@@ -495,22 +569,125 @@ export default function InventoryClient() {
       const r = await authFetch(`${API}/admin/plans/import-csv`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content, fileName: packageFile.name }),
+        body: JSON.stringify({
+          content,
+          fileName: packageFile.name,
+          mode: "FULL_CATALOG",
+        }),
       });
       const v = await r.json();
       if (!r.ok) throw new Error(v.error?.message);
       const result = v.data as ImportResult;
       toast.success(
-        `Imported ${result.imported} package(s), skipped ${result.skipped} row(s). They are DRAFT until approved.`,
+        `Catalogue applied: ${result.imported} new, ${result.updated ?? 0} updated, ${result.unchanged ?? 0} unchanged, ${result.returned ?? 0} returned, ${result.missing ?? 0} missing.`,
       );
       if (result.imported > 0) setPackageFile(null);
       loadPlans();
+      await loadCatalogBatches(result.batchId ?? undefined);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Package import failed");
     } finally {
       setPackageBusy(false);
     }
   };
+
+  const loadCatalogBatch = useCallback(
+    async (id: string, change: CatalogChange | "ALL" = catalogFilter) => {
+      setCatalogLoading(true);
+      try {
+        const query = change === "ALL" ? "" : `?change=${change}`;
+        const response = await authFetch(
+          `${API}/admin/plans/import-batches/${id}${query}`,
+          { headers: {} },
+        );
+        const value = await response.json();
+        if (!response.ok)
+          throw new Error(
+            value.error?.message ?? "Catalogue batch unavailable",
+          );
+        const { rows, ...batch } = value.data as CatalogBatch & {
+          rows: CatalogRow[];
+        };
+        setCatalogBatch(batch);
+        setCatalogRows(rows);
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : "Catalogue batch unavailable",
+        );
+      } finally {
+        setCatalogLoading(false);
+      }
+    },
+    [authFetch, catalogFilter],
+  );
+
+  const loadCatalogBatches = useCallback(
+    async (selectId?: string) => {
+      try {
+        const response = await authFetch(
+          `${API}/admin/plans/import-batches?limit=24`,
+          { headers: {} },
+        );
+        const value = await response.json();
+        if (!response.ok)
+          throw new Error(
+            value.error?.message ?? "Catalogue history unavailable",
+          );
+        const batches = (value.data ?? []) as CatalogBatch[];
+        setCatalogBatches(batches);
+        const id = selectId ?? catalogBatch?.id ?? batches[0]?.id;
+        if (id) await loadCatalogBatch(id);
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : "Catalogue history unavailable",
+        );
+      }
+    },
+    [authFetch, catalogBatch?.id, loadCatalogBatch],
+  );
+
+  const disableMissingPlan = async (row: CatalogRow) => {
+    if (!catalogBatch || !row.planId) return;
+    if (
+      !(await confirm({
+        title: "Disable missing package?",
+        description:
+          "This package was absent from this upload. Disabling it prevents new purchases but keeps orders and history intact.",
+        confirmLabel: "Disable package",
+        destructive: true,
+      }))
+    )
+      return;
+    setCatalogAction(row.id);
+    try {
+      const response = await authFetch(
+        `${API}/admin/plans/import-batches/${catalogBatch.id}/rows/${row.id}/disable`,
+        { method: "POST", headers: {} },
+      );
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          value.error?.message ?? "Package could not be disabled",
+        );
+      toast.success("Missing package disabled for new purchases");
+      await loadCatalogBatch(catalogBatch.id);
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : "Package could not be disabled",
+      );
+    } finally {
+      setCatalogAction("");
+    }
+  };
+  useEffect(() => {
+    void loadCatalogBatches();
+  }, [loadCatalogBatches]);
 
   const decide = async (batch: Batch, approve: boolean) => {
     setDecision(batch.id);
@@ -540,7 +717,7 @@ export default function InventoryClient() {
     }
   };
 
-  const loadPlans = () => {
+  const loadPlans = useCallback(() => {
     const params = new URLSearchParams({
       status: "DRAFT",
       limit: "100",
@@ -554,15 +731,14 @@ export default function InventoryClient() {
         setDraftPlans(v.data?.items ?? []);
       })
       .catch((e) => toast.error(e.message));
-  };
+  }, [authFetch, planSearch]);
   useEffect(() => {
     const timer = window.setTimeout(() => setPlanSearch(planQuery.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [planQuery]);
   useEffect(() => {
     loadPlans();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planSearch]);
+  }, [loadPlans]);
 
   const decidePlan = async (plan: Plan, approve: boolean) => {
     setPlanDecision(plan.id);
@@ -603,7 +779,7 @@ export default function InventoryClient() {
             </>
           ) : (
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Spinner /> Loading inventory…
+              <Spinner /> Loading inventory…
             </div>
           )}
         </div>
@@ -729,7 +905,11 @@ export default function InventoryClient() {
           </TabsTrigger>
           <TabsTrigger value="history" className="gap-1.5">
             <ClipboardList className="size-4" />
-            Batch history
+            Profile history
+          </TabsTrigger>
+          <TabsTrigger value="catalog-history" className="gap-1.5">
+            <Globe2 className="size-4" />
+            Catalogue reviews
           </TabsTrigger>
           <TabsTrigger value="profiles" className="gap-1.5">
             <Boxes className="size-4" />
@@ -831,7 +1011,7 @@ export default function InventoryClient() {
                         }
                       />
                     </TableHead>
-                    <TableHead>eSIM</TableHead>
+                    <TableHead>ICCID / SIM serial</TableHead>
                     <TableHead>Our system</TableHead>
                     <TableHead>Network provider</TableHead>
                     <TableHead>Last checked</TableHead>
@@ -893,27 +1073,21 @@ export default function InventoryClient() {
                         ) : profile.status === "AVAILABLE" &&
                           !["available", "allocated", "released"].includes(
                             profile.providerStatus?.toLowerCase() ?? "",
-                          )
-                            ? (
-                                <span className="text-destructive">
-                                  {`Local stock is marked available, but ${humane(profile.providerStatus ?? "not checked")} is not safe for sale`}
-                                </span>
-                              )
-                            : profile.status === "PENDING_PROVIDER_CHECK"
-                              ? (
-                                  <span className="text-muted-foreground">
-                                    Provider verification is required before sale
-                                  </span>
-                                )
-                              : profile.status === "QUARANTINED"
-                            ? (
-                                <span className="text-destructive">
-                                  {`${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`}
-                                </span>
-                              )
-                            : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
+                          ) ? (
+                          <span className="text-destructive">
+                            {`Local stock is marked available, but ${humane(profile.providerStatus ?? "not checked")} is not safe for sale`}
+                          </span>
+                        ) : profile.status === "PENDING_PROVIDER_CHECK" ? (
+                          <span className="text-muted-foreground">
+                            Provider verification is required before sale
+                          </span>
+                        ) : profile.status === "QUARANTINED" ? (
+                          <span className="text-destructive">
+                            {`${humane(profile.providerStatus ?? "unknown")} is not currently safe for sale`}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex flex-wrap justify-end gap-2">
@@ -931,7 +1105,7 @@ export default function InventoryClient() {
                             ) : (
                               <RefreshCcw className="size-3.5" />
                             )}{" "}
-                            Check network
+                            Refresh network status
                           </Button>
                           {isSuperAdmin &&
                           profile.status === "QUARANTINED" &&
@@ -1039,11 +1213,13 @@ export default function InventoryClient() {
                   onFileSelected={setPackageFile}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Optional columns: currency, popular, status.
+                  Repeated provider IDs update the existing package. Missing and
+                  returned packages are tracked in Catalogue reviews.
                 </p>
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
-                    Uploaded packages appear under Pending approvals.
+                    Valid rows apply immediately; new or returned rows stay
+                    draft unless the file explicitly permits activation.
                   </p>
                   <Button
                     onClick={() => void submitPackages()}
@@ -1111,11 +1287,13 @@ export default function InventoryClient() {
                               size="sm"
                               variant="success"
                               disabled={decision === batch.id}
-                              onClick={() => {
+                              onClick={async () => {
                                 if (
-                                  window.confirm(
-                                    `Approve this batch of ${batch.importedCount} profile(s)? They will become available for sale.`,
-                                  )
+                                  await confirm({
+                                    title: "Approve inventory batch?",
+                                    description: `This makes ${batch.importedCount} profile(s) available for sale.`,
+                                    confirmLabel: "Approve batch",
+                                  })
                                 )
                                   void decide(batch, true);
                               }}
@@ -1132,11 +1310,15 @@ export default function InventoryClient() {
                               variant="outline"
                               className="text-destructive hover:bg-destructive/10"
                               disabled={decision === batch.id}
-                              onClick={() => {
+                              onClick={async () => {
                                 if (
-                                  window.confirm(
-                                    "Reject this batch? It will not be made available for sale.",
-                                  )
+                                  await confirm({
+                                    title: "Reject inventory batch?",
+                                    description:
+                                      "These profiles will not be made available for sale.",
+                                    confirmLabel: "Reject batch",
+                                    destructive: true,
+                                  })
                                 )
                                   void decide(batch, false);
                               }}
@@ -1216,11 +1398,14 @@ export default function InventoryClient() {
                               size="sm"
                               variant="success"
                               disabled={planDecision === plan.id}
-                              onClick={() => {
+                              onClick={async () => {
                                 if (
-                                  window.confirm(
-                                    `Publish "${plan.name}"? It will become available for sale.`,
-                                  )
+                                  await confirm({
+                                    title: `Publish ${plan.name}?`,
+                                    description:
+                                      "This package will become available for customer purchase.",
+                                    confirmLabel: "Publish package",
+                                  })
                                 )
                                   void decidePlan(plan, true);
                               }}
@@ -1237,11 +1422,15 @@ export default function InventoryClient() {
                               variant="outline"
                               className="text-destructive hover:bg-destructive/10"
                               disabled={planDecision === plan.id}
-                              onClick={() => {
+                              onClick={async () => {
                                 if (
-                                  window.confirm(
-                                    `Reject "${plan.name}"? It will not be published.`,
-                                  )
+                                  await confirm({
+                                    title: `Reject ${plan.name}?`,
+                                    description:
+                                      "This package will remain unavailable for purchase.",
+                                    confirmLabel: "Reject package",
+                                    destructive: true,
+                                  })
                                 )
                                   void decidePlan(plan, false);
                               }}
@@ -1263,6 +1452,192 @@ export default function InventoryClient() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+          </Panel>
+        </TabsContent>
+
+        <TabsContent value="catalog-history" className="mt-4 space-y-4">
+          <Panel
+            title="Monthly catalogue reviews"
+            description="Every upload is retained. Existing products update in place, unchanged products remain traceable, missing products require an explicit decision, and returned products re-enter as drafts."
+          >
+            {catalogBatches.length === 0 ? (
+              <EmptyState
+                title="No catalogue uploads yet"
+                description="Upload the monthly package file to create the first comparison."
+              />
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-[minmax(15rem,0.34fr)_minmax(0,1fr)]">
+                <div className="space-y-2">
+                  {catalogBatches.map((batch) => (
+                    <button
+                      key={batch.id}
+                      type="button"
+                      onClick={() => void loadCatalogBatch(batch.id)}
+                      className={cn(
+                        "w-full rounded-lg border px-3 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        catalogBatch?.id === batch.id &&
+                          "border-primary bg-primary/5",
+                      )}
+                    >
+                      <span className="block truncate text-sm font-semibold">
+                        {batch.fileName || batch.batchReference}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {new Date(batch.createdAt).toLocaleString()}
+                      </span>
+                      <span className="mt-2 block text-xs tabular-nums text-muted-foreground">
+                        {batch.newCount} new Â· {batch.updatedCount} updated Â·{" "}
+                        {batch.missingCount} missing
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <section className="min-w-0 rounded-xl bg-muted/25 p-4 sm:p-5">
+                  {catalogBatch ? (
+                    <>
+                      <div className="flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold">
+                            {catalogBatch.fileName ||
+                              catalogBatch.batchReference}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {catalogBatch.totalRows} recorded comparison rows
+                          </p>
+                        </div>
+                        <Select
+                          value={catalogFilter}
+                          onValueChange={(value) => {
+                            const next = value as CatalogChange | "ALL";
+                            setCatalogFilter(next);
+                            void loadCatalogBatch(catalogBatch.id, next);
+                          }}
+                        >
+                          <SelectTrigger className="w-full sm:w-48">
+                            <SelectValue placeholder="Filter changes" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="ALL">All changes</SelectItem>
+                            {[
+                              "NEW",
+                              "UPDATED",
+                              "UNCHANGED",
+                              "MISSING",
+                              "RETURNED",
+                              "INVALID",
+                            ].map((change) => (
+                              <SelectItem key={change} value={change}>
+                                {humane(change)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                        {[
+                          ["New", catalogBatch.newCount],
+                          ["Updated", catalogBatch.updatedCount],
+                          ["Unchanged", catalogBatch.unchangedCount],
+                          ["Missing", catalogBatch.missingCount],
+                          ["Returned", catalogBatch.returnedCount],
+                          ["Invalid", catalogBatch.invalidCount],
+                        ].map(([label, value]) => (
+                          <div
+                            key={String(label)}
+                            className="rounded-lg bg-background px-3 py-2"
+                          >
+                            <p className="text-[11px] text-muted-foreground">
+                              {label}
+                            </p>
+                            <p className="text-lg font-semibold tabular-nums">
+                              {value}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-4 space-y-2">
+                        {catalogLoading ? (
+                          <div className="grid min-h-32 place-items-center">
+                            <Spinner />
+                          </div>
+                        ) : catalogRows.length === 0 ? (
+                          <EmptyState
+                            title="No rows in this filter"
+                            description="Choose another comparison type."
+                          />
+                        ) : (
+                          catalogRows.map((row) => (
+                            <article
+                              key={row.id}
+                              className="grid min-w-0 gap-3 rounded-lg border bg-background p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant="outline">
+                                    {humane(row.change)}
+                                  </Badge>
+                                  <span className="text-xs font-semibold">
+                                    {row.countryIso2}
+                                  </span>
+                                  <span className="break-all font-mono text-xs text-muted-foreground">
+                                    {row.providerPlanId}
+                                  </span>
+                                </div>
+                                {row.error ? (
+                                  <p className="mt-2 text-xs text-destructive">
+                                    {row.error}
+                                  </p>
+                                ) : row.change === "UPDATED" ||
+                                  row.change === "RETURNED" ? (
+                                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                    {Object.keys(row.proposedValue ?? {})
+                                      .filter(
+                                        (key) =>
+                                          JSON.stringify(
+                                            row.previousValue?.[key],
+                                          ) !==
+                                          JSON.stringify(
+                                            row.proposedValue?.[key],
+                                          ),
+                                      )
+                                      .map((key) => humane(key))
+                                      .join(" Â· ") || "Presence restored"}
+                                  </p>
+                                ) : null}
+                              </div>
+                              {row.change === "MISSING" && row.planId ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full text-destructive sm:w-auto"
+                                  disabled={catalogAction === row.id}
+                                  onClick={() => void disableMissingPlan(row)}
+                                >
+                                  {catalogAction === row.id ? (
+                                    <Spinner />
+                                  ) : (
+                                    <XCircle className="size-4" />
+                                  )}
+                                  Disable package
+                                </Button>
+                              ) : null}
+                            </article>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <EmptyState
+                      title="Select an upload"
+                      description="Choose a monthly upload to review its package comparison."
+                    />
+                  )}
+                </section>
+              </div>
             )}
           </Panel>
         </TabsContent>
@@ -1337,7 +1712,7 @@ export default function InventoryClient() {
                   identifiers, orders, batches, or customers
                 </p>
               </div>
-              <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(20rem,28rem)_14rem]">
+              <div className="grid min-w-0 w-full gap-2 lg:w-auto lg:grid-cols-[minmax(16rem,28rem)_minmax(10rem,14rem)_auto]">
                 <SearchInput
                   value={profilesQuery}
                   onChange={setProfilesQuery}
@@ -1363,6 +1738,14 @@ export default function InventoryClient() {
                     ))}
                   </SelectContent>
                 </Select>
+                <Button
+                  variant="outline"
+                  disabled={profilesLoading || profiles.length === 0}
+                  onClick={exportProfiles}
+                >
+                  <Download className="size-4" />
+                  Export visible rows
+                </Button>
               </div>
             </div>
             {profilesLoading ? (
@@ -1384,9 +1767,9 @@ export default function InventoryClient() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>eSIM</TableHead>
+                      <TableHead>SIM identifiers</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Device eID</TableHead>
+                      <TableHead>Device eID (EID)</TableHead>
                       <TableHead>Orders</TableHead>
                       <TableHead>Batch</TableHead>
                       <TableHead className="text-right">Provider</TableHead>
@@ -1396,10 +1779,13 @@ export default function InventoryClient() {
                     {profiles.map((p) => (
                       <TableRow key={p.id}>
                         <TableCell>
+                          <div className="text-[11px] text-muted-foreground">
+                            ICCID / SIM serial
+                          </div>
                           <div className="font-mono text-xs">{p.iccid}</div>
                           {p.msisdn && (
                             <div className="text-xs text-muted-foreground">
-                              {p.msisdn}
+                              MSISDN: {p.msisdn}
                             </div>
                           )}
                           {p.order ? (
@@ -1428,7 +1814,13 @@ export default function InventoryClient() {
                           )}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
-                          {p.eid}
+                          {p.eid.startsWith("SYNTH-") ? (
+                            <span className="font-sans text-muted-foreground">
+                              Not assigned yet
+                            </span>
+                          ) : (
+                            p.eid
+                          )}
                         </TableCell>
                         <TableCell>
                           {p.order ? (

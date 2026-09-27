@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import {
   CustomerSource,
+  DocumentReviewPolicy,
   DocumentStatus,
   DocumentType,
   OrderChannel,
@@ -22,22 +23,32 @@ import {
 } from "@prisma/client";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
+  ApiErrorCode,
+  declarePaymentRetry,
   documentTypeLabel,
   DocumentType as SharedDocumentType,
+  passportRequiresManualReview,
+  travelerChangeKind,
   RESTRICTED_PLAN_COUNTRY_CODES,
   type TravelerInput,
 } from "@visa-compass/shared";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { normalizeNepaliContact } from "../../common/nepali-contact.util.js";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { S3StorageService } from "../../infrastructure/s3-storage.service.js";
 import { ApiException } from "../../common/api-error.js";
 import { ConnectivityService } from "../integration/connectivity.service.js";
+import { EsimUsageView, UsageService } from "../esims/usage.service.js";
 import { NotificationService } from "../notification/notification.service.js";
 import { PartnerWebhookProcessor } from "../../jobs/partner-webhook.processor.js";
-import { QueueService } from "../../jobs/queue.service.js";
+import { enqueuePassportOcr, QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
-import { ocrJobOptions } from "../../jobs/ocr-recovery.config.js";
+import {
+  ocrJobOptions,
+  orderPassportOcrJobId,
+} from "../../jobs/ocr-recovery.config.js";
 import { OrdersService } from "../orders/orders.service.js";
+import { sanitizePassportExtractedFields } from "../orders/passport-verification.service.js";
 import { PaymentsService } from "../payments/payments.service.js";
 
 /** Opaque, deterministic composite cursor for (createdAt, id) keyset pagination. */
@@ -54,20 +65,35 @@ function decodeCursor(
   cursor?: string | undefined,
 ): { createdAt: Date; id: string } | null {
   if (!cursor) return null;
-  let raw: string;
-  try {
-    raw = Buffer.from(cursor, "base64url").toString("utf8");
-  } catch {
-    return null;
-  }
+  const invalid = () =>
+    new ApiException({
+      code: "INVALID_CURSOR",
+      message: "Cursor is malformed or expired",
+      status: 400,
+    });
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) throw invalid();
+  const raw = Buffer.from(cursor, "base64url").toString("utf8");
   const separator = raw.lastIndexOf("|");
-  if (separator <= 0) return null;
+  if (separator <= 0 || separator !== raw.indexOf("|")) throw invalid();
   const iso = raw.slice(0, separator);
   const id = raw.slice(separator + 1);
-  if (!id) return null;
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))
+    throw invalid();
   const createdAt = new Date(iso);
-  if (Number.isNaN(createdAt.getTime())) return null;
+  if (Number.isNaN(createdAt.getTime()) || createdAt.toISOString() !== iso)
+    throw invalid();
   return { createdAt, id };
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value))
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
 }
 
 type CreateOrderInput = {
@@ -104,8 +130,8 @@ type CompleteOrderInput = {
 };
 
 type UploadSessionInput = {
+  mode: "EXTRACT_FIRST";
   externalOrderId: string;
-  traveler: TravelerInput;
   documents: Array<{
     type: DocumentType;
     fileName: string;
@@ -122,6 +148,7 @@ const PARTNER_ORDER_INCLUDE = {
   events: { orderBy: { createdAt: "asc" as const } },
   partnerQuote: true,
   partnerRefundRequests: { orderBy: { createdAt: "desc" as const }, take: 1 },
+  customerEsim: { select: { inventoryId: true } },
 } satisfies Prisma.OrderInclude;
 
 type PartnerOrderRow = Prisma.OrderGetPayload<{
@@ -131,6 +158,7 @@ type PartnerOrderRow = Prisma.OrderGetPayload<{
 @Injectable()
 export class PartnerService {
   private readonly logger = new Logger(PartnerService.name);
+  private readonly usageRefreshAt = new Map<string, number>();
 
   // Legacy reservation reconciliation remains readable for historical
   // PARTNER_ACCOUNT orders. New partner-hosted sessions use HOSTED_PAYMENT and
@@ -155,6 +183,7 @@ export class PartnerService {
     private readonly queues: QueueService,
     private readonly applicationOrders: OrdersService,
     private readonly payments?: PaymentsService,
+    private readonly usageService?: UsageService,
   ) {}
 
   private async verifyUploadedDocument(assetId: string) {
@@ -172,6 +201,62 @@ export class PartnerService {
     }
   }
 
+  private async finalizeTravelerDocument(document: {
+    id: string;
+    privateAssetId: string;
+  }) {
+    const finalized = await this.storage.finalizeDocument(
+      document.privateAssetId,
+    );
+    const version = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.documentAssetVersion.upsert({
+        where: {
+          documentId_sha256: {
+            documentId: document.id,
+            sha256: finalized.sha256,
+          },
+        },
+        update: { supersededAt: null },
+        create: {
+          documentId: document.id,
+          temporaryAssetId: finalized.temporaryAssetId,
+          finalizedAssetId: finalized.finalizedAssetId,
+          sha256: finalized.sha256,
+          byteSize: finalized.byteSize,
+          contentType: finalized.contentType,
+          storageVersionId: finalized.storageVersionId,
+        },
+      });
+      const activated = await tx.travelerDocument.updateMany({
+        where: {
+          id: document.id,
+          privateAssetId: finalized.temporaryAssetId,
+        },
+        data: {
+          privateAssetId: finalized.finalizedAssetId,
+          activeAssetVersionId: created.id,
+        },
+      });
+      if (activated.count !== 1)
+        throw new ConflictException(
+          "This document was replaced while its upload was being confirmed",
+        );
+      await tx.documentAssetVersion.updateMany({
+        where: {
+          documentId: document.id,
+          id: { not: created.id },
+          supersededAt: null,
+        },
+        data: { supersededAt: new Date() },
+      });
+      return created;
+    });
+    await this.storage
+      .deleteDocument(finalized.temporaryAssetId)
+      .catch(() => undefined);
+    return { finalized, version };
+  }
+
   async capabilities(partnerId: string) {
     await this.partner(partnerId);
     return {
@@ -185,6 +270,11 @@ export class PartnerService {
       },
       idempotencyRequiredForMutations: true,
       outboundWebhooks: true,
+      documentVerification: {
+        recommendedMode: "EXTRACT_FIRST",
+        travelerConfirmationRequired: true,
+        compatibilityModes: [],
+      },
     };
   }
 
@@ -238,11 +328,17 @@ export class PartnerService {
     const activeExternalOrderKey = `${partnerId}:${input.externalOrderId}`;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 24 * 60 * 60_000);
-    const config = await this.prisma.platformConfiguration.upsert({
+    const storedConfig = await this.prisma.platformConfiguration.findUnique({
       where: { id: "platform" },
-      update: {},
-      create: { id: "platform" },
+      select: {
+        documentReviewPolicy: true,
+        ocrCheckoutWaitMs: true,
+      },
     });
+    const config = storedConfig ?? {
+      documentReviewPolicy: DocumentReviewPolicy.AUTO_OCR,
+      ocrCheckoutWaitMs: 8000,
+    };
     const checkoutReleaseAt = new Date(
       now.getTime() + config.ocrCheckoutWaitMs,
     );
@@ -258,7 +354,16 @@ export class PartnerService {
             !existing.consumedAt &&
             existing.expiresAt > now &&
             !["EXPIRED", "INVALID", "CONSUMED"].includes(existing.status);
-          if (resumable) return await this.uploadSessionResponse(existing, true);
+          if (resumable && existing.mode !== "EXTRACT_FIRST")
+            throw new ConflictException({
+              code: "DOCUMENT_SESSION_MODE_MISMATCH",
+              message:
+                "The active document session uses a different verification mode",
+            });
+          if (resumable) {
+            this.assertUploadDeclarationsMatch(existing.documents, input);
+            return await this.uploadSessionResponse(existing, true);
+          }
           await tx.partnerDocumentVerification.update({
             where: { id: existing.id },
             data: {
@@ -273,17 +378,11 @@ export class PartnerService {
             partnerId,
             externalOrderId: input.externalOrderId,
             activeExternalOrderKey,
-            travelerSnapshot: this.travelerData(
-              input.traveler,
-            ) as unknown as Prisma.InputJsonValue,
+            mode: "EXTRACT_FIRST",
             expiresAt,
             reviewPolicy: config.documentReviewPolicy,
             checkoutReleaseAt,
-            ...(config.documentReviewPolicy === "MANUAL_REVIEW"
-              ? { status: "MANUAL_REVIEW" }
-              : config.documentReviewPolicy === "NO_REVIEW"
-                ? { status: "SKIPPED" }
-                : {}),
+            status: "AWAITING_UPLOAD",
           },
         });
         const items = [];
@@ -318,13 +417,9 @@ export class PartnerService {
         }
         return {
           verificationId,
+          mode: "EXTRACT_FIRST",
           externalOrderId: input.externalOrderId,
-          status:
-            config.documentReviewPolicy === "MANUAL_REVIEW"
-              ? "MANUAL_REVIEW"
-              : config.documentReviewPolicy === "NO_REVIEW"
-                ? "SKIPPED"
-                : "AWAITING_UPLOAD",
+          status: "AWAITING_UPLOAD",
           expiresAt,
           checkoutReleaseAt,
           documents: items,
@@ -346,8 +441,38 @@ export class PartnerService {
         },
       );
       if (!existing) throw error;
+      this.assertUploadDeclarationsMatch(existing.documents, input);
       return this.uploadSessionResponse(existing, true);
     }
+  }
+
+  private assertUploadDeclarationsMatch(
+    existing: Array<{
+      type: DocumentType;
+      fileName: string;
+      contentType: string;
+      declaredSizeBytes: number;
+    }>,
+    input: UploadSessionInput,
+  ) {
+    const declarations = (items: typeof existing) =>
+      items
+        .map((item) => ({
+          type: item.type,
+          fileName: item.fileName,
+          contentType: item.contentType,
+          sizeBytes: item.declaredSizeBytes,
+        }))
+        .sort((left, right) => left.type.localeCompare(right.type));
+    const requested = input.documents
+      .map((item) => ({ ...item }))
+      .sort((left, right) => left.type.localeCompare(right.type));
+    if (canonicalJson(declarations(existing)) !== canonicalJson(requested))
+      throw new ConflictException({
+        code: "DOCUMENT_SESSION_DECLARATION_MISMATCH",
+        message:
+          "The active document session was created with different file declarations",
+      });
   }
 
   private async uploadSessionResponse(
@@ -357,6 +482,7 @@ export class PartnerService {
       status: string;
       expiresAt: Date;
       checkoutReleaseAt: Date | null;
+      mode: string;
       documents: Array<{
         id: string;
         type: DocumentType;
@@ -369,6 +495,7 @@ export class PartnerService {
   ) {
     return {
       verificationId: verification.id,
+      mode: verification.mode,
       externalOrderId: verification.externalOrderId,
       status: verification.status,
       expiresAt: verification.expiresAt,
@@ -393,38 +520,73 @@ export class PartnerService {
   }
 
   async documentVerification(partnerId: string, verificationId: string) {
-    let verification = await this.prisma.partnerDocumentVerification.findFirst({
-      where: { id: verificationId, partnerId },
-      include: { documents: true },
-    });
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { id: verificationId, partnerId },
+        include: { documents: true, passportExtraction: true },
+      });
     if (!verification)
       throw new NotFoundException({
         code: "DOCUMENT_VERIFICATION_NOT_FOUND",
         message: "Document verification not found",
       });
-    if (
-      ["AWAITING_UPLOAD", "PROCESSING"].includes(verification.status) &&
-      verification.checkoutReleaseAt &&
-      verification.checkoutReleaseAt <= new Date()
-    )
-      verification = await this.prisma.partnerDocumentVerification.update({
-        where: { id: verification.id },
-        data: { status: "PROCESSING_BACKGROUND" },
-        include: { documents: true },
-      });
+    const allRequiredUploadsConfirmed = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].every((type) =>
+      verification.documents.some(
+        (document) => document.type === type && document.uploadVerified,
+      ),
+    );
+    const travelerConfirmed = Boolean(verification.travelerSnapshot);
+    const draftCreationAllowed =
+      allRequiredUploadsConfirmed &&
+      travelerConfirmed &&
+      verification.status !== "EXPIRED" &&
+      verification.failureCode !== "DOCUMENTS_REJECTED";
+    const linkedOrder = verification.consumedOrderId
+      ? await this.prisma.order.findUnique({
+          where: { id: verification.consumedOrderId },
+          select: {
+            status: true,
+            documentReviewPolicy: true,
+            documentReviewStatus: true,
+          },
+        })
+      : null;
+    const fulfillmentAllowed = linkedOrder
+      ? linkedOrder.status === OrderStatus.REVIEW_PENDING &&
+        ((linkedOrder.documentReviewPolicy === "AUTO_OCR" &&
+          ["VERIFIED", "MANUALLY_APPROVED"].includes(
+            linkedOrder.documentReviewStatus,
+          )) ||
+          (linkedOrder.documentReviewPolicy === "MANUAL_REVIEW" &&
+            linkedOrder.documentReviewStatus === "MANUALLY_APPROVED") ||
+          (linkedOrder.documentReviewPolicy === "NO_REVIEW" &&
+            linkedOrder.documentReviewStatus === "SKIPPED"))
+      : (verification.reviewPolicy === "AUTO_OCR" &&
+          verification.status === "VERIFIED") ||
+        (verification.reviewPolicy === "NO_REVIEW" &&
+          verification.status === "SKIPPED");
     return {
       id: verification.id,
       externalOrderId: verification.externalOrderId,
       status: verification.status,
+      mode: verification.mode,
+      reviewPolicy: verification.reviewPolicy,
       failureCode: verification.failureCode,
       expiresAt: verification.expiresAt,
       consumedAt: verification.consumedAt,
-      orderCreationAllowed: [
-        "VERIFIED",
-        "MANUAL_REVIEW",
-        "PROCESSING_BACKGROUND",
-        "SKIPPED",
-      ].includes(verification.status),
+      linkedOrderId: verification.consumedOrderId,
+      requiredDocuments: [DocumentType.PASSPORT, DocumentType.TICKET],
+      travelerConfirmationRequired:
+        verification.mode === "EXTRACT_FIRST" && !travelerConfirmed,
+      suggestedTraveler: this.extractionPayload(
+        verification.passportExtraction,
+      ),
+      draftCreationAllowed,
+      orderCreationAllowed: draftCreationAllowed,
+      fulfillmentAllowed,
       documents: verification.documents.map((document) => ({
         id: document.id,
         type: document.type,
@@ -432,6 +594,13 @@ export class PartnerService {
         status: document.verificationStatus,
         code: document.verificationCode,
         verifiedAt: document.verifiedAt,
+        replacementEligible:
+          Boolean(verification.consumedOrderId) &&
+          verification.failureCode !== "DOCUMENTS_REJECTED" &&
+          document.verificationStatus === "REUPLOAD_REQUIRED" &&
+          (
+            [DocumentType.PASSPORT, DocumentType.TICKET] as DocumentType[]
+          ).includes(document.type),
       })),
     };
   }
@@ -459,12 +628,121 @@ export class PartnerService {
         code: "PARTNER_DOCUMENT_NOT_FOUND",
         message: "Document not found",
       });
+    const verificationResult = document.verificationResult;
+    const isReplacement =
+      verificationResult !== null &&
+      typeof verificationResult === "object" &&
+      !Array.isArray(verificationResult) &&
+      verificationResult.replacement === true;
     if (!document.uploadVerified) {
-      await this.verifyUploadedDocument(document.privateAssetId);
-      await this.prisma.partnerDocumentUploadIntent.update({
-        where: { id: document.id },
-        data: { uploadVerified: true, verificationStatus: "UPLOADED" },
-      });
+      const asset = await this.verifyUploadedDocument(document.privateAssetId);
+      if (
+        asset.bytes !== document.declaredSizeBytes ||
+        !this.formatMatchesContentType(asset.format ?? "", document.contentType)
+      )
+        throw new ApiException({
+          code: "UPLOAD_DECLARATION_MISMATCH",
+          message:
+            "Uploaded bytes do not match the declared size or content type",
+          status: 422,
+        });
+      const finalized = await this.storage.finalizeDocument(
+        document.privateAssetId,
+      );
+      const activated =
+        await this.prisma.partnerDocumentUploadIntent.updateMany({
+          where: {
+            id: document.id,
+            privateAssetId: finalized.temporaryAssetId,
+            uploadVerified: false,
+          },
+          data: {
+            uploadVerified: true,
+            verificationStatus: "UPLOADED",
+            temporaryAssetId: finalized.temporaryAssetId,
+            privateAssetId: finalized.finalizedAssetId,
+            contentSha256: finalized.sha256,
+            storageVersionId: finalized.storageVersionId,
+          },
+        });
+      if (activated.count !== 1)
+        throw new ConflictException(
+          "This document was replaced while its upload was being confirmed",
+        );
+      if (verification.consumedOrderId)
+        await this.prisma.$transaction([
+          this.prisma.travelerDocument.updateMany({
+            where: {
+              orderId: verification.consumedOrderId,
+              type: document.type,
+            },
+            data: {
+              fileName: document.fileName,
+              privateAssetId: finalized.finalizedAssetId,
+              uploadVerified: true,
+              status: DocumentStatus.PENDING,
+              ...(document.type === DocumentType.PASSPORT
+                ? {
+                    passportVerificationStatus: null,
+                    passportVerificationMethod: null,
+                    passportMatchedFields: Prisma.DbNull,
+                    passportConfidence: null,
+                    passportVerifiedAt: null,
+                  }
+                : {}),
+            },
+          }),
+          this.prisma.order.update({
+            where: { id: verification.consumedOrderId },
+            data: {
+              status: OrderStatus.REVIEW_PENDING,
+              documentReviewStatus:
+                verification.reviewPolicy === "AUTO_OCR"
+                  ? "OCR_PENDING"
+                  : verification.reviewPolicy === "MANUAL_REVIEW"
+                    ? "MANUAL_REVIEW"
+                    : "SKIPPED",
+              version: { increment: 1 },
+            },
+          }),
+          ...(isReplacement
+            ? [
+                this.prisma.orderEvent.create({
+                  data: {
+                    orderId: verification.consumedOrderId,
+                    fromStatus: OrderStatus.AWAITING_CUSTOMER,
+                    toStatus: OrderStatus.REVIEW_PENDING,
+                    reason: `${documentTypeLabel(document.type)} replacement uploaded and confirmed`,
+                    metadata: {
+                      documentType: document.type,
+                      documentReviewStatus:
+                        verification.reviewPolicy === "AUTO_OCR"
+                          ? "OCR_PENDING"
+                          : verification.reviewPolicy === "MANUAL_REVIEW"
+                            ? "MANUAL_REVIEW"
+                            : "SKIPPED",
+                    },
+                  },
+                }),
+              ]
+            : []),
+        ]);
+      if (verification.consumedOrderId && isReplacement)
+        await this.prisma.$transaction((tx) =>
+          this.createEvent(
+            tx,
+            partnerId,
+            verification.consumedOrderId!,
+            "document.replacement_confirmed",
+            document.id,
+            {
+              orderId: verification.consumedOrderId,
+              verificationId,
+              documentId: document.id,
+              documentType: document.type,
+            },
+          ),
+        );
     }
     const remaining = await this.prisma.partnerDocumentUploadIntent.count({
       where: { verificationId, uploadVerified: false },
@@ -476,13 +754,34 @@ export class PartnerService {
         verificationQueued: false,
         remaining,
       };
-    if (verification.reviewPolicy !== "AUTO_OCR") {
+    if (
+      verification.reviewPolicy !== "AUTO_OCR" &&
+      verification.mode !== "EXTRACT_FIRST"
+    ) {
       const status =
         verification.reviewPolicy === "NO_REVIEW" ? "SKIPPED" : "MANUAL_REVIEW";
       await this.prisma.partnerDocumentVerification.update({
         where: { id: verificationId },
         data: { status, failureCode: null },
       });
+      if (verification.consumedOrderId) {
+        await this.prisma.order.update({
+          where: { id: verification.consumedOrderId },
+          data: {
+            status: OrderStatus.REVIEW_PENDING,
+            documentReviewStatus: status,
+            version: { increment: 1 },
+          },
+        });
+        if (status === "SKIPPED")
+          await this.prisma.travelerDocument.updateMany({
+            where: {
+              orderId: verification.consumedOrderId,
+              type: { in: [DocumentType.PASSPORT, DocumentType.TICKET] },
+            },
+            data: { status: DocumentStatus.APPROVED },
+          });
+      }
       return {
         id: document.id,
         uploadVerified: true,
@@ -491,16 +790,67 @@ export class PartnerService {
         status,
       };
     }
+    if (verification.consumedOrderId && document.type === DocumentType.TICKET) {
+      const verifiedPassport = await this.prisma.travelerDocument.findFirst({
+        where: {
+          orderId: verification.consumedOrderId,
+          type: DocumentType.PASSPORT,
+          status: DocumentStatus.APPROVED,
+          passportVerificationStatus: "VERIFIED",
+        },
+      });
+      if (verifiedPassport) {
+        await this.prisma.$transaction([
+          this.prisma.partnerDocumentUploadIntent.update({
+            where: { id: document.id },
+            data: { verificationStatus: "VERIFIED", verifiedAt: new Date() },
+          }),
+          this.prisma.partnerDocumentVerification.update({
+            where: { id: verificationId },
+            data: { status: "VERIFIED", failureCode: null },
+          }),
+          this.prisma.travelerDocument.updateMany({
+            where: {
+              orderId: verification.consumedOrderId,
+              type: DocumentType.TICKET,
+            },
+            data: { status: DocumentStatus.APPROVED },
+          }),
+          this.prisma.order.update({
+            where: { id: verification.consumedOrderId },
+            data: {
+              status: OrderStatus.REVIEW_PENDING,
+              documentReviewStatus: "VERIFIED",
+              version: { increment: 1 },
+            },
+          }),
+        ]);
+        return {
+          id: document.id,
+          uploadVerified: true,
+          verificationQueued: false,
+          remaining: 0,
+          status: "VERIFIED",
+        };
+      }
+    }
     await this.prisma.partnerDocumentVerification.updateMany({
       where: { id: verificationId, status: "AWAITING_UPLOAD" },
       data: { status: "PROCESSING" },
     });
     try {
-      await this.queues.add(
-        QUEUES.documents,
+      const passportAttempt = verification.documents.find(
+        (item) => item.type === DocumentType.PASSPORT,
+      );
+      const attemptKey = createHash("sha256")
+        .update(passportAttempt?.privateAssetId ?? document.privateAssetId)
+        .digest("hex")
+        .slice(0, 16);
+      await enqueuePassportOcr(
+        this.queues,
         "verify-partner-documents",
         { verificationId },
-        `document-verification-${verificationId}`,
+        `document-verification-${verificationId}-${attemptKey}`,
         ocrJobOptions(),
       );
     } catch (error) {
@@ -526,6 +876,465 @@ export class PartnerService {
       verificationQueued: true,
       remaining: 0,
     };
+  }
+
+  async confirmExtractedTraveler(
+    partnerId: string,
+    verificationId: string,
+    traveler: TravelerInput,
+  ) {
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { id: verificationId, partnerId },
+        include: { documents: true, passportExtraction: true },
+      });
+    if (!verification)
+      throw new NotFoundException({
+        code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+        message: "Document verification not found",
+      });
+    if (verification.mode !== "EXTRACT_FIRST")
+      throw new ApiException({
+        code: "TRAVELER_CONFIRMATION_NOT_APPLICABLE",
+        message: "This verification uses the traveler-first compatibility flow",
+        status: 409,
+      });
+    if (verification.expiresAt <= new Date() || verification.consumedAt)
+      throw new GoneException({
+        code: "DOCUMENT_VERIFICATION_EXPIRED",
+        message: "This document verification can no longer be updated",
+      });
+    if (
+      !verification.passportExtraction ||
+      !["READY", "PARTIAL", "MANUAL_ENTRY_REQUIRED", "SKIPPED"].includes(
+        verification.passportExtraction.status,
+      )
+    )
+      throw new ApiException({
+        code: "PASSPORT_EXTRACTION_NOT_READY",
+        message:
+          "Wait for passport extraction before confirming traveler details",
+        status: 409,
+      });
+    const requiredUploadsPresent = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].every((type) =>
+      verification.documents.some(
+        (document) => document.type === type && document.uploadVerified,
+      ),
+    );
+    if (!requiredUploadsPresent)
+      throw new ApiException({
+        code: "DOCUMENT_UPLOADS_INCOMPLETE",
+        message: "Passport and ticket uploads must be confirmed first",
+        status: 409,
+      });
+
+    const confirmedAt = new Date();
+    const automationUnavailable = passportRequiresManualReview(
+      verification.passportExtraction.failureCode,
+    );
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.partnerDocumentVerification.updateMany({
+        where: {
+          id: verification.id,
+          partnerId,
+          mode: "EXTRACT_FIRST",
+          travelerSnapshot: { equals: Prisma.DbNull },
+          status: {
+            in: [
+              "AWAITING_TRAVELER_CONFIRMATION",
+              "MANUAL_ENTRY_REQUIRED",
+              "SKIPPED",
+            ],
+          },
+        },
+        data: {
+          travelerSnapshot: this.travelerData(
+            traveler,
+          ) as unknown as Prisma.InputJsonValue,
+          status:
+            verification.reviewPolicy === "AUTO_OCR"
+              ? automationUnavailable
+                ? "MANUAL_REVIEW"
+                : "PROCESSING"
+              : verification.reviewPolicy === "NO_REVIEW"
+                ? "SKIPPED"
+                : "MANUAL_REVIEW",
+          failureCode: automationUnavailable
+            ? "OCR_EVIDENCE_UNAVAILABLE_MANUAL_REVIEW"
+            : null,
+        },
+      });
+      if (claim.count)
+        await Promise.all([
+          tx.passportExtraction.update({
+            where: { partnerVerificationId: verification.id },
+            data: { confirmedAt },
+          }),
+          tx.partnerTravelerRevision.create({
+            data: {
+              verificationId: verification.id,
+              version: 1,
+              idempotencyKeyHash: createHash("sha256")
+                .update(`initial:${verification.id}`)
+                .digest("hex"),
+              reason: "Initial traveller confirmation",
+              travelerSnapshot: this.travelerData(
+                traveler,
+              ) as unknown as Prisma.InputJsonValue,
+            },
+          }),
+        ]);
+      return claim.count === 1;
+    });
+    if (!claimed) {
+      const current = await this.prisma.partnerDocumentVerification.findUnique({
+        where: { id: verification.id },
+        select: { travelerSnapshot: true, status: true },
+      });
+      if (current?.travelerSnapshot) {
+        const requested = this.travelerData(traveler);
+        if (
+          canonicalJson(current.travelerSnapshot) !== canonicalJson(requested)
+        )
+          throw new ConflictException({
+            code: "TRAVELER_ALREADY_CONFIRMED",
+            message:
+              "Traveller details were already confirmed with different values; retrieve the verification before correcting them",
+          });
+        return {
+          id: verification.id,
+          status: current.status,
+          confirmed: true,
+          replayed: true,
+        };
+      }
+      throw new ConflictException({
+        code: "TRAVELER_CONFIRMATION_CONFLICT",
+        message: "The verification changed; retrieve it before trying again",
+      });
+    }
+    if (verification.reviewPolicy === "AUTO_OCR" && !automationUnavailable) {
+      try {
+        const attemptKey = createHash("sha256")
+          .update(
+            `${verification.passportExtraction.passportAssetId}:${confirmedAt.toISOString()}`,
+          )
+          .digest("hex")
+          .slice(0, 16);
+        await enqueuePassportOcr(
+          this.queues,
+          "verify-partner-documents",
+          { verificationId },
+          `document-verification-${verificationId}-${attemptKey}`,
+          ocrJobOptions(),
+        );
+      } catch (error) {
+        await this.prisma.partnerDocumentVerification.updateMany({
+          where: { id: verification.id, status: "PROCESSING" },
+          data: { failureCode: "QUEUE_UNAVAILABLE" },
+        });
+        this.logger.error(
+          `Could not queue confirmed traveler verification ${verificationId}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+        return {
+          id: verification.id,
+          status: "PROCESSING",
+          confirmed: true,
+          verificationQueued: false,
+        };
+      }
+    }
+    return {
+      id: verification.id,
+      status:
+        verification.reviewPolicy === "AUTO_OCR"
+          ? automationUnavailable
+            ? "MANUAL_REVIEW"
+            : "PROCESSING"
+          : verification.reviewPolicy === "NO_REVIEW"
+            ? "SKIPPED"
+            : "MANUAL_REVIEW",
+      confirmed: true,
+      verificationQueued:
+        verification.reviewPolicy === "AUTO_OCR" && !automationUnavailable,
+    };
+  }
+
+  async correctExtractedTraveler(
+    partnerId: string,
+    verificationId: string,
+    input: { traveler: TravelerInput; reason: string },
+    idempotencyKey: string,
+  ) {
+    if (
+      !idempotencyKey ||
+      idempotencyKey.length < 8 ||
+      idempotencyKey.length > 200
+    )
+      throw new BadRequestException({
+        code: "INVALID_IDEMPOTENCY_KEY",
+        message: "Idempotency-Key is required for a traveler correction",
+      });
+    const keyHash = createHash("sha256").update(idempotencyKey).digest("hex");
+    const snapshot = this.travelerData(
+      input.traveler,
+    ) as unknown as Prisma.InputJsonValue;
+    const revision = await this.prisma.$transaction(async (tx) => {
+      const verification = await tx.partnerDocumentVerification.findFirst({
+        where: { id: verificationId, partnerId },
+        include: {
+          passportExtraction: true,
+          travelerRevisions: { orderBy: { version: "desc" }, take: 1 },
+        },
+      });
+      if (!verification)
+        throw new NotFoundException({
+          code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+          message: "Document verification not found",
+        });
+      const replay = await tx.partnerTravelerRevision.findUnique({
+        where: {
+          verificationId_idempotencyKeyHash: {
+            verificationId,
+            idempotencyKeyHash: keyHash,
+          },
+        },
+      });
+      if (replay) return { ...replay, replayed: true };
+      if (verification.expiresAt <= new Date() || verification.consumedAt)
+        throw new GoneException({
+          code: "DOCUMENT_VERIFICATION_EXPIRED",
+          message: "This document verification can no longer be corrected",
+        });
+      if (
+        verification.mode !== "EXTRACT_FIRST" ||
+        verification.status !== "MANUAL_REVIEW" ||
+        verification.failureCode !== "TRAVELLER_DETAILS_UNCONFIRMED"
+      )
+        throw new ConflictException({
+          code: "TRAVELER_CORRECTION_NOT_ALLOWED",
+          message: "Corrections are accepted only after a details mismatch",
+        });
+      const latestVersion = verification.travelerRevisions[0]?.version ?? 0;
+      if (latestVersion >= 4)
+        throw new ApiException({
+          code: "TRAVELER_CORRECTION_LIMIT_REACHED",
+          message:
+            "The correction limit has been reached; manual review is required",
+          status: 409,
+        });
+      const claim = await tx.partnerDocumentVerification.updateMany({
+        where: {
+          id: verificationId,
+          partnerId,
+          status: "MANUAL_REVIEW",
+          failureCode: "TRAVELLER_DETAILS_UNCONFIRMED",
+        },
+        data: {
+          travelerSnapshot: snapshot,
+          status: "PROCESSING",
+          failureCode: null,
+        },
+      });
+      if (claim.count !== 1)
+        throw new ConflictException({
+          code: "TRAVELER_CORRECTION_CONFLICT",
+          message: "Another correction or review decision was accepted first",
+        });
+      return {
+        ...(await tx.partnerTravelerRevision.create({
+          data: {
+            verificationId,
+            version: latestVersion + 1,
+            idempotencyKeyHash: keyHash,
+            reason: input.reason,
+            travelerSnapshot: snapshot,
+          },
+        })),
+        replayed: false,
+      };
+    });
+    if (!revision.replayed) {
+      const extraction = await this.prisma.passportExtraction.findUnique({
+        where: { partnerVerificationId: verificationId },
+      });
+      await enqueuePassportOcr(
+        this.queues,
+        "verify-partner-documents",
+        { verificationId },
+        `document-verification-${verificationId}-revision-${revision.version}-${createHash(
+          "sha256",
+        )
+          .update(extraction?.passportAssetId ?? verificationId)
+          .digest("hex")
+          .slice(0, 16)}`,
+        ocrJobOptions(),
+      );
+    }
+    return {
+      verificationId,
+      revision: revision.version,
+      status: "PROCESSING",
+      replayed: revision.replayed,
+    };
+  }
+
+  async declareDocumentReplacement(
+    partnerId: string,
+    orderId: string,
+    input: {
+      type: DocumentType;
+      fileName: string;
+      contentType: string;
+      sizeBytes: number;
+    },
+  ) {
+    if (
+      !(
+        [DocumentType.PASSPORT, DocumentType.TICKET] as DocumentType[]
+      ).includes(input.type)
+    )
+      throw new ApiException({
+        code: "DOCUMENT_REPLACEMENT_NOT_ALLOWED",
+        message: "Only a required passport or ticket can be replaced",
+        status: 400,
+      });
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        partnerId,
+        status: {
+          in: [OrderStatus.REVIEW_PENDING, OrderStatus.AWAITING_CUSTOMER],
+        },
+      },
+      include: { documents: true },
+    });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_INVALID_STATE",
+        message: "Only an uncharged pending order can accept replacements",
+        status: 409,
+      });
+    const orderDocument = order.documents.find(
+      (document) => document.type === input.type,
+    );
+    if (
+      !orderDocument ||
+      orderDocument.status !== DocumentStatus.REUPLOAD_REQUIRED
+    )
+      throw new ApiException({
+        code: "DOCUMENT_REPLACEMENT_NOT_REQUESTED",
+        message: "This document was not requested for replacement",
+        status: 409,
+      });
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { partnerId, consumedOrderId: orderId },
+        include: { documents: true },
+      });
+    if (!verification || verification.expiresAt <= new Date())
+      throw new GoneException({
+        code: "VERIFICATION_EXPIRED",
+        message: "Document verification has expired",
+      });
+    const intent = verification.documents.find(
+      (document) => document.type === input.type,
+    );
+    if (!intent)
+      throw new NotFoundException({
+        code: "PARTNER_DOCUMENT_NOT_FOUND",
+        message: "Document not found",
+      });
+    const signed = await this.storage.createPartnerDocumentUpload(
+      intent.id,
+      input.type as unknown as SharedDocumentType,
+      input.contentType,
+    );
+    await this.prisma.$transaction(async (tx) => {
+      await tx.partnerDocumentUploadIntent.update({
+        where: { id: intent.id },
+        data: {
+          fileName: input.fileName,
+          contentType: input.contentType,
+          declaredSizeBytes: input.sizeBytes,
+          privateAssetId: signed.assetId,
+          uploadVerified: false,
+          verificationStatus: "AWAITING_UPLOAD",
+          verificationCode: null,
+          verificationResult: {
+            replacement: true,
+            previousFileName: intent.fileName,
+            previousStatus: intent.verificationStatus,
+            previousCode: intent.verificationCode,
+            previousVerifiedAt: intent.verifiedAt?.toISOString() ?? null,
+            declaredAt: new Date().toISOString(),
+          },
+          verifiedAt: null,
+        },
+      });
+      await tx.partnerDocumentVerification.update({
+        where: { id: verification.id },
+        data: { status: "AWAITING_UPLOAD", failureCode: null },
+      });
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          fromStatus: order.status,
+          toStatus: order.status,
+          reason: `${documentTypeLabel(input.type)} replacement requested`,
+          metadata: {
+            documentType: input.type,
+            documentReviewStatus: "REUPLOAD_REQUIRED",
+          },
+        },
+      });
+      await this.createEvent(
+        tx,
+        partnerId,
+        orderId,
+        "document.replacement_declared",
+        intent.id,
+        {
+          orderId,
+          verificationId: verification.id,
+          documentId: intent.id,
+          documentType: input.type,
+        },
+      );
+    });
+    return {
+      verificationId: verification.id,
+      orderId,
+      documentId: intent.id,
+      type: input.type,
+      expiresAt: verification.expiresAt,
+      upload: signed.upload,
+    };
+  }
+
+  async confirmDocumentReplacement(
+    partnerId: string,
+    orderId: string,
+    documentId: string,
+  ) {
+    const verification =
+      await this.prisma.partnerDocumentVerification.findFirst({
+        where: { partnerId, consumedOrderId: orderId },
+        select: { id: true },
+      });
+    if (!verification)
+      throw new NotFoundException({
+        code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+        message: "Document verification not found",
+      });
+    return this.confirmVerificationDocument(
+      partnerId,
+      verification.id,
+      documentId,
+    );
   }
 
   async createCompleteOrder(
@@ -590,24 +1399,22 @@ export class PartnerService {
         code: "VERIFICATION_ALREADY_CONSUMED",
         message: "Document verification was already consumed",
       });
+    if (!verification.travelerSnapshot)
+      throw new ApiException({
+        code: "TRAVELER_CONFIRMATION_REQUIRED",
+        message:
+          "Confirm the complete traveler record before placing the order",
+        status: 409,
+      });
     if (
-      ![
-        "VERIFIED",
-        "MANUAL_REVIEW",
-        "PROCESSING_BACKGROUND",
-        "SKIPPED",
-      ].includes(verification.status)
+      verification.status === "EXPIRED" ||
+      (verification.status === "INVALID" &&
+        verification.failureCode === "DOCUMENTS_REJECTED")
     )
       throw new ApiException({
-        code:
-          verification.status === "INVALID"
-            ? "DOCUMENT_REUPLOAD_REQUIRED"
-            : "VERIFICATION_NOT_READY",
-        message:
-          verification.status === "INVALID"
-            ? "Documents are invalid; upload replacements"
-            : "Document verification is not complete",
-        status: verification.status === "INVALID" ? 422 : 409,
+        code: "DOCUMENT_REUPLOAD_REQUIRED",
+        message: "Documents are invalid or expired; upload replacements",
+        status: 422,
       });
     const required = this.requiredDocuments(plan.country.isoCode);
     const suppliedTypes = new Set(
@@ -627,7 +1434,6 @@ export class PartnerService {
           "Confirm every required document upload before placing the order",
         status: 409,
       });
-    await this.applicationOrders.assertInventoryAvailableForNewOrder();
     const uploadIds = intents.map((item) => item.id);
     const amountPaisa = Math.round(Number(plan.sellingPrice) * 100);
     const orderId = randomUUID();
@@ -662,21 +1468,11 @@ export class PartnerService {
           where: {
             id: verification.id,
             partnerId,
-            status: {
-              in: [
-                "VERIFIED",
-                "MANUAL_REVIEW",
-                "PROCESSING_BACKGROUND",
-                "SKIPPED",
-              ],
-            },
+            status: { not: "EXPIRED" },
             consumedAt: null,
             expiresAt: { gt: new Date() },
           },
           data: {
-            ...(verification.status === "VERIFIED"
-              ? { status: "CONSUMED" }
-              : {}),
             consumedAt: new Date(),
             consumedOrderId: orderId,
             activeExternalOrderKey: null,
@@ -688,13 +1484,39 @@ export class PartnerService {
           message: "Document verification was already consumed",
           status: 409,
         });
+      const currentVerification =
+        await tx.partnerDocumentVerification.findUnique({
+          where: { id: verification.id },
+          include: { documents: true },
+        });
+      if (!currentVerification)
+        throw new ApiException({
+          code: "DOCUMENT_VERIFICATION_NOT_FOUND",
+          message: "Document verification not found",
+          status: 404,
+        });
+      if (
+        currentVerification.status === "EXPIRED" ||
+        (currentVerification.status === "INVALID" &&
+          currentVerification.failureCode === "DOCUMENTS_REJECTED")
+      )
+        throw new ApiException({
+          code: "DOCUMENTS_REJECTED",
+          message: "The documented purchase was rejected",
+          status: 422,
+        });
+      const currentIntents = currentVerification.documents;
       const partnerCustomer = await this.ensurePartnerCustomer(
         tx,
         partner.code,
         partnerId,
         input.externalCustomerId,
       );
-      const status = OrderStatus.APPROVED;
+      const status = ["INVALID", "REUPLOAD_REQUIRED"].includes(
+        currentVerification.status,
+      )
+        ? OrderStatus.AWAITING_CUSTOMER
+        : OrderStatus.REVIEW_PENDING;
       const pricingSnapshot = {
         pricingSource: "PUBLIC_CATALOGUE",
         planId: plan.id,
@@ -720,25 +1542,29 @@ export class PartnerService {
           partnerMetadata: input.metadata ?? Prisma.JsonNull,
           planId: plan.id,
           status,
-          documentReviewPolicy: verification.reviewPolicy,
+          documentReviewPolicy: currentVerification.reviewPolicy,
           documentReviewStatus:
-            verification.status === "VERIFIED"
+            currentVerification.status === "VERIFIED"
               ? "VERIFIED"
-              : verification.status === "MANUAL_REVIEW"
+              : currentVerification.status === "MANUAL_REVIEW"
                 ? "MANUAL_REVIEW"
-                : verification.status === "SKIPPED"
+                : currentVerification.status === "SKIPPED"
                   ? "SKIPPED"
-                  : "OCR_BACKGROUND",
+                  : ["INVALID", "REUPLOAD_REQUIRED"].includes(
+                        currentVerification.status,
+                      )
+                    ? "REUPLOAD_REQUIRED"
+                    : "OCR_BACKGROUND",
           subtotal: amountPaisa / 100,
           totalAmount: amountPaisa / 100,
           pricingSnapshot,
           compatibilityAcceptedAt: new Date(input.consent.acceptedAt),
           traveler: {
             create:
-              verification.travelerSnapshot as Prisma.TravelerUncheckedCreateWithoutOrderInput,
+              currentVerification.travelerSnapshot as Prisma.TravelerUncheckedCreateWithoutOrderInput,
           },
           documents: {
-            create: intents.map((intent) => {
+            create: currentIntents.map((intent) => {
               const result = intent.verificationResult as {
                 method?: string;
                 matchedFields?: unknown;
@@ -748,12 +1574,17 @@ export class PartnerService {
                 type: intent.type,
                 fileName: intent.fileName,
                 privateAssetId: intent.privateAssetId,
+                uploadVerified: true,
                 status:
-                  verification.status === "VERIFIED"
+                  currentVerification.status === "VERIFIED"
                     ? DocumentStatus.APPROVED
-                    : DocumentStatus.PENDING,
+                    : ["INVALID", "REUPLOAD_REQUIRED"].includes(
+                          intent.verificationStatus,
+                        )
+                      ? DocumentStatus.REUPLOAD_REQUIRED
+                      : DocumentStatus.PENDING,
                 ...(intent.type === DocumentType.PASSPORT &&
-                verification.status === "VERIFIED"
+                currentVerification.status === "VERIFIED"
                   ? {
                       passportVerificationStatus: "VERIFIED",
                       passportVerificationMethod: result?.method ?? null,
@@ -769,6 +1600,44 @@ export class PartnerService {
           events: { create: { fromStatus: null, toStatus: status } },
         },
       });
+      const persistedDocuments = await tx.travelerDocument.findMany({
+        where: { orderId },
+        select: { id: true, type: true, privateAssetId: true },
+      });
+      for (const persisted of persistedDocuments) {
+        const intent = currentIntents.find(
+          (candidate) => candidate.type === persisted.type,
+        );
+        if (!intent?.contentSha256)
+          throw new ApiException({
+            code: "DOCUMENT_FINALIZATION_REQUIRED",
+            message:
+              "A confirmed document is missing its immutable integrity record; confirm the upload again",
+            status: 409,
+          });
+        const version = await tx.documentAssetVersion.create({
+          data: {
+            documentId: persisted.id,
+            temporaryAssetId: intent.temporaryAssetId ?? intent.privateAssetId,
+            finalizedAssetId: persisted.privateAssetId,
+            sha256: intent.contentSha256,
+            byteSize: intent.declaredSizeBytes,
+            contentType: intent.contentType,
+            storageVersionId: intent.storageVersionId,
+          },
+        });
+        await tx.travelerDocument.update({
+          where: { id: persisted.id },
+          data: { activeAssetVersionId: version.id },
+        });
+      }
+      await this.reserveAccount(
+        tx,
+        partnerId,
+        orderId,
+        amountPaisa,
+        input.externalOrderId,
+      );
       await tx.customerConsent.createMany({
         data: ["COMPATIBILITY", "TERMS", "PRIVACY"].map((type) => ({
           customerId: partnerCustomer.customerId,
@@ -779,38 +1648,27 @@ export class PartnerService {
           acceptedAt: new Date(input.consent.acceptedAt),
         })),
       });
-      await this.debitAccount(
-        tx,
-        partnerId,
-        orderId,
-        amountPaisa,
-        input.externalOrderId,
-      );
       await this.createEvent(
         tx,
         partnerId,
         orderId,
-        "order.accepted",
+        status === OrderStatus.AWAITING_CUSTOMER
+          ? "order.awaiting_customer"
+          : "order.review_pending",
         orderId,
         {
           orderId,
           externalOrderId: input.externalOrderId,
           status,
-          fulfillmentStatus: "PENDING",
+          fulfillmentStatus:
+            status === OrderStatus.AWAITING_CUSTOMER
+              ? "REUPLOAD_REQUIRED"
+              : "BLOCKED_ON_DOCUMENTS",
           version: 0,
           amountPaisa,
           currency: "NPR",
         },
       );
-      await tx.outboxMessage.create({
-        data: {
-          dedupeKey: `partner-fulfillment-${orderId}`,
-          topic: "provisioning",
-          jobName: "advance-approved-order",
-          payload: { orderId },
-          orderId,
-        },
-      });
     });
     const handoff = await Promise.allSettled([
       this.applicationOrders.refreshFromPersistence(orderId),
@@ -823,19 +1681,175 @@ export class PartnerService {
             ? result.reason.message
             : "Partner order post-commit handoff failed",
         );
-    try {
-      await this.applicationOrders.approveToProvisioning(
-        orderId,
-        "Partner order auto-approved",
-      );
-    } catch (error) {
-      this.logger.error(
-        `Partner order provision handoff failed for ${orderId}: ${
-          error instanceof Error ? error.message : "unknown"
-        }`,
-      );
-    }
     return this.order(partnerId, orderId);
+  }
+
+  async finalizeOrder(partnerId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, partnerId },
+      include: {
+        plan: { include: { country: true } },
+        documents: true,
+      },
+    });
+    if (!order)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
+    if (
+      (
+        [
+          OrderStatus.APPROVED,
+          OrderStatus.PROVISIONING,
+          OrderStatus.QR_READY,
+          OrderStatus.ACTIVATION_ATTENTION,
+          OrderStatus.COMPLETED,
+        ] as OrderStatus[]
+      ).includes(order.status)
+    )
+      return this.order(partnerId, orderId);
+    if (order.status === OrderStatus.CANCELLED)
+      throw new ApiException({
+        code: "DOCUMENTS_REJECTED",
+        message: "The documented purchase was rejected and cannot be finalized",
+        status: 422,
+      });
+    if (order.status !== OrderStatus.REVIEW_PENDING)
+      throw new ApiException({
+        code: "VERIFICATION_NOT_READY",
+        message: "Document verification is not complete",
+        status: 409,
+      });
+
+    const fulfillmentAllowed =
+      (order.documentReviewPolicy === "AUTO_OCR" &&
+        ["VERIFIED", "MANUALLY_APPROVED"].includes(
+          order.documentReviewStatus,
+        )) ||
+      (order.documentReviewPolicy === "MANUAL_REVIEW" &&
+        order.documentReviewStatus === "MANUALLY_APPROVED") ||
+      (order.documentReviewPolicy === "NO_REVIEW" &&
+        order.documentReviewStatus === "SKIPPED");
+    if (!fulfillmentAllowed)
+      throw new ApiException({
+        code:
+          order.documentReviewStatus === "REUPLOAD_REQUIRED"
+            ? "DOCUMENT_REUPLOAD_REQUIRED"
+            : "VERIFICATION_NOT_READY",
+        message:
+          order.documentReviewStatus === "REUPLOAD_REQUIRED"
+            ? "A required document must be replaced before finalization"
+            : "Document verification is not complete",
+        status: order.documentReviewStatus === "REUPLOAD_REQUIRED" ? 422 : 409,
+      });
+    const requiredDocumentsApproved = [
+      DocumentType.PASSPORT,
+      DocumentType.TICKET,
+    ].every((type) =>
+      order.documents.some(
+        (document) =>
+          document.type === type &&
+          document.uploadVerified &&
+          document.status === DocumentStatus.APPROVED,
+      ),
+    );
+    if (!requiredDocumentsApproved)
+      throw new ApiException({
+        code: "VERIFICATION_NOT_READY",
+        message: "Passport and ticket are not both approved",
+        status: 409,
+      });
+
+    const activePlan = await this.prisma.plan.findFirst({
+      where: {
+        id: order.planId,
+        status: "ACTIVE",
+        country: {
+          active: true,
+          ...(RESTRICTED_PLAN_COUNTRY_CODES.length
+            ? { isoCode: { notIn: [...RESTRICTED_PLAN_COUNTRY_CODES] } }
+            : {}),
+        },
+      },
+    });
+    if (!activePlan)
+      throw new ApiException({
+        code: "PLAN_UNAVAILABLE",
+        message: "Plan is unavailable",
+        status: 409,
+      });
+    await this.applicationOrders.assertInventoryAvailableForNewOrder();
+
+    const amountPaisa = Math.round(Number(order.totalAmount) * 100);
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.order.updateMany({
+        where: {
+          id: order.id,
+          partnerId,
+          version: order.version,
+          status: OrderStatus.REVIEW_PENDING,
+          documentReviewStatus: order.documentReviewStatus,
+        },
+        data: { status: OrderStatus.APPROVED, version: { increment: 1 } },
+      });
+      if (updated.count !== 1)
+        throw new ApiException({
+          code: "ORDER_CONFLICT",
+          message: "Order changed while finalizing; reload and retry",
+          status: 409,
+        });
+      await this.captureOrDebitAccount(
+        tx,
+        partnerId,
+        order.id,
+        amountPaisa,
+        order.externalOrderId ?? order.id,
+      );
+      await tx.orderEvent.create({
+        data: {
+          orderId: order.id,
+          fromStatus: OrderStatus.REVIEW_PENDING,
+          toStatus: OrderStatus.APPROVED,
+          reason: "Partner explicitly finalized verified documents",
+        },
+      });
+      await this.createEvent(
+        tx,
+        partnerId,
+        order.id,
+        "order.accepted",
+        order.id,
+        {
+          orderId: order.id,
+          externalOrderId: order.externalOrderId,
+          status: OrderStatus.APPROVED,
+          fulfillmentStatus: "PENDING",
+          amountPaisa,
+          currency: "NPR",
+        },
+      );
+      await tx.outboxMessage.create({
+        data: {
+          dedupeKey: `partner-fulfillment-${order.id}`,
+          topic: "provisioning",
+          jobName: "advance-approved-order",
+          payload: { orderId: order.id },
+          orderId: order.id,
+        },
+      });
+    });
+
+    await this.applicationOrders.refreshFromPersistence(order.id);
+    await Promise.allSettled([
+      this.partnerWebhooks.enqueuePending(),
+      this.applicationOrders.approveToProvisioning(
+        order.id,
+        "Partner finalized verified order",
+      ),
+    ]);
+    return this.order(partnerId, order.id);
   }
 
   private async createCompleteTopUpOrder(
@@ -852,28 +1866,13 @@ export class PartnerService {
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
         message:
-          "This number cannot be used for a top-up with the selected plan. Create a documented initial purchase only after customer consent.",
+          "This eSIM MSISDN cannot be used for a top-up with the selected plan. Create a documented initial purchase only after customer consent.",
         status: 422,
       });
-    const existingPartnerCustomer =
-      await this.prisma.partnerCustomer.findUnique({
-        where: {
-          partnerId_externalCustomerId: {
-            partnerId: partner.id,
-            externalCustomerId: input.externalCustomerId,
-          },
-        },
-        select: { customerId: true },
-      });
-    if (
-      !existingPartnerCustomer ||
-      !target.customerId ||
-      existingPartnerCustomer.customerId !== target.customerId
-    )
+    if (!target.customerId)
       throw new ApiException({
-        code: "TOPUP_CUSTOMER_MISMATCH",
-        message:
-          "This eSIM is not attached to the supplied partner customer. Use the same externalCustomerId as the original purchase.",
+        code: "TOPUP_NOT_ELIGIBLE",
+        message: "This eSIM cannot receive the selected package.",
         status: 422,
       });
     const eligibility = await this.applicationOrders.checkTopUpEligibility(
@@ -916,7 +1915,11 @@ export class PartnerService {
           id: orderId,
           orderNumber: `VC-${new Date().getUTCFullYear()}-${orderId.slice(0, 8).toUpperCase()}`,
           channel: OrderChannel.PARTNER_API,
-          customerId: partnerCustomer.customerId,
+          // A top-up may be purchased through any channel. Keep the order and
+          // resulting CustomerEsim attached to the established eSIM owner;
+          // partnerCustomerId separately records who initiated the purchase.
+          customerId: target.customerId,
+          targetInventoryId: inventory.id,
           partnerId: partner.id,
           partnerCustomerId: partnerCustomer.id,
           externalOrderId: input.externalOrderId,
@@ -1213,63 +2216,79 @@ export class PartnerService {
       update: {},
       create: { partnerId },
     });
-    const [debits, credits, refunds, adjustments, orders] = await Promise.all([
-      this.prisma.partnerLedgerEntry.aggregate({
-        where: {
-          partnerId,
-          type: {
-            in: [PartnerLedgerEntryType.DEBIT, PartnerLedgerEntryType.CAPTURE],
+    const [debits, credits, refunds, adjustments, orderGroups] =
+      await Promise.all([
+        this.prisma.partnerLedgerEntry.aggregate({
+          where: {
+            partnerId,
+            type: {
+              in: [
+                PartnerLedgerEntryType.DEBIT,
+                PartnerLedgerEntryType.CAPTURE,
+              ],
+            },
           },
-        },
-        _sum: { amountPaisa: true },
-      }),
-      this.prisma.partnerLedgerEntry.aggregate({
-        where: {
-          partnerId,
-          type: PartnerLedgerEntryType.CREDIT,
-        },
-        _sum: { amountPaisa: true },
-      }),
-      this.prisma.partnerLedgerEntry.aggregate({
-        where: { partnerId, type: PartnerLedgerEntryType.REFUND },
-        _sum: { amountPaisa: true },
-      }),
-      this.prisma.partnerLedgerEntry.aggregate({
-        where: { partnerId, type: PartnerLedgerEntryType.ADJUSTMENT },
-        _sum: { amountPaisa: true },
-      }),
-      this.prisma.order.findMany({
-        where: { partnerId },
-        select: { status: true, totalAmount: true },
-      }),
-    ]);
-    const ordersByStatus = orders.reduce<Record<string, number>>(
-      (result, order) => ({
+          _sum: { amountPaisa: true },
+        }),
+        this.prisma.partnerLedgerEntry.aggregate({
+          where: {
+            partnerId,
+            type: PartnerLedgerEntryType.CREDIT,
+          },
+          _sum: { amountPaisa: true },
+        }),
+        this.prisma.partnerLedgerEntry.aggregate({
+          where: { partnerId, type: PartnerLedgerEntryType.REFUND },
+          _sum: { amountPaisa: true },
+        }),
+        this.prisma.partnerLedgerEntry.aggregate({
+          where: { partnerId, type: PartnerLedgerEntryType.ADJUSTMENT },
+          _sum: { amountPaisa: true },
+        }),
+        this.prisma.order.groupBy({
+          by: ["status"],
+          where: { partnerId },
+          _count: { _all: true },
+          _sum: { totalAmount: true },
+        }),
+      ]);
+    const ordersByStatus = orderGroups.reduce<Record<string, number>>(
+      (result, group) => ({
         ...result,
-        [order.status]: (result[order.status] ?? 0) + 1,
+        [group.status]: group._count._all,
       }),
       {},
     );
-    const totalOrderValuePaisa = orders.reduce(
-      (total, order) => total + Math.round(Number(order.totalAmount) * 100),
+    const ordersCreated = orderGroups.reduce(
+      (total, group) => total + group._count._all,
+      0,
+    );
+    const totalOrderValuePaisa = orderGroups.reduce(
+      (total, group) =>
+        total + Math.round(Number(group._sum.totalAmount ?? 0) * 100),
       0,
     );
     return {
       currency: "NPR",
       balancePaisa: account.balancePaisa,
-      availableBalancePaisa: account.balancePaisa,
+      reservedPaisa: account.reservedPaisa,
+      creditLimitPaisa: 0,
+      availableBalancePaisa: Math.max(
+        0,
+        account.balancePaisa - account.reservedPaisa,
+      ),
       totalDebitsPaisa: debits._sum.amountPaisa ?? 0,
       totalCreditsPaisa: credits._sum.amountPaisa ?? 0,
       totalRefundedPaisa: refunds._sum.amountPaisa ?? 0,
       totalAdjustedPaisa: adjustments._sum.amountPaisa ?? 0,
-      ordersCreated: orders.length,
+      ordersCreated,
       ordersByStatus,
       fulfilledOrders:
         (ordersByStatus.QR_READY ?? 0) + (ordersByStatus.COMPLETED ?? 0),
       failedOrders: ordersByStatus.PROVISIONING_FAILED ?? 0,
       totalOrderValuePaisa,
-      averageOrderValuePaisa: orders.length
-        ? Math.round(totalOrderValuePaisa / orders.length)
+      averageOrderValuePaisa: ordersCreated
+        ? Math.round(totalOrderValuePaisa / ordersCreated)
         : 0,
       updatedAt: account.updatedAt,
     };
@@ -1284,7 +2303,15 @@ export class PartnerService {
       externalOrderId?: string | undefined;
       orderNumber?: string | undefined;
       reference?: string | undefined;
-      type?: "CREDIT" | "DEBIT" | "REFUND" | "ADJUSTMENT" | undefined;
+      type?:
+        | "CREDIT"
+        | "DEBIT"
+        | "RESERVATION"
+        | "CAPTURE"
+        | "RELEASE"
+        | "REFUND"
+        | "ADJUSTMENT"
+        | undefined;
       limit?: number | undefined;
     },
   ) {
@@ -1397,6 +2424,13 @@ export class PartnerService {
         message: "Order not found",
         status: 404,
       });
+    if (order.orderType === "TOPUP")
+      throw new ApiException({
+        code: "PARTNER_ESIM_MANAGEMENT_NOT_GRANTED",
+        message:
+          "A top-up purchase does not grant access to eSIM activation details.",
+        status: 403,
+      });
     if (
       order.status !== OrderStatus.QR_READY &&
       order.status !== OrderStatus.ACTIVATION_ATTENTION &&
@@ -1422,6 +2456,7 @@ export class PartnerService {
       fulfillmentStatus: this.fulfillmentStatus(order.status),
       documentStatus: order.documentReviewStatus,
       recoverability: order.operationalDisposition ?? null,
+      esimId: order.customerEsim.inventory.id,
       iccid: order.customerEsim.inventory.iccid,
       msisdn: order.customerEsim.inventory.msisdn,
       smDpAddress: order.customerEsim.inventory.smDpAddress,
@@ -1442,6 +2477,17 @@ export class PartnerService {
     const order = await this.mutableOrder(partnerId, orderId, [
       OrderStatus.DRAFT,
     ]);
+    const previousTraveler = await this.prisma.traveler.findUnique({
+      where: { orderId },
+      select: { mobile: true },
+    });
+    if (
+      order.orderType === "INITIAL_PURCHASE" &&
+      order.contactRuleVersion === 1 &&
+      (!previousTraveler || traveler.mobile !== previousTraveler.mobile)
+    ) {
+      traveler = await this.validateNewPartnerContact(order.id, traveler);
+    }
     const data = {
       title: traveler.title,
       firstName: traveler.firstName,
@@ -1454,6 +2500,7 @@ export class PartnerService {
       employerOrBusinessName: traveler.employerOrBusinessName ?? null,
       email: traveler.email,
       mobile: traveler.mobile,
+      contactNumberNormalized: normalizeNepaliContact(traveler.mobile),
       passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber),
       passportNumberHash: this.crypto.blindIndex(traveler.passportNumber),
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),
@@ -1486,7 +2533,7 @@ export class PartnerService {
     );
     const document = await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
-      return tx.travelerDocument.upsert({
+      const saved = await tx.travelerDocument.upsert({
         where: { orderId_type: { orderId, type: input.type } },
         update: {
           fileName: input.fileName,
@@ -1512,6 +2559,20 @@ export class PartnerService {
           privateAssetId: signed.assetId,
         },
       });
+      if (input.type === DocumentType.PASSPORT)
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            documentReviewStatus: "NOT_STARTED",
+            documentReviewStartedAt: null,
+            documentCheckoutReleaseAt: null,
+          },
+        });
+      if (input.type === DocumentType.PASSPORT)
+        await tx.passportExtraction.deleteMany({
+          where: { orderId: order.id },
+        });
+      return saved;
     });
     return {
       id: document.id,
@@ -1536,12 +2597,24 @@ export class PartnerService {
         status: 404,
       });
     await this.verifyUploadedDocument(document.privateAssetId);
+    const { finalized } = await this.finalizeTravelerDocument(document);
     await this.prisma.travelerDocument.update({
       where: { id: document.id },
       data: { uploadVerified: true },
     });
-    if (document.type === DocumentType.PASSPORT)
-      await this.enqueuePassportOcr(orderId, documentId);
+    // Any required evidence replacement invalidates the order verdict. When a
+    // ticket is the replaced file, rerun verification against the current
+    // passport as well; otherwise the order can remain at NOT_STARTED forever.
+    // Use a distinct OCR job key for the ticket so the run is never deduplicated
+    // against the earlier passport job and the replacement ticket is
+    // re-validated.
+    await this.enqueuePassportOcr(
+      orderId,
+      document.type === DocumentType.PASSPORT ? documentId : undefined,
+      document.type === DocumentType.TICKET
+        ? `replacement:${document.id}:${finalized.finalizedAssetId}`
+        : undefined,
+    );
     return {
       id: document.id,
       type: document.type,
@@ -1613,13 +2686,15 @@ export class PartnerService {
             plan.id,
           )
         : null;
-    const isTopUp = Boolean(topUp?.inventory && eligibility?.allowed);
+    const isTopUp = Boolean(
+      topUp?.customerId && topUp.inventory && eligibility?.allowed,
+    );
     if (input.topUpMobile && !isTopUp && !input.allowInitialPurchaseFallback)
       throw new ApiException({
         code: "TOPUP_NOT_ELIGIBLE",
         message:
           eligibility?.errorMessage ??
-          "This number cannot be used for a top-up with the selected plan. Ask the customer whether they want a new eSIM purchase instead.",
+          "This eSIM MSISDN cannot be used for a top-up with the selected plan. Ask the customer whether they want a new eSIM purchase instead.",
         status: 422,
       });
     if (!isTopUp)
@@ -1652,7 +2727,16 @@ export class PartnerService {
           id,
           orderNumber: `VC-${new Date().getUTCFullYear()}-${id.slice(0, 8).toUpperCase()}`,
           channel: OrderChannel.PARTNER_HOSTED,
-          customerId: partnerCustomer.customerId,
+          // Hosted checkout is a sales channel, not an ownership transfer.
+          // The beneficiary remains the established owner of the target eSIM,
+          // while partnerCustomerId records the partner-side purchaser.
+          customerId:
+            isTopUp && topUp?.customerId
+              ? topUp.customerId
+              : partnerCustomer.customerId,
+          ...(isTopUp && topUp?.inventory
+            ? { targetInventoryId: topUp.inventory.id }
+            : {}),
           partnerId,
           partnerCustomerId: partnerCustomer.id,
           externalOrderId: input.externalOrderId,
@@ -1709,12 +2793,9 @@ export class PartnerService {
       orderType: isTopUp ? "TOPUP" : "INITIAL_PURCHASE",
       topUp: isTopUp
         ? {
+            msisdn: input.topUpMobile,
+            // Retained for Partner API v1 response compatibility.
             mobile: input.topUpMobile,
-            ...(topUp?.traveler
-              ? {
-                  subscriberName: `${topUp.traveler.firstName} ${topUp.traveler.surname}`,
-                }
-              : {}),
             status: "BOUND",
           }
         : undefined,
@@ -1727,17 +2808,21 @@ export class PartnerService {
       where: { id: session.orderId },
       include: {
         plan: { include: { country: true } },
-        traveler: { select: { id: true } },
+        traveler: true,
+        passportExtraction: true,
+        events: { select: { reason: true }, orderBy: { createdAt: "asc" } },
         documents: {
           select: {
             id: true,
             type: true,
             status: true,
             fileName: true,
+            uploadVerified: true,
             passportVerificationStatus: true,
           },
         },
         partner: { select: { name: true, slug: true, brand: true } },
+        payments: { orderBy: { createdAt: "desc" }, take: 1 },
       },
     });
     if (!order)
@@ -1791,19 +2876,51 @@ export class PartnerService {
             where: { id: session.orderId },
             include: {
               plan: { include: { country: true } },
-              traveler: { select: { id: true } },
+              traveler: true,
+              passportExtraction: true,
+              events: {
+                select: { reason: true },
+                orderBy: { createdAt: "asc" },
+              },
               documents: {
                 select: {
                   id: true,
                   type: true,
                   status: true,
                   fileName: true,
+                  uploadVerified: true,
                   passportVerificationStatus: true,
                 },
               },
               partner: { select: { name: true, slug: true, brand: true } },
+              payments: { orderBy: { createdAt: "desc" }, take: 1 },
             },
           })) ?? order;
+    }
+    const topUpSnapshot = order.pricingSnapshot as {
+      topUpMobile?: string;
+    } | null;
+    const topUpMsisdn = topUpSnapshot?.topUpMobile;
+    const topUpMsisdnMasked = topUpMsisdn
+      ? `••••${topUpMsisdn.replace(/\D/g, "").slice(-4)}`
+      : undefined;
+    const replacementReasons: Partial<Record<"PASSPORT" | "TICKET", string>> =
+      {};
+    for (const event of [...order.events].reverse()) {
+      const reason = event.reason?.trim() ?? "";
+      const specific = /^(PASSPORT|TICKET):\s*(.+)$/i.exec(reason);
+      if (specific) {
+        const type = specific[1]!.toUpperCase() as "PASSPORT" | "TICKET";
+        replacementReasons[type] ??= specific[2]!
+          .replace(/\s+\(requested by [^)]+\)$/, "")
+          .trim();
+      } else if (reason.startsWith("Documents requested again:")) {
+        const comment = reason
+          .replace(/^Documents requested again:\s*/, "")
+          .trim();
+        replacementReasons.PASSPORT ??= comment;
+        replacementReasons.TICKET ??= comment;
+      }
     }
     return {
       sessionId: session.id,
@@ -1817,6 +2934,9 @@ export class PartnerService {
         id: order.id,
         orderNumber: order.orderNumber,
         orderType: order.orderType,
+        ...(order.orderType === "TOPUP" && topUpMsisdnMasked
+          ? { topUpMsisdnMasked }
+          : {}),
         status: order.status,
         amountPaisa: Math.round(Number(order.totalAmount) * 100),
         amountNpr: Math.round(Number(order.totalAmount) * 100) / 100,
@@ -1830,11 +2950,125 @@ export class PartnerService {
           validityDays: order.plan.validityDays,
         },
         travelerComplete: Boolean(order.traveler),
+        traveler: order.traveler ? this.decryptTraveler(order.traveler) : null,
+        passportExtraction: this.extractionPayload(
+          "passportExtraction" in order ? order.passportExtraction : null,
+        ),
+        ...(order.documentReviewStatus === "CORRECTION_REQUIRED" &&
+        Array.isArray(order.passportExtraction?.lastMismatchFields)
+          ? {
+              mismatchedFields:
+                order.passportExtraction.lastMismatchFields.filter(
+                  (field): field is string =>
+                    typeof field === "string" &&
+                    [
+                      "firstName",
+                      "middleName",
+                      "surname",
+                      "dateOfBirth",
+                      "nationality",
+                      "passportNumber",
+                      "passportExpiryDate",
+                    ].includes(field),
+                ),
+            }
+          : {}),
         documents: order.documents,
         documentReviewStatus: order.documentReviewStatus,
+        replacementReasons: Object.fromEntries(
+          Object.entries(replacementReasons).filter(([type]) =>
+            order.documents.some(
+              (document) =>
+                document.type === type &&
+                document.status === DocumentStatus.REUPLOAD_REQUIRED,
+            ),
+          ),
+        ),
         requiredDocuments,
+        paymentRetry: declarePaymentRetry({
+          status: order.status,
+          payment: order.payments?.[0]
+            ? {
+                status: order.payments[0]!.status,
+                ...(order.payments[0]!.expiresAt
+                  ? { expiresAt: order.payments[0]!.expiresAt.toISOString() }
+                  : {}),
+              }
+            : null,
+        }),
       },
     };
+  }
+
+  async claimHostedCheckout(
+    token: string,
+    clerkId: string,
+    performedById?: string,
+  ) {
+    const session = await this.hostedCheckoutSession(token);
+    const [target, order] = await Promise.all([
+      this.prisma.customer.findFirst({
+        where: { user: { clerkId } },
+        select: { id: true },
+      }),
+      this.prisma.order.findUnique({
+        where: { id: session.orderId },
+        select: {
+          id: true,
+          status: true,
+          channel: true,
+          customerId: true,
+          customer: { select: { userId: true } },
+        },
+      }),
+    ]);
+    if (!target)
+      throw new ApiException({
+        code: "CUSTOMER_ACCOUNT_NOT_FOUND",
+        message: "Customer account not found",
+        status: 404,
+      });
+    if (!order || order.channel !== OrderChannel.PARTNER_HOSTED)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
+    if (order.customerId === target.id) return this.hostedCheckout(token);
+    if (order.status !== OrderStatus.DRAFT || order.customer.userId)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_ALREADY_CLAIMED",
+        message: "This hosted checkout belongs to another account",
+        status: 409,
+      });
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.order.updateMany({
+        where: {
+          id: order.id,
+          customerId: order.customerId,
+          status: OrderStatus.DRAFT,
+        },
+        data: { customerId: target.id },
+      });
+      if (claimed.count !== 1)
+        throw new ApiException({
+          code: "HOSTED_CHECKOUT_ALREADY_CLAIMED",
+          message: "This hosted checkout was claimed by another account",
+          status: 409,
+        });
+      await tx.auditLog.create({
+        data: {
+          module: "PARTNERS",
+          entity: "Order",
+          entityId: order.id,
+          action: "HOSTED_ORDER_CLAIMED",
+          ...(performedById ? { performedById } : {}),
+          previousValue: { ownership: "PARTNER_GUEST" },
+          newValue: { ownership: "CUSTOMER_ACCOUNT" },
+        },
+      });
+    });
+    return this.hostedCheckout(token);
   }
 
   async hostedCheckoutDocuments(token: string) {
@@ -1846,6 +3080,7 @@ export class PartnerService {
         type: true,
         status: true,
         fileName: true,
+        uploadVerified: true,
         passportVerificationStatus: true,
       },
     });
@@ -1854,13 +3089,80 @@ export class PartnerService {
 
   async setHostedTraveler(token: string, traveler: TravelerInput) {
     const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    const previous = order.traveler
+      ? this.decryptTraveler(order.traveler)
+      : null;
+    const changeKind = travelerChangeKind(previous, traveler);
+    if (
+      previous &&
+      order.documentReviewStatus === "MANUAL_REVIEW" &&
+      changeKind !== "unchanged"
+    )
+      throw new ApiException({
+        code: "TRAVELER_REVIEW_LOCKED",
+        message: "Traveller details cannot be changed during manual review",
+        status: 409,
+      });
+    if (
+      changeKind === "identity" &&
+      order.documentReviewStatus === "MANUALLY_APPROVED"
+    )
+      throw new ApiException({
+        code: "TRAVELER_REVIEW_LOCKED",
+        message: "Approved passport identity cannot be changed",
+        status: 409,
+      });
+    if (changeKind === "unchanged") return this.hostedCheckout(token);
+    if (
+      order.orderType === "INITIAL_PURCHASE" &&
+      order.contactRuleVersion === 1 &&
+      (!previous || traveler.mobile !== previous.mobile)
+    ) {
+      traveler = await this.validateNewPartnerContact(order.id, traveler);
+    }
+    const reverifyApprovedIdentity =
+      changeKind === "identity" && order.documentReviewStatus === "VERIFIED";
+    const retryExistingPassport =
+      reverifyApprovedIdentity ||
+      order.documentReviewStatus === "REUPLOAD_REQUIRED" ||
+      (order.documentReviewStatus === "MANUAL_REVIEW" &&
+        ["PARTIAL", "FAILED"].includes(
+          order.documents.find((document) => document.type === "PASSPORT")
+            ?.passportVerificationStatus ?? "",
+        ));
     await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
+      if (retryExistingPassport) {
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            documentReviewStatus: "NOT_STARTED",
+            documentReviewStartedAt: null,
+            documentCheckoutReleaseAt: null,
+          },
+        });
+        await tx.travelerDocument.updateMany({
+          where: { orderId: order.id, type: DocumentType.PASSPORT },
+          data: {
+            status: DocumentStatus.PENDING,
+            passportVerificationStatus: null,
+            passportVerificationMethod: null,
+            passportMatchedFields: Prisma.DbNull,
+            passportConfidence: null,
+            passportVerifiedAt: null,
+          },
+        });
+      }
       await tx.traveler.upsert({
         where: { orderId: order.id },
         update: this.travelerData(traveler),
         create: { orderId: order.id, ...this.travelerData(traveler) },
       });
+      if (!retryExistingPassport)
+        await tx.passportExtraction.updateMany({
+          where: { orderId: order.id, confirmedAt: null },
+          data: { confirmedAt: new Date() },
+        });
       const normalizedEmail = traveler.email.trim().toLowerCase();
       const emailOwner = await tx.customer.findUnique({
         where: { email: normalizedEmail },
@@ -1882,7 +3184,7 @@ export class PartnerService {
         const attached = await tx.partnerCustomer.findFirst({
           where: {
             id: order.partnerCustomerId,
-            customerId: order.customerId,
+            ...(order.partnerId ? { partnerId: order.partnerId } : {}),
           },
           select: { id: true },
         });
@@ -1897,14 +3199,96 @@ export class PartnerService {
     return this.hostedCheckout(token);
   }
 
+  private async validateNewPartnerContact(
+    orderId: string,
+    traveler: TravelerInput,
+  ): Promise<TravelerInput> {
+    const contact = /^\d{10}$/.test(traveler.mobile)
+      ? normalizeNepaliContact(traveler.mobile)
+      : null;
+    if (!contact)
+      throw new ApiException({
+        code: ApiErrorCode.NEPAL_CONTACT_REQUIRED,
+        message: "Enter exactly 10 digits for the Nepali mobile number",
+      });
+    const candidates = await this.prisma.order.findMany({
+      where: {
+        id: { not: orderId },
+        orderType: "INITIAL_PURCHASE",
+        traveler: { is: { contactNumberNormalized: contact } },
+        OR: [
+          {
+            status: {
+              in: [
+                "PAYMENT_PENDING",
+                "PAYMENT_CONFIRMED",
+                "PAYMENT_REVIEW_REQUIRED",
+                "REVIEW_PENDING",
+                "APPROVED",
+                "PROVISIONING",
+                "QR_READY",
+                "COMPLETED",
+                "ACTIVATION_ATTENTION",
+                "PROVISIONING_FAILED",
+              ],
+            },
+          },
+          { customerEsim: { isNot: null } },
+        ],
+      },
+      select: {
+        status: true,
+        traveler: { select: { mobile: true } },
+        customerEsim: {
+          select: { inventory: { select: { status: true } } },
+        },
+      },
+    });
+    if (
+      candidates.some((candidate) => {
+        const inventory = candidate.customerEsim?.inventory.status;
+        const active = inventory
+          ? ["RESERVED", "ASSIGNED", "ACTIVATED"].includes(inventory)
+          : !["CANCELLED", "REFUNDED", "PAYMENT_FAILED"].includes(
+              candidate.status,
+            );
+        return (
+          active &&
+          normalizeNepaliContact(candidate.traveler?.mobile ?? "") === contact
+        );
+      })
+    )
+      throw new ApiException({
+        code: ApiErrorCode.ESIM_CONTACT_ALREADY_LINKED,
+        message:
+          "This contact number already has an active eSIM. Recharge it instead of buying another.",
+        status: 409,
+      });
+    return traveler;
+  }
+
   async addHostedDocument(
     token: string,
     input: { type: DocumentType; fileName: string; contentType: string },
   ) {
-    const order = await this.sessionOrder(token, [
-      OrderStatus.DRAFT,
-      OrderStatus.AWAITING_CUSTOMER,
-    ]);
+    const order = await this.sessionOrder(
+      token,
+      [OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER],
+      true,
+    );
+    if (
+      order.status === OrderStatus.AWAITING_CUSTOMER &&
+      !order.documents.some(
+        (document) =>
+          document.type === input.type &&
+          document.status === DocumentStatus.REUPLOAD_REQUIRED,
+      )
+    )
+      throw new ApiException({
+        code: "DOCUMENT_REPLACEMENT_NOT_REQUESTED",
+        message: "Only documents requested for replacement can be uploaded",
+        status: 409,
+      });
     const signed = await this.storage.createDocumentUpload(
       order.id,
       input.type as unknown as SharedDocumentType,
@@ -1912,7 +3296,7 @@ export class PartnerService {
     );
     const document = await this.prisma.$transaction(async (tx) => {
       await this.bumpInTransaction(tx, order.id, order.version);
-      return tx.travelerDocument.upsert({
+      const saved = await tx.travelerDocument.upsert({
         where: { orderId_type: { orderId: order.id, type: input.type } },
         update: {
           fileName: input.fileName,
@@ -1938,6 +3322,22 @@ export class PartnerService {
           privateAssetId: signed.assetId,
         },
       });
+      // Passport OCR owns the aggregate review status. An optional visa must
+      // never reset a verified passport or requeue an already-consumed OCR job.
+      if (input.type === DocumentType.PASSPORT)
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            documentReviewStatus: "NOT_STARTED",
+            documentReviewStartedAt: null,
+            documentCheckoutReleaseAt: null,
+          },
+        });
+      if (input.type === DocumentType.PASSPORT)
+        await tx.passportExtraction.deleteMany({
+          where: { orderId: order.id },
+        });
+      return saved;
     });
     return {
       id: document.id,
@@ -1948,7 +3348,11 @@ export class PartnerService {
   }
 
   async confirmHostedDocument(token: string, documentId: string) {
-    const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    const order = await this.sessionOrder(
+      token,
+      [OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER],
+      true,
+    );
     const document = await this.prisma.travelerDocument.findFirst({
       where: { id: documentId, orderId: order.id },
     });
@@ -1959,10 +3363,72 @@ export class PartnerService {
         status: 404,
       });
     await this.verifyUploadedDocument(document.privateAssetId);
+    await this.finalizeTravelerDocument(document);
     await this.prisma.travelerDocument.update({
       where: { id: document.id },
       data: { uploadVerified: true },
     });
+    const remainingRequired = this.requiredDocuments(
+      order.plan.country.isoCode,
+    ).filter(
+      (type) =>
+        !order.documents.some(
+          (item) =>
+            item.type === type &&
+            (item.id === document.id ||
+              (item.uploadVerified &&
+                item.status !== DocumentStatus.REUPLOAD_REQUIRED)),
+        ),
+    );
+    if (remainingRequired.length === 0) {
+      if (
+        order.status === OrderStatus.AWAITING_CUSTOMER &&
+        document.type !== DocumentType.PASSPORT
+      ) {
+        // A replacement ticket must be checked against the existing passport;
+        // its earlier terminal passport verdict cannot short-circuit OCR.
+        await this.prisma.travelerDocument.updateMany({
+          where: { orderId: order.id, type: DocumentType.PASSPORT },
+          data: {
+            passportVerificationStatus: null,
+            passportVerificationMethod: null,
+            passportMatchedFields: Prisma.DbNull,
+            passportConfidence: null,
+            passportVerifiedAt: null,
+          },
+        });
+      }
+      const verification = await this.verifyHostedPassport(token);
+      if (
+        order.status === OrderStatus.AWAITING_CUSTOMER &&
+        verification.status !== "REUPLOAD_REQUIRED"
+      ) {
+        const moved = await this.prisma.order.updateMany({
+          where: { id: order.id, status: OrderStatus.AWAITING_CUSTOMER },
+          data: {
+            status: OrderStatus.REVIEW_PENDING,
+            version: { increment: 1 },
+          },
+        });
+        if (moved.count === 1)
+          await this.prisma.orderEvent.create({
+            data: {
+              orderId: order.id,
+              fromStatus: OrderStatus.AWAITING_CUSTOMER,
+              toStatus: OrderStatus.REVIEW_PENDING,
+              reason: "Customer supplied requested document replacements",
+            },
+          });
+      }
+    } else if (
+      order.documents.some(
+        (item) => item.status === DocumentStatus.REUPLOAD_REQUIRED,
+      )
+    )
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: { documentReviewStatus: "REUPLOAD_REQUIRED" },
+      });
     return {
       id: document.id,
       type: document.type,
@@ -1979,7 +3445,11 @@ export class PartnerService {
    * triggers a full order re-save.
    */
   async verifyHostedPassport(token: string) {
-    const order = await this.sessionOrder(token, [OrderStatus.DRAFT]);
+    const order = await this.sessionOrder(
+      token,
+      [OrderStatus.DRAFT, OrderStatus.AWAITING_CUSTOMER],
+      true,
+    );
     if (
       ["VERIFIED", "MANUALLY_APPROVED", "SKIPPED"].includes(
         order.documentReviewStatus,
@@ -1998,7 +3468,10 @@ export class PartnerService {
     ).filter(
       (type) =>
         !order.documents.some(
-          (document) => document.type === type && document.uploadVerified,
+          (document) =>
+            document.type === type &&
+            document.uploadVerified &&
+            document.status !== DocumentStatus.REUPLOAD_REQUIRED,
         ),
     );
     if (missingRequiredDocuments.length)
@@ -2007,102 +3480,25 @@ export class PartnerService {
         message: `Confirm all required documents before verification: ${missingRequiredDocuments.map(documentTypeLabel).join(", ")}`,
         status: 409,
       });
-    const passport = order.documents.find(
-      (document) => document.type === DocumentType.PASSPORT,
+    const updated = await this.applicationOrders.verifyPassport(order.id, null);
+    return {
+      ...(updated.passportVerification ?? {}),
+      status: updated.documentReviewStatus ?? "NOT_STARTED",
+      passportExtraction: updated.passportExtraction ?? null,
+    };
+  }
+
+  async confirmHostedPassportDetails(token: string) {
+    const order = await this.sessionOrder(token, [OrderStatus.DRAFT], true);
+    const updated = await this.applicationOrders.confirmPassportDetails(
+      order.id,
+      null,
     );
-    if (!passport)
-      throw new BadRequestException({
-        code: "PASSPORT_REQUIRED",
-        message: "Upload a passport before verification",
-      });
-    if (!this.decryptTraveler(order.traveler))
-      throw new BadRequestException({
-        code: "TRAVELER_REQUIRED",
-        message: "Traveller details are required before verification",
-      });
-    if (
-      ["MANUAL_REVIEW", "OCR_BACKGROUND", "REUPLOAD_REQUIRED"].includes(
-        order.documentReviewStatus,
-      )
-    )
-      return {
-        status: order.documentReviewStatus,
-        checkedAt: new Date().toISOString(),
-        method: "asynchronous",
-      };
-    const config = await this.prisma.platformConfiguration.upsert({
-      where: { id: "platform" },
-      update: {},
-      create: { id: "platform" },
-    });
-    const now = new Date();
-    if (config.documentReviewPolicy === "MANUAL_REVIEW") {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: {
-          documentReviewPolicy: config.documentReviewPolicy,
-          documentReviewStatus: "MANUAL_REVIEW",
-          documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-          documentCheckoutReleaseAt: null,
-          version: { increment: 1 },
-        },
-      });
-      return {
-        status: "MANUAL_REVIEW",
-        checkedAt: now.toISOString(),
-        method: "manual",
-      };
-    }
-    if (config.documentReviewPolicy === "NO_REVIEW") {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: {
-          documentReviewPolicy: config.documentReviewPolicy,
-          documentReviewStatus: "SKIPPED",
-          documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-          documentCheckoutReleaseAt: null,
-          version: { increment: 1 },
-        },
-      });
-      return {
-        status: "SKIPPED",
-        checkedAt: now.toISOString(),
-        method: "policy",
-      };
-    }
-    await this.prisma.order.update({
-      where: { id: order.id },
-      data: {
-        documentReviewPolicy: config.documentReviewPolicy,
-        documentReviewStatus: "OCR_PENDING",
-        documentReviewStartedAt: order.documentReviewStartedAt ?? now,
-        documentCheckoutReleaseAt: null,
-        version: { increment: 1 },
-      },
-    });
-    try {
-      await this.queues.add(
-        QUEUES.documents,
-        "verify-order-passport",
-        { orderId: order.id, documentId: passport.id },
-        `order-passport-${order.id}-${passport.id}`,
-        ocrJobOptions(),
-      );
-      return {
-        status: "OCR_PENDING",
-        checkedAt: now.toISOString(),
-        method: "asynchronous",
-      };
-    } catch {
-      // Preserve OCR_PENDING during the recovery window. The workflow
-      // reconciler retries the handoff and performs the eventual strict manual
-      // fallback even if the dedicated OCR process is completely offline.
-      return {
-        status: "OCR_PENDING",
-        checkedAt: now.toISOString(),
-        method: "recovery-pending",
-      };
-    }
+    return {
+      ...(updated.passportVerification ?? {}),
+      status: updated.documentReviewStatus ?? "NOT_STARTED",
+      passportExtraction: updated.passportExtraction ?? null,
+    };
   }
 
   async completeHostedCheckout(
@@ -2262,6 +3658,16 @@ export class PartnerService {
     return result;
   }
 
+  async hostedCheckoutTelemetry(token: string, body: unknown) {
+    const session = await this.hostedCheckoutSession(token);
+    if (!this.payments) return this.hostedPaymentDeprecated();
+    return this.payments.recordFonepayClientTelemetry(
+      session.orderId,
+      null,
+      body,
+    );
+  }
+
   async hostedCheckoutSimulate(
     token: string,
     reference?: string,
@@ -2357,8 +3763,7 @@ export class PartnerService {
         reason: "NOT_HOSTED_CHECKOUT",
       };
     if (
-      order.partnerSettlementMethod !==
-      PartnerSettlementMethod.PARTNER_ACCOUNT
+      order.partnerSettlementMethod !== PartnerSettlementMethod.PARTNER_ACCOUNT
     )
       return {
         orderId,
@@ -2442,6 +3847,64 @@ export class PartnerService {
       }
     }
     return { captured, released, skipped };
+  }
+
+  /** Releases prepaid funds left behind when an API order becomes terminal. */
+  async reconcileApiReservations(): Promise<{
+    released: number;
+    skipped: number;
+  }> {
+    const reservations = await this.prisma.partnerLedgerEntry.findMany({
+      where: {
+        type: PartnerLedgerEntryType.RESERVATION,
+        order: {
+          channel: OrderChannel.PARTNER_API,
+          status: OrderStatus.CANCELLED,
+          partnerLedgerEntries: {
+            none: {
+              type: {
+                in: [
+                  PartnerLedgerEntryType.CAPTURE,
+                  PartnerLedgerEntryType.RELEASE,
+                ],
+              },
+            },
+          },
+        },
+      },
+      select: {
+        partnerId: true,
+        orderId: true,
+        amountPaisa: true,
+      },
+      take: 100,
+    });
+    let released = 0;
+    let skipped = 0;
+    for (const reservation of reservations) {
+      if (!reservation.orderId) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const result = await this.prisma.$transaction((tx) =>
+          this.releaseReservation(
+            tx,
+            reservation.partnerId,
+            reservation.orderId!,
+            reservation.amountPaisa,
+          ),
+        );
+        if (result.applied) released += 1;
+        else skipped += 1;
+      } catch (error) {
+        this.logger.warn(
+          `API partner reservation release failed for ${reservation.orderId}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+        skipped += 1;
+      }
+    }
+    return { released, skipped };
   }
 
   /**
@@ -2572,7 +4035,7 @@ export class PartnerService {
             order.partnerQuote.wholesaleAmountPaisa,
           );
         else
-          await this.refundDirectDebit(
+          await this.releaseOrRefundAccount(
             tx,
             partnerId,
             orderId,
@@ -2648,10 +4111,36 @@ export class PartnerService {
     return request;
   }
 
-  async events(partnerId: string, orderId: string) {
-    await this.order(partnerId, orderId);
-    return this.prisma.partnerEvent.findMany({
-      where: { partnerId, orderId },
+  async events(
+    partnerId: string,
+    orderId: string,
+    input: { cursor?: string | undefined; limit?: number | undefined },
+  ) {
+    const ownedOrder = await this.prisma.order.findFirst({
+      where: { id: orderId, partnerId },
+      select: { id: true },
+    });
+    if (!ownedOrder)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order not found",
+        status: 404,
+      });
+    const bound = decodeCursor(input.cursor);
+    const limit = input.limit ?? 50;
+    const rows = await this.prisma.partnerEvent.findMany({
+      where: {
+        partnerId,
+        orderId,
+        ...(bound
+          ? {
+              OR: [
+                { occurredAt: { gt: bound.createdAt } },
+                { occurredAt: bound.createdAt, id: { gt: bound.id } },
+              ],
+            }
+          : {}),
+      },
       select: {
         id: true,
         type: true,
@@ -2661,13 +4150,23 @@ export class PartnerService {
         payload: true,
         occurredAt: true,
       },
-      orderBy: { occurredAt: "asc" },
+      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      take: limit + 1,
     });
+    const more = rows.length > limit;
+    const items = rows.slice(0, limit);
+    return {
+      items,
+      nextCursor: more
+        ? (encodeCursor(items.at(-1)?.occurredAt, items.at(-1)?.id) ?? null)
+        : null,
+    };
   }
 
   async usage(partnerId: string, orderId: string) {
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, partnerId },
+      include: { customerEsim: true },
     });
     if (!order)
       throw new ApiException({
@@ -2675,13 +4174,232 @@ export class PartnerService {
         message: "Order not found",
         status: 404,
       });
-    if (order.status !== OrderStatus.COMPLETED)
+    if (!order.customerEsim)
       throw new ApiException({
         code: "PARTNER_USAGE_UNAVAILABLE",
-        message: "Usage details are available once the eSIM is active",
-        status: 400,
+        message: "Usage details are available once the eSIM is provisioned",
+        status: 409,
       });
-    return this.connectivity.getUsage(orderId);
+    await this.authorizePartnerEsim(partnerId, order.customerEsim.inventoryId);
+    if (!this.usageService) return this.connectivity.getUsage(orderId);
+    return this.partnerUsageView(
+      partnerId,
+      await this.usageService.cached(order.customerEsim.inventoryId),
+      orderId,
+    );
+  }
+
+  async usageByEsim(partnerId: string, esimId: string) {
+    await this.authorizePartnerEsim(partnerId, esimId);
+    if (!this.usageService)
+      throw new ApiException({
+        code: "PARTNER_USAGE_UNAVAILABLE",
+        message: "Usage service is unavailable",
+        status: 503,
+      });
+    return this.partnerUsageView(
+      partnerId,
+      await this.usageService.cached(esimId),
+    );
+  }
+
+  async customerUsage(partnerId: string, externalCustomerId: string) {
+    const usageService = this.usageService;
+    if (!usageService)
+      throw new ApiException({
+        code: "PARTNER_USAGE_UNAVAILABLE",
+        message: "Usage service is unavailable",
+        status: 503,
+      });
+    const partnerCustomer = await this.prisma.partnerCustomer.findUnique({
+      where: {
+        partnerId_externalCustomerId: { partnerId, externalCustomerId },
+      },
+      select: { id: true, customerId: true },
+    });
+    if (!partnerCustomer)
+      throw new ApiException({
+        code: "PARTNER_CUSTOMER_NOT_FOUND",
+        message: "Customer not found",
+        status: 404,
+      });
+    const links = await this.prisma.customerEsim.findMany({
+      where: { customerId: partnerCustomer.customerId },
+      select: { inventoryId: true },
+      distinct: ["inventoryId"],
+    });
+    const esims = await Promise.all(
+      links.map(async (link) =>
+        this.partnerUsageView(
+          partnerId,
+          await usageService.cached(link.inventoryId),
+        ),
+      ),
+    );
+    return { externalCustomerId, esims };
+  }
+
+  async refreshOrderUsage(partnerId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, partnerId },
+      include: { customerEsim: true },
+    });
+    if (!order?.customerEsim)
+      throw new ApiException({
+        code: "PARTNER_ORDER_NOT_FOUND",
+        message: "Order or provisioned eSIM was not found",
+        status: 404,
+      });
+    await this.authorizePartnerEsim(partnerId, order.customerEsim.inventoryId);
+    return this.refreshPartnerEsim(
+      partnerId,
+      order.customerEsim.inventoryId,
+      orderId,
+    );
+  }
+
+  async refreshEsimUsage(partnerId: string, esimId: string) {
+    await this.authorizePartnerEsim(partnerId, esimId);
+    return this.refreshPartnerEsim(partnerId, esimId);
+  }
+
+  private async refreshPartnerEsim(
+    partnerId: string,
+    esimId: string,
+    anchorOrderId?: string,
+  ) {
+    if (!this.usageService)
+      throw new ApiException({
+        code: "PARTNER_USAGE_UNAVAILABLE",
+        message: "Usage service is unavailable",
+        status: 503,
+      });
+    const cooldownKey = `${partnerId}:${esimId}`;
+    const previous = this.usageRefreshAt.get(cooldownKey) ?? 0;
+    const remainingMs = 30_000 - (Date.now() - previous);
+    if (!this.queues.enabled && remainingMs > 0)
+      throw new ApiException({
+        code: "PARTNER_USAGE_REFRESHED_RECENTLY",
+        message: `Usage was refreshed recently. Retry in ${Math.ceil(remainingMs / 1000)} seconds.`,
+        status: 429,
+      });
+    const rate = await this.queues.consumeRateLimit(
+      `partner-usage-refresh:${cooldownKey}`,
+      30_000,
+    );
+    if (rate.count > 1)
+      throw new ApiException({
+        code: "PARTNER_USAGE_REFRESHED_RECENTLY",
+        message: `Usage was refreshed recently. Retry in ${rate.retryAfterSeconds} seconds.`,
+        status: 429,
+      });
+    this.usageRefreshAt.set(cooldownKey, Date.now());
+    try {
+      const result = await this.usageService.refresh(esimId);
+      return {
+        ...this.partnerUsageView(partnerId, result, anchorOrderId),
+        refreshResult: "SUCCESS",
+      };
+    } catch {
+      const cached = await this.usageService.cached(esimId);
+      if (!cached.summary.confirmedPackageCount)
+        throw new ApiException({
+          code: "PARTNER_USAGE_UNAVAILABLE",
+          message: "Live usage and a confirmed cached balance are unavailable",
+          status: 503,
+        });
+      return {
+        ...this.partnerUsageView(
+          partnerId,
+          { ...cached, freshness: "STALE" },
+          anchorOrderId,
+        ),
+        refreshResult: "PROVIDER_UNAVAILABLE",
+        message:
+          "Transatel could not confirm the latest balance. Last-known usage is shown.",
+      };
+    }
+  }
+
+  private async authorizePartnerEsim(partnerId: string, esimId: string) {
+    const link = await this.prisma.customerEsim.findFirst({
+      // Buying a top-up for an eSIM is intentionally allowed across channels,
+      // but it does not grant the purchasing partner management or usage
+      // access. That access exists only when this partner supplied the
+      // physical eSIM through an initial-purchase order.
+      where: {
+        inventoryId: esimId,
+        order: { partnerId, orderType: "INITIAL_PURCHASE" },
+      },
+      select: { id: true },
+    });
+    if (!link)
+      throw new ApiException({
+        code: "PARTNER_ESIM_NOT_FOUND",
+        message: "eSIM not found",
+        status: 404,
+      });
+  }
+
+  private partnerUsageView(
+    partnerId: string,
+    view: EsimUsageView,
+    anchorOrderId?: string,
+  ) {
+    const packages = view.packages.map((item) => {
+      const owned = item.partnerId === partnerId;
+      const common = {
+        packageReference: item.packageReference,
+        ownedByRequester: owned,
+        plan: item.plan,
+        status: item.status,
+        balanceStatus: item.balanceStatus,
+        usedMb: item.usedMb,
+        totalMb: item.totalMb,
+        remainingMb: item.remainingMb,
+        activatedAt: item.activatedAt,
+        expiresAt: item.expiresAt,
+        lastConfirmedAt: item.lastConfirmedAt,
+      };
+      return owned
+        ? {
+            ...common,
+            orderId: item.orderId,
+            orderNumber: item.orderNumber,
+            externalOrderId: item.externalOrderId,
+            purchaseType: item.purchaseType,
+            providerSubscriptionId: item.providerSubscriptionId,
+          }
+        : common;
+    });
+    const anchor = anchorOrderId
+      ? packages.find(
+          (item) => "orderId" in item && item.orderId === anchorOrderId,
+        )
+      : undefined;
+    return {
+      scope: "PHYSICAL_ESIM",
+      anchorOrderId: anchorOrderId ?? null,
+      esim: {
+        id: view.esim.id,
+        iccid: view.esim.iccid,
+        msisdn: view.esim.msisdn,
+        status: view.esim.status,
+      },
+      usageStatus: view.usageStatus,
+      completeness: view.completeness,
+      freshness: view.freshness,
+      lastConfirmedAt: view.lastConfirmedAt,
+      oldestConfirmedAt: view.oldestConfirmedAt,
+      summary: view.summary,
+      packages,
+      // Additive V1 compatibility aliases.
+      usedMb: view.summary.usedMb,
+      totalMb: view.summary.totalMb,
+      usageAvailable: view.usageStatus === "AVAILABLE",
+      subscriptions: packages,
+      ...(anchor ? { anchorPackage: anchor } : {}),
+    };
   }
 
   async notify(
@@ -2724,10 +4442,14 @@ export class PartnerService {
   }
 
   private normalizeOrder(order: PartnerOrderRow) {
+    const isTopUp = order.orderType === "TOPUP";
     return {
       id: order.id,
       orderNumber: order.orderNumber,
       externalOrderId: order.externalOrderId,
+      // A blind top-up exposes the purchased order, not the beneficiary's
+      // internal eSIM identifier or management surfaces.
+      esimId: isTopUp ? null : (order.customerEsim?.inventoryId ?? null),
       status: order.status,
       settlementMethod: order.partnerSettlementMethod,
       metadata: order.partnerMetadata,
@@ -2755,15 +4477,36 @@ export class PartnerService {
         at: event.createdAt,
       })),
       fulfillmentStatus: this.fulfillmentStatus(order.status),
+      documentReviewPolicy: order.documentReviewPolicy,
+      documentReviewStatus: order.documentReviewStatus,
+      requiredDocuments: isTopUp
+        ? []
+        : [DocumentType.PASSPORT, DocumentType.TICKET],
+      fulfillmentAllowed:
+        order.status === OrderStatus.REVIEW_PENDING &&
+        ((order.documentReviewPolicy === "AUTO_OCR" &&
+          ["VERIFIED", "MANUALLY_APPROVED"].includes(
+            order.documentReviewStatus,
+          )) ||
+          (order.documentReviewPolicy === "MANUAL_REVIEW" &&
+            order.documentReviewStatus === "MANUALLY_APPROVED") ||
+          (order.documentReviewPolicy === "NO_REVIEW" &&
+            order.documentReviewStatus === "SKIPPED")),
       links: {
         order: `/api/v1/partners/orders/${order.id}`,
         events: `/api/v1/partners/orders/${order.id}/events`,
-        esim: `/api/v1/partners/orders/${order.id}/esim`,
+        ...(!isTopUp
+          ? {
+              esim: `/api/v1/partners/orders/${order.id}/esim`,
+              usage: `/api/v1/partners/orders/${order.id}/usage`,
+            }
+          : {}),
       },
       esimDetailsAvailable:
-        order.status === OrderStatus.QR_READY ||
-        order.status === OrderStatus.ACTIVATION_ATTENTION ||
-        order.status === OrderStatus.COMPLETED,
+        !isTopUp &&
+        (order.status === OrderStatus.QR_READY ||
+          order.status === OrderStatus.ACTIVATION_ATTENTION ||
+          order.status === OrderStatus.COMPLETED),
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
     };
@@ -2807,18 +4550,36 @@ export class PartnerService {
     return session;
   }
 
-  private async sessionOrder(token: string, statuses?: OrderStatus[]) {
-    const session = await this.hostedCheckoutSession(token);
+  private async sessionOrder(
+    token: string,
+    statuses?: OrderStatus[],
+    allowConsumedReplacement = false,
+  ) {
+    const session = await this.hostedCheckoutSession(
+      token,
+      allowConsumedReplacement,
+    );
     const order = await this.prisma.order.findUnique({
       where: { id: session.orderId },
       include: {
         plan: { include: { country: true } },
         traveler: true,
         documents: true,
+        passportExtraction: true,
         partner: { select: { name: true, slug: true, brand: true } },
       },
     });
     if (!order)
+      throw new ApiException({
+        code: "HOSTED_CHECKOUT_NOT_FOUND",
+        message: "Hosted checkout not found",
+        status: 404,
+      });
+    if (
+      session.consumedAt &&
+      (!allowConsumedReplacement ||
+        order.status !== OrderStatus.AWAITING_CUSTOMER)
+    )
       throw new ApiException({
         code: "HOSTED_CHECKOUT_NOT_FOUND",
         message: "Hosted checkout not found",
@@ -2918,6 +4679,7 @@ export class PartnerService {
   private async reserveAccount(
     tx: Prisma.TransactionClient,
     partnerId: string,
+    orderId: string,
     amountPaisa: number,
     externalOrderId: string,
   ) {
@@ -2926,13 +4688,13 @@ export class PartnerService {
       update: {},
       create: { partnerId },
     });
-    const available =
-      account.balancePaisa + account.creditLimitPaisa - account.reservedPaisa;
+    const reservedPaisa = account.reservedPaisa ?? 0;
+    const available = account.balancePaisa - reservedPaisa;
     if (available < amountPaisa)
       throw new ApiException({
         code: "INSUFFICIENT_PARTNER_BALANCE",
-        message: "Partner prepaid balance is insufficient",
-        status: 400,
+        message: `Partner balance is insufficient. Required NPR ${(amountPaisa / 100).toFixed(2)}; available NPR ${(Math.max(0, available) / 100).toFixed(2)}.`,
+        status: 402,
       });
     const updated = await tx.partnerAccount.updateMany({
       where: { id: account.id, version: account.version },
@@ -2950,10 +4712,12 @@ export class PartnerService {
     await tx.partnerLedgerEntry.create({
       data: {
         partnerId,
+        orderId,
         type: PartnerLedgerEntryType.RESERVATION,
         amountPaisa,
         balanceAfterPaisa: account.balancePaisa,
         reference: `reserve:${partnerId}:${externalOrderId}`,
+        metadata: { settlement: "PARTNER_ACCOUNT", channel: "PARTNER_API" },
       },
     });
   }
@@ -2970,17 +4734,20 @@ export class PartnerService {
       update: {},
       create: { partnerId },
     });
-    if (account.balancePaisa < amountPaisa)
-      throw new BadRequestException({
+    const reservedPaisa = account.reservedPaisa ?? 0;
+    const available = account.balancePaisa - reservedPaisa;
+    if (available < amountPaisa)
+      throw new ApiException({
         code: "INSUFFICIENT_PARTNER_BALANCE",
-        message: "Partner prepaid balance is insufficient",
+        message: `Partner balance is insufficient. Required NPR ${(amountPaisa / 100).toFixed(2)}; available NPR ${(Math.max(0, available) / 100).toFixed(2)}.`,
+        status: 402,
       });
     const balanceAfterPaisa = account.balancePaisa - amountPaisa;
     const updated = await tx.partnerAccount.updateMany({
       where: {
         id: account.id,
         version: account.version,
-        balancePaisa: { gte: amountPaisa },
+        balancePaisa: { gte: amountPaisa + reservedPaisa },
       },
       data: {
         balancePaisa: balanceAfterPaisa,
@@ -3056,10 +4823,37 @@ export class PartnerService {
         amountPaisa,
         balanceAfterPaisa,
         reference,
-        metadata: { settlement: "PARTNER_ACCOUNT", channel: "PARTNER_HOSTED" },
+        metadata: { settlement: "PARTNER_ACCOUNT" },
       },
     });
     return { applied: true };
+  }
+
+  private async captureOrDebitAccount(
+    tx: Prisma.TransactionClient,
+    partnerId: string,
+    orderId: string,
+    amountPaisa: number,
+    externalOrderId: string,
+  ) {
+    const reservation = await tx.partnerLedgerEntry.findFirst({
+      where: {
+        partnerId,
+        orderId,
+        type: PartnerLedgerEntryType.RESERVATION,
+      },
+      select: { id: true },
+    });
+    if (reservation)
+      return this.captureAccount(tx, partnerId, orderId, amountPaisa);
+    await this.debitAccount(
+      tx,
+      partnerId,
+      orderId,
+      amountPaisa,
+      externalOrderId,
+    );
+    return { applied: true, legacyDirectDebit: true };
   }
 
   private travelerData(traveler: TravelerInput) {
@@ -3075,10 +4869,65 @@ export class PartnerService {
       employerOrBusinessName: traveler.employerOrBusinessName ?? null,
       email: traveler.email,
       mobile: traveler.mobile,
+      contactNumberNormalized: normalizeNepaliContact(traveler.mobile),
       passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber),
       passportNumberHash: this.crypto.blindIndex(traveler.passportNumber),
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),
       pointOfSaleCode: traveler.pointOfSaleCode ?? null,
+    };
+  }
+
+  private extractionPayload(
+    extraction: {
+      status: string;
+      payloadEncrypted: string | null;
+      fieldsRequiringInput: Prisma.JsonValue;
+      failureCode: string | null;
+    } | null,
+  ) {
+    if (!extraction) return null;
+    let fields: Partial<Record<string, string>> = {};
+    if (extraction.payloadEncrypted) {
+      try {
+        const parsed = JSON.parse(
+          this.crypto.decrypt(extraction.payloadEncrypted),
+        ) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+          fields = sanitizePassportExtractedFields(
+            Object.fromEntries(
+              Object.entries(parsed).filter(
+                ([, value]) => typeof value === "string",
+              ),
+            ),
+          );
+      } catch (error) {
+        this.logger.error(
+          `Could not decrypt passport extraction: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+        return {
+          status: "MANUAL_ENTRY_REQUIRED",
+          fields: {},
+          fieldsRequiringInput: [
+            "firstName",
+            "surname",
+            "dateOfBirth",
+            "nationality",
+            "passportNumber",
+            "passportExpiryDate",
+          ],
+          failureCode: "EXTRACTION_PAYLOAD_UNAVAILABLE",
+        };
+      }
+    }
+    return {
+      status: extraction.status,
+      fields,
+      fieldsRequiringInput: Array.isArray(extraction.fieldsRequiringInput)
+        ? extraction.fieldsRequiringInput.filter(
+            (field): field is string => typeof field === "string",
+          )
+        : [],
+      failureCode: extraction.failureCode,
     };
   }
 
@@ -3123,20 +4972,8 @@ export class PartnerService {
     };
   }
 
-  private requiredDocuments(countryCode: string): DocumentType[] {
-    const visaCountries = new Set(
-      (process.env.VISA_REQUIRED_COUNTRIES ?? "")
-        .split(",")
-        .map((value) => value.trim().toUpperCase())
-        .filter(Boolean),
-    );
-    return [
-      DocumentType.PASSPORT,
-      DocumentType.TICKET,
-      ...(visaCountries.has(countryCode.toUpperCase())
-        ? [DocumentType.VISA]
-        : []),
-    ];
+  private requiredDocuments(_countryCode: string): DocumentType[] {
+    return [DocumentType.PASSPORT, DocumentType.TICKET];
   }
 
   private formatMatchesContentType(format: string, contentType: string) {
@@ -3183,12 +5020,20 @@ export class PartnerService {
     if (!account) return { applied: false, reason: "NO_ACCOUNT" };
     if (account.reservedPaisa <= 0)
       return { applied: false, reason: "NO_RESERVATION" };
+    if (account.reservedPaisa < amountPaisa)
+      throw new ApiException({
+        code: "PARTNER_BALANCE_CONFLICT",
+        message: "The reserved balance no longer covers this order",
+        status: 409,
+      });
     const updated = await tx.partnerAccount.updateMany({
-      where: { id: account.id, version: account.version },
+      where: {
+        id: account.id,
+        version: account.version,
+        reservedPaisa: { gte: amountPaisa },
+      },
       data: {
-        reservedPaisa: {
-          decrement: Math.min(account.reservedPaisa, amountPaisa),
-        },
+        reservedPaisa: { decrement: amountPaisa },
         version: { increment: 1 },
       },
     });
@@ -3206,10 +5051,31 @@ export class PartnerService {
         amountPaisa,
         balanceAfterPaisa: account.balancePaisa,
         reference,
-        metadata: { settlement: "PARTNER_ACCOUNT", channel: "PARTNER_HOSTED" },
+        metadata: { settlement: "PARTNER_ACCOUNT" },
       },
     });
     return { applied: true };
+  }
+
+  private async releaseOrRefundAccount(
+    tx: Prisma.TransactionClient,
+    partnerId: string,
+    orderId: string,
+    amountPaisa: number,
+    reason: string,
+  ) {
+    const reservation = await tx.partnerLedgerEntry.findFirst({
+      where: {
+        partnerId,
+        orderId,
+        type: PartnerLedgerEntryType.RESERVATION,
+      },
+      select: { id: true },
+    });
+    if (reservation)
+      return this.releaseReservation(tx, partnerId, orderId, amountPaisa);
+    await this.refundDirectDebit(tx, partnerId, orderId, amountPaisa, reason);
+    return { applied: true, legacyDirectDebit: true };
   }
 
   private async refundDirectDebit(
@@ -3256,22 +5122,27 @@ export class PartnerService {
     });
   }
 
-  private async enqueuePassportOcr(orderId: string, documentId?: string) {
-    const id =
-      documentId ??
-      (
-        await this.prisma.travelerDocument.findFirst({
-          where: { orderId, type: DocumentType.PASSPORT },
-          select: { id: true },
-        })
-      )?.id;
-    if (!id) return;
+  private async enqueuePassportOcr(
+    orderId: string,
+    documentId?: string,
+    attemptKey = "initial",
+  ) {
+    const document = await this.prisma.travelerDocument.findFirst({
+      where: {
+        orderId,
+        type: DocumentType.PASSPORT,
+        ...(documentId ? { id: documentId } : {}),
+      },
+      select: { id: true, privateAssetId: true },
+    });
+    if (!document) return;
+    const id = document.id;
     try {
-      await this.queues.add(
-        QUEUES.documents,
+      await enqueuePassportOcr(
+        this.queues,
         "verify-passport",
-        { orderId, documentId: id },
-        `order-passport-${orderId}-${id}`,
+        { orderId, documentId: id, privateAssetId: document.privateAssetId },
+        orderPassportOcrJobId(orderId, id, document.privateAssetId, attemptKey),
         ocrJobOptions(),
       );
     } catch (error) {

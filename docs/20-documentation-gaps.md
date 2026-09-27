@@ -29,19 +29,17 @@ documentation set had to make an assumption.
    sets it from the payment provider — orders created via payment flows use
    `WEB`/`CLERK`-derived sources (see `docs/13`). UNKNOWN whether a real
    provider integration would set it.
-3. **`/auth/me` landing portal URLs are hard-coded**
-   (`auth.controller.ts:25-28`: `http://localhost:3000/account/esims` /
-   `http://localhost:3001/`), not derived from `CUSTOMER_WEB_URL` /
-   `OPS_WEB_URL` even though `main.ts:17` uses those env vars for CORS.
+3. **`/auth/me` landing portal URLs are environment-derived.** The customer
+   and operations destinations use `CUSTOMER_WEB_URL` and `OPS_WEB_URL`, with
+   localhost defaults limited to development configuration.
 4. **`PAYMENT_MODE` semantics.** `payments.service.ts:25` selects the real
    gateway when `PAYMENT_MODE === 'sandbox'` **or** `NODE_ENV ===
 'production'`; there is no explicit "simulator" string — any value other
    than `sandbox` (outside production) selects the simulator. `.env.example`
    documents this, but it is a common misreading.
-5. **Rate limiter is per-process.** `rate-limit.guard.ts` keeps buckets in
-   memory (`docs/19`); multi-instance deployments need a shared store. Redis
-   does provide durable BullMQ transport and distributed reconciliation
-   leases, but it is not currently used by the HTTP rate limiter.
+5. **Rate limiting uses Redis when available.** All API replicas consume the
+   same normalized route bucket. A stricter local bucket is retained only as
+   bounded degradation behavior during a Redis incident (`docs/19`).
 6. **`safeNotify` trigger path for `DOCUMENT_REUPLOAD`.** `safeNotify` is
    defined in `notification.service.ts` and called during `requestReupload`
    / document transitions (`docs/07`, `docs/11`); the call site at

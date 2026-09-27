@@ -26,6 +26,10 @@ export class MetricsService {
   private statuses = new Map<string, number>();
   private durations = new Map<string, number>();
   private failures = new Map<string, number>();
+  private ocrProviderCalls = new Map<string, number>();
+  private ocrProviderDurations = new Map<string, number>();
+  private ocrFallbacks = new Map<string, number>();
+  private ocrRoutings = new Map<string, number>();
   private redisRateLimitDegraded = false;
 
   recordRequest(
@@ -43,6 +47,25 @@ export class MetricsService {
   recordFailure(kind: string, label: string) {
     const key = `${kind}:${label.replaceAll('"', "_")}`;
     this.failures.set(key, (this.failures.get(key) ?? 0) + 1);
+  }
+
+  recordOcrProvider(provider: string, durationMs: number, success: boolean) {
+    const key = `${provider}:${success ? "success" : "failure"}`;
+    this.ocrProviderCalls.set(key, (this.ocrProviderCalls.get(key) ?? 0) + 1);
+    this.ocrProviderDurations.set(
+      provider,
+      (this.ocrProviderDurations.get(provider) ?? 0) + durationMs,
+    );
+  }
+
+  recordOcrFallback(from: string, to: string) {
+    const key = `${from}:${to}`;
+    this.ocrFallbacks.set(key, (this.ocrFallbacks.get(key) ?? 0) + 1);
+  }
+
+  recordOcrRouting(provider: string, reason: string) {
+    const key = `${provider}:${reason}`;
+    this.ocrRoutings.set(key, (this.ocrRoutings.get(key) ?? 0) + 1);
   }
 
   setRedisRateLimitDegraded(degraded: boolean) {
@@ -96,6 +119,40 @@ export class MetricsService {
     for (const [key, count] of [...this.failures.entries()].sort()) {
       const [kind, label] = split(key);
       lines.push(`vc_failures_total{kind="${kind}",label="${label}"} ${count}`);
+    }
+    lines.push(
+      "# HELP vc_ocr_provider_calls_total OCR provider calls by result",
+    );
+    lines.push("# TYPE vc_ocr_provider_calls_total counter");
+    for (const [key, count] of [...this.ocrProviderCalls.entries()].sort()) {
+      const [provider, result] = split(key);
+      lines.push(
+        `vc_ocr_provider_calls_total{provider="${provider}",result="${result}"} ${count}`,
+      );
+    }
+    lines.push(
+      "# HELP vc_ocr_provider_duration_ms_sum Total OCR provider latency",
+    );
+    lines.push("# TYPE vc_ocr_provider_duration_ms_sum counter");
+    for (const [provider, duration] of [
+      ...this.ocrProviderDurations.entries(),
+    ].sort())
+      lines.push(
+        `vc_ocr_provider_duration_ms_sum{provider="${provider}"} ${Math.round(duration)}`,
+      );
+    lines.push("# HELP vc_ocr_fallbacks_total OCR provider fallback count");
+    lines.push("# TYPE vc_ocr_fallbacks_total counter");
+    for (const [key, count] of [...this.ocrFallbacks.entries()].sort()) {
+      const [from, to] = split(key);
+      lines.push(`vc_ocr_fallbacks_total{from="${from}",to="${to}"} ${count}`);
+    }
+    lines.push("# HELP vc_ocr_routings_total OCR jobs by provider and reason");
+    lines.push("# TYPE vc_ocr_routings_total counter");
+    for (const [key, count] of [...this.ocrRoutings.entries()].sort()) {
+      const [provider, reason] = split(key);
+      lines.push(
+        `vc_ocr_routings_total{provider="${provider}",reason="${reason}"} ${count}`,
+      );
     }
     return lines.join("\n") + "\n";
   }

@@ -1,6 +1,5 @@
 "use client";
 
-import { UserProfile } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
@@ -15,13 +14,25 @@ export default function ChangePasswordPage() {
   const authFetch = useAuthenticatedFetch();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
 
   const finish = async () => {
+    if (password.length < 12) {
+      setError("Choose a password of at least 12 characters.");
+      return;
+    }
+    if (password !== confirmation) {
+      setError("The password confirmation does not match.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const response = await authFetch(`${API}/auth/me/password-changed`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ newPassword: password }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok)
@@ -44,11 +55,36 @@ export default function ChangePasswordPage() {
           new password below, then continue to the console.
         </p>
       </div>
-      <UserProfile routing="path" path="/change-password" />
+      <div className="space-y-4">
+        <label className="block text-sm font-medium" htmlFor="new-password">
+          New password
+        </label>
+        <input
+          id="new-password"
+          className="w-full rounded-md border bg-background px-3 py-2"
+          type="password"
+          autoComplete="new-password"
+          minLength={12}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+        <label className="block text-sm font-medium" htmlFor="confirm-password">
+          Confirm new password
+        </label>
+        <input
+          id="confirm-password"
+          className="w-full rounded-md border bg-background px-3 py-2"
+          type="password"
+          autoComplete="new-password"
+          minLength={12}
+          value={confirmation}
+          onChange={(event) => setConfirmation(event.target.value)}
+        />
+      </div>
       <ErrorDialog error={error} onClose={() => setError("")} />
       <Button onClick={() => void finish()} disabled={busy}>
         {busy ? <Spinner className="text-primary-foreground" /> : null}
-        {busy ? "Continuing…" : "I've set my new password — continue"}
+        {busy ? "Updating password..." : "Set new password"}
       </Button>
     </section>
   );

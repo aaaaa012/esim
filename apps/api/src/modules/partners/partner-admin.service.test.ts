@@ -60,9 +60,11 @@ describe("PartnerAdminService workspace controls", () => {
     const transaction = vi.fn(async (callback: (tx: unknown) => unknown) =>
       callback({
         partnerAccount: {
-          upsert: vi
-            .fn()
-            .mockResolvedValue({ id: "account-1", balancePaisa: 500 }),
+          upsert: vi.fn().mockResolvedValue({
+            id: "account-1",
+            balancePaisa: 500,
+            reservedPaisa: 0,
+          }),
         },
       }),
     );
@@ -75,5 +77,39 @@ describe("PartnerAdminService workspace controls", () => {
         "actor-1",
       ),
     ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("preserves reserved funds when Ops credits the cash balance", async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const transaction = vi.fn(async (callback: (tx: unknown) => unknown) =>
+      callback({
+        partnerAccount: {
+          upsert: vi.fn().mockResolvedValue({
+            id: "account-1",
+            balancePaisa: 500,
+            reservedPaisa: 300,
+            version: 4,
+          }),
+          updateMany,
+        },
+        partnerLedgerEntry: {
+          create: vi.fn().mockResolvedValue({ id: "entry-1" }),
+        },
+        user: { findUnique: vi.fn().mockResolvedValue({ id: "user-1" }) },
+        auditLog: { create: vi.fn() },
+      }),
+    );
+    const instance = service({ $transaction: transaction });
+
+    await instance.adjustAccount(
+      "partner-1",
+      { amountPaisa: 200, reference: "credit-1", reason: "Deposit received" },
+      "actor-1",
+    );
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: "account-1", version: 4 },
+      data: { balancePaisa: 700, version: { increment: 1 } },
+    });
   });
 });

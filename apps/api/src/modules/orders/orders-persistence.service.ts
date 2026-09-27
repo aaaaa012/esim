@@ -1,3 +1,4 @@
+import type { RechargeRecoveryOutbox } from "./recharge-ownership.js";
 import { ConflictException, Injectable } from "@nestjs/common";
 import {
   Prisma,
@@ -17,9 +18,13 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { CryptoService } from "../../infrastructure/crypto.service.js";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
+import { normalizeNepaliContact } from "../../common/nepali-contact.util.js";
 import { withPostgresTransactionRetry } from "../../infrastructure/postgres-transaction-retry.js";
 import type { DemoOrder } from "./orders.service.js";
-import type { PassportVerificationResult } from "./passport-verification.service.js";
+import {
+  sanitizePassportExtractedFields,
+  type PassportVerificationResult,
+} from "./passport-verification.service.js";
 
 @Injectable()
 export class OrdersPersistenceService {
@@ -43,12 +48,20 @@ export class OrdersPersistenceService {
               ],
             }
           : {},
-      ...(startup ? { orderBy: { updatedAt: "desc" as const }, take: 2_000 } : {}),
+      ...(startup
+        ? { orderBy: { updatedAt: "desc" as const }, take: 2_000 }
+        : {}),
       include: {
         customer: { include: { user: true } },
+        manualRefunds: {
+          take: 1,
+          orderBy: { createdAt: "desc" },
+          select: { status: true },
+        },
         partner: { select: { id: true, code: true, name: true } },
         plan: { include: { country: true } },
         traveler: true,
+        passportExtraction: true,
         customerEsim: { include: { inventory: true, subscriptions: true } },
         documents: true,
         payments: { orderBy: { createdAt: "desc" }, take: 1 },
@@ -85,9 +98,89 @@ export class OrdersPersistenceService {
           }
         : undefined;
       const payment = row.payments[0];
+      let extractionPayloadCorrupt = false;
+      const passportExtraction = row.passportExtraction
+        ? {
+            status: row.passportExtraction.status as
+              | "PROCESSING"
+              | "READY"
+              | "PARTIAL"
+              | "MANUAL_ENTRY_REQUIRED"
+              | "SKIPPED",
+            fields: (() => {
+              if (!row.passportExtraction.payloadEncrypted) return {};
+              try {
+                const value = JSON.parse(
+                  this.crypto.decrypt(row.passportExtraction.payloadEncrypted),
+                ) as unknown;
+                return value &&
+                  typeof value === "object" &&
+                  !Array.isArray(value)
+                  ? sanitizePassportExtractedFields(
+                      value as NonNullable<
+                        DemoOrder["passportExtraction"]
+                      >["fields"],
+                    )
+                  : {};
+              } catch {
+                extractionPayloadCorrupt = true;
+                return {};
+              }
+            })(),
+            fieldsRequiringInput: Array.isArray(
+              row.passportExtraction.fieldsRequiringInput,
+            )
+              ? row.passportExtraction.fieldsRequiringInput.filter(
+                  (value): value is string => typeof value === "string",
+                )
+              : [],
+            passportAssetId: row.passportExtraction.passportAssetId,
+            ...(row.passportExtraction.confidence != null
+              ? { confidence: row.passportExtraction.confidence }
+              : {}),
+            correctionAttempts: row.passportExtraction.correctionAttempts,
+            ...(row.passportExtraction.lastMismatchFingerprint
+              ? {
+                  lastMismatchFingerprint:
+                    row.passportExtraction.lastMismatchFingerprint,
+                }
+              : {}),
+            ...(Array.isArray(row.passportExtraction.lastMismatchFields)
+              ? {
+                  lastMismatchFields:
+                    row.passportExtraction.lastMismatchFields.filter(
+                      (value): value is NonNullable<
+                        PassportVerificationResult["mismatchedFields"]
+                      >[number] => typeof value === "string",
+                    ) as NonNullable<
+                      PassportVerificationResult["mismatchedFields"]
+                    >,
+                }
+              : {}),
+            ...(row.passportExtraction.confirmedMismatchFingerprint
+              ? {
+                  confirmedMismatchFingerprint:
+                    row.passportExtraction.confirmedMismatchFingerprint,
+                }
+              : {}),
+            ...(row.passportExtraction.failureCode
+              ? { failureCode: row.passportExtraction.failureCode }
+              : {}),
+          }
+        : undefined;
+      if (passportExtraction && extractionPayloadCorrupt) {
+        passportExtraction.status = "MANUAL_ENTRY_REQUIRED";
+        passportExtraction.failureCode = "EXTRACTION_PAYLOAD_UNAVAILABLE";
+      }
       return {
         id: row.id,
+        refundStatus: row.manualRefunds?.[0]?.status,
         ownerId: row.customer.user?.clerkId ?? row.customerId,
+        beneficiaryCustomerId: row.customerId,
+        purchasedByUserId: row.purchasedByUserId ?? undefined,
+        targetInventoryId: row.targetInventoryId ?? undefined,
+        checkoutAttemptKey: row.checkoutAttemptKey ?? undefined,
+        checkoutRequestHash: row.checkoutRequestHash ?? undefined,
         orderNumber: row.orderNumber,
         status: row.status as OrderStatus,
         version: row.version,
@@ -105,7 +198,9 @@ export class OrdersPersistenceService {
         totalAmountNpr: Number(row.totalAmount),
         pricingSnapshot: row.pricingSnapshot as object,
         compatibilityAcceptedAt: row.compatibilityAcceptedAt.toISOString(),
+        contactRuleVersion: row.contactRuleVersion,
         ...(traveler ? { traveler } : {}),
+        ...(passportExtraction ? { passportExtraction } : {}),
         documents: row.documents.map((doc) => ({
           id: doc.id,
           type: doc.type as DocumentType,
@@ -123,6 +218,12 @@ export class OrdersPersistenceService {
             matchedFields:
               (passport.passportMatchedFields as
                 PassportVerificationResult["matchedFields"] | null) ?? [],
+            ...(passportExtraction?.lastMismatchFields?.length
+              ? {
+                  mismatchedFields: passportExtraction.lastMismatchFields,
+                  reasonCode: "IDENTITY_FIELDS_MISMATCH" as const,
+                }
+              : {}),
             ...(passport.passportConfidence != null
               ? { confidence: passport.passportConfidence }
               : {}),
@@ -163,6 +264,7 @@ export class OrdersPersistenceService {
           to: event.toStatus as OrderStatus,
           at: event.createdAt.toISOString(),
           ...(event.reason ? { reason: event.reason } : {}),
+          ...(event.actorId ? { actorId: event.actorId } : {}),
         })),
         ...(row.customerEsim
           ? {
@@ -271,7 +373,7 @@ export class OrdersPersistenceService {
     });
   }
 
-  async save(order: DemoOrder) {
+  async save(order: DemoOrder, recovery?: RechargeRecoveryOutbox) {
     if (!this.prisma.enabled) return;
     // Interactive transactions default to a 5000 ms timeout, which cloud DB
     // latency routinely exceeds during payment flows; raise it so payment
@@ -402,6 +504,10 @@ export class OrdersPersistenceService {
                 id: order.id,
                 orderNumber: order.orderNumber,
                 customerId: identity.customerId,
+                purchasedByUserId: order.purchasedByUserId ?? null,
+                targetInventoryId: order.targetInventoryId ?? null,
+                checkoutAttemptKey: order.checkoutAttemptKey ?? null,
+                checkoutRequestHash: order.checkoutRequestHash ?? null,
                 planId: order.plan.id,
                 orderType: (order.purchaseType ??
                   "INITIAL_PURCHASE") as DbOrderType,
@@ -424,6 +530,30 @@ export class OrdersPersistenceService {
                 createdAt: new Date(order.createdAt),
               },
             });
+            if (recovery) {
+              await tx.guestOrderAccessToken.create({
+                data: {
+                  orderId: order.id,
+                  purpose: "EMAIL",
+                  tokenHash: recovery.tokenHash,
+                  recipientHash: recovery.recipientHash,
+                  expiresAt: new Date(recovery.expiresAt),
+                },
+              });
+              await tx.notification.create({
+                data: {
+                  orderId: order.id,
+                  channel: "EMAIL",
+                  template: "RECHARGE_RECOVERY",
+                  dedupeKey: `recharge-recovery:${order.id}`,
+                  recipient: recovery.recipient,
+                  orderNumber: order.orderNumber,
+                  recoveryUrlEncrypted: recovery.recoveryUrlEncrypted,
+                  status: "QUEUED",
+                  nextAttemptAt: new Date(),
+                },
+              });
+            }
           }
           if (order.traveler)
             await tx.traveler.upsert({
@@ -476,7 +606,7 @@ export class OrdersPersistenceService {
               },
             });
           }
-          if (order.payment)
+          if (order.payment) {
             await tx.payment.upsert({
               where: { paymentReference: order.payment.reference },
               update: {
@@ -489,10 +619,12 @@ export class OrdersPersistenceService {
                   : null,
                 returnUrl: order.payment.returnUrl ?? null,
                 redirectUrl: order.payment.redirectUrl ?? null,
-                paidAt:
-                  order.payment.status === PaymentStatus.COMPLETED
-                    ? new Date()
-                    : null,
+                // Payment completion time is immutable. confirmPaymentPersisted
+                // owns the transition that sets it; unrelated order saves must
+                // never move the financial timestamp forward.
+                ...(order.payment.status === PaymentStatus.COMPLETED
+                  ? {}
+                  : { paidAt: null }),
               },
               create: {
                 orderId: order.id,
@@ -510,9 +642,96 @@ export class OrdersPersistenceService {
                 status: order.payment.status as DbPaymentStatus,
               },
             });
+            await tx.paymentEvent.createMany({
+              data: [
+                {
+                  orderId: order.id,
+                  provider: order.payment.provider as never,
+                  eventType: "PAYMENT_STATE_RECORDED",
+                  source: "ORDER_PERSISTENCE",
+                  paymentReference: order.payment.reference,
+                  toStatus: order.payment.status as DbPaymentStatus,
+                  amount: order.totalAmountNpr,
+                  currency: "NPR",
+                  providerTransactionId:
+                    order.payment.providerTransactionId ?? null,
+                  dedupeKey: `payment-state:${order.payment.reference}:${order.payment.status}`,
+                },
+              ],
+              skipDuplicates: true,
+            });
+          }
+          // Passport evidence is created and replaced before payment exists.
+          // Keep its durable row synchronized on every order save so a refresh
+          // cannot resurrect a verdict belonging to a superseded upload.
+          if (order.passportExtraction) {
+            const passport = order.documents.find(
+              (document) => document.type === DocumentType.PASSPORT,
+            );
+            if (passport)
+              await tx.passportExtraction.upsert({
+                where: { orderId: order.id },
+                update: {
+                  passportAssetId: passport.privateAssetId,
+                  status: order.passportExtraction.status,
+                  payloadEncrypted: this.crypto.encrypt(
+                    JSON.stringify(order.passportExtraction.fields),
+                  ),
+                  fieldsRequiringInput: order.passportExtraction
+                    .fieldsRequiringInput as Prisma.InputJsonValue,
+                  confidence: order.passportExtraction.confidence ?? null,
+                  correctionAttempts:
+                    order.passportExtraction.correctionAttempts ?? 0,
+                  lastMismatchFingerprint:
+                    order.passportExtraction.lastMismatchFingerprint ?? null,
+                  lastMismatchFields: order.passportExtraction
+                    .lastMismatchFields
+                    ? (order.passportExtraction
+                        .lastMismatchFields as Prisma.InputJsonValue)
+                    : Prisma.JsonNull,
+                  confirmedMismatchFingerprint:
+                    order.passportExtraction.confirmedMismatchFingerprint ??
+                    null,
+                  failureCode: order.passportExtraction.failureCode ?? null,
+                },
+                create: {
+                  orderId: order.id,
+                  passportAssetId: passport.privateAssetId,
+                  status: order.passportExtraction.status,
+                  payloadEncrypted: this.crypto.encrypt(
+                    JSON.stringify(order.passportExtraction.fields),
+                  ),
+                  fieldsRequiringInput: order.passportExtraction
+                    .fieldsRequiringInput as Prisma.InputJsonValue,
+                  confidence: order.passportExtraction.confidence ?? null,
+                  correctionAttempts:
+                    order.passportExtraction.correctionAttempts ?? 0,
+                  lastMismatchFingerprint:
+                    order.passportExtraction.lastMismatchFingerprint ?? null,
+                  lastMismatchFields: order.passportExtraction
+                    .lastMismatchFields
+                    ? (order.passportExtraction
+                        .lastMismatchFields as Prisma.InputJsonValue)
+                    : Prisma.JsonNull,
+                  confirmedMismatchFingerprint:
+                    order.passportExtraction.confirmedMismatchFingerprint ??
+                    null,
+                  failureCode: order.passportExtraction.failureCode ?? null,
+                },
+              });
+          } else {
+            await tx.passportExtraction.deleteMany({
+              where: { orderId: order.id },
+            });
+          }
           const persistedEvents = await tx.orderEvent.findMany({
             where: { orderId: order.id },
-            select: { fromStatus: true, toStatus: true, createdAt: true, reason: true },
+            select: {
+              fromStatus: true,
+              toStatus: true,
+              createdAt: true,
+              reason: true,
+            },
           });
           const persistedEventKeys = new Set(
             persistedEvents.map((event) =>
@@ -538,6 +757,7 @@ export class OrdersPersistenceService {
                 toStatus: event.to as DbOrderStatus,
                 createdAt: new Date(event.at),
                 reason: event.reason ?? null,
+                actorId: event.actorId ?? null,
               })),
             });
         },
@@ -582,6 +802,7 @@ export class OrdersPersistenceService {
             where: { paymentReference: reference },
             select: {
               orderId: true,
+              provider: true,
               status: true,
               order: { select: { status: true } },
             },
@@ -630,6 +851,22 @@ export class OrdersPersistenceService {
               requiresReview: false,
             };
           }
+          await tx.paymentEvent.createMany({
+            data: [
+              {
+                orderId,
+                provider: payment.provider,
+                eventType: "PAYMENT_CONFIRMED",
+                source: "GATEWAY_VERIFICATION",
+                paymentReference: reference,
+                fromStatus: payment.status,
+                toStatus: PaymentStatus.COMPLETED as DbPaymentStatus,
+                providerTransactionId: transactionId ?? null,
+                dedupeKey: `payment-confirmed:${reference}`,
+              },
+            ],
+            skipDuplicates: true,
+          });
           if (!orderCanAdvance)
             return {
               claimed: true,
@@ -730,24 +967,54 @@ export class OrdersPersistenceService {
     });
   }
 
-  async audit() {
-    if (!this.prisma.enabled) return [];
-    const rows = await this.prisma.auditLog.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 200,
-      include: { performedBy: { select: { email: true } } },
-    });
-    return rows.map((row) => ({
-      id: row.id,
-      module: row.module,
-      entity: row.entity,
-      entityId: row.entityId,
-      action: row.action,
-      performedByEmail: row.performedBy?.email ?? null,
-      previousValue: row.previousValue,
-      newValue: row.newValue,
-      createdAt: row.createdAt.toISOString(),
-    }));
+  async audit(input: { limit: number; offset: number; query?: string }) {
+    if (!this.prisma.enabled)
+      return { items: [], total: 0, limit: input.limit, offset: input.offset };
+    const search = input.query?.trim();
+    const where = search
+      ? {
+          OR: [
+            { module: { contains: search, mode: "insensitive" as const } },
+            { entity: { contains: search, mode: "insensitive" as const } },
+            { action: { contains: search, mode: "insensitive" as const } },
+            {
+              performedBy: {
+                is: {
+                  email: { contains: search, mode: "insensitive" as const },
+                },
+              },
+            },
+          ],
+        }
+      : undefined;
+    const [rows, total] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        ...(where ? { where } : {}),
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+        skip: input.offset,
+        include: { performedBy: { select: { email: true } } },
+      }),
+      where
+        ? this.prisma.auditLog.count({ where })
+        : this.prisma.auditLog.count(),
+    ]);
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        module: row.module,
+        entity: row.entity,
+        entityId: row.entityId,
+        action: row.action,
+        performedByEmail: row.performedBy?.email ?? null,
+        previousValue: row.previousValue,
+        newValue: row.newValue,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      total,
+      limit: input.limit,
+      offset: input.offset,
+    };
   }
 
   async recordReview(
@@ -793,6 +1060,48 @@ export class OrdersPersistenceService {
     ]);
   }
 
+  async recordBulkReupload(
+    orderId: string,
+    documentIds: string[],
+    actorClerkId: string,
+    reason: string,
+  ) {
+    if (!this.prisma.enabled) return;
+    const actor = await this.prisma.user.upsert({
+      where: { clerkId: actorClerkId },
+      update: {},
+      create: {
+        clerkId: actorClerkId,
+        email: `${createHash("sha256").update(actorClerkId).digest("hex").slice(0, 12)}@local.visacompass.invalid`,
+      },
+    });
+    await this.prisma.$transaction([
+      this.prisma.orderReview.create({
+        data: {
+          orderId,
+          reviewerId: actor.id,
+          decision: "REUPLOAD_REQUIRED",
+          reasons: [reason],
+          comments: reason,
+        },
+      }),
+      this.prisma.travelerDocument.updateMany({
+        where: { orderId, id: { in: documentIds } },
+        data: { reviewedById: actor.id, reviewedAt: new Date() },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          module: "VERIFICATION",
+          entity: "Order",
+          entityId: orderId,
+          action: "REUPLOAD",
+          performedById: actor.id,
+          newValue: { orderId, documentIds, reason },
+        },
+      }),
+    ]);
+  }
+
   private travelerData(traveler: TravelerInput) {
     return {
       title: traveler.title,
@@ -806,6 +1115,7 @@ export class OrdersPersistenceService {
       employerOrBusinessName: traveler.employerOrBusinessName ?? null,
       email: traveler.email,
       mobile: traveler.mobile,
+      contactNumberNormalized: normalizeNepaliContact(traveler.mobile),
       passportNumberEncrypted: this.crypto.encrypt(traveler.passportNumber),
       passportNumberHash: this.crypto.blindIndex(traveler.passportNumber),
       passportExpiryEncrypted: this.crypto.encrypt(traveler.passportExpiryDate),
@@ -835,6 +1145,28 @@ export class OrdersPersistenceService {
   }
 
   private async ensureIdentity(tx: Prisma.TransactionClient, order: DemoOrder) {
+    if (order.purchaseType === "TOPUP" && order.targetInventoryId) {
+      const originals = await tx.order.findMany({
+        where: {
+          orderType: "INITIAL_PURCHASE",
+          customerEsim: { is: { inventoryId: order.targetInventoryId } },
+        },
+        select: { customerId: true },
+      });
+      if (
+        originals.length !== 1 ||
+        originals[0]!.customerId !== order.beneficiaryCustomerId
+      )
+        throw new ConflictException(
+          "Recharge beneficiary no longer matches the original eSIM owner",
+        );
+    }
+    if (order.beneficiaryCustomerId) {
+      const customer = await tx.customer.findUniqueOrThrow({
+        where: { id: order.beneficiaryCustomerId },
+      });
+      return { userId: customer.userId, customerId: customer.id };
+    }
     if (!order.ownerId) {
       const suffix = createHash("sha256")
         .update(order.id)

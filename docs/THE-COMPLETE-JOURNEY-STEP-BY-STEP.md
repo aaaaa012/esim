@@ -57,7 +57,7 @@ Visa Compass eSIM?" box on the home page.
 **Step 3. The customer presses Choose (or Recharge)** and reaches the checkout page.
 The checkout is a simple wizard with **four steps in order:**
 
-> **1. Compatibility → 2. Traveller → 3. Documents → 4. Payment**
+> **1. Compatibility → 2. Documents and passport extraction → 3. Traveller confirmation → 4. Payment**
 
 **Step 4 (Wizard step 1) — Confirm the device.**
 The customer ticks **"I confirm my device is compatible"** and notes that an

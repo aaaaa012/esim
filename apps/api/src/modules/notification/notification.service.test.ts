@@ -83,7 +83,23 @@ describe("NotificationService queue-disabled delivery guard", () => {
       "deliver-notification",
       expect.objectContaining({ notificationId: result.id }),
       `notification-${result.id}`,
+      expect.objectContaining({
+        attempts: 6,
+        backoff: { type: "exponential", delay: 15_000 },
+      }),
     );
+  });
+
+  it("deduplicates the same durable business notification", async () => {
+    const queue = queueStub(true);
+    const service = new NotificationService(memoryPrisma(), queue);
+    const durable = { ...input, dedupeKey: "order-1:qr-ready" };
+
+    const first = await service.enqueue(durable);
+    const second = await service.enqueue(durable);
+
+    expect(second).toEqual(first);
+    expect(queue.add).toHaveBeenCalledTimes(1);
   });
 
   it("retry fails loudly without claiming a delivery was scheduled", async () => {

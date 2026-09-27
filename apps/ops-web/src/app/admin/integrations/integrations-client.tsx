@@ -46,6 +46,7 @@ type Integration = {
   status: string;
   secretValue: string;
   checkedAt: string;
+  capabilities?: Record<string, boolean | string>;
 };
 type Plan = { id: string; countryCode: string; name: string };
 type IntegrationLog = {
@@ -59,6 +60,42 @@ type IntegrationLog = {
   errorMessage?: string;
   createdAt: string;
 };
+type FonepayBank = {
+  bankCode: string;
+  bankName: string;
+  packageName?: string | null;
+  intentScheme: string;
+  active: boolean;
+};
+type FonepayDirectory = { banks: FonepayBank[]; lastSyncedAt: string | null };
+type GatewayCapabilities = {
+  checkout: "QR" | "REDIRECT" | "QR_AND_REDIRECT" | "NONE";
+  statusLookup: boolean;
+  refunds: "SUPPORTED" | "MANUAL" | "NOT_SUPPORTED";
+  disputes: "SUPPORTED" | "NOT_SUPPORTED";
+  extra?: string[];
+};
+type PaymentGatewayCapabilities = {
+  provider: string;
+  configured: boolean;
+  capabilities: GatewayCapabilities;
+  notes: string[];
+};
+
+function capabilityTone(
+  value: string | boolean,
+): "success" | "warning" | "default" {
+  if (value === true || value === "SUPPORTED" || value === "QR_AND_REDIRECT")
+    return "success";
+  if (value === "MANUAL" || value === "NOT_SUPPORTED") return "warning";
+  return "default";
+}
+
+function capabilityLabel(value: string | boolean): string {
+  if (typeof value === "boolean") return value ? "Available" : "Not available";
+  if (value === "QR_AND_REDIRECT") return "QR and redirect";
+  return value;
+}
 
 export default function IntegrationsClient() {
   const authFetch = useAuthenticatedFetch();
@@ -80,12 +117,25 @@ export default function IntegrationsClient() {
   const [plansBusy, setPlansBusy] = useState(false);
   const [eligibilityMsisdn, setEligibilityMsisdn] = useState("");
   const [logsBusy, setLogsBusy] = useState(false);
+  const [fonepayDirectory, setFonepayDirectory] = useState<FonepayDirectory>({
+    banks: [],
+    lastSyncedAt: null,
+  });
+  const [gateways, setGateways] = useState<PaymentGatewayCapabilities[]>([]);
   useEffect(() => {
     void request<Integration[]>("/admin/integrations")
       .then(setIntegrations)
       .catch((e) => toast.error(e.message));
     void request<IntegrationLog[]>("/operations/integration-logs")
       .then(setLogs)
+      .catch((e) => toast.error(e.message));
+    void request<FonepayDirectory>("/admin/integrations/fonepay/banks")
+      .then(setFonepayDirectory)
+      .catch((e) => toast.error(e.message));
+    void request<PaymentGatewayCapabilities[]>(
+      "/admin/integrations/payment-gateways",
+    )
+      .then(setGateways)
       .catch((e) => toast.error(e.message));
   }, []);
   useEffect(() => {
@@ -127,9 +177,7 @@ export default function IntegrationsClient() {
       setBusy("");
     }
   };
-  const transatelAction = async (
-    action: "sync-catalog" | "sync-usage" | "ensure-webhook",
-  ) => {
+  const transatelAction = async (action: "sync-catalog" | "sync-usage") => {
     setBusy(`transatel:${action}`);
     try {
       await request(`/admin/integrations/transatel/${action}`, {
@@ -138,9 +186,7 @@ export default function IntegrationsClient() {
       toast.success(
         action === "sync-catalog"
           ? "Plans synced with the network provider"
-          : action === "sync-usage"
-            ? "Data usage synchronized with network provider"
-            : "Automatic notifications set up",
+          : "Data usage synchronized with network provider",
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action} failed`);
@@ -179,6 +225,25 @@ export default function IntegrationsClient() {
       );
     } finally {
       setLogsBusy(false);
+    }
+  };
+  const syncFonepayBanks = async () => {
+    setBusy("fonepay:banks");
+    try {
+      const directory = await request<FonepayDirectory>(
+        "/admin/integrations/fonepay/banks/sync",
+        { method: "POST" },
+      );
+      setFonepayDirectory(directory);
+      toast.success(
+        `Fonepay bank directory updated (${directory.banks.length} active)`,
+      );
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Bank directory sync failed",
+      );
+    } finally {
+      setBusy("");
     }
   };
 
@@ -236,6 +301,16 @@ export default function IntegrationsClient() {
               <p className="mt-2 text-xs text-muted-foreground">
                 Last checked: {new Date(item.checkedAt).toLocaleString()}
               </p>
+              {item.capabilities ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {Object.entries(item.capabilities).map(([name, value]) => (
+                    <Badge key={name} variant="secondary">
+                      {name.replace(/([a-z])([A-Z])/g, "$1 $2")}:{" "}
+                      {String(value)}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button
                   size="sm"
@@ -290,24 +365,21 @@ export default function IntegrationsClient() {
                       )}
                       Sync usage
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => transatelAction("ensure-webhook")}
-                      disabled={busy === "transatel:ensure-webhook"}
-                    >
-                      {busy === "transatel:ensure-webhook" ? (
-                        <Spinner />
-                      ) : (
-                        <Pencil className="size-4" />
-                      )}
-                      Register webhook
-                    </Button>
                   </>
                 )}
               </div>
               {item.id === "transatel" && (
                 <div className="mt-4 space-y-3 rounded-lg border border-dashed p-4">
+                  <div>
+                    <p className="text-sm font-medium">
+                      Provider notifications
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Configure the callback URL and event subscriptions in the
+                      Transatel Developer Console. Transatel no longer permits
+                      webhook registration through its API.
+                    </p>
+                  </div>
                   <p className="text-sm font-medium">Eligibility check</p>
                   <Input
                     placeholder="Search country or plan…"
@@ -361,6 +433,141 @@ export default function IntegrationsClient() {
           ))}
         </div>
       )}
+      <Panel
+        className="mt-6"
+        title="Payment gateway capabilities"
+        description="What each gateway can do today. A capability that is missing is shown explicitly — never implied by the provider's brand."
+      >
+        {!gateways.length ? (
+          <EmptyState
+            title="No gateways"
+            description="Payment gateways will appear once configured."
+          />
+        ) : (
+          <div className="space-y-4">
+            {gateways.map((gateway) => (
+              <div key={gateway.provider} className="rounded-lg border p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium">{gateway.provider}</p>
+                  <StatusBadge
+                    label={
+                      gateway.configured ? "Configured" : "Config required"
+                    }
+                    tone={gateway.configured ? "success" : "warning"}
+                  />
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="flex items-center justify-between border-b pb-2 text-sm">
+                    <span className="text-muted-foreground">Checkout</span>
+                    <StatusBadge
+                      label={capabilityLabel(gateway.capabilities.checkout)}
+                      tone={capabilityTone(gateway.capabilities.checkout)}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-b pb-2 text-sm">
+                    <span className="text-muted-foreground">Status lookup</span>
+                    <StatusBadge
+                      label={capabilityLabel(gateway.capabilities.statusLookup)}
+                      tone={capabilityTone(gateway.capabilities.statusLookup)}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-b pb-2 text-sm">
+                    <span className="text-muted-foreground">Refunds</span>
+                    <StatusBadge
+                      label={capabilityLabel(gateway.capabilities.refunds)}
+                      tone={capabilityTone(gateway.capabilities.refunds)}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-b pb-2 text-sm">
+                    <span className="text-muted-foreground">Disputes</span>
+                    <StatusBadge
+                      label={capabilityLabel(gateway.capabilities.disputes)}
+                      tone={capabilityTone(gateway.capabilities.disputes)}
+                    />
+                  </div>
+                </div>
+                {gateway.capabilities.extra?.length ? (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {gateway.capabilities.extra.map((extra) => (
+                      <Badge key={extra} variant="outline">
+                        {extra}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+                {gateway.notes.length ? (
+                  <ul className="mt-3 list-disc pl-5 text-xs text-muted-foreground">
+                    {gateway.notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+      <Panel
+        title="Fonepay bank directory"
+        description="Last-known-good mobile banking destinations. Checkout QR generation remains available if this directory is temporarily unavailable."
+        action={
+          <Button
+            variant="outline"
+            onClick={() => void syncFonepayBanks()}
+            disabled={busy === "fonepay:banks"}
+          >
+            {busy === "fonepay:banks" ? (
+              <Spinner />
+            ) : (
+              <RefreshCcw className="size-4" />
+            )}
+            Refresh directory
+          </Button>
+        }
+      >
+        <p className="mb-3 text-xs text-muted-foreground">
+          Last successful sync:{" "}
+          {fonepayDirectory.lastSyncedAt
+            ? new Date(fonepayDirectory.lastSyncedAt).toLocaleString()
+            : "Not synced yet"}
+        </p>
+        {!fonepayDirectory.banks.length ? (
+          <EmptyState
+            title="No cached banks"
+            description="Refresh the directory after Fonepay is configured."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Bank</TableHead>
+                  <TableHead>Code</TableHead>
+                  <TableHead>Mobile package</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {fonepayDirectory.banks.map((bank) => (
+                  <TableRow key={bank.bankCode}>
+                    <TableCell className="font-medium">
+                      {bank.bankName}
+                    </TableCell>
+                    <TableCell>{bank.bankCode}</TableCell>
+                    <TableCell>{bank.packageName || "Not supplied"}</TableCell>
+                    <TableCell>
+                      <StatusBadge
+                        label={bank.active ? "Active" : "Inactive"}
+                        tone={bank.active ? "success" : "default"}
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </Panel>
     </>
   );
 }

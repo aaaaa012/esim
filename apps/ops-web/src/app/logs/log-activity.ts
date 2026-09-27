@@ -4,6 +4,25 @@ export type LogActivity = {
   title: string;
 };
 
+export function providerLabel(entry: LogActivity): string {
+  const identifier = entry.identifier ?? "";
+  if (entry.group !== "provider") return identifier || "N/A";
+  const operation = identifier.toLowerCase();
+  const endpoint = entry.title.toLowerCase();
+  if (operation.startsWith("fonepay") || endpoint.includes("thirdparty"))
+    return "Fonepay";
+  if (operation.startsWith("khalti") || endpoint.includes("epayment"))
+    return "Khalti";
+  if (
+    operation.includes("transatel") ||
+    operation.includes("subscriber") ||
+    endpoint.includes("sim-management") ||
+    endpoint.includes("/ocs/")
+  )
+    return "Transatel";
+  return "External Provider";
+}
+
 export function activityLabel(entry: LogActivity): string {
   if (entry.group === "incoming") {
     const source = entry.identifier?.toLowerCase() ?? "";
@@ -20,22 +39,50 @@ export function activityLabel(entry: LogActivity): string {
   if (operation === "customer-topup-lookup") return "Customer eSIM Lookup";
   if (operation === "customer-topup-eligibility")
     return "Customer Top-up Eligibility";
-  const provider =
-    operation.startsWith("khalti") || endpoint.includes("epayment")
-      ? "Khalti"
-      : "Transatel";
+  const provider = providerLabel(entry);
   if (operation.includes("token") || endpoint.includes("/token"))
     return `${provider} Access Token Request`;
+  if (provider === "Fonepay") {
+    const clientEventLabels: Record<string, string> = {
+      "fonepay-client-qr-rendered": "Fonepay QR Displayed",
+      "fonepay-client-socket-connected": "Fonepay WebSocket Connected",
+      "fonepay-client-socket-error": "Fonepay WebSocket Error",
+      "fonepay-client-socket-closed": "Fonepay WebSocket Closed",
+      "fonepay-client-socket-reconnecting": "Fonepay WebSocket Reconnecting",
+      "fonepay-client-qr-verified-signal": "Fonepay QR Scan Recognized",
+      "fonepay-client-payment-result-signal":
+        "Fonepay Payment Result Signal Received",
+      "fonepay-client-bank-launch-attempted":
+        "Fonepay Banking App Launch Attempted",
+      "fonepay-client-bank-launch-blocked":
+        "Fonepay Banking App Launch Blocked",
+      "fonepay-client-bank-app-navigation-observed":
+        "Fonepay Banking App Opened",
+    };
+    if (clientEventLabels[operation]) return clientEventLabels[operation];
+    if (operation.includes("authentication")) return "Fonepay Authentication";
+    if (operation.includes("banks") || endpoint.includes("/banks/list"))
+      return "Fonepay Bank List";
+    if (operation.includes("generate-intent-qr"))
+      return "Fonepay Payment Initiation";
+    if (
+      operation.includes("dynamicqrgetstatus") ||
+      endpoint.includes("dynamicqrgetstatus")
+    )
+      return "Fonepay Payment Status Lookup";
+  }
   if (operation.includes("initiat") || endpoint.includes("/initiate"))
-    return "Khalti Payment Initiation";
+    return `${provider} Payment Initiation`;
   if (operation.includes("lookup") || endpoint.includes("/lookup"))
-    return "Khalti Payment Lookup";
+    return `${provider} Payment Status Lookup`;
   if (operation.includes("provision")) return "Transatel eSIM Provisioning";
   if (operation.includes("usage")) return "Transatel Data-Usage Lookup";
   if (operation.includes("esim-details"))
     return "Transatel eSIM Details Lookup";
   if (operation.includes("subscriber-suspend"))
     return "Transatel eSIM Suspension";
+  if (operation.includes("subscriber-reactivate"))
+    return "Transatel eSIM Reactivation";
   if (operation.includes("subscriber-terminate"))
     return "Transatel eSIM Termination";
   if (operation.includes("catalog")) return "Transatel Plan Catalog Lookup";

@@ -1,14 +1,17 @@
+import { CryptoService } from "../../infrastructure/crypto.service.js";
 import {
   Injectable,
+  Optional,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PrismaService } from "../../infrastructure/prisma.service.js";
 import { QueueService } from "../../jobs/queue.service.js";
 import { QUEUES } from "../../jobs/queues.js";
 import type { NotificationTemplate } from "./notification.templates.js";
+import { NOTIFICATION_JOB_OPTIONS } from "../../infrastructure/resilience-policy.js";
 
 export type NotificationChannel = "EMAIL" | "WHATSAPP";
 
@@ -20,6 +23,7 @@ type MemoryNotification = {
   status: string;
   sentAt: Date | null;
   createdAt: Date;
+  dedupeKey?: string;
 };
 
 /**
@@ -36,6 +40,7 @@ export class NotificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly queues: QueueService,
+    @Optional() private readonly crypto?: CryptoService,
   ) {}
 
   health() {
@@ -69,36 +74,81 @@ export class NotificationService {
     recipient: string;
     orderNumber: string;
     reason?: string;
+    recoveryUrl?: string;
+    dedupeKey?: string;
   }) {
     const id = randomUUID();
-    if (this.prisma.enabled)
-      await this.prisma.notification.create({
-        data: {
+    let notificationId: string = id;
+    let retryExisting = false;
+    if (this.prisma.enabled) {
+      const notification = input.dedupeKey
+        ? await this.prisma.notification.upsert({
+            where: { dedupeKey: input.dedupeKey },
+            update: {},
+            create: {
+              id,
+              dedupeKey: input.dedupeKey,
+              orderId: input.orderId,
+              channel: input.channel,
+              template: input.template,
+              recipient: input.recipient,
+              orderNumber: input.orderNumber,
+              ...(input.reason ? { reason: input.reason } : {}),
+              status: "QUEUED",
+            },
+          })
+        : await this.prisma.notification.create({
+            data: {
+              id,
+              orderId: input.orderId,
+              channel: input.channel,
+              template: input.template,
+              recipient: input.recipient,
+              orderNumber: input.orderNumber,
+              ...(input.reason ? { reason: input.reason } : {}),
+              status: "QUEUED",
+            },
+          });
+      if (notification.id !== id) {
+        if (notification.status !== "FAILED")
+          return { id: notification.id, status: notification.status };
+        notificationId = notification.id;
+        retryExisting = true;
+        await this.prisma.notification.update({
+          where: { id: notificationId },
+          data: { status: "QUEUED", errorMessage: null, nextAttemptAt: null },
+        });
+      }
+    } else {
+      const existing = input.dedupeKey
+        ? [...this.memory.values()].find(
+            (item: MemoryNotification) => item.dedupeKey === input.dedupeKey,
+          )
+        : undefined;
+      if (existing) {
+        if (existing.status !== "FAILED")
+          return { id: existing.id, status: existing.status };
+        notificationId = existing.id;
+        retryExisting = true;
+        existing.status = "QUEUED";
+      }
+      if (!existing)
+        this.memory.set(id, {
           id,
           orderId: input.orderId,
           channel: input.channel,
           template: input.template,
-          recipient: input.recipient,
-          orderNumber: input.orderNumber,
-          ...(input.reason ? { reason: input.reason } : {}),
           status: "QUEUED",
-        },
-      });
-    else
-      this.memory.set(id, {
-        id,
-        orderId: input.orderId,
-        channel: input.channel,
-        template: input.template,
-        status: "QUEUED",
-        sentAt: null,
-        createdAt: new Date(),
-      });
+          sentAt: null,
+          createdAt: new Date(),
+          ...(input.dedupeKey ? { dedupeKey: input.dedupeKey } : {}),
+        });
+    }
 
     if (!this.queues.enabled) {
-      await this.mark(id, "FAILED");
+      await this.mark(notificationId, "FAILED");
       const message =
-        `Notification ${id} (${input.template} for order ${input.orderNumber}) ` +
+        `Notification ${notificationId} (${input.template} for order ${input.orderNumber}) ` +
         `to ${input.recipient} was NOT delivered: the background queue is unavailable ` +
         `(REDIS_URL is not set). Delivery requires Redis; the message was left FAILED.`;
       this.logger.error(message);
@@ -106,16 +156,19 @@ export class NotificationService {
         throw new ServiceUnavailableException(
           "Notification delivery is unavailable (background queue is not configured)",
         );
-      return { id, status: "FAILED" as const };
+      return { id: notificationId, status: "FAILED" as const };
     }
 
     await this.queues.add(
       QUEUES.notifications,
       "deliver-notification",
-      { notificationId: id, ...input },
-      `notification-${id}`,
+      { notificationId, ...input },
+      retryExisting
+        ? `notification-${notificationId}-retry-${Date.now()}`
+        : `notification-${notificationId}`,
+      NOTIFICATION_JOB_OPTIONS,
     );
-    return { id, status: "QUEUED" as const };
+    return { id: notificationId, status: "QUEUED" as const };
   }
 
   async mark(
@@ -167,14 +220,17 @@ export class NotificationService {
 
   async list(orderIds?: string[]) {
     if (this.prisma.enabled)
-      return this.prisma.notification.findMany({
-        ...(orderIds ? { where: { orderId: { in: orderIds } } } : {}),
-        orderBy: { createdAt: "desc" },
-        take: 200,
-      });
+      return (
+        await this.prisma.notification.findMany({
+          ...(orderIds ? { where: { orderId: { in: orderIds } } } : {}),
+          orderBy: { createdAt: "desc" },
+          take: 200,
+        })
+      ).map(({ recoveryUrlEncrypted: _secret, ...item }) => item);
     return [...this.memory.values()]
       .filter((item) => !orderIds || orderIds.includes(item.orderId))
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, 200);
   }
 
   async get(id: string) {
@@ -211,8 +267,25 @@ export class NotificationService {
         template: item.template,
         recipient,
         orderNumber,
+        ...("recoveryUrlEncrypted" in item &&
+        item.recoveryUrlEncrypted &&
+        this.crypto
+          ? {
+              recoveryUrl: this.crypto.decrypt(
+                item.recoveryUrlEncrypted as string,
+              ),
+            }
+          : {}),
       },
-      `notification-retry-${id}-${Date.now()}`,
+      "recoveryUrlEncrypted" in item && item.recoveryUrlEncrypted
+        ? `notification-retry-${id}-${createHash("sha256").update(String(item.recoveryUrlEncrypted)).digest("hex").slice(0, 16)}-${"attemptCount" in item ? item.attemptCount : 0}`
+        : `notification-retry-${id}-${Date.now()}`,
+      {
+        ...NOTIFICATION_JOB_OPTIONS,
+        allowDuplicate: !(
+          "recoveryUrlEncrypted" in item && item.recoveryUrlEncrypted
+        ),
+      },
     );
     return { id, status: "QUEUED" as const };
   }

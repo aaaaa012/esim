@@ -2,13 +2,15 @@
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Bell, ExternalLink, RefreshCcw } from "lucide-react";
+import { Bell, Download, ExternalLink, RefreshCcw } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { Panel } from "@/components/panel";
 import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Spinner } from "@/components/spinner";
 import ErrorDialog from "@/components/error-dialog";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Table,
   TableBody,
@@ -39,6 +41,7 @@ type Health = {
 
 export default function NotificationsClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [items, setItems] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -131,6 +134,37 @@ export default function NotificationsClient() {
           </span>
         }
         description={`${items.length} messages`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `notification-delivery-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Created",
+                  "Sent",
+                  "Order ID",
+                  "Channel",
+                  "Template",
+                  "Status",
+                ],
+                items.map((item) => [
+                  item.createdAt,
+                  item.sentAt,
+                  item.orderId,
+                  item.channel,
+                  item.template,
+                  item.status,
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
         noPadding
       >
         {loading ? (
@@ -187,13 +221,16 @@ export default function NotificationsClient() {
                         variant="outline"
                         size="sm"
                         disabled={busy === item.id}
-                        onClick={() => {
+                        onClick={async () => {
                           if (
-                            window.confirm(
-                              "Send this message to the customer again?",
-                            )
+                            await confirm({
+                              title: "Send message again?",
+                              description:
+                                "The customer will receive another copy of this notification.",
+                              confirmLabel: "Send again",
+                            })
                           )
-                            retry(item.id);
+                            void retry(item.id);
                         }}
                       >
                         {busy === item.id ? (

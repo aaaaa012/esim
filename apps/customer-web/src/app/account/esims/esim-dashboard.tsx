@@ -20,7 +20,8 @@ import {
 import { useAuthenticatedFetch } from "../../authenticated-api-provider";
 import InstallGuide from "./install-guide";
 import ErrorModal from "../../../components/error-modal";
-import { orderStatusLabel } from "@visa-compass/shared";
+import { formatDataMb, formatPlanDataText } from "../../../lib/format-data";
+import { orderStatusPresentation } from "@visa-compass/shared";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const REFRESH_COOLDOWN_MS = 30_000;
@@ -30,6 +31,11 @@ type Usage = {
   totalMb: number;
   remainingMb: number;
   lastCheckedAt?: string;
+  oldestConfirmedAt?: string;
+  completeness?: "FULL" | "PARTIAL";
+  freshness?: "FRESH" | "STALE";
+  confirmedPackageCount?: number;
+  unconfirmedPackageCount?: number;
 };
 type Subscription = Usage & {
   id: string;
@@ -37,6 +43,9 @@ type Subscription = Usage & {
   orderNumber: string;
   status: string;
   assignmentVerificationStatus?: string;
+  purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
+  balanceStatus?:
+    "CONFIRMED" | "LAST_KNOWN" | "WAITING_FOR_FIRST_USE" | "UNAVAILABLE";
   expiresAt?: string;
   lastCheckedAt?: string;
   plan: {
@@ -62,15 +71,14 @@ type Esim = {
   iccidMasked?: string;
   msisdnMasked?: string;
   usage: (Usage & { lastCheckedAt: string }) | null;
+  completeness?: "FULL" | "PARTIAL";
+  freshness?: "FRESH" | "STALE";
   subscriptions: Subscription[];
   activity?: ActivityItem[];
   qrOrderId?: string;
 };
 
-const formatData = (mb: number) =>
-  mb >= 1024
-    ? `${Number((mb / 1024).toFixed(2))} GB`
-    : `${Math.round(mb).toLocaleString()} MB`;
+const formatData = formatDataMb;
 const formatStatus = (esim: Esim) => {
   const active = esim.subscriptions.some((item) => item.status === "ACTIVE");
   const pending = esim.subscriptions.some((item) => item.status === "PENDING");
@@ -81,7 +89,7 @@ const formatStatus = (esim: Esim) => {
     return {
       label: "Needs attention",
       tone: "needs-attention",
-      detail: "We are checking this eSIM assignment.",
+      detail: "Open the related order to review the eSIM assignment issue.",
     };
   if (active)
     return {
@@ -99,13 +107,19 @@ const formatStatus = (esim: Esim) => {
     return {
       label: "Preparing eSIM",
       tone: "activating",
-      detail: "We are securely preparing your installation QR.",
+      detail:
+        "Your secure installation QR is being prepared. No action is needed yet.",
     };
   return {
     label: "No active plan",
     tone: "no-plan",
     detail: "Add a destination plan when you are ready.",
   };
+};
+
+export const activityStatusLabel = (status: string) => {
+  if (status === "COMPLETED") return "Purchase completed";
+  return orderStatusPresentation(status).label;
 };
 
 function Battery({
@@ -410,13 +424,7 @@ function QrModal({
   );
 }
 
-function CurrentPlans({
-  plans,
-  qrReady,
-}: {
-  plans: Subscription[];
-  qrReady: boolean;
-}) {
+function CurrentPlans({ plans }: { plans: Subscription[] }) {
   return (
     <section className="plan-section">
       <div className="section-heading">
@@ -431,36 +439,37 @@ function CurrentPlans({
       {plans.length ? (
         plans.map((plan) => {
           const isActive = plan.status === "ACTIVE";
+          const isTopUp = plan.purchaseType === "TOPUP";
           const label =
             plan.assignmentVerificationStatus === "MISMATCH"
               ? "Needs attention"
               : isActive
                 ? "Active"
-                : qrReady
-                  ? "Ready to install"
-                  : "Preparing";
+                : isTopUp
+                  ? "Package added"
+                  : "Ready to install";
           return (
             <Link
               className="plan-service-row"
               href={`/account/orders/${plan.orderId}`}
               key={plan.id}
             >
-              <Battery
-                small
-                usage={isActive && plan.lastCheckedAt ? plan : null}
-              />
+              <Battery small usage={plan.lastCheckedAt ? plan : null} />
               <div className="plan-copy">
                 <b>{plan.plan.name}</b>
                 <span>
-                  {plan.plan.countryName} · {plan.plan.dataAllowance} ·{" "}
+                  {plan.plan.countryName} ·{" "}
+                  {formatPlanDataText(plan.plan.dataAllowance)} ·{" "}
                   {plan.plan.validityDays} days
                 </span>
                 <small>
-                  {isActive
-                    ? "Ready to use on this eSIM"
-                    : qrReady
-                      ? "Install your eSIM before travelling"
-                      : "We are preparing this plan"}
+                  {plan.balanceStatus === "LAST_KNOWN"
+                    ? "Last-known balance — provider confirmation is pending"
+                    : isActive
+                      ? "Ready to use on this eSIM"
+                      : isTopUp
+                        ? "Waiting for first data use · No new installation required"
+                        : "Install your eSIM before travelling"}
                 </small>
               </div>
               <div className="plan-state">
@@ -608,9 +617,18 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
               Choose your first destination plan and we’ll add your reusable
               eSIM to this dashboard.
             </p>
-            <Link className="button" href="/#plans">
-              Browse plans
-            </Link>
+            <div className="account-empty-actions">
+              <Link className="button" href="/destinations">
+                Browse plans
+              </Link>
+              <Link className="button secondary" href="/account/orders">
+                View my orders
+              </Link>
+            </div>
+            <small>
+              Already placed an order or recharged another person’s existing
+              eSIM? Check your orders.
+            </small>
           </div>
         </div>
       </main>
@@ -627,7 +645,7 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
     esim.subscriptions[0]?.plan.countryCode ??
     "";
   const status = formatStatus(esim);
-  const hasActivePlan = active.some((item) => item.status === "ACTIVE");
+  const hasActivePlan = active.length > 0;
   const displayNumber = esim.msisdnMasked ?? esim.iccidMasked;
   const shortNumber = displayNumber ? displayNumber.slice(-4) : "";
   return (
@@ -689,7 +707,7 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
               )}
               <Link
                 className="button secondary"
-                href={`/?esim=${esim.id}&country=${country}#plans`}
+                href={`/destinations?esim=${esim.id}&country=${country}`}
               >
                 <Plus />
                 Add data
@@ -719,9 +737,23 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
                 {esim.usage
                   ? `${formatData(esim.usage.usedMb)} used of ${formatData(esim.usage.totalMb)} · Last updated ${new Date(esim.usage.lastCheckedAt).toLocaleString()}`
                   : hasActivePlan
-                    ? "Your provider has not reported a balance yet."
+                    ? "Your provider has not reported a balance yet. No action is needed—check again after first use."
                     : "Install and activate your plan to begin tracking data."}
               </p>
+              {esim.usage?.completeness === "PARTIAL" ? (
+                <small className="usage-notice" role="status">
+                  Confirmed usage from {esim.usage.confirmedPackageCount ?? 0}{" "}
+                  of{" "}
+                  {(esim.usage.confirmedPackageCount ?? 0) +
+                    (esim.usage.unconfirmedPackageCount ?? 0)}{" "}
+                  packages. Last-known balances are not included in this total.
+                </small>
+              ) : null}
+              {esim.usage?.freshness === "STALE" ? (
+                <small className="usage-notice" role="status">
+                  Usage is based on the last confirmed provider update.
+                </small>
+              ) : null}
               {usageNotice && (
                 <small className="usage-notice" role="status">
                   {usageNotice}
@@ -742,7 +774,7 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
               Refresh usage
             </button>
           </section>
-          <CurrentPlans plans={active} qrReady={Boolean(esim.qrOrderId)} />
+          <CurrentPlans plans={active} />
           <InstallGuide
             canInstall={Boolean(esim.qrOrderId)}
             onOpenQr={esim.qrOrderId ? () => setShowQr(true) : undefined}
@@ -782,7 +814,7 @@ export default function EsimDashboard({ selectedId }: { selectedId?: string }) {
                   >
                     <i />
                     <span>
-                      <b>{orderStatusLabel(item.orderStatus)}</b>
+                      <b>{activityStatusLabel(item.orderStatus)}</b>
                       <small>
                         {item.planName} ·{" "}
                         {new Date(item.createdAt).toLocaleDateString()}

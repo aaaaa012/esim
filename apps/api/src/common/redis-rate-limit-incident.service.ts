@@ -1,7 +1,10 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { AttentionCaseStatus } from "@prisma/client";
 import { PrismaService } from "../infrastructure/prisma.service.js";
-import { EMAIL_CHANNEL, type EmailChannel } from "../modules/notification/email.channel.js";
+import {
+  EMAIL_CHANNEL,
+  type EmailChannel,
+} from "../modules/notification/email.channel.js";
 import { MetricsService } from "../observability/metrics.service.js";
 
 const DEDUPE_KEY = "infrastructure:redis-rate-limit";
@@ -24,14 +27,19 @@ export class RedisRateLimitIncidentService {
     this.metrics.recordFailure("redis", "rate-limit-degraded");
     if (!this.locallyDegraded) {
       this.locallyDegraded = true;
-      this.logger.error("Redis rate limiting is unavailable; strict local fallback enabled");
+      this.logger.error(
+        "Redis rate limiting is unavailable; strict local fallback enabled",
+      );
     }
 
     let shouldAlert = false;
     if (this.prisma.enabled) {
       try {
         const reopened = await this.prisma.attentionCase.updateMany({
-          where: { dedupeKey: DEDUPE_KEY, status: AttentionCaseStatus.RESOLVED },
+          where: {
+            dedupeKey: DEDUPE_KEY,
+            status: AttentionCaseStatus.RESOLVED,
+          },
           data: {
             status: AttentionCaseStatus.OPEN,
             severity: "CRITICAL",
@@ -56,11 +64,14 @@ export class RedisRateLimitIncidentService {
                 entityType: "Redis",
                 entityId: "rate-limit",
                 summary: "Redis rate limiting is unavailable",
-                detail: "API requests are using the strict per-process fallback.",
+                detail:
+                  "API requests are using the strict per-process fallback.",
                 failureCategory: "REDIS_UNAVAILABLE",
                 localState: "DEGRADED",
                 externalState: "UNREACHABLE",
-                availableActions: ["CHECK_REDIS", "CHECK_NETWORK", "CHECK_CREDENTIALS"],
+                // Infrastructure recovery happens outside the application.
+                // Do not offer buttons that cannot perform a safe operation.
+                availableActions: [],
               },
             });
             shouldAlert = true;
@@ -69,19 +80,24 @@ export class RedisRateLimitIncidentService {
           }
         }
       } catch {
-        shouldAlert = Date.now() - this.lastLocalAlertAt >= LOCAL_ALERT_COOLDOWN_MS;
+        shouldAlert =
+          Date.now() - this.lastLocalAlertAt >= LOCAL_ALERT_COOLDOWN_MS;
       }
     } else {
-      shouldAlert = Date.now() - this.lastLocalAlertAt >= LOCAL_ALERT_COOLDOWN_MS;
+      shouldAlert =
+        Date.now() - this.lastLocalAlertAt >= LOCAL_ALERT_COOLDOWN_MS;
     }
 
     if (shouldAlert) {
       this.lastLocalAlertAt = Date.now();
-      await this.send("CRITICAL: Redis rate limiting unavailable", [
-        "Redis could not be reached by the API rate limiter.",
-        "Strict per-process fallback limiting is active.",
-        "Check Render Key Value health, credentials, networking, and connection limits immediately.",
-      ].join("\n"));
+      await this.send(
+        "CRITICAL: Redis rate limiting unavailable",
+        [
+          "Redis could not be reached by the API rate limiter.",
+          "Strict per-process fallback limiting is active.",
+          "Check Render Key Value health, credentials, networking, and connection limits immediately.",
+        ].join("\n"),
+      );
     }
     void reason;
   }
@@ -117,7 +133,10 @@ export class RedisRateLimitIncidentService {
   }
 
   private async send(subject: string, text: string) {
-    const recipients = [process.env.OPS_ALERT_EMAIL, process.env.ADMIN_ALERT_EMAIL]
+    const recipients = [
+      process.env.OPS_ALERT_EMAIL,
+      process.env.ADMIN_ALERT_EMAIL,
+    ]
       .map((value) => value?.trim())
       .filter((value): value is string => Boolean(value));
     await Promise.allSettled(

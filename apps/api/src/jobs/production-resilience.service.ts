@@ -4,11 +4,10 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { AttentionCaseStatus, OutboxStatus, Prisma } from "@prisma/client";
+import { isAttentionAction } from "@visa-compass/shared";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../infrastructure/prisma.service.js";
-import {
-  SELLABLE_PROVIDER_STATUSES,
-} from "../common/sellable-provider-statuses.js";
+import { SELLABLE_PROVIDER_STATUSES } from "../common/sellable-provider-statuses.js";
 import { QueueService } from "./queue.service.js";
 import { QUEUES } from "./queues.js";
 
@@ -41,11 +40,14 @@ export class ProductionResilienceService {
     nextRetryAt?: Date;
   }) {
     if (!this.prisma.enabled) return null;
+    const availableActions = (input.availableActions ?? []).filter(
+      isAttentionAction,
+    );
     return this.prisma.attentionCase.upsert({
       where: { dedupeKey: input.dedupeKey },
       create: {
         ...input,
-        availableActions: input.availableActions ?? [],
+        availableActions,
       },
       update: {
         status: AttentionCaseStatus.OPEN,
@@ -57,7 +59,7 @@ export class ProductionResilienceService {
         lastSuccessfulStep: input.lastSuccessfulStep ?? null,
         failureCategory: input.failureCategory ?? null,
         nextRetryAt: input.nextRetryAt ?? null,
-        availableActions: input.availableActions ?? [],
+        availableActions,
         retryCount: { increment: 1 },
         resolvedAt: null,
         resolution: null,
@@ -99,19 +101,57 @@ export class ProductionResilienceService {
   async list(input: {
     status?: AttentionCaseStatus;
     category?: string;
+    severity?: string;
+    query?: string;
+    createdFrom?: Date;
+    createdTo?: Date;
     limit?: number;
     offset?: number;
   }) {
     const limit = Math.min(200, Math.max(1, input.limit ?? 50));
     const offset = Math.max(0, input.offset ?? 0);
+    if (!this.prisma.enabled) return { items: [], total: 0, limit, offset };
     const where: Prisma.AttentionCaseWhereInput = {
       ...(input.status ? { status: input.status } : {}),
       ...(input.category ? { category: input.category } : {}),
+      ...(input.severity ? { severity: input.severity } : {}),
+      ...(input.query
+        ? {
+            OR: [
+              { summary: { contains: input.query, mode: "insensitive" } },
+              { detail: { contains: input.query, mode: "insensitive" } },
+              {
+                failureCategory: {
+                  contains: input.query,
+                  mode: "insensitive",
+                },
+              },
+              {
+                order: {
+                  is: {
+                    orderNumber: {
+                      contains: input.query,
+                      mode: "insensitive",
+                    },
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+      ...(input.createdFrom || input.createdTo
+        ? {
+            createdAt: {
+              ...(input.createdFrom ? { gte: input.createdFrom } : {}),
+              ...(input.createdTo ? { lte: input.createdTo } : {}),
+            },
+          }
+        : {}),
     };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.attentionCase.findMany({
         where,
-        orderBy: [{ severity: "desc" }, { createdAt: "asc" }],
+        orderBy: { createdAt: "desc" },
         take: limit,
         skip: offset,
         include: {
@@ -231,14 +271,17 @@ export class ProductionResilienceService {
     if (!this.prisma.enabled) return;
     const instanceId = this.instanceId;
     await this.prisma.workerHeartbeat.upsert({
-      where: { worker },
+      where: { worker_instanceId: { worker, instanceId } },
       create: {
         worker,
         instanceId,
+        buildVersion:
+          process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA ?? "development",
         ...(metadata ? { metadata: metadata as Prisma.InputJsonValue } : {}),
       },
       update: {
-        instanceId,
+        buildVersion:
+          process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA ?? "development",
         status: "RUNNING",
         lastSeenAt: new Date(),
         ...(metadata ? { metadata: metadata as Prisma.InputJsonValue } : {}),
@@ -258,6 +301,7 @@ export class ProductionResilienceService {
       lifecycleCounts,
       unsafeAvailableInventory,
       openDisputes,
+      stalePartnerAudits,
     ] = await Promise.all([
       this.prisma.workerHeartbeat.findMany({ orderBy: { worker: "asc" } }),
       this.prisma.attentionCase.count({
@@ -328,6 +372,12 @@ export class ProductionResilienceService {
       this.prisma.paymentDispute.count({
         where: { status: { in: ["OPEN", "UNDER_REVIEW", "LOST"] } },
       }),
+      this.prisma.partnerApiAudit.count({
+        where: {
+          status: "STARTED",
+          startedAt: { lt: new Date(Date.now() - 5 * 60_000) },
+        },
+      }),
     ]);
     const now = Date.now();
     const requiredWorkers = ["workflow-worker", "ocr-worker", "reconciliation"];
@@ -338,20 +388,28 @@ export class ProductionResilienceService {
     const heartbeatHealthy = (worker: { worker: string; lastSeenAt: Date }) =>
       now - worker.lastSeenAt.getTime() <=
       (worker.worker === "reconciliation" ? reconciliationHealthyMs : 120_000);
+    const expectedBuild = process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA;
+    const activeWorkers = workers.filter(
+      (worker) =>
+        heartbeatHealthy(worker) &&
+        (!expectedBuild || worker.buildVersion === expectedBuild),
+    );
     const missingWorkers = requiredWorkers.filter(
-      (name) => !workers.some((worker) => worker.worker === name),
+      (name) => !activeWorkers.some((worker) => worker.worker === name),
     );
     return {
       status:
         missingWorkers.length > 0 ||
-        workers.some((worker) => !heartbeatHealthy(worker)) ||
+        activeWorkers.length < requiredWorkers.length ||
         deadLetters > 0 ||
+        stalePartnerAudits > 0 ||
         unsafeAvailableInventory > 0
           ? "degraded"
           : "healthy",
       workers: workers.map((worker) => ({
         ...worker,
         healthy: heartbeatHealthy(worker),
+        compatible: !expectedBuild || worker.buildVersion === expectedBuild,
       })),
       missingWorkers,
       queues,
@@ -363,11 +421,15 @@ export class ProductionResilienceService {
           : 0,
       },
       webhooks: { deadLetters },
+      partnerAudit: { stale: stalePartnerAudits },
       payments: {
         oldestReviewAgeSeconds: oldestPaymentReview
           ? Math.floor((now - oldestPaymentReview.updatedAt.getTime()) / 1000)
           : 0,
         openDisputes,
+        lastReconcileSweepAt:
+          workers.find((worker) => worker.worker === "payment-reconcile")
+            ?.lastSeenAt ?? null,
       },
       orders: {
         stuckByState: Object.fromEntries(
@@ -380,6 +442,44 @@ export class ProductionResilienceService {
           workers.find((worker) => worker.worker === "reconciliation")
             ?.lastSeenAt ?? null,
       },
+    };
+  }
+
+  /**
+   * Release health is intentionally narrower than platformHealth(). Existing
+   * operational work (for example quarantined inventory or a dead-lettered
+   * webhook) must stay visible to Operations without rolling back an otherwise
+   * healthy application release.
+   */
+  async deploymentHealth() {
+    const workers = await this.prisma.workerHeartbeat.findMany({
+      where: { worker: { in: ["workflow-worker", "ocr-worker"] } },
+      orderBy: { worker: "asc" },
+    });
+    const now = Date.now();
+    const expectedBuild = process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA;
+    const requiredWorkers = ["workflow-worker", "ocr-worker"];
+    const activeWorkers = workers.filter(
+      (worker) =>
+        now - worker.lastSeenAt.getTime() <= 120_000 &&
+        (!expectedBuild || worker.buildVersion === expectedBuild),
+    );
+    const missingWorkers = requiredWorkers.filter(
+      (name) => !activeWorkers.some((worker) => worker.worker === name),
+    );
+
+    return {
+      status: missingWorkers.length === 0 ? "healthy" : "degraded",
+      expectedBuild: expectedBuild ?? null,
+      missingWorkers,
+      workers: workers.map((worker) => ({
+        worker: worker.worker,
+        buildVersion: worker.buildVersion,
+        status: worker.status,
+        lastSeenAt: worker.lastSeenAt,
+        healthy: now - worker.lastSeenAt.getTime() <= 120_000,
+        compatible: !expectedBuild || worker.buildVersion === expectedBuild,
+      })),
     };
   }
 

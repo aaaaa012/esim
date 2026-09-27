@@ -140,7 +140,7 @@ Do not claim sandbox or live-provider certification until the corresponding cred
 
 - **Error contract** — every API error returns a stable machine-readable `error.code` and a customer-safe `message` (`packages/shared/src/errors.ts`). Internal detail (provider responses, stack traces) is logged server-side with the correlation ID and never sent to clients.
 - **Request logging** — every request is logged with method, path, status, duration, correlation ID and a masked actor.
-- **Rate limiting** — per-IP + route limits with `x-ratelimit-limit` / `x-ratelimit-remaining` headers; webhook endpoints are exempt. Tune via `RATE_LIMIT_PER_MINUTE` and `AUTH_RATE_LIMIT_PER_MINUTE`.
+- **Rate limiting** — per-IP + route limits with `x-ratelimit-limit` / `x-ratelimit-remaining` headers; webhook endpoints are exempt. Public authentication uses `AUTH_RATE_LIMIT_PER_MINUTE`, while authenticated `/auth/me` checks use a verified-user limit plus a higher pre-authentication IP ceiling (`AUTH_ME_RATE_LIMIT_PER_MINUTE` and `AUTH_ME_IP_RATE_LIMIT_PER_MINUTE`).
 - **Usage reconciliation** — active Transatel subscriptions are polled for fresh usage balances on the `reconciliation` queue (`RECONCILIATION_INTERVAL_MINUTES`, default 15).
 - **Health** — `/health/ready` reports real database and queue state.
 - **Provider audit trail** — every outbound Transatel call (token, provisioning, usage, catalog, eligibility, webhooks) is persisted to `IntegrationLog` with HTTP status, duration, and the provider's raw error text; ops can query `GET /operations/integration-logs`. Inbound webhooks are stored in `WebhookEvent` with signature validity and processing errors.

@@ -1,7 +1,11 @@
 "use client";
 import { useAuthenticatedFetch } from "../../../authenticated-api-provider";
 import ErrorModal from "../../../../components/error-modal";
-import { useEffect, useState } from "react";
+import {
+  formatDataMb,
+  formatPlanDataText,
+} from "../../../../lib/format-data";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -15,6 +19,9 @@ import {
   Upload,
 } from "lucide-react";
 import "./recovery.css";
+import { createDocumentUploader } from "../../../esim/checkout/document-upload";
+import { useDocumentRefresh } from "../../../esim/checkout/use-document-refresh";
+import { replacementReasonsFromTimeline } from "../../../esim/checkout/document-recovery";
 import {
   apiErrorMessage,
   documentStatusLabel,
@@ -24,21 +31,13 @@ import {
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
-type DocumentAuthorization = {
-  id: string;
-  upload: {
-    mode: string;
-    endpoint?: string;
-    method?: "PUT";
-    headers?: Record<string, string>;
-  };
-};
 type Order = {
   id: string;
   orderNumber: string;
   status: string;
   totalAmountNpr: number;
   createdAt: string;
+  purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   plan: {
     name: string;
     countryCode: string;
@@ -63,92 +62,125 @@ export default function EsimDetails({ id }: { id: string }) {
   const [replacements, setReplacements] = useState<
     Record<string, File | undefined>
   >({});
-  const load = () =>
-    authFetch(`${API}/customer/orders/${id}`, { headers }).then(
-      async (response) => {
-        const value = await response.json();
-        if (!response.ok)
-          throw new Error(
-            apiErrorMessage(
-              value.error?.code ?? "",
-              value.error?.message ?? "Something went wrong",
-            ),
-          );
-        setOrder(value.data);
-      },
-    );
+  const [loadError, setLoadError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const [paymentCheckedAt, setPaymentCheckedAt] = useState<Date | null>(null);
+  const [paymentResult, setPaymentResult] = useState<{
+    title: string;
+    message: string;
+    tone: "success" | "info";
+  } | null>(null);
+  const load = useCallback(
+    (isCurrent: () => boolean = () => true) =>
+      authFetch(`${API}/customer/orders/${id}`, { headers }).then(
+        async (response) => {
+          const value = await response.json();
+          if (!response.ok)
+            throw new Error(
+              apiErrorMessage(
+                value.error?.code ?? "",
+                "This eSIM could not be loaded.",
+              ),
+            );
+          if (!isCurrent()) return;
+          if (value.data.purchaseType === "TOPUP") {
+            window.location.replace(
+              `/esim/checkout?order=${encodeURIComponent(id)}&recharge=1`,
+            );
+            return;
+          }
+          setOrder(value.data);
+          setLoadError("");
+        },
+      ),
+    [authFetch, id],
+  );
   useEffect(() => {
-    void load().catch((cause) => setError(cause.message));
-  }, [id]);
+    let cancelled = false;
+    setOrder(null);
+    setLoadError("");
+    void load(() => !cancelled).catch(() => {
+      if (!cancelled)
+        setLoadError(
+          "This order could not be loaded. Check your connection and try again.",
+        );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, attempt]);
+  useDocumentRefresh(
+    Boolean(order) &&
+      !busy &&
+      ([
+        "PAYMENT_PENDING",
+        "PAYMENT_CONFIRMED",
+        "REVIEW_PENDING",
+        "APPROVED",
+        "PROVISIONING",
+      ].includes(order?.status ?? "") ||
+        ["OCR_PENDING", "OCR_BACKGROUND", "MANUAL_REVIEW"].includes(
+          order?.documentReviewStatus ?? "",
+        )),
+    async (isCurrent) => {
+      await load(isCurrent);
+    },
+    () =>
+      setLoadError(
+        "Connection interrupted. Your order is saved. We’ll keep trying to refresh its status.",
+      ),
+    order?.documentReviewStatus === "MANUAL_REVIEW",
+  );
+  const uploadDocument = useRef(createDocumentUploader());
   const uploadReplacement = async (document: { id: string; type: string }) => {
     const file = replacements[document.id];
-    if (!file) return setError("Choose a replacement file first");
+    if (!file || busy) return;
     if (file.size > 10 * 1024 * 1024)
       return setError("Document exceeds the 10 MB limit");
+    if (
+      !["application/pdf", "image/jpeg", "image/png"].includes(
+        file.type || "application/pdf",
+      )
+    )
+      return setError("Choose a PDF, JPG or PNG document");
     setBusy(document.id);
     setError("");
     try {
-      const authorizationResponse = await authFetch(
-        `${API}/customer/orders/${id}/documents`,
-        {
-          method: "POST",
-          headers: {
-            ...headers,
-            "content-type": "application/json",
-            "x-idempotency-key": crypto.randomUUID(),
-          },
-          body: JSON.stringify({
-            type: document.type,
-            fileName: file.name,
-            contentType: file.type || "application/pdf",
-          }),
+      await uploadDocument.current({
+        type: document.type,
+        file,
+        basePath: `${API}/customer/orders/${id}/documents`,
+        progress: setNotice,
+        request: async <T,>(path: string, init?: RequestInit): Promise<T> => {
+          const response = await authFetch(path, {
+            ...init,
+            headers: {
+              "content-type": "application/json",
+              "x-idempotency-key": crypto.randomUUID(),
+            },
+          });
+          const value = await response.json();
+          if (!response.ok)
+            throw new Error(
+              apiErrorMessage(
+                value.error?.code ?? "",
+                "Your document could not be saved. Please retry.",
+              ),
+            );
+          return value.data;
         },
-      );
-      const authorizationValue = await authorizationResponse.json();
-      if (!authorizationResponse.ok)
-        throw new Error(
-          apiErrorMessage(
-            authorizationValue.error?.code ?? "",
-            authorizationValue.error?.message ?? "Something went wrong",
-          ),
-        );
-      const authorization = authorizationValue.data as DocumentAuthorization;
-      if (
-        authorization.upload.mode !== "s3-presigned" ||
-        !authorization.upload.endpoint
-      )
-        throw new Error("Private document storage is unavailable");
-      const uploaded = await fetch(authorization.upload.endpoint, {
-        method: authorization.upload.method ?? "PUT",
-        ...(authorization.upload.headers
-          ? { headers: authorization.upload.headers }
-          : {}),
-        body: file,
       });
-      if (!uploaded.ok) throw new Error("Replacement upload failed");
-      const confirmation = await authFetch(
-        `${API}/customer/orders/${id}/documents/${authorization.id}/confirm`,
-        {
-          method: "POST",
-          headers: {
-            ...headers,
-            "content-type": "application/json",
-            "x-idempotency-key": crypto.randomUUID(),
-          },
-          body: "{}",
-        },
+      setReplacements((current) => {
+        const next = { ...current };
+        delete next[document.id];
+        return next;
+      });
+      setNotice(
+        "Replacement securely saved. If another document is marked, upload it too. Review restarts when all requested files are received.",
       );
-      const confirmationValue = await confirmation.json();
-      if (!confirmation.ok)
-        throw new Error(
-          apiErrorMessage(
-            confirmationValue.error?.code ?? "",
-            confirmationValue.error?.message ?? "Something went wrong",
-          ),
-        );
-      setReplacements({});
       await load();
     } catch (cause) {
+      setNotice("");
       setError(
         cause instanceof Error ? cause.message : "Replacement upload failed",
       );
@@ -178,7 +210,7 @@ export default function EsimDetails({ id }: { id: string }) {
         throw new Error(
           apiErrorMessage(
             value.error?.code ?? "",
-            value.error?.message ?? "Something went wrong",
+            "This eSIM request could not be completed.",
           ),
         );
       setNotice(
@@ -222,15 +254,90 @@ export default function EsimDetails({ id }: { id: string }) {
       setBusy("");
     }
   };
-  if (error && !order)
+  const checkPaymentStatus = async () => {
+    if (!order?.payment?.reference || busy) return;
+    setBusy("payment-status");
+    setError("");
+    try {
+      const response = await authFetch(
+        `${API}/customer/orders/${id}/payment/verify`,
+        {
+          method: "POST",
+          headers: {
+            ...headers,
+            "content-type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({ reference: order.payment.reference }),
+        },
+      );
+      const value = await response.json();
+      if (!response.ok) {
+        await load();
+        throw new Error(
+          apiErrorMessage(
+            value.error?.code ?? "",
+            "We could not confirm the payment status. Please try again shortly.",
+          ),
+        );
+      }
+      setOrder(value.data);
+      setPaymentCheckedAt(new Date());
+      const confirmed = [
+        "PAYMENT_CONFIRMED",
+        "APPROVED",
+        "PROVISIONING",
+        "QR_READY",
+        "COMPLETED",
+      ].includes(value.data.status);
+      setPaymentResult(
+        confirmed
+          ? {
+              title: "Payment confirmed",
+              message:
+                "Your payment has been confirmed. The latest order status is now shown on this page.",
+              tone: "success",
+            }
+          : {
+              title: "Payment confirmation pending",
+              message:
+                "The payment provider has not confirmed this transaction yet. Your order remains safe; check again after completing payment in your banking app or wallet.",
+              tone: "info",
+            },
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "We could not confirm the payment status. Please try again shortly.",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+  if (loadError && !order)
     return (
       <main className="section">
-        <ErrorModal error={error} onClose={() => setError("")} />
+        <div className="account-empty" role="alert">
+          <h1>We could not load this order</h1>
+          <p>{loadError}</p>
+          <div className="form-actions">
+            <button
+              className="button"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              Try again
+            </button>
+            <Link className="button secondary" href="/account/orders">
+              View orders
+            </Link>
+          </div>
+        </div>
       </main>
     );
   if (!order)
     return (
-      <main className="account-loading">
+      <main className="account-loading" role="status">
         <LoaderCircle className="spin" />
         Loading secure order…
       </main>
@@ -243,12 +350,16 @@ export default function EsimDetails({ id }: { id: string }) {
   const needsReupload = order.documents.some(
     (document) => document.status === "REUPLOAD_REQUIRED",
   );
-  const documentReviewPending = ["MANUAL_REVIEW", "OCR_BACKGROUND"].includes(
-    order.documentReviewStatus ?? "",
+  const replacementReasons = replacementReasonsFromTimeline(order.timeline);
+  const requestedDocuments = order.documents.filter(
+    (document) => document.status === "REUPLOAD_REQUIRED",
   );
-  const resumeLabel = paymentPending
-    ? "Check payment status"
-    : order.status === "PAYMENT_FAILED"
+  const documentReviewPending = [
+    "OCR_PENDING",
+    "MANUAL_REVIEW",
+    "OCR_BACKGROUND",
+  ].includes(order.documentReviewStatus ?? "");
+  const resumeLabel = order.status === "PAYMENT_FAILED"
       ? "Retry payment"
       : "Resume checkout";
   return (
@@ -263,7 +374,7 @@ export default function EsimDetails({ id }: { id: string }) {
             <span className={`status-chip ${order.status.toLowerCase()}`}>
               {orderStatusLabel(order.status)}
             </span>
-            <h1>{order.plan.name}</h1>
+            <h1>{formatPlanDataText(order.plan.name)}</h1>
             <p>
               {order.orderNumber} · Created{" "}
               {new Date(order.createdAt).toLocaleDateString()}
@@ -274,20 +385,58 @@ export default function EsimDetails({ id }: { id: string }) {
             <b>NPR {order.totalAmountNpr.toLocaleString()}</b>
           </div>
         </div>
+        {loadError && (
+          <div className="qr-notice" role="status">
+            {loadError}
+          </div>
+        )}
         {error && <ErrorModal error={error} onClose={() => setError("")} />}
-        {notice && <div className="qr-notice ok">{notice}</div>}
-        {resumable && (
+        {paymentResult && (
+          <ErrorModal
+            error={paymentResult.message}
+            title={paymentResult.title}
+            tone={paymentResult.tone}
+            onClose={() => setPaymentResult(null)}
+          />
+        )}
+        {notice && (
+          <div className="qr-notice ok" role="status">
+            {notice}
+          </div>
+        )}
+        {paymentPending ? (
+          <section className="customer-action-banner">
+            <Clock3 />
+            <span>
+              <b>Awaiting payment confirmation</b>
+              <small>
+                {paymentCheckedAt
+                  ? `Checked at ${paymentCheckedAt.toLocaleTimeString()}. The payment has not been confirmed yet.`
+                  : "Completed the payment in your banking app or wallet? Check its latest status here."}
+              </small>
+            </span>
+            <button
+              className="button"
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => void checkPaymentStatus()}
+            >
+              {busy === "payment-status" ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : (
+                <CheckCircle2 size={17} />
+              )}
+              {busy === "payment-status" ? "Checking status" : "Check status"}
+            </button>
+          </section>
+        ) : resumable && !needsReupload ? (
           <section className="customer-action-banner">
             <AlertCircle />
             <span>
-              <b>
-                {paymentPending
-                  ? "Confirm your payment"
-                  : "Complete your purchase"}
-              </b>
+              <b>Complete your purchase</b>
               <small>
-                {paymentPending
-                  ? "Your payment returned to us but is still being confirmed. We re-check it automatically."
+                {order.status === "PAYMENT_FAILED"
+                  ? "The previous payment did not complete. Return to checkout to choose a payment method and try again."
                   : "Your saved traveller and document information will be restored."}
               </small>
             </span>
@@ -295,29 +444,32 @@ export default function EsimDetails({ id }: { id: string }) {
               {resumeLabel}
             </Link>
           </section>
-        )}
+        ) : null}
         {needsReupload && (
-          <section className="customer-action-banner warning">
+          <section className="customer-action-banner warning" role="alert">
             <Upload />
             <span>
-              <b>Replacement document required</b>
+              <b>{requestedDocuments.length === 1 ? `${documentTypeLabel(requestedDocuments[0]!.type)} needs a new upload` : "Documents need new uploads"}</b>
               <small>
-                {[...order.timeline]
-                  .reverse()
-                  .find((event) => event.to === "AWAITING_CUSTOMER")?.reason ??
-                  "Upload the requested document to submit the order again."}
+                Our review team requested {requestedDocuments.length === 1 ? "a replacement" : "replacements"}. See the reason beside each marked document below. Your other files remain saved; review resumes after the requested uploads are complete.
               </small>
             </span>
+            <a className="button" href="#replacement-documents">Upload requested files</a>
           </section>
         )}
         {documentReviewPending && !needsReupload && (
           <section className="customer-action-banner">
             <Clock3 />
             <span>
-              <b>Your documents are being reviewed separately</b>
+              <b>
+                {order.documentReviewStatus === "MANUAL_REVIEW"
+                  ? "Documents awaiting review"
+                  : "Checking your documents"}
+              </b>
               <small>
-                Your payment and eSIM activation continue normally. Our team
-                will contact you only if another document is required.
+                {order.payment?.status === "COMPLETED"
+                  ? "Your payment has been received. Document review updates will appear here automatically."
+                  : "Your documents are saved. Payment becomes available after verification succeeds. This page updates automatically."}
               </small>
             </span>
           </section>
@@ -343,14 +495,14 @@ export default function EsimDetails({ id }: { id: string }) {
                       <b>{orderStatusLabel(event.to)}</b>
                       <small>
                         {new Date(event.at).toLocaleString()}
-                        {event.reason ? ` · ${event.reason}` : ""}
+                        {event.reason ? ` · ${event.reason.replace(/\s+\(requested by [^)]+\)$/, "")}` : ""}
                       </small>
                     </span>
                   </div>
                 ))}
               </div>
             </section>
-            <section className="detail-card">
+            <section className="detail-card" id="replacement-documents">
               <h2>Documents</h2>
               {order.documents.map((document) => (
                 <div
@@ -363,8 +515,13 @@ export default function EsimDetails({ id }: { id: string }) {
                   <b>{documentStatusLabel(document.status)}</b>
                   {document.status === "REUPLOAD_REQUIRED" && (
                     <div className="replacement-control">
+                      {replacementReasons[document.type as "PASSPORT" | "TICKET"] && (
+                        <p className="replacement-review-reason"><b>Reason from our review team</b>{replacementReasons[document.type as "PASSPORT" | "TICKET"]}</p>
+                      )}
                       <input
                         type="file"
+                        disabled={Boolean(busy)}
+                        aria-label={`Replace ${documentTypeLabel(document.type)}`}
                         accept="application/pdf,image/jpeg,image/png"
                         onChange={(event) =>
                           setReplacements((value) => ({
@@ -375,7 +532,7 @@ export default function EsimDetails({ id }: { id: string }) {
                       />
                       <button
                         className="button"
-                        disabled={busy === document.id}
+                        disabled={Boolean(busy) || !replacements[document.id]}
                         onClick={() => uploadReplacement(document)}
                       >
                         {busy === document.id ? (
@@ -395,13 +552,29 @@ export default function EsimDetails({ id }: { id: string }) {
             <span className="form-icon">
               <QrCode />
             </span>
-            <h2>{resumable ? "Purchase incomplete" : "eSIM activation"}</h2>
-            {resumable ? (
+            <h2>
+              {paymentPending
+                ? "What happens next"
+                : resumable
+                  ? "Purchase incomplete"
+                  : "eSIM activation"}
+            </h2>
+            {paymentPending ? (
               <>
                 <p>
-                  {paymentPending
-                    ? "We re-check the payment with your wallet automatically and will activate the eSIM as soon as it is confirmed."
-                    : "Continue checkout to submit traveller documents and complete payment."}
+                  Your eSIM will be prepared only after the payment provider
+                  confirms the transaction. You do not need to start another
+                  payment while this one is pending.
+                </p>
+                <div className="processing">
+                  <Clock3 size={18} /> Payment confirmation pending
+                </div>
+              </>
+            ) : resumable ? (
+              <>
+                <p>
+                  Continue checkout to finish the remaining details and
+                  payment.
                 </p>
                 <Link
                   className="button"
@@ -409,6 +582,18 @@ export default function EsimDetails({ id }: { id: string }) {
                 >
                   {resumeLabel}
                 </Link>
+              </>
+            ) : order.status === "QR_READY" &&
+              order.purchaseType === "TOPUP" ? (
+              <>
+                <p>
+                  This package has been added to your existing eSIM. You do not
+                  need to install or scan another QR code.
+                </p>
+                <div className="processing">
+                  <CheckCircle2 size={18} />
+                  Package added — waiting for first data use
+                </div>
               </>
             ) : order.status === "QR_READY" ? (
               <>
@@ -453,6 +638,17 @@ export default function EsimDetails({ id }: { id: string }) {
                       Download QR PDF
                     </button>
                   </div>
+                </div>
+              </>
+            ) : order.status === "COMPLETED" &&
+              order.purchaseType === "TOPUP" ? (
+              <>
+                <p>
+                  Your top-up is active on the existing eSIM. No new QR code or
+                  installation is required.
+                </p>
+                <div className="processing">
+                  <CheckCircle2 size={18} /> Top-up activated
                 </div>
               </>
             ) : order.status === "COMPLETED" ? (
@@ -516,16 +712,15 @@ export default function EsimDetails({ id }: { id: string }) {
                       />
                     </div>
                     <p>
-                      <b>{order.usage.usedMb.toLocaleString()} MB</b> of{" "}
-                      {order.usage.totalMb.toLocaleString()} MB used
+                      <b>{formatDataMb(order.usage.usedMb)}</b> of{" "}
+                      {formatDataMb(order.usage.totalMb)} used
                     </p>
                     <small>
                       Remaining:{" "}
-                      {Math.max(
+                      {formatDataMb(Math.max(
                         0,
                         order.usage.totalMb - order.usage.usedMb,
-                      ).toLocaleString()}{" "}
-                      MB · last checked{" "}
+                      ))} · last checked{" "}
                       {order.usage.lastCheckedAt
                         ? new Date(order.usage.lastCheckedAt).toLocaleString()
                         : "—"}
@@ -565,7 +760,7 @@ export default function EsimDetails({ id }: { id: string }) {
                     another plan without being charged.
                   </small>
                   <div className="qr-recovery-buttons">
-                    <Link className="button" href="/#plans">
+                    <Link className="button" href="/destinations">
                       Choose another plan
                     </Link>
                   </div>

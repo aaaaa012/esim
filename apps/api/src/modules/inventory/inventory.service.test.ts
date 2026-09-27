@@ -44,7 +44,346 @@ function connectivityStub() {
   return {} as unknown as ConnectivityService;
 }
 
+describe("InventoryService.assign", () => {
+  it("upserts the same customer eSIM and provider subscription on recovery retries", async () => {
+    const customerEsimUpsert = vi
+      .fn()
+      .mockResolvedValue({ id: "customer-esim-1" });
+    const subscriptionUpsert = vi.fn().mockResolvedValue({ id: "sub-row-1" });
+    const tx = {
+      esimInventory: { update: vi.fn().mockResolvedValue(undefined) },
+      customerEsim: { upsert: customerEsimUpsert },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({ id: "inventory-1" }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    const providerInfo = {
+      provider: "TRANSATEL",
+      providerSubscriptionId: "provider-sub-1",
+    };
+
+    await inventory.assign(
+      "order-1",
+      "customer-1",
+      "LPA:1$recovered",
+      providerInfo,
+    );
+    await inventory.assign(
+      "order-1",
+      "customer-1",
+      "LPA:1$recovered",
+      providerInfo,
+    );
+
+    expect(customerEsimUpsert).toHaveBeenCalledTimes(2);
+    expect(customerEsimUpsert).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ where: { orderId: "order-1" } }),
+    );
+    expect(subscriptionUpsert).toHaveBeenCalledTimes(2);
+    expect(subscriptionUpsert).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { providerSubscriptionId: "provider-sub-1" },
+      }),
+    );
+  });
+});
+
+describe("InventoryService.applyLifecycle", () => {
+  it("does not regress an existing subscription to PENDING for an old PRELOADED event", async () => {
+    const subscriptionUpsert = vi.fn().mockResolvedValue({ id: "sub-row-1" });
+    const tx = {
+      esimInventory: { update: vi.fn().mockResolvedValue(undefined) },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          providerSubscriptionId: "sub-1",
+          status: "ACTIVATED",
+        }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("order-1", {
+      provider: "TRANSATEL",
+      status: "PRELOADED",
+      subscriptionId: "sub-1",
+      iccid: "8988247076000000319",
+    });
+
+    expect(subscriptionUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.not.objectContaining({ status: expect.anything() }),
+        create: expect.objectContaining({ status: "PENDING" }),
+      }),
+    );
+  });
+
+  it("preserves an active subscription when a recurring product is canceled", async () => {
+    const subscriptionUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const subscriptionUpsert = vi.fn();
+    const tx = {
+      esimInventory: { update: vi.fn().mockResolvedValue(undefined) },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: {
+        updateMany: subscriptionUpdateMany,
+        upsert: subscriptionUpsert,
+      },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockImplementation(({ where }) =>
+          Promise.resolve(
+            where.assignedOrderId
+              ? {
+                  id: "inventory-1",
+                  iccid: "8988247076000000319",
+                  msisdn: "33612345678",
+                }
+              : {
+                  id: "inventory-1",
+                  iccid: "8988247076000000319",
+                  providerSubscriptionId: "sub-1",
+                  status: "ACTIVATED",
+                },
+          ),
+        ),
+      },
+      customerEsim: { findUnique: vi.fn() },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("order-1", {
+      provider: "TRANSATEL",
+      status: "CANCELED",
+      subscriptionId: "sub-1",
+      iccid: "8988247076000000319",
+      expiresAt: "2026-09-19T00:00:00Z",
+    });
+
+    expect(subscriptionUpdateMany).toHaveBeenCalledWith({
+      where: { providerSubscriptionId: "sub-1" },
+      data: {
+        providerLastSeenAt: expect.any(Date),
+        expiresAt: new Date("2026-09-19T00:00:00Z"),
+      },
+    });
+    expect(subscriptionUpsert).not.toHaveBeenCalled();
+  });
+
+  it("does not expire the whole eSIM inventory when one product expires", async () => {
+    const inventoryUpdate = vi.fn().mockResolvedValue(undefined);
+    const subscriptionUpsert = vi.fn().mockResolvedValue({ id: "sub-row-1" });
+    const tx = {
+      esimInventory: { update: inventoryUpdate },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          providerSubscriptionId: "sub-1",
+          status: "ACTIVATED",
+          providerStatus: "ACTIVE",
+        }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("order-1", {
+      provider: "TRANSATEL",
+      eventType: "OCS/PRODUCT/EXPIRED",
+      statusScope: "PRODUCT",
+      status: "EXPIRED",
+      subscriptionId: "sub-1",
+      iccid: "8988247076000000319",
+    });
+
+    const inventoryData = inventoryUpdate.mock.calls[0]?.[0]?.data;
+    expect(inventoryData).not.toHaveProperty("status");
+    expect(inventoryData).not.toHaveProperty("providerStatus");
+    expect(subscriptionUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ status: "EXPIRED" }),
+      }),
+    );
+  });
+
+  it("does not suspend a product row when the network subscriber is suspended", async () => {
+    const inventoryUpdate = vi.fn().mockResolvedValue(undefined);
+    const subscriptionUpsert = vi.fn();
+    const tx = {
+      esimInventory: { update: inventoryUpdate },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          providerSubscriptionId: "sub-1",
+          status: "ACTIVATED",
+        }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("order-1", {
+      provider: "TRANSATEL",
+      eventType: "CONNECTIVITY-MANAGEMENT/SUBSCRIBER/SUSPENDED",
+      statusScope: "SUBSCRIBER",
+      status: "SUSPENDED",
+      iccid: "8988247076000000319",
+    });
+
+    expect(inventoryUpdate).toHaveBeenCalledWith({
+      where: { id: "inventory-1" },
+      data: expect.objectContaining({ providerStatus: "SUSPENDED" }),
+    });
+    expect(subscriptionUpsert).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original inventory identity when a top-up product event arrives", async () => {
+    const inventoryUpdate = vi.fn().mockResolvedValue(undefined);
+    const subscriptionUpsert = vi.fn().mockResolvedValue({ id: "topup-row" });
+    const tx = {
+      esimInventory: { update: inventoryUpdate },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({ id: "customer-esim-1" }),
+      },
+      subscription: { upsert: subscriptionUpsert },
+    };
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "inventory-1",
+          iccid: "8988247076000000319",
+          assignedOrderId: "initial-order",
+          providerSubscriptionId: "initial-subscription",
+          status: "ACTIVATED",
+        }),
+      },
+      customerEsim: {
+        findUnique: vi.fn().mockResolvedValue({
+          inventory: { id: "inventory-1" },
+        }),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+
+    await inventory.applyLifecycle("topup-order", {
+      provider: "TRANSATEL",
+      eventType: "OCS/PRODUCT/ACTIVATED",
+      statusScope: "PRODUCT",
+      status: "ACTIVATED",
+      subscriptionId: "topup-subscription",
+      iccid: "8988247076000000319",
+      activatedAt: "2026-09-10T00:00:00Z",
+      expiresAt: "2026-09-17T00:00:00Z",
+    });
+
+    const inventoryData = inventoryUpdate.mock.calls[0]?.[0]?.data;
+    expect(inventoryData).not.toHaveProperty("providerSubscriptionId");
+    expect(inventoryData).not.toHaveProperty("activatedAt");
+    expect(inventoryData).not.toHaveProperty("expiresAt");
+    expect(subscriptionUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { providerSubscriptionId: "topup-subscription" },
+      }),
+    );
+  });
+});
+
 describe("InventoryService.importBatchCsv", () => {
+  it("rejects a row without an MSISDN", async () => {
+    const prisma = prismaStub();
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    const content = ["iccid,msisdn", "899770100000000001,"].join("\n");
+    const result = await inventory.importBatchCsv(content);
+    expect(result).toMatchObject({ imported: 0, skipped: 1 });
+    expect(result.errors?.[0]).toContain("MSISDN is required");
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid MSISDN and does not import that row", async () => {
     const prisma = prismaStub();
     const inventory = new InventoryService(
@@ -208,12 +547,14 @@ describe("InventoryService bulk reconciliation selection", () => {
                 { providerStatus: null },
                 {
                   providerStatus: {
-                    notIn: [
+                    notIn: expect.arrayContaining([
                       "available",
                       "allocated",
+                      "released",
                       "AVAILABLE",
                       "ALLOCATED",
-                    ],
+                      "RELEASED",
+                    ]),
                   },
                 },
               ],
@@ -334,7 +675,7 @@ describe("InventoryService.assertAvailableForNewOrder", () => {
     const count = vi.fn().mockResolvedValue(0);
     const prisma = {
       enabled: true,
-      esimInventory: { count },
+      esimInventory: { count, findFirst: vi.fn().mockResolvedValue(null) },
     } as unknown as PrismaService;
     const inventory = new InventoryService(
       prisma,
@@ -371,6 +712,74 @@ describe("InventoryService.assertAvailableForNewOrder", () => {
     await expect(
       inventory.assertAvailableForNewOrder(),
     ).resolves.toBeUndefined();
+  });
+
+  it("refreshes stale safe stock on demand before rejecting checkout", async () => {
+    const count = vi.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    const findFirst = vi.fn().mockResolvedValueOnce({ id: "stale-inv-1" });
+    const prisma = {
+      enabled: true,
+      esimInventory: { count, findFirst },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    const reconcile = vi
+      .spyOn(inventory, "reconcileProviderProfile")
+      .mockResolvedValue({
+        id: "stale-inv-1",
+        iccid: "8988247076000000319",
+        localStatus: "AVAILABLE",
+        providerStatus: "released",
+        inSync: true,
+        checkedAt: new Date().toISOString(),
+      });
+
+    await expect(
+      inventory.assertAvailableForNewOrder(),
+    ).resolves.toBeUndefined();
+    expect(reconcile).toHaveBeenCalledWith("stale-inv-1");
+    expect(count).toHaveBeenCalledTimes(2);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: "AVAILABLE",
+          assignedOrderId: null,
+          providerSubscriptionId: null,
+          providerStatus: {
+            in: expect.arrayContaining(["released", "RELEASED"]),
+          },
+        }),
+      }),
+    );
+  });
+
+  it("fails closed when stale stock cannot be freshly verified", async () => {
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "stale-inv-1" })
+      .mockResolvedValueOnce(null);
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        count: vi.fn().mockResolvedValue(0),
+        findFirst,
+      },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    vi.spyOn(inventory, "reconcileProviderProfile").mockRejectedValue(
+      new Error("provider unavailable"),
+    );
+
+    await expect(inventory.assertAvailableForNewOrder()).rejects.toThrow(
+      "No eSIM inventory is currently available",
+    );
   });
 });
 
@@ -700,6 +1109,49 @@ describe("InventoryService.reserve provider safety", () => {
     expect(
       results.filter((result) => result.status === "rejected"),
     ).toHaveLength(1);
+  });
+
+  it("rechecks stale safe stock before reserving it", async () => {
+    const candidate = {
+      id: "stale-inv-1",
+      iccid: "8988247000000000999",
+      eid: "eid-stale",
+      status: "AVAILABLE",
+      assignedOrderId: null,
+      providerStatus: "released",
+    };
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: candidate.id })
+      .mockResolvedValueOnce(candidate);
+    const prisma = {
+      enabled: true,
+      esimInventory: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst,
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    } as unknown as PrismaService;
+    const inventory = new InventoryService(
+      prisma,
+      cryptoStub(),
+      connectivityStub(),
+    );
+    vi.spyOn(inventory, "reconcileProviderProfile").mockResolvedValue({
+      id: candidate.id,
+      iccid: candidate.iccid,
+      localStatus: "AVAILABLE",
+      providerStatus: "released",
+      inSync: true,
+      checkedAt: new Date().toISOString(),
+    });
+
+    await expect(inventory.reserve("order-1")).resolves.toMatchObject({
+      id: candidate.id,
+      status: "RESERVED",
+      assignedOrderId: "order-1",
+    });
   });
 });
 

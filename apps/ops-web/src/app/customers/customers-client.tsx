@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Download } from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/panel";
@@ -41,6 +42,7 @@ type Customer = {
   spendNpr: number;
   remainingMb?: number | null;
   usageLastCheckedAt?: string | null;
+  usagePartial?: boolean;
   lastOrderAt?: string | null;
 };
 
@@ -123,7 +125,7 @@ export default function CustomersClient() {
           className="w-full sm:w-72"
         />
         <Select value={searchBy} onValueChange={setSearchBy}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger aria-label="Search customers by" className="w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -135,7 +137,10 @@ export default function CustomersClient() {
           </SelectContent>
         </Select>
         <Select value={orderStatus} onValueChange={setOrderStatus}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger
+            aria-label="Filter customers by order status"
+            className="w-44"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -148,7 +153,10 @@ export default function CustomersClient() {
           </SelectContent>
         </Select>
         <Select value={esimStatus} onValueChange={setEsimStatus}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger
+            aria-label="Filter customers by eSIM status"
+            className="w-44"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -164,6 +172,46 @@ export default function CustomersClient() {
       <Panel
         title="Customer directory"
         description={`${total} customers`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={loading || !items.length}
+            onClick={() =>
+              downloadCsv(
+                `customers-page-${page}-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Customer code",
+                  "Name",
+                  "Email",
+                  "Phone",
+                  "Orders",
+                  "Completed eSIMs",
+                  "Active eSIMs",
+                  "Confirmed remaining MB",
+                  "Usage checked at",
+                  "Total spent NPR",
+                  "Last order",
+                ],
+                items.map((customer) => [
+                  customer.customerCode,
+                  customer.name,
+                  customer.email,
+                  customer.phone,
+                  customer.orders,
+                  customer.completedEsims,
+                  customer.activeEsims,
+                  customer.remainingMb,
+                  customer.usageLastCheckedAt,
+                  customer.spendNpr,
+                  customer.lastOrderAt,
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" /> Export visible rows
+          </Button>
+        }
         noPadding
       >
         {loading ? (
@@ -178,7 +226,7 @@ export default function CustomersClient() {
                 <TableHead>Contact</TableHead>
                 <TableHead>Orders</TableHead>
                 <TableHead>Active eSIMs</TableHead>
-                <TableHead>Remaining data</TableHead>
+                <TableHead>Confirmed available data</TableHead>
                 <TableHead>Total spent</TableHead>
                 <TableHead>Last order</TableHead>
                 <TableHead className="sticky right-0 bg-card text-right">
@@ -188,7 +236,9 @@ export default function CustomersClient() {
             </TableHeader>
             <TableBody>
               {items.map((c, index) => (
-                <TableRow key={`${c.ownerId}-${c.customerCode ?? c.email}-${index}`}>
+                <TableRow
+                  key={`${c.ownerId}-${c.customerCode ?? c.email}-${index}`}
+                >
                   <TableCell>
                     <p className="font-medium">{c.name}</p>
                     <p className="text-xs text-muted-foreground">
@@ -213,6 +263,7 @@ export default function CustomersClient() {
                       ? "Not checked yet"
                       : `${c.remainingMb.toLocaleString()} MB`}
                     <p className="text-xs text-muted-foreground">
+                      {c.usagePartial ? "Partial provider data · " : ""}
                       {c.usageLastCheckedAt
                         ? new Date(c.usageLastCheckedAt).toLocaleString()
                         : "—"}
@@ -226,7 +277,7 @@ export default function CustomersClient() {
                   </TableCell>
                   <TableCell className="sticky right-0 bg-card text-right">
                     <Button asChild size="sm" variant="outline">
-                      <Link href={`/customers/${c.ownerId}`}>
+                      <Link href={`/customers/${c.ownerId}`} prefetch={false}>
                         Open <ArrowRight className="size-3.5" />
                       </Link>
                     </Button>

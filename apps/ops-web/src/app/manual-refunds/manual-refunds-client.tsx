@@ -1,7 +1,14 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ExternalLink, RefreshCcw, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  RefreshCcw,
+  XCircle,
+} from "lucide-react";
+import { downloadCsv } from "@/lib/csv";
 import { toast } from "sonner";
 import { useAuthenticatedFetch } from "../authenticated-api-provider";
 import { PageHeader } from "@/components/page-header";
@@ -10,6 +17,7 @@ import { StatusBadge, humane } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Dialog,
   DialogContent,
@@ -54,6 +62,7 @@ export type ManualRefund = {
   reviewNote?: string | null;
   createdAt: string;
   order: { orderNumber: string; status: string };
+  payment: { provider: "KHALTI" | "FONEPAY" };
   requestedBy: { email: string };
   reviewedBy?: { email: string } | null;
 };
@@ -67,6 +76,7 @@ const toLocalInput = (date: Date) => {
 
 export default function ManualRefundsClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const [items, setItems] = useState<ManualRefund[]>([]);
   const [status, setStatus] = useState("ACTIVE");
   const [busy, setBusy] = useState("");
@@ -152,7 +162,7 @@ export default function ManualRefundsClient() {
       void act(item, "reject", { note: note.trim() });
     } else {
       if (!providerReference.trim()) {
-        toast.error("Please add the Khalti payment reference.");
+        toast.error("Please add the payment provider's refund reference.");
         return;
       }
       void act(item, "complete", {
@@ -168,11 +178,14 @@ export default function ManualRefundsClient() {
     <>
       <PageHeader
         title="Manual refunds"
-        description="Rare refunds for company errors, processed in Khalti and recorded here."
+        description="Rare refunds for company errors, completed in the original payment provider and recorded here."
         actions={
           <div className="flex gap-2">
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-44">
+              <SelectTrigger
+                aria-label="Filter refunds by status"
+                className="w-44"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -205,7 +218,7 @@ export default function ManualRefundsClient() {
             </DialogTitle>
             <DialogDescription>
               {dialog?.action === "complete"
-                ? "Only confirm after you have completed the refund in Khalti. This records the refund as done."
+                ? `Only confirm after you have completed the refund in ${humane(dialog.item.payment.provider)}. This records the refund as done.`
                 : "The refund request will be declined. A note is required for the record."}
             </DialogDescription>
           </DialogHeader>
@@ -214,14 +227,14 @@ export default function ManualRefundsClient() {
               <>
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">
-                    Khalti payment reference
+                    {humane(dialog.item.payment.provider)} refund reference
                   </Label>
                   <Input
                     value={providerReference}
                     onChange={(event) =>
                       setProviderReference(event.target.value)
                     }
-                    placeholder="The reference Khalti shows for the refund"
+                    placeholder={`The reference ${humane(dialog.item.payment.provider)} shows for the refund`}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -270,7 +283,48 @@ export default function ManualRefundsClient() {
       </Dialog>
       <Panel
         title="Refund register"
-        description="Submitting or approving never sends money. Complete the refund in Khalti before confirming it here."
+        description="Submitting or approving never sends money. Complete the refund in the original payment provider before confirming it here."
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!items.length}
+            onClick={() =>
+              downloadCsv(
+                `manual-refunds-${status.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`,
+                [
+                  "Created",
+                  "Order",
+                  "Provider",
+                  "Reason",
+                  "Explanation",
+                  "Amount NPR",
+                  "Status",
+                  "Requested by",
+                  "Reviewed by",
+                  "Provider reference",
+                  "Review note",
+                ],
+                items.map((item) => [
+                  item.createdAt,
+                  item.order.orderNumber,
+                  item.payment.provider,
+                  item.reason,
+                  item.explanation,
+                  item.amount,
+                  item.status,
+                  item.requestedBy.email,
+                  item.reviewedBy?.email,
+                  item.providerReference,
+                  item.reviewNote,
+                ]),
+              )
+            }
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        }
         noPadding
       >
         <Table>
@@ -318,11 +372,13 @@ export default function ManualRefundsClient() {
                           size="sm"
                           variant="success"
                           disabled={!!busy}
-                          onClick={() => {
+                          onClick={async () => {
                             if (
-                              window.confirm(
-                                "Approve this manual refund for completion in Khalti?",
-                              )
+                              await confirm({
+                                title: "Approve manual refund?",
+                                description: `This authorizes the refund for completion in ${humane(item.payment.provider)}. The payment is not marked complete until the provider reference is recorded.`,
+                                confirmLabel: "Approve refund",
+                              })
                             )
                               void act(item, "approve");
                           }}

@@ -1,4 +1,5 @@
 import HostedCheckoutClient from "./hosted-checkout-client";
+import AuthenticatedApiProvider from "../../authenticated-api-provider";
 
 export default async function PartnerCheckoutPage({
   params,
@@ -6,5 +7,9 @@ export default async function PartnerCheckoutPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  return <HostedCheckoutClient token={token} />;
+  return (
+    <AuthenticatedApiProvider>
+      <HostedCheckoutClient token={token} />
+    </AuthenticatedApiProvider>
+  );
 }

@@ -11,6 +11,15 @@ export class PaymentSimulatorGateway implements PaymentGateway {
     string,
     { orderId: string; amountNpr: number; status: PaymentStatus }
   >();
+  capabilities() {
+    return {
+      checkout: "QR" as const,
+      statusLookup: true,
+      refunds: "SUPPORTED" as const,
+      disputes: "NOT_SUPPORTED" as const,
+      extra: [],
+    };
+  }
   async initiate(input: {
     orderId: string;
     orderNumber: string;

@@ -8,6 +8,7 @@ import { PrismaService } from "./infrastructure/prisma.service.js";
 import { validateEnv } from "./infrastructure/env-validation.js";
 import { PassportVerificationService } from "./modules/orders/passport-verification.service.js";
 import { ProductionResilienceService } from "./jobs/production-resilience.service.js";
+import { MetricsService } from "./observability/metrics.service.js";
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ProductionResilienceService } from "./jobs/production-resilience.servic
     PassportVerificationService,
     PassportOcrProcessor,
     ProductionResilienceService,
+    MetricsService,
   ],
 })
 export class OcrWorkerModule {}

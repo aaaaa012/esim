@@ -34,6 +34,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 const headers = {};
@@ -46,7 +53,67 @@ type Log = {
   durationMs?: number;
   errorCode?: string;
   errorMessage?: string;
+  correlationId?: string;
+  requestBody?: unknown;
+  responseBody?: unknown;
   createdAt: string;
+};
+
+type LogContext = {
+  caller: string;
+  order?: string;
+  job?: string;
+};
+
+const objectValue = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+const findLogValue = (
+  value: unknown,
+  keys: string[],
+  depth = 0,
+): string | undefined => {
+  if (depth > 5) return undefined;
+  const record = objectValue(value);
+  if (!record) return undefined;
+  for (const key of keys) {
+    const found = record[key];
+    if (["string", "number"].includes(typeof found)) return String(found);
+  }
+  for (const child of Object.values(record)) {
+    const found = findLogValue(child, keys, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+};
+
+const logContext = (log: Log): LogContext => {
+  const partnerCode = findLogValue(log.requestBody, ["partnerCode"]);
+  const order = findLogValue(log.requestBody, [
+    "orderNumber",
+    "orderId",
+    "orderReference",
+    "merchantTxnId",
+    "purchase_order_id",
+  ]);
+  const job = findLogValue(log.requestBody, ["jobName", "jobId", "queue"]);
+  const operation = log.operation.toLowerCase();
+  const caller = partnerCode
+    ? `Partner API · ${partnerCode}`
+    : operation === "partner-api"
+      ? "Partner API"
+      : operation.startsWith("customer-")
+        ? "Customer web"
+        : job
+          ? `Background job · ${job}`
+          : "Visa Compass backend";
+  return {
+    caller,
+    ...(order ? { order } : {}),
+    ...(job ? { job } : {}),
+  };
 };
 
 const OK = (status: number) => status >= 200 && status < 400;
@@ -58,6 +125,9 @@ export default function IntegrationLogsClient() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [operation, setOperation] = useState("ALL");
+  const [query, setQuery] = useState("");
+  const [oldestFirst, setOldestFirst] = useState(false);
+  const [selected, setSelected] = useState<Log | null>(null);
 
   const load = (refreshOnly = false) => {
     if (refreshOnly) setRefreshing(true);
@@ -84,10 +154,32 @@ export default function IntegrationLogsClient() {
     () => Array.from(new Set(items.map((item) => item.operation))).sort(),
     [items],
   );
-  const visible =
-    operation === "ALL"
-      ? items
-      : items.filter((item) => item.operation === operation);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visible = items
+    .filter((item) => {
+      const context = logContext(item);
+      return (
+        (operation === "ALL" || item.operation === operation) &&
+        (!normalizedQuery ||
+          [
+            item.correlationId,
+            item.operation,
+            item.method,
+            item.endpoint,
+            item.errorCode,
+            item.errorMessage,
+            context.caller,
+            context.order,
+            context.job,
+          ].some((value) => value?.toLowerCase().includes(normalizedQuery)))
+      );
+    })
+    .sort((left, right) => {
+      const difference =
+        new Date(left.createdAt).getTime() -
+        new Date(right.createdAt).getTime();
+      return oldestFirst ? difference : -difference;
+    });
   const stats = useMemo(() => {
     const ok = items.filter((item) => OK(item.status)).length;
     return { total: items.length, ok, failed: items.length - ok };
@@ -100,6 +192,7 @@ export default function IntegrationLogsClient() {
         log.method,
         log.endpoint,
         `=> ${log.status}`,
+        log.correlationId ? `correlation=${log.correlationId}` : "",
         log.durationMs != null ? `(${log.durationMs}ms)` : "( - ms)",
         log.errorMessage ?? log.errorCode ?? "",
       ]
@@ -128,6 +221,54 @@ export default function IntegrationLogsClient() {
   return (
     <>
       <ErrorDialog error={error} onClose={() => setError("")} />
+      <Dialog
+        open={Boolean(selected)}
+        onOpenChange={(open) => !open && setSelected(null)}
+      >
+        <DialogContent className="max-h-[90dvh] w-[min(94vw,760px)] max-w-none overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Technical request details</DialogTitle>
+            <DialogDescription>
+              Redacted request and response data for technical troubleshooting.
+              Customer-facing screens never display this content.
+            </DialogDescription>
+          </DialogHeader>
+          {selected ? (
+            <div className="grid min-w-0 gap-4 text-sm">
+              <div className="grid gap-2 rounded-lg bg-muted/50 p-3 sm:grid-cols-2">
+                <span>
+                  <b>Request:</b> {selected.method} {selected.endpoint}
+                </span>
+                <span>
+                  <b>Result:</b> HTTP {selected.status} ·{" "}
+                  {selected.durationMs ?? "—"} ms
+                </span>
+                <span>
+                  <b>Caller:</b> {logContext(selected).caller}
+                </span>
+                <span>
+                  <b>Order:</b> {logContext(selected).order ?? "Not recorded"}
+                </span>
+                <span className="min-w-0 break-all sm:col-span-2">
+                  <b>Correlation:</b> {selected.correlationId ?? "Not recorded"}
+                </span>
+              </div>
+              <section className="min-w-0">
+                <h3 className="mb-2 font-semibold">Redacted request</h3>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
+                  {JSON.stringify(selected.requestBody ?? null, null, 2)}
+                </pre>
+              </section>
+              <section className="min-w-0">
+                <h3 className="mb-2 font-semibold">Redacted response</h3>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
+                  {JSON.stringify(selected.responseBody ?? null, null, 2)}
+                </pre>
+              </section>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow-card">
           <span className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -168,6 +309,13 @@ export default function IntegrationLogsClient() {
         description={`The most recent 200 requests`}
         actions={
           <>
+            <input
+              className="h-9 w-64 rounded-md border bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Order, reference, endpoint or error"
+              aria-label="Search integration logs"
+            />
             <div className="w-52">
               <Select value={operation} onValueChange={setOperation}>
                 <SelectTrigger className="h-9">
@@ -183,6 +331,14 @@ export default function IntegrationLogsClient() {
                 </SelectContent>
               </Select>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setOldestFirst((current) => !current)}
+              title="Change the chronological order of the displayed calls"
+            >
+              {oldestFirst ? "Oldest first" : "Newest first"}
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -222,10 +378,13 @@ export default function IntegrationLogsClient() {
               <TableRow>
                 <TableHead>Time</TableHead>
                 <TableHead>Operation</TableHead>
+                <TableHead>Caller / order</TableHead>
+                <TableHead>Correlation trace</TableHead>
                 <TableHead>Request</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Duration</TableHead>
                 <TableHead>Error</TableHead>
+                <TableHead className="text-right">Details</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -246,6 +405,19 @@ export default function IntegrationLogsClient() {
                       )}
                       {log.operation}
                     </span>
+                  </TableCell>
+                  <TableCell className="max-w-[190px] text-xs">
+                    <span className="font-medium">
+                      {logContext(log).caller}
+                    </span>
+                    {logContext(log).order ? (
+                      <span className="mt-1 block break-all font-mono text-muted-foreground">
+                        {logContext(log).order}
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="max-w-[180px] break-all font-mono text-xs text-muted-foreground">
+                    {log.correlationId ?? "—"}
                   </TableCell>
                   <TableCell>
                     <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold">
@@ -280,6 +452,15 @@ export default function IntegrationLogsClient() {
                     ) : (
                       <History className="size-4 text-muted-foreground/50" />
                     )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setSelected(log)}
+                    >
+                      View details
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}

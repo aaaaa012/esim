@@ -6,14 +6,19 @@ APP_DIR="/home/ec2-user/visaCompass/esim2.2"
 BRANCH="with-fonepay"
 REPOSITORY="git@github.com:samirextra369/esim2.2.git"
 LOCK_FILE="/tmp/visacompass-production-deploy.lock"
+DEPLOYED_SHA_FILE="$APP_DIR/.visa-compass-deployed-sha"
 READY_URL="http://127.0.0.1:4000/api/v1/health/ready"
+DEPLOYMENT_URL="http://127.0.0.1:4000/api/v1/health/deployment"
 CUSTOMER_URL="http://127.0.0.1:3000/"
 OPS_URL="http://127.0.0.1:3001/"
+DEPLOY_ENV_FILE="/etc/visa-compass/deploy.env"
+WORKFLOW_UNIT_SOURCE="$APP_DIR/deploy/systemd/visacompass-workflow-worker.service"
 RUN_TESTS="${RUN_TESTS:-0}"
 DEPLOY_SHA="${DEPLOY_SHA:-}"
 
 SERVICES=(
   visacompass-api.service
+  visacompass-workflow-worker.service
   visacompass-ocr-worker.service
   visacompass-customer.service
   visacompass-ops.service
@@ -24,6 +29,7 @@ target_sha=""
 deployment_started=0
 runtime_changed=0
 rollback_started=0
+last_deployed_sha=""
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -78,26 +84,93 @@ build_release() {
     run_with_app_env pnpm test
   fi
 
-  log "Building all production applications"
-  run_with_app_env pnpm build
+  # Two concurrent Next.js production builds can exhaust a small EC2 host and
+  # appear hung until the outer Actions timeout kills SSH. Build deterministically
+  # and sequentially; CI has already tested the same commit in parallel.
+  log "Building shared package"
+  run_with_app_env pnpm --filter @visa-compass/shared build
+  log "Building API"
+  run_with_app_env pnpm --filter @visa-compass/api build
+  log "Building customer web"
+  run_with_app_env pnpm --filter @visa-compass/customer-web build
+  log "Building Ops web"
+  run_with_app_env pnpm --filter @visa-compass/ops-web build
+}
+
+record_deployed_sha() {
+  local sha="$1"
+  local temporary="${DEPLOYED_SHA_FILE}.tmp"
+  printf '%s\n' "$sha" > "$temporary"
+  mv -f "$temporary" "$DEPLOYED_SHA_FILE"
+}
+
+restore_known_generated_files() {
+  local generated_file="apps/customer-web/next-env.d.ts"
+  local committed_contents
+  local production_contents
+  local working_contents
+
+  git diff --quiet -- "$generated_file" && return 0
+  git diff --cached --quiet -- "$generated_file" || return 0
+  [[ -f "$generated_file" ]] || return 0
+
+  committed_contents="$(git show "HEAD:$generated_file")" || return 0
+  production_contents="${committed_contents/.next-dev\/types\/routes.d.ts/.next\/types\/routes.d.ts}"
+  working_contents="$(<"$generated_file")"
+
+  if [[ "$production_contents" != "$committed_contents" && "$working_contents" == "$production_contents" ]]; then
+    log "Restoring Next-generated $generated_file change"
+    git restore --worktree -- "$generated_file"
+  fi
 }
 
 show_failure_logs() {
   log "Recent service logs"
   sudo journalctl --no-pager --lines=60 \
     --unit visacompass-api.service \
+    --unit visacompass-workflow-worker.service \
     --unit visacompass-ocr-worker.service \
     --unit visacompass-customer.service \
     --unit visacompass-ops.service || true
 }
 
+configure_runtime_services() {
+  local release_sha="$1"
+
+  [[ -f "$WORKFLOW_UNIT_SOURCE" ]] || \
+    die "workflow worker unit is missing: $WORKFLOW_UNIT_SOURCE"
+
+  sudo install -m 0644 "$WORKFLOW_UNIT_SOURCE" \
+    /etc/systemd/system/visacompass-workflow-worker.service
+  sudo install -d -m 0755 /etc/visa-compass
+  printf 'DEPLOY_SHA=%s\n' "$release_sha" | \
+    sudo tee "$DEPLOY_ENV_FILE" >/dev/null
+
+  sudo install -d -m 0755 \
+    /etc/systemd/system/visacompass-api.service.d \
+    /etc/systemd/system/visacompass-ocr-worker.service.d
+  printf '[Service]\nEnvironmentFile=-%s\nEnvironment=PROCESS_ROLE=api\n' \
+    "$DEPLOY_ENV_FILE" | sudo tee \
+    /etc/systemd/system/visacompass-api.service.d/20-runtime.conf >/dev/null
+  printf '[Service]\nEnvironmentFile=-%s\nEnvironment=PROCESS_ROLE=ocr-worker\n' \
+    "$DEPLOY_ENV_FILE" | sudo tee \
+    /etc/systemd/system/visacompass-ocr-worker.service.d/20-runtime.conf >/dev/null
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable visacompass-workflow-worker.service >/dev/null
+}
+
 restart_and_verify() {
+  local release_sha="${1:-$(git rev-parse HEAD)}"
+  configure_runtime_services "$release_sha"
+
   log "Restarting API"
   sudo systemctl restart visacompass-api.service
   wait_for_url "API readiness" "$READY_URL"
 
   log "Restarting worker and web applications"
   sudo systemctl restart \
+    visacompass-workflow-worker.service \
     visacompass-ocr-worker.service \
     visacompass-customer.service \
     visacompass-ops.service
@@ -109,6 +182,10 @@ restart_and_verify() {
 
   wait_for_url "Customer web" "$CUSTOMER_URL" 30 2
   wait_for_url "Ops web" "$OPS_URL" 30 2
+  # Release health verifies that each long-running worker process has published
+  # a fresh heartbeat for this build. Business alerts remain visible through
+  # /health/operational but must not roll back a technically healthy release.
+  wait_for_url "Deployment worker health" "$DEPLOYMENT_URL" 45 2
 }
 
 rollback() {
@@ -121,6 +198,14 @@ rollback() {
 
   rollback_started=1
   trap - ERR
+
+  # A previous attempt may have checked out this SHA without ever deploying it.
+  # In that case there is no known source revision to restore locally; leave the
+  # still-running services untouched and force the next attempt to rebuild.
+  if [[ "$previous_sha" == "$target_sha" && "$last_deployed_sha" != "$target_sha" ]]; then
+    show_failure_logs
+    die "deployment of $target_sha did not complete; successful deployment marker was not advanced"
+  fi
   log "Deployment failed; restoring code at $previous_sha"
 
   git reset --hard "$previous_sha"
@@ -132,7 +217,8 @@ rollback() {
   log "Database migrations are forward-only and are not reversed by this rollback"
   RUN_TESTS=0
   build_release
-  restart_and_verify
+  restart_and_verify "$previous_sha"
+  record_deployed_sha "$previous_sha"
   show_failure_logs
   die "Deployment of $target_sha failed; application restored to $previous_sha"
 }
@@ -163,6 +249,10 @@ flock --nonblock 9 || die "another production deployment is already running"
 cd "$APP_DIR"
 [[ -f .env ]] || die "$APP_DIR/.env is missing"
 
+# Next.js rewrites this tracked declaration when switching between the custom
+# development output directory and the production output directory.
+restore_known_generated_files
+
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   die "tracked files on EC2 have local changes; refusing to overwrite them"
 fi
@@ -171,6 +261,12 @@ current_branch="$(git branch --show-current)"
 [[ "$current_branch" == "$BRANCH" ]] || die "EC2 checkout is on '$current_branch', expected '$BRANCH'"
 
 previous_sha="$(git rev-parse HEAD)"
+if [[ -f "$DEPLOYED_SHA_FILE" ]]; then
+  last_deployed_sha="$(tr -d '[:space:]' < "$DEPLOYED_SHA_FILE")"
+  if [[ ! "$last_deployed_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    die "deployed SHA marker is invalid: $DEPLOYED_SHA_FILE"
+  fi
+fi
 log "Fetching $BRANCH from $REPOSITORY"
 git fetch --prune "$REPOSITORY" "$BRANCH"
 branch_sha="$(git rev-parse FETCH_HEAD)"
@@ -180,24 +276,31 @@ git cat-file -e "$target_sha^{commit}" || die "target commit $target_sha was not
 git merge-base --is-ancestor "$target_sha" "$branch_sha" || \
   die "target $target_sha is not contained in $BRANCH"
 
-if [[ "$previous_sha" == "$target_sha" ]]; then
+if [[ "$previous_sha" == "$target_sha" && "$last_deployed_sha" == "$target_sha" ]]; then
   log "Already deployed at $target_sha"
-  restart_and_verify
+  restart_and_verify "$target_sha"
   exit 0
 fi
 
-if git merge-base --is-ancestor "$target_sha" "$previous_sha"; then
+if [[ "$previous_sha" == "$target_sha" ]]; then
+  log "Checkout is at $target_sha but no successful deployment is recorded; rebuilding"
+  deployment_started=1
+fi
+
+if [[ "$previous_sha" != "$target_sha" ]] && git merge-base --is-ancestor "$target_sha" "$previous_sha"; then
   log "Skipping stale deployment $target_sha; $previous_sha is already newer"
   wait_for_url "API readiness" "$READY_URL"
   exit 0
 fi
 
-git merge-base --is-ancestor "$previous_sha" "$target_sha" || \
-  die "target $target_sha is not a fast-forward from $previous_sha"
+if [[ "$previous_sha" != "$target_sha" ]]; then
+  git merge-base --is-ancestor "$previous_sha" "$target_sha" || \
+    die "target $target_sha is not a fast-forward from $previous_sha"
 
-log "Preparing $target_sha (current: $previous_sha)"
-git merge --ff-only "$target_sha"
-deployment_started=1
+  log "Preparing $target_sha (current: $previous_sha)"
+  git merge --ff-only "$target_sha"
+  deployment_started=1
+fi
 
 # Build before touching running processes. Prisma migrations are applied only
 # after every application has compiled successfully.
@@ -207,7 +310,8 @@ log "Applying committed Prisma migrations"
 runtime_changed=1
 pnpm db:deploy
 
-restart_and_verify
+restart_and_verify "$target_sha"
+record_deployed_sha "$target_sha"
 deployment_started=0
 runtime_changed=0
 

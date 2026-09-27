@@ -6,7 +6,13 @@
  * developer strings such as `PAYMENT_PENDING` onto the screen.
  */
 
-export const ORDER_STATUS_LABELS: Record<string, string> = {
+import {
+  orderStatusPresentation,
+  documentStatusPresentation,
+} from "./status-presentation.js";
+import { DocumentStatus, OrderStatus } from "./contracts.js";
+
+export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   DRAFT: "Draft",
   PAYMENT_PENDING: "Awaiting payment",
   PAYMENT_CONFIRMED: "Payment received",
@@ -31,7 +37,7 @@ export const DOCUMENT_TYPE_LABELS: Record<string, string> = {
   VISA: "Visa",
 };
 
-export const DOCUMENT_STATUS_LABELS: Record<string, string> = {
+export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
   PENDING: "Pending review",
   APPROVED: "Approved",
   REJECTED: "Rejected",
@@ -45,7 +51,7 @@ export function documentTypeLabel(type: string | null | undefined): string {
 
 export function documentStatusLabel(status: string | null | undefined): string {
   if (!status) return "";
-  return DOCUMENT_STATUS_LABELS[status] ?? humanize(status);
+  return documentStatusPresentation(status).label;
 }
 
 export const INVENTORY_STATUS_LABELS: Record<string, string> = {
@@ -72,6 +78,7 @@ export const NOTIFICATION_TEMPLATE_LABELS: Record<string, string> = {
   ORDER_STATUS: "Order update",
   QR_READY: "Your eSIM is ready",
   DOCUMENT_REUPLOAD: "Document update",
+  DOCUMENT_APPROVED: "Documents approved",
   PLAN_EXHAUSTED: "Data used up",
   PLAN_EXPIRED: "Plan expired",
   OPS_ALERT: "System alert",
@@ -126,7 +133,7 @@ export function humanize(value: string | null | undefined): string {
 /** Plain-language label for an order status code, with a human fallback. */
 export function orderStatusLabel(status: string | null | undefined): string {
   if (!status) return "";
-  return ORDER_STATUS_LABELS[status] ?? humanize(status);
+  return orderStatusPresentation(status).label;
 }
 
 /** Plain-language label for a notification template code. */

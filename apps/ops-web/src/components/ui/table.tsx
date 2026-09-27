@@ -3,10 +3,18 @@ import { cn } from "@/lib/utils";
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
-    <div className="relative w-full overflow-auto">
+    <div
+      className="relative w-full overflow-auto overscroll-x-contain"
+      role="region"
+      aria-label={props["aria-label"] ?? "Scrollable data table"}
+      tabIndex={0}
+    >
       <table
         data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
+        className={cn(
+          "w-full caption-bottom text-sm [&_button]:whitespace-nowrap",
+          className,
+        )}
         {...props}
       />
     </div>
@@ -83,7 +91,7 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
     <td
       data-slot="table-cell"
       className={cn(
-        "p-3 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        "min-w-0 p-3 align-middle whitespace-normal break-words [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
         className,
       )}
       {...props}

@@ -18,7 +18,7 @@ const ITEMS = [
   },
   {
     q: "Which payment methods do you support?",
-    a: "We accept payments via Khalti in NPR. All prices shown are in NPR and include the full cost of the plan with no hidden fees.",
+    a: "We accept supported digital payments, including Khalti and Fonepay, in NPR. All prices shown are in NPR and include the full cost of the plan with no hidden fees.",
   },
   {
     q: "Can I top up an existing eSIM?",
@@ -26,7 +26,7 @@ const ITEMS = [
   },
   {
     q: "What happens if my eSIM runs out of data?",
-    a: "Track your live usage in My eSIM and refresh it anytime. When you need more data, top up using your mobile number — no need to go through check-in again.",
+    a: "Track your live usage in My eSIM and refresh it anytime. When you need more data, top up using the eSIM mobile number shown in your delivery email — no need to go through check-in again.",
   },
 ];
 

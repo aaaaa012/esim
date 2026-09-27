@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/spinner";
 import { EmptyState } from "@/components/empty-state";
 import { toast } from "sonner";
+import { useConfirmation } from "@/components/confirmation-provider";
 import {
   Dialog,
   DialogContent,
@@ -68,6 +69,7 @@ function Logo({ item, className }: { item: ShowcaseItem; className?: string }) {
 
 export default function PartnersShowcaseClient() {
   const authFetch = useAuthenticatedFetch();
+  const confirm = useConfirmation();
   const request = useCallback(
     async <T,>(path: string, init?: RequestInit) => {
       const r = await authFetch(`${API}${path}`, {
@@ -184,7 +186,12 @@ export default function PartnersShowcaseClient() {
   };
 
   const remove = async (item: ShowcaseItem) => {
-    if (!confirm(`Remove ${item.name} from the homepage showcase?`)) return;
+    if (!(await confirm({
+      title: "Remove showcased partner?",
+      description: `Remove ${item.name} from the homepage showcase?`,
+      confirmLabel: "Remove",
+      destructive: true,
+    }))) return;
     setBusyId(item.id);
     try {
       await request(`/admin/partner-showcase/${item.id}`, { method: "DELETE" });
@@ -228,6 +235,7 @@ export default function PartnersShowcaseClient() {
                 Display name
               </Label>
               <Input
+                aria-label="Partner display name"
                 placeholder="e.g. Himalayan Airways"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
@@ -238,6 +246,7 @@ export default function PartnersShowcaseClient() {
                 Logo URL (optional)
               </Label>
               <Input
+                aria-label="Partner logo URL"
                 placeholder="https://example.com/logo.png"
                 value={logoUrl}
                 onChange={(event) => setLogoUrl(event.target.value)}
@@ -252,6 +261,7 @@ export default function PartnersShowcaseClient() {
                 Sort order (lower first)
               </Label>
               <Input
+                aria-label="Partner sort order"
                 type="number"
                 min="0"
                 max="9999"
@@ -319,6 +329,7 @@ export default function PartnersShowcaseClient() {
                     </TableCell>
                     <TableCell>
                       <Switch
+                        aria-label={`${item.active ? "Hide" : "Show"} ${item.name} on the homepage`}
                         checked={item.active}
                         disabled={busyId === item.id}
                         onCheckedChange={() => void toggleActive(item)}
@@ -377,6 +388,7 @@ export default function PartnersShowcaseClient() {
                   Display name
                 </Label>
                 <Input
+                  aria-label="Partner display name"
                   value={editing.name}
                   onChange={(event) =>
                     setEditing({ ...editing, name: event.target.value })
@@ -388,6 +400,7 @@ export default function PartnersShowcaseClient() {
                   Logo URL (optional)
                 </Label>
                 <Input
+                  aria-label="Partner logo URL"
                   placeholder="https://example.com/logo.png"
                   value={editing.logoUrl ?? ""}
                   onChange={(event) =>
@@ -403,6 +416,7 @@ export default function PartnersShowcaseClient() {
                   Sort order (lower first)
                 </Label>
                 <Input
+                  aria-label="Partner sort order"
                   type="number"
                   min="0"
                   max="9999"

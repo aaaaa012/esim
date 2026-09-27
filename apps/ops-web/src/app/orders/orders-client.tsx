@@ -41,9 +41,17 @@ export type OpsOrder = {
   traveler?: { firstName: string; surname: string; email: string };
   purchaseType?: "INITIAL_PURCHASE" | "TOPUP";
   channel?: "CUSTOMER_WEB" | "PARTNER_API" | "PARTNER_HOSTED";
+  documentReviewStatus?: string;
   topUpMobile?: string;
   externalOrderId?: string | null;
   partner?: { id: string; code: string; name: string } | null;
+  customer?: {
+    id: string;
+    customerCode: string;
+    email: string;
+    source: string;
+    hasLogin: boolean;
+  };
 };
 export const opsHeaders = {};
 const QUEUE_STATUSES = [
@@ -188,7 +196,7 @@ export default function OrdersClient({
       visible.map((order) => [
         order.orderNumber,
         order.externalOrderId ?? "",
-        order.partner ? "PARTNER" : "DIRECT",
+        order.channel ?? (order.partner ? "PARTNER" : "CUSTOMER_WEB"),
         order.partner ? `${order.partner.name} (${order.partner.code})` : "",
         order.status,
         order.traveler
@@ -220,7 +228,7 @@ export default function OrdersClient({
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full sm:w-40">
+            <SelectTrigger aria-label="Filter orders by source" className="w-full sm:w-40">
               <SelectValue placeholder="Source" />
             </SelectTrigger>
             <SelectContent>
@@ -237,7 +245,7 @@ export default function OrdersClient({
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full sm:w-48">
+            <SelectTrigger aria-label="Filter orders by partner" className="w-full sm:w-48">
               <SelectValue placeholder="Partner" />
             </SelectTrigger>
             <SelectContent>
@@ -256,7 +264,7 @@ export default function OrdersClient({
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full sm:w-44">
+            <SelectTrigger aria-label="Filter orders by channel" className="w-full sm:w-44">
               <SelectValue placeholder="Channel" />
             </SelectTrigger>
             <SelectContent>
@@ -273,7 +281,7 @@ export default function OrdersClient({
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full sm:w-44">
+            <SelectTrigger aria-label="Filter orders by status" className="w-full sm:w-44">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
@@ -379,9 +387,17 @@ export default function OrdersClient({
                     </span>
                   </TableCell>
                   <TableCell>
-                    {order.traveler
-                      ? `${order.traveler.firstName} ${order.traveler.surname}`
-                      : order.ownerId}
+                    <Link
+                      href={`/customers/${order.customer?.id ?? order.ownerId}`}
+                      className="font-medium text-primary hover:underline"
+                    >
+                      {order.traveler
+                        ? `${order.traveler.firstName} ${order.traveler.surname}`
+                        : (order.customer?.customerCode ?? order.ownerId)}
+                    </Link>
+                    <p className="text-xs text-muted-foreground">
+                      {order.customer?.email ?? "Customer profile"}
+                    </p>
                   </TableCell>
                   <TableCell>
                     {order.plan.countryCode} · {order.plan.name}
@@ -394,7 +410,12 @@ export default function OrdersClient({
                   <TableCell>
                     {order.partner ? (
                       <div>
-                        <p className="font-medium">{order.partner.name}</p>
+                        <Link
+                          href={`/admin/partners/${order.partner.id}`}
+                          className="font-medium text-primary hover:underline"
+                        >
+                          {order.partner.name}
+                        </Link>
                         <p className="text-xs text-muted-foreground">
                           {order.partner.code}
                         </p>
@@ -411,7 +432,7 @@ export default function OrdersClient({
                   </TableCell>
                   <TableCell className="sticky right-0 bg-card text-right">
                     <Button asChild variant="outline" size="sm">
-                      <Link href={`/orders/${order.id}`}>
+                      <Link href={`/orders/${order.id}`} prefetch={false}>
                         Open <ArrowRight className="size-3.5" />
                       </Link>
                     </Button>

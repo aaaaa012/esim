@@ -40,6 +40,8 @@ const toneMap: Record<
   suspended: "warning",
   degraded: "warning",
   suspend_pending: "warning",
+  reactivation_pending: "warning",
+  approval_required: "warning",
   termination_pending: "danger",
   terminated: "danger",
   cancelled: "warning",
@@ -53,7 +55,7 @@ const toneMap: Record<
   draft: "info",
   reserved: "info",
   assigned: "info",
-  quarantined: "destructive",
+  quarantined: "warning",
 };
 
 // Human-readable labels for internal status/reason codes shown on every page.
@@ -64,6 +66,7 @@ const labelMap: Record<string, string> = {
   PAYMENT_FAILED: "Payment failed",
   PAYMENT_REVIEW_REQUIRED: "Payment needs confirmation",
   REVIEW_PENDING: "Awaiting review",
+  AWAITING_PARTNER_FINALIZATION: "Awaiting partner finalization",
   AWAITING_CUSTOMER: "Awaiting customer",
   APPROVED: "Approved",
   PROVISIONING: "Setting up",
@@ -89,6 +92,8 @@ const labelMap: Record<string, string> = {
   QUARANTINED: "Quarantined",
   NOT_CHECKED: "Not checked",
   SUSPEND_PENDING: "Suspension in progress",
+  REACTIVATION_PENDING: "Reactivation in progress",
+  APPROVAL_REQUIRED: "Approval required",
   TERMINATION_PENDING: "Termination in progress",
   ACCEPTED: "Accepted",
   WAITING_FOR_QR: "Waiting for QR",

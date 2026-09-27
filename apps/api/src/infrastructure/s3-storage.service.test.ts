@@ -16,6 +16,7 @@ vi.mock("@aws-sdk/client-s3", () => {
     PutObjectCommand: class PutObjectCommand extends Command {},
     HeadObjectCommand: class HeadObjectCommand extends Command {},
     GetObjectCommand: class GetObjectCommand extends Command {},
+    CopyObjectCommand: class CopyObjectCommand extends Command {},
     DeleteObjectCommand: class DeleteObjectCommand extends Command {},
   };
 });
@@ -68,7 +69,10 @@ describe("S3StorageService", () => {
       mode: "s3-presigned",
       endpoint: "https://signed.example/upload",
       method: "PUT",
-      headers: { "content-type": "image/png" },
+      headers: {
+        "content-type": "image/png",
+        "x-amz-server-side-encryption": "AES256",
+      },
       expiresInSeconds: 600,
     });
     const command = getSignedUrlMock.mock.calls[0]?.[1] as {
@@ -78,6 +82,7 @@ describe("S3StorageService", () => {
       expect.objectContaining({
         Bucket: "private-documents",
         ContentType: "image/png",
+        ServerSideEncryption: "AES256",
       }),
     );
   });
@@ -120,5 +125,43 @@ describe("S3StorageService", () => {
     await expect(
       new S3StorageService().verifyDocument("private/order/passport"),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("copies verified bytes to a content-addressed immutable key", async () => {
+    vi.stubEnv("AWS_REGION", "ap-south-1");
+    vi.stubEnv("AWS_S3_BUCKET", "private-documents");
+    const bytes = Buffer.from("%PDF-1.7\nimmutable-document");
+    sendMock
+      .mockResolvedValueOnce({
+        ContentLength: bytes.length,
+        ContentType: "application/pdf",
+      })
+      .mockResolvedValueOnce({
+        Body: { transformToByteArray: async () => Uint8Array.from(bytes) },
+      })
+      .mockResolvedValueOnce({
+        Body: { transformToByteArray: async () => Uint8Array.from(bytes) },
+        ContentType: "application/pdf",
+      })
+      .mockResolvedValueOnce({ VersionId: "version-1" })
+      .mockResolvedValueOnce({ ContentLength: bytes.length });
+
+    const result = await new S3StorageService().finalizeDocument(
+      "visa-compass/private/orders/order-1/passport-doc_temporary",
+    );
+
+    expect(result.finalizedAssetId).toMatch(
+      /^visa-compass\/private\/orders\/order-1\/passport\/finalized\/[a-f0-9]{64}\.pdf$/,
+    );
+    expect(result.storageVersionId).toBe("version-1");
+    const copy = sendMock.mock.calls[3]?.[0] as {
+      input: Record<string, unknown>;
+    };
+    expect(copy.input).toEqual(
+      expect.objectContaining({
+        ServerSideEncryption: "AES256",
+        MetadataDirective: "REPLACE",
+      }),
+    );
   });
 });

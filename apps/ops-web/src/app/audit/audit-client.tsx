@@ -18,8 +18,10 @@ import {
 } from "@/components/ui/table";
 import { downloadCsv } from "@/lib/csv";
 import { cn } from "@/lib/utils";
+import { PaginationBar } from "@/components/pagination-bar";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+const PAGE_SIZE = 50;
 type Audit = {
   id: string;
   module: string;
@@ -65,21 +67,32 @@ export default function AuditClient() {
   const [items, setItems] = useState<Audit[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   useEffect(() => {
-    void authFetch(`${API}/operations/audit`, { headers: {} })
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+  useEffect(() => {
+    setLoading(true);
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE),
+      offset: String((page - 1) * PAGE_SIZE),
+    });
+    if (debouncedQuery) params.set("q", debouncedQuery);
+    void authFetch(`${API}/operations/audit?${params}`, { headers: {} })
       .then((r) => r.json())
-      .then((v) => setItems(v.data ?? []))
+      .then((v) => {
+        setItems(v.data?.items ?? []);
+        setTotal(v.data?.total ?? 0);
+      })
       .finally(() => setLoading(false));
-  }, []);
-  const visible = useMemo(
-    () =>
-      items.filter((item) =>
-        `${item.module} ${item.entity} ${item.action} ${item.performedByEmail ?? ""} ${detailOf(item.newValue)}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-      ),
-    [items, query],
-  );
+  }, [page, debouncedQuery]);
+  const visible = useMemo(() => items, [items]);
   const exportCsv = () => {
     downloadCsv(
       `audit-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -123,7 +136,7 @@ export default function AuditClient() {
       />
       <Panel
         title="Activity records"
-        description={`${visible.length} records`}
+        description={`${total} records`}
         noPadding
       >
         {loading ? (
@@ -194,6 +207,14 @@ export default function AuditClient() {
               ))}
             </TableBody>
           </Table>
+        )}
+        {!loading && total > 0 && (
+          <PaginationBar
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            onPageChange={setPage}
+          />
         )}
       </Panel>
     </>
